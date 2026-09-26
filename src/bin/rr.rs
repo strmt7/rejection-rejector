@@ -61,36 +61,45 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
             )?;
-            let mut installed = false;
-            let mut digest_matches = false;
-            let mut gpu_resident_now = false;
-            let mut model_message = String::new();
             let local_ai = Ollama::new(&e.settings)?;
             let ollama_healthy = local_ai.healthy();
-            if ollama_healthy {
+            let (installed, digest_matches, gpu_resident_now, model_message) = if ollama_healthy {
                 match local_ai.inspect() {
                     Ok(info) => {
-                        installed = info.installed;
-                        digest_matches = e.settings.model_digest.as_ref() == Some(&info.digest);
+                        let digest_matches =
+                            e.settings.model_digest.as_ref() == Some(&info.digest);
                         match local_ai.residency(&info.digest) {
-                            Ok(status) => {
-                                gpu_resident_now = status.gpu_resident;
-                                model_message = status.message;
-                            }
-                            Err(error) => {
-                                model_message = format!(
+                            Ok(status) => (
+                                info.installed,
+                                digest_matches,
+                                status.gpu_resident,
+                                status.message,
+                            ),
+                            Err(error) => (
+                                info.installed,
+                                digest_matches,
+                                false,
+                                format!(
                                     "Model is installed but not currently qualified as GPU-resident: {error}"
-                                );
-                            }
+                                ),
+                            ),
                         }
                     }
-                    Err(error) => {
-                        model_message = format!("Model inspection failed: {error}");
-                    }
+                    Err(error) => (
+                        false,
+                        false,
+                        false,
+                        format!("Model inspection failed: {error}"),
+                    ),
                 }
             } else {
-                model_message = "Ollama is not reachable on the configured loopback address".into();
-            }
+                (
+                    false,
+                    false,
+                    false,
+                    "Ollama is not reachable on the configured loopback address".into(),
+                )
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
