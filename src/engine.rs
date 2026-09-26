@@ -270,6 +270,17 @@ impl Engine {
         if self.demo || self.gmail.is_none() || self.settings.model_digest.is_none() {
             return Ok(false);
         }
+        // Global runtime/configuration failures must not consume retries on individual
+        // messages. Keep the queue intact so it resumes automatically when Ollama/model
+        // availability is restored.
+        let local_ai = Ollama::new(&self.settings)?;
+        ensure!(
+            local_ai.healthy(),
+            "Local Ollama is unavailable; queued messages were left unchanged"
+        );
+        local_ai
+            .inspect()
+            .context("Pinned local model is unavailable; queued messages were left unchanged")?;
         let Some(mut job) = self.db.next_queued(&self.account, Utc::now())? else {
             return Ok(false);
         };
