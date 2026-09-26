@@ -1,7 +1,7 @@
 use crate::{
     config::{Mode, Settings, PROMPT_VERSION},
     evaluation,
-    gmail::{Gmail, SendFailureKind},
+    gmail::{FetchFailureKind, Gmail, SendFailureKind},
     mail,
     oauth::{self, Credentials},
     ollama::{self, ModelStatus, Ollama},
@@ -284,6 +284,38 @@ impl Engine {
         let Some(mut job) = self.db.next_queued(&self.account, Utc::now())? else {
             return Ok(false);
         };
+        if job.email.is_none() {
+            match self
+                .gmail
+                .as_mut()
+                .context("Connect Gmail")?
+                .email(&job.stub)
+            {
+                Ok(Some(email)) => job.email = Some(email),
+                Ok(None) => {
+                    job.state = JobState::Other;
+                    self.db.save(
+                        &mut job,
+                        "email.unavailable",
+                        "Provider message no longer exists",
+                    )?;
+                    return Ok(true);
+                }
+                Err(error) if error.kind == FetchFailureKind::Infrastructure => {
+                    return Err(anyhow::anyhow!(error.message));
+                }
+                Err(error) => {
+                    job.state = JobState::Attention;
+                    job.flags = vec![error.message];
+                    self.db.save(
+                        &mut job,
+                        "email.malformed",
+                        "Message parsing failed safely; Human review required",
+                    )?;
+                    return Ok(true);
+                }
+            }
+        }
         let result = self.analyze_job(&mut job);
         if let Err(error) = result {
             job.attempts = job.attempts.saturating_add(1);
@@ -303,21 +335,8 @@ impl Engine {
         Ok(true)
     }
     fn analyze_job(&mut self, job: &mut Job) -> Result<()> {
-        if job.email.is_none() {
-            job.email = self
-                .gmail
-                .as_mut()
-                .context("Connect Gmail")?
-                .email(&job.stub)?;
-        }
         let Some(email) = job.email.as_ref() else {
-            job.state = JobState::Other;
-            self.db.save(
-                job,
-                "email.unavailable",
-                "Provider message no longer exists",
-            )?;
-            return Ok(());
+            anyhow::bail!("Message content must be fetched before analysis");
         };
         if email.received_at < self.settings.cutoff(Utc::now()) || email.received_at > Utc::now() {
             job.state = JobState::Deferred;
