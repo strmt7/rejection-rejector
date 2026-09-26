@@ -423,11 +423,42 @@ fn run(
     }
     Ok(())
 }
+fn unique_query(
+    url: &url::Url,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut query = std::collections::BTreeMap::new();
+    for (key, value) in url.query_pairs() {
+        let key = key.into_owned();
+        ensure!(
+            query.insert(key.clone(), value.into_owned()).is_none(),
+            "Duplicate query parameter: {key}"
+        );
+    }
+    Ok(query)
+}
+
+fn validate_api_item_id(id: &str) -> Result<()> {
+    ensure!(
+        id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "Invalid item identifier"
+    );
+    Ok(())
+}
+
 fn api_query(e: &Engine, path: &str) -> Result<Value> {
     let u = url::Url::parse(&format!("http://127.0.0.1{path}"))?;
-    let query: std::collections::HashMap<_, _> = u.query_pairs().collect();
+    ensure!(
+        u.username().is_empty()
+            && u.password().is_none()
+            && u.fragment().is_none()
+            && u.host_str() == Some("127.0.0.1"),
+        "Invalid local API request target"
+    );
+    let query = unique_query(&u)?;
     match u.path() {
-        "/v1/capabilities" => Ok(json!({
+        "/v1/capabilities" => {
+            ensure!(query.is_empty(), "Capabilities endpoint takes no query parameters");
+            Ok(json!({
             "api_version": 1,
             "application_version": env!("CARGO_PKG_VERSION"),
             "read_only": true,
@@ -444,19 +475,32 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
             },
             "poll_hours": crate::config::POLL_HOURS,
             "lookback_days": crate::config::LOOKBACK_DAYS
-        })),
-        "/v1/status" => Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?}),
-        ),
+        }))
+        },
+        "/v1/status" => {
+            ensure!(query.is_empty(), "Status endpoint takes no query parameters");
+            Ok(
+                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?}),
+            )
+        },
         "/v1/items" => {
+            ensure!(
+                query.keys().all(|key| key == "page"),
+                "Items endpoint accepts only page"
+            );
             let page = query
                 .get("page")
                 .map(|v| v.parse::<u32>())
                 .transpose()?
                 .unwrap_or(0);
+            ensure!(page <= 1_000_000, "Page is outside supported range");
             Ok(json!({"page":page,"page_size":25,"items":e.db.list(&e.account,false,page,25)?}))
         }
         "/v1/events" => {
+            ensure!(
+                query.keys().all(|key| key == "after"),
+                "Events endpoint accepts only after"
+            );
             let after = query
                 .get("after")
                 .map(|v| v.parse::<i64>())
@@ -465,7 +509,9 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
             Ok(json!({"events":e.db.events(after.max(0),100)?}))
         }
         path if path.starts_with("/v1/items/") => {
+            ensure!(query.is_empty(), "Item endpoint takes no query parameters");
             let id = path.trim_start_matches("/v1/items/");
+            validate_api_item_id(id)?;
             Ok(serde_json::to_value(e.owned(id)?)?)
         }
         _ => Err(anyhow::anyhow!("Unknown API route")),
@@ -493,6 +539,32 @@ mod tests {
             value["poll_hours"],
             serde_json::json!(crate::config::POLL_HOURS)
         );
+    }
+
+    #[test]
+    fn integration_query_parser_rejects_duplicates_and_unknown_parameters() {
+        let url = url::Url::parse("http://127.0.0.1/v1/items?page=1&page=2").unwrap();
+        assert!(unique_query(&url).is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(api_query(&engine, "/v1/status?extra=1").is_err());
+        assert!(api_query(&engine, "/v1/items?page=1&extra=2").is_err());
+        assert!(api_query(&engine, "/v1/events?after=0&after=1").is_err());
+    }
+
+    #[test]
+    fn integration_item_ids_have_exact_hash_shape() {
+        assert!(validate_api_item_id(&"a".repeat(64)).is_ok());
+        for id in ["", "abc", &"g".repeat(64), &"a".repeat(65)] {
+            assert!(validate_api_item_id(id).is_err());
+        }
     }
 
     #[test]
