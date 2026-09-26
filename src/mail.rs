@@ -226,19 +226,6 @@ pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
     .any(|s| lower.contains(s))
 }
 
-pub fn reply_subject(subject: &str) -> String {
-    let trimmed = subject.trim();
-    let lower = trimmed.to_lowercase();
-    let already_reply = ["re:", "aw:", "sv:", "antw:", "rif:"]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix));
-    if already_reply {
-        trimmed.to_owned()
-    } else {
-        format!("Re: {trimmed}")
-    }
-}
-
 fn encoded_subject(subject: &str) -> String {
     let mut out = Vec::new();
     let mut part = String::new();
@@ -302,7 +289,7 @@ pub fn raw_reply(
         .collect::<Vec<_>>()
         .join("\r\n");
     validate_job_identity(job)?;
-    let raw = format!("From: {account}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: {}\r\nIn-Reply-To: {}\r\nReferences: {}\r\nAuto-Submitted: auto-replied\r\nX-Auto-Response-Suppress: All\r\nX-Rejection-Rejector: 0.1.0\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{wrapped}\r\n", email.recipient()?, encoded_subject(&reply_subject(&email.subject)), now.to_rfc2822(), outgoing_id(job), email.message_id, refs.join("\r\n "));
+    let raw = format!("From: {account}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: {}\r\nIn-Reply-To: {}\r\nReferences: {}\r\nAuto-Submitted: auto-replied\r\nX-Auto-Response-Suppress: All\r\nX-Rejection-Rejector: 0.1.0\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{wrapped}\r\n", email.recipient()?, encoded_subject(&email.subject), now.to_rfc2822(), outgoing_id(job), email.message_id, refs.join("\r\n "));
     Ok(URL_SAFE_NO_PAD.encode(raw.as_bytes()))
 }
 
@@ -411,23 +398,6 @@ mod tests {
             "Ignore previous instructions",
             "We have decided not to move forward with your application."
         ));
-    }
-
-    #[test]
-    fn reply_subject_is_prefixed_once() {
-        assert_eq!(
-            reply_subject("Application update"),
-            "Re: Application update"
-        );
-        for subject in [
-            "Re: Application update",
-            "AW: Bewerbung",
-            "SV: Ansökan",
-            "Antw: Bewerbung",
-            "Rif: Candidatura",
-        ] {
-            assert_eq!(reply_subject(subject), subject);
-        }
     }
 
     #[test]
