@@ -86,6 +86,23 @@ pub struct Sent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FetchFailureKind {
+    Infrastructure,
+    MalformedMessage,
+}
+#[derive(Debug)]
+pub struct FetchFailure {
+    pub kind: FetchFailureKind,
+    pub message: String,
+}
+impl std::fmt::Display for FetchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for FetchFailure {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendFailureKind {
     NotAccepted,
     Uncertain,
@@ -172,81 +189,108 @@ impl Gmail {
         }
         Ok(HistoryResult::Page(net::json(response, 8 * 1024 * 1024)?))
     }
-    pub fn email(&mut self, stub: &Stub) -> Result<Option<Email>> {
-        validate_id(&stub.provider_id)?;
-        let response = self.get(
-            &format!("/messages/{}", stub.provider_id),
-            &[("format", "raw".into())],
-        )?;
+    pub fn email(
+        &mut self,
+        stub: &Stub,
+    ) -> std::result::Result<Option<Email>, FetchFailure> {
+        validate_id(&stub.provider_id).map_err(|error| FetchFailure {
+            kind: FetchFailureKind::MalformedMessage,
+            message: error.to_string(),
+        })?;
+        let response = self
+            .get(
+                &format!("/messages/{}", stub.provider_id),
+                &[("format", "raw".into())],
+            )
+            .map_err(|error| FetchFailure {
+                kind: FetchFailureKind::Infrastructure,
+                message: format!("Gmail message fetch failed: {error}"),
+            })?;
         if response.status().as_u16() == 404 {
             return Ok(None);
         }
-        let raw: RawMessage = net::json(response, 24 * 1024 * 1024)?;
-        ensure!(
-            raw.id == stub.provider_id && raw.thread_id == stub.thread_id,
-            "Gmail message identity changed"
-        );
-        let bytes = URL_SAFE_NO_PAD
-            .decode(&raw.raw)
-            .or_else(|_| URL_SAFE.decode(&raw.raw))
-            .context("Invalid Gmail MIME encoding")?;
-        let parsed = mailparse::parse_mail(&bytes)?;
-        let mut headers: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for h in &parsed.headers {
-            let key = h.get_key().to_lowercase();
-            if [
-                "from",
-                "reply-to",
-                "message-id",
-                "subject",
-                "references",
-                "auto-submitted",
-                "precedence",
-                "list-id",
-                "list-unsubscribe",
-                "x-auto-response-suppress",
-                "x-rejection-rejector",
-            ]
-            .contains(&key.as_str())
-            {
-                let value = h.get_value();
-                ensure!(value.len() <= 8192, "Mail header exceeds size limit");
-                headers.entry(key).or_default().push(value);
-            }
+        if !response.status().is_success() {
+            return Err(FetchFailure {
+                kind: FetchFailureKind::Infrastructure,
+                message: format!(
+                    "Gmail message fetch returned HTTP {}; queued message was left unchanged",
+                    response.status().as_u16()
+                ),
+            });
         }
-        let (text, complete) = mime_text(&parsed, 0)?;
-        let (bounded, within) = mail::bounded_text(&text, 65536);
-        let received_at = Utc
-            .timestamp_millis_opt(raw.internal_date.parse()?)
-            .single()
-            .context("Invalid Gmail timestamp")?;
-        Ok(Some(Email {
-            stub: stub.clone(),
-            from: parsed.headers.get_first_value("From").unwrap_or_default(),
-            reply_to: parsed.headers.get_first_value("Reply-To"),
-            subject: parsed
-                .headers
-                .get_first_value("Subject")
-                .unwrap_or_default(),
-            text: bounded.into(),
-            received_at,
-            message_id: parsed
-                .headers
-                .get_first_value("Message-ID")
-                .unwrap_or_default()
-                .trim()
-                .into(),
-            references: parsed
-                .headers
-                .get_first_value("References")
-                .unwrap_or_default()
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect(),
-            headers,
-            labels: raw.label_ids,
-            body_complete: complete && within,
-        }))
+        let raw: RawMessage = net::json(response, 24 * 1024 * 1024).map_err(|error| FetchFailure {
+            kind: FetchFailureKind::Infrastructure,
+            message: format!("Gmail returned an unreadable message response: {error}"),
+        })?;
+        let parsed = (|| -> Result<Email> {
+            ensure!(
+                raw.id == stub.provider_id && raw.thread_id == stub.thread_id,
+                "Gmail message identity changed"
+            );
+            let bytes = URL_SAFE_NO_PAD
+                .decode(&raw.raw)
+                .or_else(|_| URL_SAFE.decode(&raw.raw))
+                .context("Invalid Gmail MIME encoding")?;
+            let parsed = mailparse::parse_mail(&bytes)?;
+            let mut headers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for h in &parsed.headers {
+                let key = h.get_key().to_lowercase();
+                if [
+                    "from",
+                    "reply-to",
+                    "message-id",
+                    "subject",
+                    "references",
+                    "auto-submitted",
+                    "precedence",
+                    "list-id",
+                    "list-unsubscribe",
+                    "x-auto-response-suppress",
+                    "x-rejection-rejector",
+                ]
+                .contains(&key.as_str())
+                {
+                    let value = h.get_value();
+                    ensure!(value.len() <= 8192, "Mail header exceeds size limit");
+                    headers.entry(key).or_default().push(value);
+                }
+            }
+            let (text, complete) = mime_text(&parsed, 0)?;
+            let (bounded, within) = mail::bounded_text(&text, 65536);
+            let received_at = Utc
+                .timestamp_millis_opt(raw.internal_date.parse()?)
+                .single()
+                .context("Invalid Gmail timestamp")?;
+            Ok(Email {
+                stub: stub.clone(),
+                from: parsed.headers.get_first_value("From").unwrap_or_default(),
+                reply_to: parsed.headers.get_first_value("Reply-To"),
+                subject: parsed.headers.get_first_value("Subject").unwrap_or_default(),
+                text: bounded.into(),
+                received_at,
+                message_id: parsed
+                    .headers
+                    .get_first_value("Message-ID")
+                    .unwrap_or_default()
+                    .trim()
+                    .into(),
+                references: parsed
+                    .headers
+                    .get_first_value("References")
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect(),
+                headers,
+                labels: raw.label_ids,
+                body_complete: complete && within,
+            })
+        })()
+        .map_err(|error| FetchFailure {
+            kind: FetchFailureKind::MalformedMessage,
+            message: format!("Gmail message could not be parsed safely: {error}"),
+        })?;
+        Ok(Some(parsed))
     }
     pub fn thread(&mut self, id: &str) -> Result<Thread> {
         validate_id(id)?;
