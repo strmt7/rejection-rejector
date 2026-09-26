@@ -581,8 +581,7 @@ impl Engine {
             DispatchFailureKind::ReviewRequired,
             "Reply changed after confirmation",
         )?;
-        mail::validate_draft(body)
-            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        mail::validate_draft(body).map_err(|error| DispatchFailure::review(error.to_string()))?;
         let original = job
             .email
             .as_ref()
@@ -645,11 +644,7 @@ impl Engine {
         )?;
         let fresh = match gmail.email(&job.stub) {
             Ok(Some(email)) => email,
-            Ok(None) => {
-                return Err(DispatchFailure::review(
-                    "Original message no longer exists",
-                ))
-            }
+            Ok(None) => return Err(DispatchFailure::review("Original message no longer exists")),
             Err(error) if error.kind == FetchFailureKind::Infrastructure => {
                 return Err(DispatchFailure::retryable(error.message))
             }
@@ -667,7 +662,10 @@ impl Engine {
             ))
         })?;
         dispatch_require(
-            thread.messages.iter().any(|message| message.id == job.stub.provider_id),
+            thread
+                .messages
+                .iter()
+                .any(|message| message.id == job.stub.provider_id),
             DispatchFailureKind::ReviewRequired,
             "Original message is no longer in the conversation",
         )?;

@@ -189,10 +189,7 @@ impl Gmail {
         }
         Ok(HistoryResult::Page(net::json(response, 8 * 1024 * 1024)?))
     }
-    pub fn email(
-        &mut self,
-        stub: &Stub,
-    ) -> std::result::Result<Option<Email>, FetchFailure> {
+    pub fn email(&mut self, stub: &Stub) -> std::result::Result<Option<Email>, FetchFailure> {
         validate_id(&stub.provider_id).map_err(|error| FetchFailure {
             kind: FetchFailureKind::MalformedMessage,
             message: error.to_string(),
@@ -218,10 +215,11 @@ impl Gmail {
                 ),
             });
         }
-        let raw: RawMessage = net::json(response, 24 * 1024 * 1024).map_err(|error| FetchFailure {
-            kind: FetchFailureKind::Infrastructure,
-            message: format!("Gmail returned an unreadable message response: {error}"),
-        })?;
+        let raw: RawMessage =
+            net::json(response, 24 * 1024 * 1024).map_err(|error| FetchFailure {
+                kind: FetchFailureKind::Infrastructure,
+                message: format!("Gmail returned an unreadable message response: {error}"),
+            })?;
         let parsed = (|| -> Result<Email> {
             ensure!(
                 raw.id == stub.provider_id && raw.thread_id == stub.thread_id,
@@ -265,7 +263,10 @@ impl Gmail {
                 stub: stub.clone(),
                 from: parsed.headers.get_first_value("From").unwrap_or_default(),
                 reply_to: parsed.headers.get_first_value("Reply-To"),
-                subject: parsed.headers.get_first_value("Subject").unwrap_or_default(),
+                subject: parsed
+                    .headers
+                    .get_first_value("Subject")
+                    .unwrap_or_default(),
                 text: bounded.into(),
                 received_at,
                 message_id: parsed
