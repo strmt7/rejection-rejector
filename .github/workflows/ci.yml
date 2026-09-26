@@ -2,6 +2,8 @@ name: Rust CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -9,55 +11,33 @@ concurrency:
   group: rust-ci-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  prepare:
-    name: Lock and format source on main
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      build_sha: ${{ steps.source.outputs.build_sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Finalize tracked source and dependency lockfile
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f .github/finalize-source.py ]; then
-            python3 .github/finalize-source.py
-            git rm .github/finalize-source.py
-          fi
-          if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi
-          cargo fmt --all
-          git add Cargo.lock src tests README.md docs
-          if ! git diff --cached --quiet; then
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'chore: lock dependencies and format Rust sources'
-            git push origin HEAD:main
-          fi
-          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   test:
-    needs: prepare
+    name: Verify (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.prepare.outputs.build_sha }}
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.1
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Prepare artifacts
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Prepare artifacts and assert exact source
         shell: bash
-        run: mkdir -p artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f Cargo.lock
+          test ! -f .github/finalize-source.py
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev xvfb openbox scrot dbus-x11
@@ -68,7 +48,7 @@ jobs:
         run: set -o pipefail; cargo test --locked --lib --no-default-features 2>&1 | tee artifacts/core-tests.log
       - name: Native GUI and CLI build
         run: cargo build --locked --bins
-      - name: All-feature and automatic-policy tests
+      - name: All-feature and integration tests
         shell: bash
         run: set -o pipefail; cargo test --locked --all-features 2>&1 | tee artifacts/all-tests.log
       - name: Clippy without warnings
@@ -77,26 +57,30 @@ jobs:
       - name: Headless offline smoke test
         shell: bash
         run: set -o pipefail; cargo run --locked --no-default-features --bin rr -- demo 2>&1 | tee artifacts/headless-demo.log
-      - name: Native UI smoke test and actual screenshot
+      - name: Six native GUI captures and review geometry
         if: runner.os == 'Linux'
-        run: timeout 70s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
+        run: timeout 120s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
       - name: Build Windows release binaries
         if: runner.os == 'Windows'
         run: cargo build --locked --release --bins
+      - name: Verify tracked source was not modified
+        run: git diff --exit-code HEAD
       - name: Source and toolchain evidence
         if: always()
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           rustc --version > artifacts/toolchain.txt
           cargo --version >> artifacts/toolchain.txt
           git rev-parse HEAD > artifacts/COMMIT.txt
-          cp Cargo.lock artifacts/ 2>/dev/null || true
+          cp Cargo.lock artifacts/
           git archive --format=zip HEAD -o artifacts/rejection-rejector-source.zip
       - name: Collect Windows package
         if: runner.os == 'Windows' && success()
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
           Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
@@ -104,10 +88,20 @@ jobs:
           Copy-Item -Recurse scripts artifacts/windows/scripts
           Copy-Item Cargo.lock artifacts/windows/
           Copy-Item artifacts/COMMIT.txt artifacts/windows/
+          Copy-Item artifacts/toolchain.txt artifacts/windows/
+          $root = (Resolve-Path artifacts/windows).Path
+          $sums = Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\','/')
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $relative"
+          }
+          $sums | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
           Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
-          Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256 | Format-List | Out-File artifacts/SHA256.txt
-      - uses: actions/upload-artifact@v4
+          $packageHash = (Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$packageHash  rejection-rejector-windows-x64.zip" | Set-Content artifacts/SHA256.txt -Encoding ascii
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: rejection-rejector-${{ matrix.os }}
           path: artifacts/
+          if-no-files-found: error
