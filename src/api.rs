@@ -12,6 +12,18 @@ use std::{
 use subtle::ConstantTimeEq;
 use tiny_http::{Header, Method, Response, Server};
 
+fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a str> {
+    let mut values = headers
+        .iter()
+        .filter(|header| header.field.equiv(name))
+        .map(|header| header.value.as_str());
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    Some(value)
+}
+
 fn authorized(value: Option<&str>, token: &str) -> bool {
     let expected = format!("Bearer {token}");
     value
@@ -38,16 +50,8 @@ pub fn start(
                 Ok(None) => continue,
                 Err(_) => break,
             };
-            let auth = request
-                .headers()
-                .iter()
-                .find(|h| h.field.equiv("Authorization"))
-                .map(|h| h.value.as_str());
-            let host = request
-                .headers()
-                .iter()
-                .find(|h| h.field.equiv("Host"))
-                .map(|h| h.value.as_str());
+            let auth = unique_header(request.headers(), "Authorization");
+            let host = unique_header(request.headers(), "Host");
             let origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
             let (status, body) = if !authorized(auth, &token)
                 || host != Some(format!("127.0.0.1:{port}").as_str())
@@ -103,6 +107,17 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn duplicate_sensitive_headers_are_not_unique() {
+        let headers = vec![
+            Header::from_bytes("Authorization", "Bearer one").unwrap(),
+            Header::from_bytes("Authorization", "Bearer two").unwrap(),
+            Header::from_bytes("Host", "127.0.0.1:8734").unwrap(),
+        ];
+        assert!(unique_header(&headers, "Authorization").is_none());
+        assert_eq!(unique_header(&headers, "Host"), Some("127.0.0.1:8734"));
+    }
+
     #[test]
     fn exact_bearer_required() {
         assert!(authorized(Some("Bearer correct"), "correct"));
