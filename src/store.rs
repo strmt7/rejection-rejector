@@ -61,6 +61,19 @@ impl Store {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         ensure!(version <= 2, "Database belongs to a newer app version");
+        if version > 0 {
+            let existing_check: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT payload FROM meta WHERE name='vault_check'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(bytes) = existing_check {
+                let check: String = vault.open_value("meta/vault_check", &bytes)?;
+                ensure!(check == "rejection-rejector:v1", "Wrong vault");
+            }
+        }
         if version == 0 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
@@ -574,6 +587,39 @@ mod tests {
         assert!(deferred.analysis.is_none());
         assert!(deferred.drafted_at.is_none());
         assert!(db.list("me@example.com", true, 0, 25).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wrong_key_cannot_mutate_a_pending_schema_migration() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let good = Vault::random();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                PRAGMA user_version=1;").unwrap();
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [good
+                    .seal("meta/vault_check", &"rejection-rejector:v1")
+                    .unwrap()],
+            )
+            .unwrap();
+        }
+        assert!(Store::open(&path, Vault::random()).is_err());
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 1);
+        let mut columns = conn.prepare("PRAGMA table_info(items)").unwrap();
+        let names = columns
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!names.iter().any(|name| name == "received_at"));
     }
 
     #[test]
