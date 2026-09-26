@@ -12,9 +12,9 @@ Actual message dates/folders are checked by the worker. Out-of-window messages b
 
 Queued → Ready / Attention / Other / Deferred. Editing a reviewable reply invalidates verification and moves to Attention. Regeneration requeues it. Dismissal records Dismissed. Confirmed human sends or eligible automatic replies transition through Sending → Sent / Uncertain. Positive Sent reconciliation resolves Uncertain.
 
-A send must match the current revision and exact persisted draft hash. Account, source message and newer conversation activity are rechecked. An IMMEDIATE transaction enforces the rolling attempt cap and reserves the conversation before HTTP dispatch. Unique thread reservations prevent a second attempt. Crashed Sending records recover as Uncertain; reservations are never automatically released.
+A send must match the current revision and exact persisted draft hash. Account, source message and newer conversation activity are rechecked. An IMMEDIATE transaction enforces the rolling attempt cap and creates one permanent delivery record for that specific rejection message before HTTP dispatch. A thread may have only one **reserved or uncertain** delivery at a time; a completed Sent record does not prevent a later, distinct rejection in the same Gmail thread from receiving its own reply. The same rejection message can never obtain a second delivery record. Crashed Sending records recover as Uncertain.
 
-This prioritizes avoiding duplicate delivery over guaranteed delivery. It is at-most-once **application-level attempts**, not a distributed exactly-once guarantee. The outgoing deterministic Message-ID supports reconciliation.
+Known pre-dispatch cancellation or a definite provider-side rejection releases the unsent reservation and returns the message to Human Review. Ambiguous network/server outcomes retain an Uncertain record and block further replies in that thread until reconciliation. This prioritizes avoiding duplicate delivery over guaranteed delivery. It is at-most-once **per rejection message at the application level**, not a distributed exactly-once guarantee. The deterministic outgoing Message-ID supports reconciliation.
 
 ## Trust boundary
 
