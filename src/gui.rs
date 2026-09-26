@@ -897,24 +897,6 @@ impl eframe::App for App {
 fn visible_draft_matches(job: &Job, text: &str) -> bool {
     job.draft.as_ref().is_some_and(|d| d.body == text)
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn unsaved_editor_never_matches_send_candidate() {
-        let email = crate::ollama::sample_email("Synthetic", "Synthetic rejection");
-        let mut job = Job::new(email.stub, chrono::Utc::now());
-        job.draft = Some(crate::types::Draft {
-            body: "Persisted and reviewed reply".into(),
-            origin: "human".into(),
-        });
-        assert!(visible_draft_matches(&job, "Persisted and reviewed reply"));
-        assert!(!visible_draft_matches(&job, "Changed but not saved reply"));
-        job.draft = None;
-        assert!(!visible_draft_matches(&job, ""));
-    }
-}
-
 mod review;
 impl App {
     fn modal_open(&self) -> bool {
@@ -937,6 +919,25 @@ impl App {
 fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
     key.is_some_and(|(id, revision)| id == &job.id && *revision == job.revision)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unsaved_editor_never_matches_send_candidate() {
+        let email = crate::ollama::sample_email("Synthetic", "Synthetic rejection");
+        let mut job = Job::new(email.stub, chrono::Utc::now());
+        job.draft = Some(crate::types::Draft {
+            body: "Persisted and reviewed reply".into(),
+            origin: "human".into(),
+        });
+        assert!(visible_draft_matches(&job, "Persisted and reviewed reply"));
+        assert!(!visible_draft_matches(&job, "Changed but not saved reply"));
+        job.draft = None;
+        assert!(!visible_draft_matches(&job, ""));
+    }
+}
+
 #[cfg(test)]
 mod editor_binding_regressions {
     use super::*;

@@ -259,6 +259,23 @@ pub fn raw_reply(
     Ok(URL_SAFE_NO_PAD.encode(raw.as_bytes()))
 }
 
+pub fn validate_job_identity(job: &Job) -> Result<()> {
+    let email = job
+        .email
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Original email is missing"))?;
+    ensure!(
+        job.id == job.stub.id()
+            && job.id == email.stub.id()
+            && job.stub.account == email.stub.account
+            && job.stub.provider_id == email.stub.provider_id
+            && job.stub.thread_id == email.stub.thread_id
+            && job.stub.source == email.stub.source,
+        "Queue, message or conversation identity mismatch; reload before replying"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,21 +322,4 @@ mod tests {
         let s = encoded_subject(&"Δοκιμή ".repeat(30));
         assert!(s.split("\r\n").all(|line| line.len() < 78));
     }
-}
-
-pub fn validate_job_identity(job: &Job) -> Result<()> {
-    let email = job
-        .email
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Original email is missing"))?;
-    ensure!(
-        job.id == job.stub.id()
-            && job.id == email.stub.id()
-            && job.stub.account == email.stub.account
-            && job.stub.provider_id == email.stub.provider_id
-            && job.stub.thread_id == email.stub.thread_id
-            && job.stub.source == email.stub.source,
-        "Queue, message or conversation identity mismatch; reload before replying"
-    );
-    Ok(())
 }
