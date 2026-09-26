@@ -80,6 +80,12 @@ impl App {
         style
             .text_styles
             .insert(egui::TextStyle::Heading, egui::FontId::proportional(27.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
         cc.egui_ctx.set_style(style);
         Self {
             worker: Worker::spawn(dir, demo),
@@ -124,7 +130,10 @@ impl App {
             .stroke(egui::Stroke::new(1.0_f32, LINE))
             .corner_radius(12)
             .inner_margin(18)
-            .show(ui, body);
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                body(ui);
+            });
     }
     fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
         ui.label(RichText::new(text).color(color).strong());
@@ -389,15 +398,17 @@ impl App {
                 {
                     self.worker.command(Command::Reconcile(job.id.clone()));
                 }
-                ui.collapsing("Details", |ui| {
-                    ui.monospace(&job.id);
-                    for flag in &job.flags {
-                        ui.label(flag);
-                    }
-                    if let Some(d) = &job.draft {
-                        ui.label(&d.body);
-                    }
-                });
+                egui::CollapsingHeader::new("Details")
+                    .id_salt(("activity", &job.id))
+                    .show(ui, |ui| {
+                        ui.monospace(&job.id);
+                        for flag in &job.flags {
+                            ui.label(flag);
+                        }
+                        if let Some(d) = &job.draft {
+                            ui.label(&d.body);
+                        }
+                    });
             });
         }
         ui.add_space(20.0);

@@ -17,6 +17,9 @@ impl App {
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(Vec2::new(queue_width, height), egui::Layout::top_down(egui::Align::Min), |ui| self.queue(ui, s));
             ui.separator();
+            // A ScrollArea inherits its parent's layout. Explicitly leave the
+            // outer horizontal queue layout before rendering stacked details.
+            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), height), egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical().id_salt("review_details").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
                 let Some(job) = s.selected.as_ref() else {
                     ui.add_space(32.0);
@@ -26,13 +29,13 @@ impl App {
                 };
                 let bound = editor_binding_matches(job, self.editor_key.as_ref());
                 let available = bound && s.busy.is_empty() && job.state.reviewable() && !self.modal_open();
-                let body_height = (height - 270.0).clamp(170.0, 310.0);
+                let body_height = (height - 320.0).clamp(140.0, 250.0);
                 if !job.state.reviewable() {
                     ui.colored_label(AMBER, format!("This message is {}. Select another item.", job.state.label()));
                 }
-                ui.columns(2, |cols| {
+                let cards = ui.scope(|ui| { ui.columns(2, |cols| {
                     Self::card(&mut cols[0], |ui| {
-                        ui.set_min_height(body_height + 150.0);
+                        ui.set_min_height(body_height + 125.0);
                         ui.label(RichText::new("ORIGINAL EMAIL").small().color(MUTED));
                         if let Some(email) = &job.email {
                             ui.add(egui::Label::new(RichText::new(&email.subject).strong().size(18.0)).wrap());
@@ -47,7 +50,7 @@ impl App {
                         }
                     });
                     Self::card(&mut cols[1], |ui| {
-                        ui.set_min_height(body_height + 150.0);
+                        ui.set_min_height(body_height + 125.0);
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));
                             if self.dirty { ui.colored_label(AMBER, "Unsaved"); }
@@ -63,7 +66,7 @@ impl App {
                         });
                         ui.label(RichText::new(format!("{} words", self.editor.split_whitespace().count())).small().color(MUTED));
                     });
-                });
+                }); }).response;
                 if !bound {
                     ui.colored_label(AMBER, "The selected message changed while you were editing. Your text is retained, but cannot be saved or sent to this message.");
                 }
@@ -82,7 +85,7 @@ impl App {
                     });
                 }
                 for flag in &job.flags { ui.colored_label(AMBER, flag); }
-                ui.horizontal_wrapped(|ui| {
+                let actions = ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(available && self.dirty, egui::Button::new("Save changes")).clicked() {
                         match crate::mail::validate_draft(&self.editor) {
                             Ok(()) => {
@@ -102,11 +105,48 @@ impl App {
                     if ui.add_enabled(can_send, egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT)).clicked() {
                         self.send_confirmation = Some(job.clone());
                     }
-                });
+                }).response;
+                if self.screenshot.is_some() && self.frames > 10 {
+                    assert!(review_actions_visible(cards.rect, actions.rect, ui.clip_rect()),
+                        "Review controls are not below the cards and visible: cards={:?}, actions={:?}, viewport={:?}",
+                        cards.rect, actions.rect, ui.clip_rect());
+                }
                 if !s.settings.sending_enabled {
                     ui.label(RichText::new("Sending is disabled. Enable it explicitly in Settings after connecting Gmail with send permission.").small().color(MUTED));
                 }
             });
+            });
         });
+    }
+}
+
+/// Actual screenshot runs call this on rendered widget rectangles, not mock coordinates.
+fn review_actions_visible(cards: egui::Rect, actions: egui::Rect, clip: egui::Rect) -> bool {
+    actions.top() >= cards.bottom() - 1.0 && clip.contains_rect(actions.shrink(0.5))
+}
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn actions_must_be_below_cards_and_inside_viewport() {
+        let cards = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(500.0, 300.0));
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(500.0, 500.0));
+        let below = egui::Rect::from_min_max(egui::pos2(0.0, 320.0), egui::pos2(450.0, 360.0));
+        assert!(review_actions_visible(cards, below, clip));
+        assert!(!review_actions_visible(
+            cards,
+            below.translate(egui::vec2(600.0, 0.0)),
+            clip
+        ));
+        assert!(!review_actions_visible(
+            cards,
+            below.translate(egui::vec2(0.0, -100.0)),
+            clip
+        ));
+        assert!(!review_actions_visible(
+            cards,
+            below.translate(egui::vec2(0.0, 200.0)),
+            clip
+        ));
     }
 }
