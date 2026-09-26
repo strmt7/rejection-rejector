@@ -57,6 +57,15 @@ jobs:
       - name: Headless offline smoke test
         shell: bash
         run: set -o pipefail; cargo run --locked --no-default-features --bin rr -- demo 2>&1 | tee artifacts/headless-demo.log
+      - name: Readiness diagnostics smoke test
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RR_VAULT_PASSPHRASE: ci-only-local-vault-passphrase-2026
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/rejection-rejector-doctor"
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$RUNNER_TEMP/rejection-rejector-doctor" doctor 2>&1 | tee artifacts/doctor.log
       - name: Six native GUI captures and review geometry
         if: runner.os == 'Linux'
         run: timeout 120s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh

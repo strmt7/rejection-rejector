@@ -11,11 +11,11 @@
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
 | AI | Local Ollama classification, drafting and a separate same-model audit; structured outputs and exact evidence checks |
-| Model | `gemma4:12b-it-qat`, default 8,192 context, explicit download and digest qualification |
+| Model | `gemma4:12b-it-qat`, default 8,192 context, explicit download and full classification/draft/verification/residency qualification |
 | GPU target | 16 GiB; conservative 14 GiB reported-residency budget, not physical peak certification |
 | Check interval | **1 / 2 / 4 / 8 / 24 hours** |
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
-| Sync | Durable incremental Gmail history queue; insert missing identities only; cursor-expiry recovery |
+| Sync | Durable incremental Gmail history queue; page-batched insert of missing identities only; cursor-expiry recovery |
 | Database | Embedded SQLite with authenticated encrypted payloads; Windows Credential Manager holds the key |
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
 | Automatic | Explicit authorization, cooldown, send-attempt cap, source/draft/model checks and conversation preflight |
