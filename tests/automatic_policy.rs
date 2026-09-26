@@ -157,6 +157,17 @@ fn lists_and_loops_hold() {
     });
 }
 #[test]
+fn automatically_generated_incoming_mail_requires_human_review() {
+    held(|j, _, _| {
+        j.email
+            .as_mut()
+            .unwrap()
+            .headers
+            .insert("auto-submitted".into(), vec!["auto-generated".into()]);
+    });
+}
+
+#[test]
 fn spam_and_trashed_mail_hold() {
     held(|j, _, _| j.email.as_mut().unwrap().labels.push("SPAM".into()));
     held(|j, _, _| j.email.as_mut().unwrap().labels.push("TRASH".into()));

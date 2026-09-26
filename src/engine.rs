@@ -661,6 +661,12 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
     if mail::auto_language_conflict(&email.text) {
         reasons.push("Conflicting or suspicious email language".into());
     }
+    if email
+        .header("auto-submitted")
+        .is_some_and(|value| !value.eq_ignore_ascii_case("no"))
+    {
+        reasons.push("Automatically generated incoming mail requires Human review".into());
+    }
     for name in [
         "list-id",
         "list-unsubscribe",
