@@ -332,7 +332,7 @@ impl Ollama {
         if !complete {
             flags.push("Input was too long or incomplete; automatic sending blocked".into());
         }
-        if mail::auto_language_conflict(&email.text) {
+        if mail::auto_language_conflict(&email.subject, &email.text) {
             flags.push("Conflicting opportunity language or possible prompt injection".into());
         }
         let verified_hash = if verification.as_ref().is_some_and(Verification::passed) {
