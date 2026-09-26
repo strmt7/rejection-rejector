@@ -84,6 +84,13 @@ struct Progress {
 pub struct Ollama {
     settings: Settings,
 }
+
+fn model_name_matches(configured: &str, actual: &str) -> bool {
+    actual == configured
+        || (!configured.rsplit('/').next().unwrap_or(configured).contains(':')
+            && actual == format!("{configured}:latest"))
+}
+
 impl Ollama {
     pub fn new(settings: &Settings) -> Result<Self> {
         settings.validate()?;
@@ -107,7 +114,7 @@ impl Ollama {
         let tag = tags
             .models
             .into_iter()
-            .find(|t| t.name == self.settings.model)
+            .find(|t| model_name_matches(&self.settings.model, &t.name))
             .context("Selected model is not installed. Use Download model")?;
         ensure!(
             tag.size > 0 && tag.size < GPU_BUDGET_BYTES,
@@ -157,7 +164,7 @@ impl Ollama {
         let m = ps
             .models
             .into_iter()
-            .find(|m| m.name == self.settings.model && m.digest == digest)
+            .find(|m| model_name_matches(&self.settings.model, &m.name) && m.digest == digest)
             .context("Selected pinned model is not loaded")?;
         let resident = single
             && m.size > 0
@@ -534,6 +541,24 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ollama_latest_tag_matches_an_untagged_configuration() {
+        assert!(model_name_matches("qwen3.5", "qwen3.5:latest"));
+        assert!(model_name_matches(
+            "example/model",
+            "example/model:latest"
+        ));
+        assert!(model_name_matches(
+            "gemma4:12b-it-qat",
+            "gemma4:12b-it-qat"
+        ));
+        assert!(!model_name_matches(
+            "gemma4:12b-it-qat",
+            "gemma4:latest"
+        ));
+        assert!(!model_name_matches("qwen3.5:9b", "qwen3.5:latest"));
+    }
+
     #[test]
     fn fabricated_evidence_fails() {
         let v = Verdict {
