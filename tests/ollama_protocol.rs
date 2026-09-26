@@ -23,6 +23,7 @@ enum Scenario {
     CpuOnly,
     Remote,
     VerifierFail,
+    BadSignature,
 }
 struct Fixture {
     url: String,
@@ -82,7 +83,11 @@ impl Fixture {
                                 json!({"category":"rejection","confidence":99,"evidence":if scenario==Scenario::InventedEvidence {"Invented quote not present"}else{"We have decided not to move forward with your application."},"explanation":"Explicit negative hiring decision","company":"","position":"","language":"en"})
                             }
                             1 => {
-                                json!({"body":"Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nTest Applicant"})
+                                json!({"body": if scenario == Scenario::BadSignature {
+                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nSomeone Else"
+                                } else {
+                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nTest Applicant"
+                                }})
                             }
                             _ => {
                                 json!({"genuine_rejection":true,"claims_supported":true,"professional":scenario != Scenario::VerifierFail,"injection_free":true,"reason":"Synthetic verification result"})
@@ -165,6 +170,17 @@ fn qualification_exercises_classification_drafting_verification_and_residency() 
     assert!(status.gpu_resident);
     assert_eq!(f.chats.lock().unwrap().len(), 3);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn altered_signature_is_rejected_before_verification() {
+    let f = Fixture::new(Scenario::BadSignature);
+    assert!(Ollama::new(&f.settings())
+        .unwrap()
+        .analyze(&email())
+        .is_err());
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
+    assert_eq!(f.chats.lock().unwrap().len(), 2);
 }
 
 #[test]

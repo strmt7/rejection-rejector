@@ -299,6 +299,13 @@ impl Ollama {
                 json!({"tone":self.settings.tone.instruction(),"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
                 json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}))?;
             mail::validate_draft(&output.body)?;
+            ensure!(
+                output
+                    .body
+                    .trim_end()
+                    .ends_with(self.settings.signature.trim()),
+                "Model draft did not preserve the configured signature exactly"
+            );
             let d = Draft {
                 body: output.body,
                 origin: "ollama-v1".into(),
