@@ -85,6 +85,17 @@ impl App {
                     });
                 }
                 for flag in &job.flags { ui.colored_label(AMBER, flag); }
+                let send_blocks = job
+                    .email
+                    .as_ref()
+                    .map(|email| crate::mail::hard_blocks(email, &s.account))
+                    .unwrap_or_else(|| vec!["Original email is unavailable".into()]);
+                if !send_blocks.is_empty() {
+                    ui.colored_label(
+                        AMBER,
+                        format!("Sending blocked: {}", send_blocks.join("; ")),
+                    );
+                }
                 let actions = ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(available && self.dirty, egui::Button::new("Save changes")).clicked() {
                         match crate::mail::validate_draft(&self.editor) {
@@ -101,7 +112,13 @@ impl App {
                     if ui.add_enabled(available && !self.dirty, egui::Button::new("Dismiss")).clicked() {
                         self.worker.command(Command::Dismiss { id: job.id.clone(), revision: job.revision });
                     }
-                    let can_send = available && !self.dirty && visible_draft_matches(job, &self.editor) && s.settings.sending_enabled && !s.demo && !self.worker.paused.load(Ordering::SeqCst);
+                    let can_send = available
+                        && !self.dirty
+                        && visible_draft_matches(job, &self.editor)
+                        && send_blocks.is_empty()
+                        && s.settings.sending_enabled
+                        && !s.demo
+                        && !self.worker.paused.load(Ordering::SeqCst);
                     if ui.add_enabled(can_send, egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT)).clicked() {
                         self.send_confirmation = Some(job.clone());
                     }
