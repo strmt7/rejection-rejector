@@ -29,6 +29,7 @@ struct Fixture {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     chats: Arc<Mutex<Vec<Value>>>,
+    warms: Arc<Mutex<Vec<Value>>>,
 }
 impl Fixture {
     fn new(scenario: Scenario) -> Self {
@@ -36,8 +37,10 @@ impl Fixture {
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let chats = Arc::new(Mutex::new(Vec::new()));
+        let warms = Arc::new(Mutex::new(Vec::new()));
         let flag = stop.clone();
         let calls = chats.clone();
+        let warm_calls = warms.clone();
         let handle = thread::spawn(move || {
             let mut stage = 0;
             while !flag.load(Ordering::SeqCst) {
@@ -57,6 +60,15 @@ impl Fixture {
                     }
                     "/api/ps" => {
                         json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":9_000_000_000u64,"size_vram":if scenario==Scenario::CpuOnly {2_000_000_000u64}else{9_000_000_000u64},"context_length":8192}]})
+                    }
+                    "/api/generate" => {
+                        let mut body = String::new();
+                        req.as_reader().read_to_string(&mut body).unwrap();
+                        warm_calls
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::from_str(&body).unwrap());
+                        json!({"model":DEFAULT_MODEL,"response":"ready","done":true,"done_reason":"length","prompt_eval_count":4,"eval_count":1})
                     }
                     "/api/chat" => {
                         let mut body = String::new();
@@ -91,6 +103,7 @@ impl Fixture {
             stop,
             handle: Some(handle),
             chats,
+            warms,
         }
     }
     fn settings(&self) -> Settings {
@@ -129,6 +142,7 @@ fn three_stage_protocol_binds_draft_and_model_and_uses_reasoning() {
     assert!(flags.is_empty());
     let calls = f.chats.lock().unwrap();
     assert_eq!(calls.len(), 3);
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
     for call in calls.iter() {
         assert_eq!(call["think"], true);
         assert_eq!(call["stream"], false);
@@ -150,6 +164,7 @@ fn qualification_exercises_classification_drafting_verification_and_residency() 
     let status = Ollama::new(&settings).unwrap().qualify().unwrap();
     assert!(status.gpu_resident);
     assert_eq!(f.chats.lock().unwrap().len(), 3);
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -159,6 +174,7 @@ fn qualification_rejects_a_failed_reply_verifier() {
     settings.model_digest = None;
     assert!(Ollama::new(&settings).unwrap().qualify().is_err());
     assert_eq!(f.chats.lock().unwrap().len(), 3);
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -169,6 +185,7 @@ fn fabricated_evidence_prevents_drafting() {
         .analyze(&email())
         .is_err());
     assert_eq!(f.chats.lock().unwrap().len(), 1);
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
 #[test]
 fn truncated_generation_prevents_drafting() {
@@ -178,6 +195,7 @@ fn truncated_generation_prevents_drafting() {
         .analyze(&email())
         .is_err());
     assert_eq!(f.chats.lock().unwrap().len(), 1);
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
 #[test]
 fn cloud_marker_blocks_before_any_email_inference() {
@@ -187,6 +205,7 @@ fn cloud_marker_blocks_before_any_email_inference() {
         .analyze(&email())
         .is_err());
     assert!(f.chats.lock().unwrap().is_empty());
+    assert!(f.warms.lock().unwrap().is_empty());
 }
 #[test]
 fn changed_digest_blocks_before_any_email_inference() {
@@ -195,14 +214,15 @@ fn changed_digest_blocks_before_any_email_inference() {
     s.model_digest = Some("b".repeat(64));
     assert!(Ollama::new(&s).unwrap().analyze(&email()).is_err());
     assert!(f.chats.lock().unwrap().is_empty());
+    assert!(f.warms.lock().unwrap().is_empty());
 }
 #[test]
-fn cpu_offload_does_not_receive_automatic_gpu_approval() {
+fn cpu_offload_is_blocked_before_private_email_inference() {
     let f = Fixture::new(Scenario::CpuOnly);
-    let (a, _, flags) = Ollama::new(&f.settings())
+    assert!(Ollama::new(&f.settings())
         .unwrap()
         .analyze(&email())
-        .unwrap();
-    assert!(!a.gpu_resident);
-    assert!(flags.iter().any(|x| x.contains("GPU")));
+        .is_err());
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
+    assert!(f.chats.lock().unwrap().is_empty());
 }

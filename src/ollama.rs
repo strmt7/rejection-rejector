@@ -63,6 +63,12 @@ struct Chat {
     eval_count: u32,
 }
 #[derive(Deserialize)]
+struct Generate {
+    done: bool,
+    #[serde(default)]
+    prompt_eval_count: u32,
+}
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReplyOutput {
     body: String,
@@ -214,6 +220,41 @@ impl Ollama {
         ensure!(status.gpu_resident, "{}", status.message);
         Ok(status)
     }
+    fn preflight_private_inference(&self) -> Result<ModelStatus> {
+        let info = self.inspect()?;
+        let warm: Generate = net::json(
+            net::client(self.settings.llm_timeout_seconds, true)?
+                .post(self.url("/api/generate"))
+                .json(&json!({
+                    "model": self.settings.model,
+                    "prompt": "Reply with one word: ready",
+                    "stream": false,
+                    "think": false,
+                    "keep_alive": "5m",
+                    "options": {
+                        "num_ctx": self.settings.num_ctx,
+                        "num_predict": 1,
+                        "temperature": 0.0,
+                        "seed": 42
+                    }
+                }))
+                .send()
+                .context("Local Ollama warm-up failed")?,
+            256 * 1024,
+        )?;
+        ensure!(
+            warm.done && warm.prompt_eval_count > 0,
+            "Local model warm-up was incomplete"
+        );
+        let status = self.residency(&info.digest)?;
+        ensure!(
+            status.gpu_resident,
+            "Private email inference is blocked until the pinned model is fully GPU-resident: {}",
+            status.message
+        );
+        Ok(status)
+    }
+
     pub fn classify(&self, email: &Email) -> Result<(Verdict, bool)> {
         let current = mail::current_text(&email.text);
         let (text, complete) = mail::bounded_text(
@@ -238,11 +279,11 @@ impl Ollama {
         ))
     }
     pub fn analyze(&self, email: &Email) -> Result<(Analysis, Option<Draft>, Vec<String>)> {
-        let info = self.inspect()?;
         ensure!(
             self.settings.model_digest.is_some(),
             "Qualify and pin the local model before processing email"
         );
+        let preflight = self.preflight_private_inference()?;
         let (verdict, mut complete) = self.classify(email)?;
         let mut flags = Vec::new();
         let mut draft = None;
@@ -275,11 +316,11 @@ impl Ollama {
             draft = Some(d);
         }
         let gpu = self
-            .residency(&info.digest)
+            .residency(&preflight.digest)
             .map(|s| s.gpu_resident)
             .unwrap_or(false);
         if !gpu {
-            flags.push("Full GPU residency was not confirmed".into());
+            flags.push("Full GPU residency was lost during analysis".into());
         }
         if !complete {
             flags.push("Input was too long or incomplete; automatic sending blocked".into());
@@ -297,7 +338,7 @@ impl Ollama {
                 verdict,
                 verification,
                 model: self.settings.model.clone(),
-                model_digest: info.digest,
+                model_digest: preflight.digest,
                 prompt_version: PROMPT_VERSION.into(),
                 email_fingerprint: email.fingerprint(),
                 verified_draft_hash: verified_hash,
