@@ -56,8 +56,17 @@ impl Engine {
         };
         let mut db = Store::open(&directory.join("state.sqlite3"), vault)?;
         db.recover_interrupted_sends()?;
-        let settings: Settings = db.meta("settings")?.unwrap_or_default();
+        let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
+        let repaired = settings.repair_legacy_automatic_state();
         settings.validate()?;
+        if repaired {
+            db.set_meta("settings", &settings)?;
+            db.log(
+                "settings.repaired",
+                None,
+                "Legacy Automatic mode without a qualified model pin was disabled fail-closed",
+            )?;
+        }
         let creds: Option<Credentials> = db.meta("google_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
         if !account.is_empty() {
