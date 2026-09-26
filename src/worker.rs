@@ -55,6 +55,7 @@ pub enum Command {
     InstallOllama,
     StartOllama,
     PullModel,
+    InspectModel,
     QualifyModel,
     List {
         review: bool,
@@ -267,6 +268,10 @@ fn run(
                         busy(&shared, "Downloading the selected local model…");
                         Ollama::new(&e.settings)
                             .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &p)))
+                    }
+                    Command::InspectModel => {
+                        busy(&shared, "Refreshing local model status…");
+                        e.inspect_model_status()
                     }
                     Command::QualifyModel => {
                         busy(

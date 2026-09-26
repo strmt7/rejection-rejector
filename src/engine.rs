@@ -185,6 +185,34 @@ impl Engine {
         )?;
         Ok(())
     }
+    pub fn inspect_model_status(&mut self) -> Result<()> {
+        let mut unpinned = self.settings.clone();
+        unpinned.model_digest = None;
+        let local = Ollama::new(&unpinned)?;
+        let mut status = local.inspect()?;
+        if let Some(pin) = &self.settings.model_digest {
+            let expected = pin.trim_start_matches("sha256:");
+            let actual = status.digest.trim_start_matches("sha256:");
+            if expected != actual {
+                status.gpu_resident = false;
+                status.message =
+                    "Installed model digest differs from the qualified pin; qualify again".into();
+            } else {
+                match local.residency(&status.digest) {
+                    Ok(resident) => status = resident,
+                    Err(error) => {
+                        status.gpu_resident = false;
+                        status.message = format!(
+                            "Pinned model is installed but not currently confirmed GPU-resident: {error}"
+                        );
+                    }
+                }
+            }
+        }
+        self.model = status;
+        Ok(())
+    }
+
     pub fn synchronize(&mut self) -> Result<usize> {
         ensure!(
             !self.demo,
