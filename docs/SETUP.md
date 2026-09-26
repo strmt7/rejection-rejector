@@ -73,7 +73,7 @@ Pause blocks future dispatch but cannot recall a request already sent to Gmail. 
 
 An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection returns the rejection message to Human Review instead of pretending delivery may have occurred. Completed Sent records are permanent per-message at-most-once tombstones, but they do not block a later distinct rejection in the same thread.
 
-Pruning removes old completed content, not deduplication/delivery identities. Pending/uncertain records remain. Invoke pruning explicitly; it is not automatic physical erasure. Close the app before copying database files. A database copy without its Credential Manager key is not portable. Do not delete the OS credential or vault-id; key loss is unrecoverable in v0.1.
+Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not automatic physical erasure. Close the app before copying database files. A database copy without its Credential Manager key is not portable. Do not delete the OS credential or vault-id; key loss is unrecoverable in v0.1.
 
 ## Troubleshooting
 

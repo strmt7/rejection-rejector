@@ -614,7 +614,10 @@ impl Store {
                 j.email = None;
                 j.draft = None;
                 j.analysis = None;
-                j.flags = vec!["Content pruned; identity retained".into()];
+                j.drafted_at = None;
+                j.attempts = 0;
+                j.retry_at = 0;
+                j.flags = vec!["Private content pruned; delivery identity retained".into()];
                 self.save(&mut j, "content.pruned", "Retention policy")?;
                 n += 1;
             }
@@ -1002,6 +1005,40 @@ mod tests {
         db.finish_send(&a.id, None).unwrap();
         assert!(db.reserve_send(&b, 1, Utc::now()).is_err());
     }
+    #[test]
+    fn retention_prunes_private_processing_state_but_keeps_identity() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let identity = stub("retained-id", "retained-thread");
+        let id = identity.id();
+        let old = Utc::now() - chrono::Duration::days(100);
+        db.insert_stub(identity, old).unwrap();
+        let mut job = db.get(&id).unwrap();
+        job.state = JobState::Dismissed;
+        job.email = Some(crate::ollama::sample_email("Private subject", "Private body"));
+        job.draft = Some(Draft {
+            body: "Private draft with enough content for retention testing.".into(),
+            origin: "human".into(),
+        });
+        job.drafted_at = Some(old);
+        job.attempts = 2;
+        job.retry_at = old.timestamp();
+        db.save(&mut job, "test", "old completed content").unwrap();
+        db.conn.execute(
+            "UPDATE items SET updated_at=?2 WHERE id=?1",
+            params![id, old.timestamp()],
+        ).unwrap();
+        assert_eq!(db.purge(30).unwrap(), 1);
+        let pruned = db.get(&id).unwrap();
+        assert_eq!(pruned.stub.provider_id, "retained-id");
+        assert!(pruned.email.is_none());
+        assert!(pruned.draft.is_none());
+        assert!(pruned.analysis.is_none());
+        assert!(pruned.drafted_at.is_none());
+        assert_eq!(pruned.attempts, 0);
+        assert_eq!(pruned.retry_at, 0);
+    }
+
     #[test]
     fn secret_not_in_plaintext() {
         let d = tempfile::tempdir().unwrap();
