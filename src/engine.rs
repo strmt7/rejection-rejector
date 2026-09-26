@@ -161,11 +161,8 @@ impl Engine {
         self.settings = settings;
         if tightened_window && !self.account.is_empty() {
             let now = Utc::now();
-            self.db.defer_review_outside_window(
-                &self.account,
-                self.settings.cutoff(now),
-                now,
-            )?;
+            self.db
+                .defer_review_outside_window(&self.account, self.settings.cutoff(now), now)?;
         }
         self.db.log(
             "settings.changed",
