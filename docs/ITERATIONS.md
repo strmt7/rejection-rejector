@@ -33,3 +33,17 @@ The final workflow removes the temporary source-finalization and auto-commit job
 ## Evidence boundary
 
 Always use the latest completed workflow and its artifact COMMIT.txt to identify the exact tested version. Historic passing tests do not certify later edits. Real Gmail authorization/delivery, actual model accuracy, physical 16 GiB GPU peaks and complete Windows DPI/accessibility testing remain owner-environment acceptance checks. No such results were fabricated.
+
+## Completion hardening rounds
+
+The incremental Gmail queue was changed from one SQLite transaction per discovered message to one encrypted transaction per Gmail page. `INSERT OR IGNORE` keeps existing payloads untouched and only genuinely missing identities receive a queue record and audit event. Regression coverage verifies replay-safe deduplication.
+
+Age-window enforcement was tightened: reducing 28/14/7/3/1-day scope immediately defers older actionable records and clears their stored message body, draft and analysis while retaining only the provider-identity tombstone needed for deduplication and later scope expansion.
+
+Local AI qualification now exercises all three reasoning stages—classification, drafting and verification—before accepting a digest pin, then requires the configured full-GPU-residency gate. Automatic-mode deterministic guards were expanded for clear interview/offer and prompt-injection language across English, German, French, Italian, Spanish and Portuguese; the LLM remains the primary classifier.
+
+The headless CLI gained `rr doctor`, which reports only non-sensitive Gmail permission/configuration flags, schedule/mode, Ollama reachability, model pin/install state and current residency. CI also smoke-tests this command in an isolated encrypted workspace.
+
+## Final acceptance rule
+
+The deliverable is only considered build-verified when the newest `main` workflow completes successfully on both Windows and Linux after all of the rounds above. The Windows ZIP must contain an exact `COMMIT.txt`, toolchain evidence and SHA-256 manifests. Live Gmail consent/delivery, model accuracy on the owner's private corpus and physical 16 GiB GPU behavior remain explicit owner-environment acceptance checks.

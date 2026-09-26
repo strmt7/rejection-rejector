@@ -31,7 +31,7 @@ Open **Local AI**, using `gemma4:12b-it-qat` and 8,192 context initially.
 1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
 3. **Download model** retrieves weights through the local Ollama API with progress. No email is sent to the registry.
-4. **Qualify & pin** checks local metadata, runs a synthetic classification, reads loaded-model memory counters and saves the digest. Qualification does not authorize email sending.
+4. **Qualify & pin** checks local GGUF metadata and cloud markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.
 
 Equivalent environment for a server you start yourself:
 
@@ -47,9 +47,19 @@ ollama serve
 
 Do not start a second server on an occupied port. Environment variables do not retroactively change an existing process. GPU compatibility depends on Ollama/backend/driver. The app does not guarantee every 16 GiB card works identically.
 
+### Readiness check
+
+Close the GUI, then run:
+
+```powershell
+.\rr.exe doctor
+```
+
+This prints only non-sensitive readiness state: Gmail connection/send-scope flags, selected schedule/mode, Ollama reachability, model pin/install match and current Ollama GPU-residency status. It does not print message bodies, refresh tokens or OAuth client secrets. A healthy point-in-time residency report does not replace **Qualify & pin**, which exercises the full local AI pipeline.
+
 ## Human review
 
-Save the check interval and age window. Use **Check email now** to populate the durable queue. Only new items are processed; non-rejection bodies are discarded after classification while identities remain.
+Save the check interval and age window. Use **Check email now** to populate the durable queue. Only missing provider identities are inserted; Gmail pages are committed in batches. Non-rejection bodies are discarded after classification while identities remain. Tightening the age window immediately removes older reviewable items from the queue and clears their stored body/draft/analysis while retaining the identity tombstone for deduplication.
 
 Select a rejection in Review. Read the original and response, edit/save or regenerate it, then confirm the exact recipient, subject and body before sending. A failed save must remain unsaved. Sending requires Google send scope **and** the app's Enable sending switch. The conversation is rechecked before dispatch.
 
