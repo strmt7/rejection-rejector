@@ -324,11 +324,48 @@ impl App {
                         .map(|e| e.subject.as_str())
                         .unwrap_or("Message awaiting analysis");
                     let selected = s.selected.as_ref().is_some_and(|j| j.id == job.id);
-                    let title = format!("{}\n{}", subject, job.state.label());
+                    let role = job
+                        .analysis
+                        .as_ref()
+                        .map(|analysis| {
+                            let company = analysis.verdict.company.trim();
+                            let position = analysis.verdict.position.trim();
+                            match (company.is_empty(), position.is_empty()) {
+                                (false, false) => format!("{company} · {position}"),
+                                (false, true) => company.to_owned(),
+                                (true, false) => position.to_owned(),
+                                (true, true) => String::new(),
+                            }
+                        })
+                        .unwrap_or_default();
+                    let received = job
+                        .email
+                        .as_ref()
+                        .map(|email| {
+                            email
+                                .received_at
+                                .with_timezone(&chrono::Local)
+                                .format("%d %b · %H:%M")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| "Date unavailable".into());
+                    let score = job
+                        .analysis
+                        .as_ref()
+                        .map(|analysis| format!(" · score {}/100", analysis.verdict.confidence))
+                        .unwrap_or_default();
+                    let title = if role.is_empty() {
+                        format!("{subject}\n{received} · {}{score}", job.state.label())
+                    } else {
+                        format!(
+                            "{subject}\n{role}\n{received} · {}{score}",
+                            job.state.label()
+                        )
+                    };
                     if ui
                         .add_sized(
-                            [ui.available_width(), 78.0],
-                            egui::Button::new(RichText::new(title).size(14.0))
+                            [ui.available_width(), if role.is_empty() { 82.0 } else { 102.0 }],
+                            egui::Button::new(RichText::new(title).size(13.5))
                                 .selected(selected)
                                 .wrap(),
                         )
