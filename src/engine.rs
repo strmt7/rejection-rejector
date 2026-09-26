@@ -540,10 +540,11 @@ impl Engine {
             .reserve_send(&job, self.settings.daily_send_limit, Utc::now())?;
         // The check is repeated after reservation; cancellation consumes the reservation conservatively.
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
-            self.db.finish_send(id, None)?;
-            anyhow::bail!(
-                "Dispatch cancelled after reservation; reconcile before any further action"
-            );
+            self.db.release_unsent_reservation(
+                id,
+                "Dispatch was cancelled before the Gmail network request; no email was sent",
+            )?;
+            anyhow::bail!("Dispatch cancelled before Gmail accepted any request");
         }
         match self
             .gmail
@@ -556,7 +557,7 @@ impl Engine {
                 Ok(())
             }
             Err(error) if error.kind == SendFailureKind::NotAccepted => {
-                self.db.cancel_rejected_send(
+                self.db.release_unsent_reservation(
                     id,
                     "Gmail definitively rejected the send request; no email was accepted",
                 )?;

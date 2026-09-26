@@ -434,7 +434,7 @@ impl Store {
         tx.commit()?;
         Ok(j)
     }
-    pub fn cancel_rejected_send(&mut self, id: &str, detail: &str) -> Result<Job> {
+    pub fn release_unsent_reservation(&mut self, id: &str, detail: &str) -> Result<Job> {
         let mut job = self.get(id)?;
         ensure!(
             job.state == JobState::Sending,
@@ -817,11 +817,28 @@ mod tests {
         let second = ready(&mut db, "second", "same-thread");
         db.reserve_send(&first, 10, Utc::now()).unwrap();
         let restored = db
-            .cancel_rejected_send(&first.id, "Synthetic HTTP 403")
+            .release_unsent_reservation(&first.id, "Synthetic HTTP 403")
             .unwrap();
         assert_eq!(restored.state, JobState::Attention);
         assert!(!db.thread_reserved(&first.stub.thread_key()).unwrap());
         db.reserve_send(&second, 10, Utc::now()).unwrap();
+    }
+
+    #[test]
+    fn known_unsent_cancellation_does_not_become_uncertain() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let candidate = ready(&mut db, "cancelled", "cancelled-thread");
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
+        let restored = db
+            .release_unsent_reservation(
+                &candidate.id,
+                "Synthetic pause before network dispatch",
+            )
+            .unwrap();
+        assert_eq!(restored.state, JobState::Attention);
+        assert_eq!(db.counts("me@example.com").unwrap().uncertain, 0);
+        assert!(!db.thread_reserved(&candidate.stub.thread_key()).unwrap());
     }
 
     #[test]
