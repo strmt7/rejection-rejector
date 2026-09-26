@@ -24,6 +24,7 @@ enum Scenario {
     Remote,
     VerifierFail,
     BadSignature,
+    NativeFormat,
 }
 struct Fixture {
     url: String,
@@ -53,7 +54,12 @@ impl Fixture {
                         json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":7_200_000_000u64}]})
                     }
                     "/api/show" => {
-                        let mut data = json!({"details":{"format":"gguf"},"model_info":{"general.architecture":"gemma4"}});
+                        let format = if scenario == Scenario::NativeFormat {
+                            "mxfp4"
+                        } else {
+                            "gguf"
+                        };
+                        let mut data = json!({"details":{"format":format},"model_info":{"general.architecture":"gemma4"}});
                         if scenario == Scenario::Remote {
                             data["remote_host"] = json!("https://remote.invalid");
                         }
@@ -213,6 +219,19 @@ fn truncated_generation_prevents_drafting() {
     assert_eq!(f.chats.lock().unwrap().len(), 1);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
+#[test]
+fn local_non_gguf_model_formats_are_allowed_when_residency_passes() {
+    let f = Fixture::new(Scenario::NativeFormat);
+    let (analysis, draft, flags) = Ollama::new(&f.settings())
+        .unwrap()
+        .analyze(&email())
+        .unwrap();
+    assert_eq!(analysis.verdict.category, Category::Rejection);
+    assert!(analysis.gpu_resident);
+    assert!(draft.is_some());
+    assert!(flags.is_empty());
+}
+
 #[test]
 fn cloud_marker_blocks_before_any_email_inference() {
     let f = Fixture::new(Scenario::Remote);

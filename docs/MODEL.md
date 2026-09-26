@@ -12,7 +12,7 @@ The app uses local `/api/chat`, thinking, structured JSON, a fixed seed and low 
 
 **Qualify & pin** is an end-to-end application test, not a download check. It:
 
-1. requires an installed local GGUF model and rejects Ollama remote/cloud markers;
+1. requires installed local model metadata and rejects Ollama remote/cloud markers;
 2. validates the selected model name and inspected digest;
 3. runs a synthetic rejection through classification;
 4. requires a valid structured assertive draft;
