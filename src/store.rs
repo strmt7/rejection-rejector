@@ -103,27 +103,37 @@ impl Store {
             |r| r.get(0),
         )?)
     }
-    pub fn insert_stub(&mut self, stub: Stub, now: DateTime<Utc>) -> Result<bool> {
-        let j = Job::new(stub, now);
-        if self.contains(&j.id)? {
-            return Ok(false);
-        }
+    /// Insert a Gmail page worth of message identities in one durable transaction.
+    /// Existing identities are ignored without rewriting their encrypted payloads.
+    pub fn insert_stubs<I>(&mut self, stubs: I, now: DateTime<Utc>) -> Result<usize>
+    where
+        I: IntoIterator<Item = Stub>,
+    {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let n = tx.execute("INSERT OR IGNORE INTO items(id,account_key,state,revision,created_at,updated_at,retry_at,payload) VALUES(?1,?2,?3,0,?4,?4,0,?5)", params![j.id, hash(&j.stub.account), j.state.db(), now.timestamp(), self.vault.seal(&format!("item/{}", j.id), &j)?])?;
-        if n == 1 {
-            event(
-                &tx,
-                &self.vault,
-                "email.queued",
-                Some(&j.id),
-                "New provider identity stored",
-                now,
-            )?;
+        let mut inserted = 0usize;
+        for stub in stubs {
+            let j = Job::new(stub, now);
+            let n = tx.execute("INSERT OR IGNORE INTO items(id,account_key,state,revision,created_at,updated_at,retry_at,payload) VALUES(?1,?2,?3,0,?4,?4,0,?5)", params![j.id, hash(&j.stub.account), j.state.db(), now.timestamp(), self.vault.seal(&format!("item/{}", j.id), &j)?])?;
+            if n == 1 {
+                event(
+                    &tx,
+                    &self.vault,
+                    "email.queued",
+                    Some(&j.id),
+                    "New provider identity stored",
+                    now,
+                )?;
+                inserted += 1;
+            }
         }
         tx.commit()?;
-        Ok(n == 1)
+        Ok(inserted)
+    }
+
+    pub fn insert_stub(&mut self, stub: Stub, now: DateTime<Utc>) -> Result<bool> {
+        Ok(self.insert_stubs(std::iter::once(stub), now)? == 1)
     }
     pub fn get(&self, id: &str) -> Result<Job> {
         let (b, r, s): (Vec<u8>, u64, String) = self
@@ -450,6 +460,35 @@ mod tests {
         db.save(&mut j, "test", "ready").unwrap();
         j
     }
+    #[test]
+    fn batch_insert_only_stores_missing_identities() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        assert_eq!(
+            db.insert_stubs(
+                vec![stub("a", "ta"), stub("b", "tb"), stub("a", "ta")],
+                now,
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.insert_stubs(vec![stub("a", "ta"), stub("b", "tb")], now)
+                .unwrap(),
+            0
+        );
+        assert_eq!(db.counts("me@example.com").unwrap().stored, 2);
+        assert_eq!(
+            db.events(0, 100)
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == "email.queued")
+                .count(),
+            2
+        );
+    }
+
     #[test]
     fn dedup_and_stale_revisions() {
         let d = tempfile::tempdir().unwrap();

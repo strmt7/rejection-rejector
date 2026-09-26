@@ -82,11 +82,13 @@ pub fn synchronize<P: Provider>(
             }
             HistoryResult::Page(p) => p,
         };
+        let mut stubs = Vec::new();
         for record in p.history {
             for added in record.messages_added {
-                inserted += usize::from(db.insert_stub(gmail::stub(account, added.message)?, now)?);
+                stubs.push(gmail::stub(account, added.message)?);
             }
         }
+        inserted += db.insert_stubs(stubs, now)?;
         if let Some(next) = p.next_page_token {
             ensure!(
                 tokens.insert(next.clone()) && tokens.len() <= 10000,
@@ -132,9 +134,11 @@ fn full_sync<P: Provider>(
             "Synchronization cancelled; previous cursor retained"
         );
         let p = provider.list(&query, page.as_deref())?;
+        let mut stubs = Vec::with_capacity(p.messages.len());
         for message in p.messages {
-            n += usize::from(db.insert_stub(gmail::stub(account, message)?, now)?);
+            stubs.push(gmail::stub(account, message)?);
         }
+        n += db.insert_stubs(stubs, now)?;
         if let Some(next) = p.next_page_token {
             ensure!(
                 tokens.insert(next.clone()) && tokens.len() <= 10000,
