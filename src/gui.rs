@@ -514,6 +514,15 @@ impl App {
                 {
                     self.worker.command(Command::QualifyModel);
                 }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo && s.settings.model_digest.is_some(),
+                        egui::Button::new("Evaluate synthetic suite"),
+                    )
+                    .clicked()
+                {
+                    self.worker.command(Command::EvaluateModel);
+                }
             });
         });
         ui.add_space(16.0);
@@ -547,7 +556,7 @@ impl App {
                 self.worker
                     .command(Command::Settings(self.settings.clone()));
             }
-            ui.label(RichText::new("Qualification is a smoke test and an Ollama-reported residency check, not proof of peak whole-device memory or best-in-class accuracy. Test on your actual GPU and mailbox before using Automatic.").small().color(AMBER));
+            ui.label(RichText::new("Qualification is a smoke test and an Ollama-reported residency check, not proof of peak whole-device memory or best-in-class accuracy. The evaluation button writes a timestamped JSON report into this app's local data directory; it uses synthetic fixtures only and sends no email. Test on your actual GPU and mailbox before using Automatic.").small().color(AMBER));
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui, s: &Snapshot) {

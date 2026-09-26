@@ -1,5 +1,6 @@
 use crate::{
     config::{Mode, Settings, PROMPT_VERSION},
+    evaluation,
     gmail::Gmail,
     mail,
     oauth::{self, Credentials},
@@ -220,6 +221,19 @@ impl Engine {
         }
         self.model = status;
         Ok(())
+    }
+
+    pub fn evaluate_model(&mut self) -> Result<PathBuf> {
+        ensure!(!self.demo, "Synthetic demo mode does not run the configured model");
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        let path = self.directory.join(format!("model-evaluation-{stamp}.json"));
+        evaluation::run(&self.settings, &path)?;
+        self.db.log(
+            "model.evaluated",
+            None,
+            &format!("Synthetic model evaluation saved as {}", path.display()),
+        )?;
+        Ok(path)
     }
 
     pub fn synchronize(&mut self) -> Result<usize> {

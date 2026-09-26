@@ -57,6 +57,7 @@ pub enum Command {
     PullModel,
     InspectModel,
     QualifyModel,
+    EvaluateModel,
     List {
         review: bool,
         page: u32,
@@ -281,6 +282,13 @@ fn run(
                         let r = e.qualify();
                         settings_changed = r.is_ok();
                         r
+                    }
+                    Command::EvaluateModel => {
+                        busy(
+                            &shared,
+                            "Running the local synthetic evaluation suite…",
+                        );
+                        e.evaluate_model().map(|_| ())
                     }
                     Command::List { review: r, page: p } => {
                         review = r;
