@@ -1,10 +1,14 @@
-# Integrating the separate job-seeker app
+# Integration with the separate job-seeker application
 
-Use the Rust library or the read-only HTTP API, not SQLite internals. Only one process can open a data directory.
+## Rust library
 
-Enable the API in Settings, save and restart. Default origin: http://127.0.0.1:8734. Reveal its random bearer token in Settings. It is stored encrypted and grants access to private email data; keep it out of repositories/frontend constants.
+The crate exposes typed configuration/messages, encrypted storage, Gmail synchronization, Ollama analysis, the guarded engine and the worker. Prefer these interfaces to duplicating delivery logic. Only one GUI or headless worker may own a data directory; close the GUI before running rr.exe run.
 
-Only GET with an exact loopback Host and valid bearer is accepted. Browser Origin headers are refused; no CORS permission is emitted. There are no write/send endpoints in v0.1. The future Rust desktop backend can call it directly.
+## Read-only loopback API
+
+Enable the API in Settings, save and restart the app or worker. The default origin is http://127.0.0.1:8734. Reveal its random bearer token in Settings. The token is stored encrypted and grants access to private email content; never commit it or embed it in a public frontend.
+
+The server accepts GET only, an exact literal-loopback Host header and the valid bearer token. Browser Origin headers are refused and no CORS permissions are emitted. Call from the trusted Rust backend of the future desktop application, not arbitrary web content.
 
 ```powershell
 $token = Read-Host 'Local API token'
@@ -14,4 +18,13 @@ Invoke-RestMethod 'http://127.0.0.1:8734/v1/items?page=0' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 ```
 
-/v1/status returns aggregate status; /v1/items?page=N returns 25 account-owned jobs; /v1/items/ID returns one job; /v1/events?after=SEQ returns up to100 audit events. Persist the largest sequence for incremental consumption. Responses use no-store. A503 means the single worker is busy: retry with bounded backoff. Enabling/disabling/changing the listener requires restart. api_allow_writes=true is rejected; no webhook upload exists.
+| Endpoint | Result |
+|---|---|
+| /v1/status | Version, account, mode, pause/send settings, counts and last successful sync |
+| /v1/items?page=N | Page of 25 account-owned jobs with retained original/draft content |
+| /v1/items/ID | One account-owned job |
+| /v1/events?after=SEQ | Up to 100 audit events; persist the highest returned sequence |
+
+Responses use Cache-Control: no-store. HTTP 503 means the single worker is busy, for example during local inference: use bounded backoff rather than bypassing the worker and opening SQLite directly. SQLite internals are not a stable integration contract.
+
+Version 0.1 has no write/send HTTP routes, automatic webhook uploads or cross-service synchronization. The reserved api_allow_writes setting rejects true. Enabling, disabling or changing the API listener requires a restart.
