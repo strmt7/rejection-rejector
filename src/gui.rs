@@ -59,8 +59,8 @@ impl App {
         style.visuals.extreme_bg_color = BG;
         style.visuals.faint_bg_color = PANEL;
         style.visuals.selection.bg_fill = Color32::from_rgb(29, 81, 72);
-        style.visuals.selection.stroke = egui::Stroke::new(1.0, MINT);
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, LINE);
+        style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, MINT);
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
         style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 44, 58);
         style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 65, 79);
         style.spacing.item_spacing = Vec2::new(12.0, 12.0);
@@ -112,7 +112,7 @@ impl App {
     fn card(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
         egui::Frame::default()
             .fill(PANEL)
-            .stroke(egui::Stroke::new(1.0, LINE))
+            .stroke(egui::Stroke::new(1.0_f32, LINE))
             .corner_radius(12)
             .inner_margin(18)
             .show(ui, body);
@@ -775,7 +775,8 @@ impl App {
         }
         if self.install_confirmation {
             egui::Window::new("Install Ollama").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0]).show(ctx,|ui|{
-            ui.label("This runs the official Ollama package through Windows Package Manager. It changes this computer and may require Windows approval. The model download is a separate step.");ui.horizontal(|ui|{if ui.button("Cancel").clicked(){self.install_confirmation=false;}if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.command(Command::InstallOllama);}});
+            ui.label("This runs the official Ollama package through Windows Package Manager. It changes this computer and may require Windows approval. The model download is a separate step.");ui.horizontal(|ui|{if ui.button("Cancel").clicked(){self.install_confirmation=false;}
+if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.command(Command::InstallOllama);}});
         });
         }
         if let Some(job) = self.send_confirmation.clone() {
@@ -783,7 +784,8 @@ impl App {
             if let Some(e)=&job.email{ui.label(RichText::new(format!("To: {}",e.recipient().unwrap_or_default())).strong());ui.label(format!("Subject: {}",e.subject));}
             ui.separator();let body=job.draft.as_ref().map(|d|d.body.as_str()).unwrap_or("");egui::ScrollArea::vertical().max_height(400.0).show(ui,|ui|{ui.label(body);});
             ui.colored_label(AMBER,"Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.");
-            ui.horizontal(|ui|{if ui.button("Cancel").clicked(){self.send_confirmation=None;}if ui.add_enabled(s.busy.is_empty()&&!self.worker.paused.load(Ordering::SeqCst),egui::Button::new("Send this reply now")).clicked(){self.worker.command(Command::Send{id:job.id,revision:job.revision,body_hash:hash(body)});self.send_confirmation=None;}});
+            ui.horizontal(|ui|{if ui.button("Cancel").clicked(){self.send_confirmation=None;}
+if ui.add_enabled(s.busy.is_empty()&&!self.worker.paused.load(Ordering::SeqCst),egui::Button::new("Send this reply now")).clicked(){self.worker.command(Command::Send{id:job.id,revision:job.revision,body_hash:hash(body)});self.send_confirmation=None;}});
         });
         }
     }
@@ -796,7 +798,7 @@ impl eframe::App for App {
         if self.screenshot.is_some() {
             // Screenshot mode is restricted to synthetic demo data.
             ctx.request_repaint();
-            if self.frames % 120 == 0 {
+            if self.frames.is_multiple_of(120) {
                 eprintln!("GUI_QA initialized={} fatal={} items={} selected={} requested={} elapsed={:.1}",s.initialized,s.fatal,s.items.len(),s.selected.is_some(),self.screenshot_requested,self.started.elapsed().as_secs_f32());
             }
         }

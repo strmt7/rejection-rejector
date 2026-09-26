@@ -1,5 +1,6 @@
 //! Application-layer authenticated encryption. Indexes/counts/timestamps are not encrypted.
 use anyhow::{ensure, Context, Result};
+#[cfg(any(windows, target_os = "macos"))]
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},

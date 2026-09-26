@@ -28,6 +28,8 @@
 
 Download the Windows package from a successful **Rust CI** run on `main`, extract `rejection-rejector-windows-x64.zip`, and launch `rejection-rejector.exe`. The package contains the desktop binary, `rr.exe`, documentation and exact build-commit evidence. The binaries are unsigned; verify their origin and hash. Do not disable Windows security globally.
 
+Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).
+
 Safe offline preview:
 
 ```powershell
