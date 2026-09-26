@@ -55,8 +55,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ always() }}
       - name: Prepare artifacts
         shell: bash
         run: mkdir -p artifacts
