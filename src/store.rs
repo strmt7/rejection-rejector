@@ -60,15 +60,27 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 1, "Database belongs to a newer app version");
-        conn.execute_batch("BEGIN IMMEDIATE;
-            CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
-            CREATE INDEX IF NOT EXISTS items_queue ON items(account_key,state,retry_at,created_at);
-            CREATE TABLE IF NOT EXISTS deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
-            CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(attempt_at);
-            CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
-            PRAGMA user_version=1; COMMIT;")?;
+        ensure!(version <= 2, "Database belongs to a newer app version");
+        if version == 0 {
+            conn.execute_batch("BEGIN IMMEDIATE;
+                CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
+                CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
+                CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                PRAGMA user_version=2; COMMIT;")?;
+        } else if version == 1 {
+            conn.execute_batch("BEGIN IMMEDIATE;
+                ALTER TABLE items ADD COLUMN received_at INTEGER;
+                CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
+                PRAGMA user_version=2; COMMIT;")?;
+        } else {
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);",
+            )?;
+        }
         let mut db = Self { conn, vault };
         match db.meta::<String>("vault_check")? {
             Some(s) => ensure!(s == "rejection-rejector:v1", "Wrong vault"),
@@ -152,10 +164,11 @@ impl Store {
         let mut next = job.clone();
         next.revision += 1;
         next.updated_at = Utc::now();
+        let received_at = next.email.as_ref().map(|email| email.received_at.timestamp());
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,payload=?6 WHERE id=?1 AND revision=?7", params![next.id, next.state.db(), next.revision, next.updated_at.timestamp(), next.retry_at, self.vault.seal(&format!("item/{}", next.id), &next)?, old])?;
+        let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,received_at=COALESCE(?6,received_at),payload=?7 WHERE id=?1 AND revision=?8", params![next.id, next.state.db(), next.revision, next.updated_at.timestamp(), next.retry_at, received_at, self.vault.seal(&format!("item/{}", next.id), &next)?, old])?;
         ensure!(
             changed == 1,
             "Stale revision: reload the message before acting"
@@ -180,7 +193,7 @@ impl Store {
         limit: u32,
     ) -> Result<Vec<Job>> {
         let limit = limit.clamp(1, 100);
-        let mut q = self.conn.prepare("SELECT id,payload,revision,state FROM items WHERE account_key=?1 AND (?2=0 OR state IN ('ready','attention')) ORDER BY created_at DESC,id LIMIT ?3 OFFSET ?4")?;
+        let mut q = self.conn.prepare("SELECT id,payload,revision,state FROM items WHERE account_key=?1 AND (?2=0 OR state IN ('ready','attention')) ORDER BY COALESCE(received_at,created_at) DESC,id LIMIT ?3 OFFSET ?4")?;
         let rows = q.query_map(
             params![
                 hash(account),
@@ -209,7 +222,7 @@ impl Store {
     }
     pub fn ready_ids(&self, account: &str) -> Result<Vec<String>> {
         let mut q = self.conn.prepare(
-            "SELECT id FROM items WHERE account_key=?1 AND state='ready' ORDER BY created_at,id",
+            "SELECT id FROM items WHERE account_key=?1 AND state='ready' ORDER BY COALESCE(received_at,created_at),id",
         )?;
         let rows = q.query_map([hash(account)], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -561,6 +574,45 @@ mod tests {
         assert!(deferred.analysis.is_none());
         assert!(deferred.drafted_at.is_none());
         assert!(db.list("me@example.com", true, 0, 25).unwrap().is_empty());
+    }
+
+    #[test]
+    fn review_queue_orders_by_email_received_time() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        for (provider, days) in [("older", 3), ("newer", 1)] {
+            let identity = stub(provider, provider);
+            let id = identity.id();
+            db.insert_stub(identity, now).unwrap();
+            let mut job = db.get(&id).unwrap();
+            let mut email = crate::ollama::sample_email(provider, "Rejected");
+            email.stub = job.stub.clone();
+            email.received_at = now - chrono::Duration::days(days);
+            job.email = Some(email);
+            job.state = JobState::Ready;
+            db.save(&mut job, "test", "ready").unwrap();
+        }
+        let jobs = db.list("me@example.com", true, 0, 25).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].stub.provider_id, "newer");
+        assert_eq!(jobs[1].stub.provider_id, "older");
+    }
+
+    #[test]
+    fn schema_v1_migrates_received_time_index() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                PRAGMA user_version=1;").unwrap();
+        }
+        let mut db = Store::open(&path, Vault::random()).unwrap();
+        assert!(db.insert_stub(stub("after-migration", "thread"), Utc::now()).unwrap());
     }
 
     #[test]
