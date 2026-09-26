@@ -86,6 +86,12 @@ pub fn current_text(s: &str) -> String {
             || (l.starts_with("on ") && l.ends_with("wrote:"))
             || (l.starts_with("am ") && l.contains("schrieb"))
             || (l.starts_with("le ") && l.contains("écrit"))
+            || (l.starts_with("il ") && l.contains("ha scritto"))
+            || (l.starts_with("el ") && l.contains("escribió"))
+            || (l.starts_with("em ") && l.contains("escreveu"))
+            || l.contains("messaggio inoltrato")
+            || l.contains("mensaje reenviado")
+            || l.contains("mensagem encaminhada")
         {
             break;
         }
@@ -341,6 +347,24 @@ mod tests {
     fn utf8_bounds_are_safe() {
         assert_eq!(bounded_text("αβγ", 3), ("α", false));
     }
+    #[test]
+    fn multilingual_reply_and_forward_boundaries_hide_old_decisions() {
+        for body in [
+            "Current invitation\nIl 25 settembre Mario ha scritto:\nWe will not proceed.",
+            "Current invitation\nEl 25 de septiembre Ana escribió:\nWe will not proceed.",
+            "Current invitation\nEm 25 de setembro Ana escreveu:\nWe will not proceed.",
+            "Current invitation\n---------- Messaggio inoltrato ---------\nWe will not proceed.",
+            "Current invitation\n---------- Mensaje reenviado ---------\nWe will not proceed.",
+            "Current invitation\n---------- Mensagem encaminhada ---------\nWe will not proceed.",
+        ] {
+            assert_eq!(current_text(body), "Current invitation");
+            assert!(!auto_language_conflict(&format!(
+                "{}\n> We would like to offer you the position",
+                current_text(body)
+            )));
+        }
+    }
+
     #[test]
     fn draft_controls_rejected() {
         assert!(validate_draft("This is a sufficiently long message\u{202e}").is_err());
