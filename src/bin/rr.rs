@@ -66,8 +66,7 @@ fn main() -> Result<()> {
             let (installed, digest_matches, gpu_resident_now, model_message) = if ollama_healthy {
                 match local_ai.inspect() {
                     Ok(info) => {
-                        let digest_matches =
-                            e.settings.model_digest.as_ref() == Some(&info.digest);
+                        let digest_matches = e.settings.model_digest.as_ref() == Some(&info.digest);
                         match local_ai.residency(&info.digest) {
                             Ok(status) => (
                                 info.installed,
