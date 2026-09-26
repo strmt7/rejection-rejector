@@ -111,10 +111,7 @@ impl Engine {
         self.db.change_meta(
             &[
                 ("settings", serde_json::to_value(&settings)?),
-                (
-                    "google_credentials",
-                    serde_json::to_value(&credentials)?,
-                ),
+                ("google_credentials", serde_json::to_value(&credentials)?),
                 ("account", serde_json::to_value(&account)?),
             ],
             &[],
