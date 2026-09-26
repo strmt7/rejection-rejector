@@ -9,7 +9,39 @@ concurrency:
   group: rust-ci-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  prepare:
+    name: Lock and format source on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      build_sha: ${{ steps.source.outputs.build_sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Finalize tracked source and dependency lockfile
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f .github/finalize-source.py ]; then
+            python3 .github/finalize-source.py
+            git rm .github/finalize-source.py
+          fi
+          if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi
+          cargo fmt --all
+          git add Cargo.lock src tests
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'chore: lock dependencies and format Rust sources'
+            git push origin HEAD:main
+          fi
+          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   test:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -17,31 +49,40 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.build_sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Prepare artifacts
+        shell: bash
+        run: mkdir -p artifacts
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb openbox scrot dbus-x11
+      - name: Formatting
+        run: cargo fmt --all -- --check
       - name: Core tests
-        run: cargo test --lib --no-default-features
+        shell: bash
+        run: set -o pipefail; cargo test --locked --lib --no-default-features 2>&1 | tee artifacts/core-tests.log
       - name: Native GUI and CLI build
-        run: cargo build --bins
+        run: cargo build --locked --bins
       - name: All-feature tests
-        run: cargo test --all-features
+        shell: bash
+        run: set -o pipefail; cargo test --locked --all-features 2>&1 | tee artifacts/all-tests.log
       - name: Clippy
-        run: cargo clippy --all-targets --all-features
+        shell: bash
+        run: set -o pipefail; cargo clippy --locked --all-targets --all-features 2>&1 | tee artifacts/clippy.log
       - name: Headless offline smoke test
-        run: cargo run --no-default-features --bin rr -- demo
+        shell: bash
+        run: set -o pipefail; cargo run --locked --no-default-features --bin rr -- demo 2>&1 | tee artifacts/headless-demo.log
       - name: Native UI smoke test and actual screenshot
         if: runner.os == 'Linux'
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-        run: timeout 90s xvfb-run -a -s '-screen 0 1600x1000x24' target/debug/rejection-rejector --demo --screenshot artifacts/native-review.png
+        run: timeout 70s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
       - name: Build Windows release binaries
         if: runner.os == 'Windows'
-        run: cargo build --release --bins
+        run: cargo build --locked --release --bins
       - name: Source and toolchain evidence
         if: always()
         shell: bash
@@ -58,8 +99,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
           Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
-          Copy-Item README.md,LICENSE artifacts/windows/
+          Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
           Copy-Item -Recurse docs artifacts/windows/docs
+          Copy-Item -Recurse scripts artifacts/windows/scripts
           Copy-Item Cargo.lock artifacts/windows/
           Copy-Item artifacts/COMMIT.txt artifacts/windows/
           Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
