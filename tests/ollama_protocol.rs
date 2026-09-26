@@ -24,6 +24,7 @@ enum Scenario {
     Remote,
     VerifierFail,
     BadSignature,
+    BadLength,
     NativeFormat,
 }
 struct Fixture {
@@ -90,9 +91,11 @@ impl Fixture {
                             }
                             1 => {
                                 json!({"body": if scenario == Scenario::BadSignature {
-                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nSomeone Else"
+                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome. I would also like to understand which advertised requirements were considered unmet and how my relevant experience was weighed in reaching the decision.\n\nRegards,\nSomeone Else"
+                                } else if scenario == Scenario::BadLength {
+                                    "Please explain.\n\nTest Applicant"
                                 } else {
-                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nTest Applicant"
+                                    "Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome. I would also like to understand which advertised requirements were considered unmet and how my relevant experience was weighed in reaching the decision.\n\nRegards,\nTest Applicant"
                                 }})
                             }
                             _ => {
@@ -176,6 +179,17 @@ fn qualification_exercises_classification_drafting_verification_and_residency() 
     assert!(status.gpu_resident);
     assert_eq!(f.chats.lock().unwrap().len(), 3);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn generated_reply_outside_length_envelope_is_rejected() {
+    let f = Fixture::new(Scenario::BadLength);
+    assert!(Ollama::new(&f.settings())
+        .unwrap()
+        .analyze(&email())
+        .is_err());
+    assert_eq!(f.warms.lock().unwrap().len(), 1);
+    assert_eq!(f.chats.lock().unwrap().len(), 2);
 }
 
 #[test]

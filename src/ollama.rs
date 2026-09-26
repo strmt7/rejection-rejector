@@ -312,6 +312,11 @@ impl Ollama {
                 json!({"tone":self.settings.tone.instruction(),"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
                 json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}))?;
             mail::validate_draft(&output.body)?;
+            let generated_words = output.body.split_whitespace().count();
+            ensure!(
+                (40..=180).contains(&generated_words),
+                "Model draft length is outside the supported 40-180 word envelope"
+            );
             ensure!(
                 output
                     .body
