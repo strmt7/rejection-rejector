@@ -171,13 +171,24 @@ fn lists_and_loops_hold() {
     });
 }
 #[test]
-fn automatically_generated_incoming_mail_requires_human_review() {
+fn replyable_auto_generated_rejection_can_still_pass_automatic_policy() {
+    let (mut job, settings, now) = eligible();
+    job.email
+        .as_mut()
+        .unwrap()
+        .headers
+        .insert("auto-submitted".into(), vec!["auto-generated".into()]);
+    assert!(auto_blocks(&job, &settings, "candidate@example.com", now).is_empty());
+}
+
+#[test]
+fn automatic_reply_loop_marker_requires_human_review() {
     held(|j, _, _| {
         j.email
             .as_mut()
             .unwrap()
             .headers
-            .insert("auto-submitted".into(), vec!["auto-generated".into()]);
+            .insert("auto-submitted".into(), vec!["auto-replied".into()]);
     });
 }
 
