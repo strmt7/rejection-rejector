@@ -9,7 +9,7 @@ permissions:
   contents: read
 concurrency:
   group: rust-ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   test:
     name: Verify (${{ matrix.os }})
