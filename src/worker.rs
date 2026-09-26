@@ -379,6 +379,24 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
     let u = url::Url::parse(&format!("http://127.0.0.1{path}"))?;
     let query: std::collections::HashMap<_, _> = u.query_pairs().collect();
     match u.path() {
+        "/v1/capabilities" => Ok(json!({
+            "api_version": 1,
+            "application_version": env!("CARGO_PKG_VERSION"),
+            "read_only": true,
+            "mail_provider": "gmail",
+            "modes": ["human_review", "automatic"],
+            "features": {
+                "encrypted_local_store": true,
+                "incremental_sync": true,
+                "local_ollama": true,
+                "review_queue": true,
+                "automatic_policy": true,
+                "delivery_reconciliation": true,
+                "events": true
+            },
+            "poll_hours": crate::config::POLL_HOURS,
+            "lookback_days": crate::config::LOOKBACK_DAYS
+        })),
         "/v1/status" => Ok(
             json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?}),
         ),
@@ -409,6 +427,26 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capabilities_are_versioned_and_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let value = api_query(&engine, "/v1/capabilities").unwrap();
+        assert_eq!(value["api_version"], 1);
+        assert_eq!(value["read_only"], true);
+        assert_eq!(value["mail_provider"], "gmail");
+        assert_eq!(
+            value["poll_hours"],
+            serde_json::json!(crate::config::POLL_HOURS)
+        );
+    }
+
     #[test]
     fn demo_worker_initializes_and_publishes_selection() {
         let dir = tempfile::tempdir().unwrap();
