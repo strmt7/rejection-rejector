@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
-//! Local-first, reusable core. Constructing this library never sends email.
+//! Native local-first core. Constructing this library never sends email.
+pub mod api;
 pub mod config;
+pub mod engine;
+pub mod evaluation;
 pub mod gmail;
 pub mod mail;
 pub mod net;
@@ -10,3 +13,6 @@ pub mod store;
 pub mod sync;
 pub mod types;
 pub mod vault;
+pub mod worker;
+#[cfg(feature="gui")]
+pub mod gui;

@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   test:
     strategy:
@@ -18,8 +21,27 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --lib --no-default-features
-      - run: cargo clippy --lib --no-default-features
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
+      - name: Core tests
+        run: cargo test --lib --no-default-features
+      - name: Native GUI and CLI build
+        run: cargo build --bins
+      - name: All-feature tests
+        run: cargo test --all-features
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+      - name: Headless offline smoke test
+        run: cargo run --no-default-features --bin rr -- demo
+      - name: Native UI smoke test and actual screenshot
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: timeout 90s xvfb-run -a -s '-screen 0 1600x1000x24' target/debug/rejection-rejector --demo --screenshot artifacts/native-review.png
+      - name: Build Windows release binaries
+        if: runner.os == 'Windows'
+        run: cargo build --release --bins
       - name: Source and toolchain evidence
         if: always()
         shell: bash
@@ -29,28 +51,21 @@ jobs:
           cargo --version >> artifacts/toolchain.txt
           git rev-parse HEAD > artifacts/COMMIT.txt
           cp Cargo.lock artifacts/ 2>/dev/null || true
-          git archive --format=zip HEAD -o artifacts/source.zip
+          git archive --format=zip HEAD -o artifacts/rejection-rejector-source.zip
+      - name: Collect Windows package
+        if: runner.os == 'Windows' && success()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
+          Copy-Item README.md,LICENSE artifacts/windows/
+          Copy-Item -Recurse docs artifacts/windows/docs
+          Copy-Item Cargo.lock artifacts/windows/
+          Copy-Item artifacts/COMMIT.txt artifacts/windows/
+          Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
+          Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256 | Format-List | Out-File artifacts/SHA256.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: evidence-${{ matrix.os }}
+          name: rejection-rejector-${{ matrix.os }}
           path: artifacts/
-  remove-obsolete-branch:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Delete only the user-requested, fully preserved temporary branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          branch='feat/local-first-v0.1'
-          if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-            git merge-base --is-ancestor "origin/$branch" HEAD
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
-          fi
