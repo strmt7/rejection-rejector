@@ -686,7 +686,7 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
     if !s.include_backlog && s.automatic_since.is_none_or(|t| email.received_at < t) {
         reasons.push("Predates automatic-mode enrollment".into());
     }
-    if mail::auto_language_conflict(&email.text) {
+    if mail::auto_language_conflict(&email.subject, &email.text) {
         reasons.push("Conflicting or suspicious email language".into());
     }
     if email
