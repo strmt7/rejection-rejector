@@ -41,6 +41,7 @@ pub struct Snapshot {
     pub page: u32,
     pub review_only: bool,
     pub api_token: Option<String>,
+    pub api_token_expires: Option<Instant>,
     pub api_listening: bool,
 }
 pub enum Command {
@@ -84,6 +85,7 @@ pub enum Command {
     Reconcile(String),
     Purge,
     RevealApiToken,
+    HideApiToken,
     Api {
         path: String,
         reply: Sender<Value>,
@@ -316,6 +318,15 @@ fn run(
                         let t = e.db.meta::<String>("api_token")?;
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = t;
+                            s.api_token_expires =
+                                s.api_token.as_ref().map(|_| Instant::now() + Duration::from_secs(60));
+                        }
+                        Ok(())
+                    }
+                    Command::HideApiToken => {
+                        if let Ok(mut s) = shared.lock() {
+                            s.api_token = None;
+                            s.api_token_expires = None;
                         }
                         Ok(())
                     }
@@ -333,6 +344,15 @@ fn run(
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+        }
+        if let Ok(mut snapshot) = shared.lock() {
+            if snapshot
+                .api_token_expires
+                .is_some_and(|until| Instant::now() >= until)
+            {
+                snapshot.api_token = None;
+                snapshot.api_token_expires = None;
+            }
         }
         if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
             continue;

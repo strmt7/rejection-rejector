@@ -746,12 +746,20 @@ impl App {
                 self.worker.command(Command::RevealApiToken);
             }
             if let Some(token) = &s.api_token {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.monospace(token);
                     if ui.button("Copy token").clicked() {
                         ui.ctx().copy_text(token.clone());
                     }
+                    if ui.button("Hide token").clicked() {
+                        self.worker.command(Command::HideApiToken);
+                    }
                 });
+                ui.label(
+                    RichText::new("The on-screen token hides automatically after 60 seconds.")
+                        .small()
+                        .color(MUTED),
+                );
             }
             ui.label(RichText::new("A copied token grants access to your local email data. Keep it private; never put it in source control.").small().color(AMBER));
         });
