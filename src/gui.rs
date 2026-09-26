@@ -436,7 +436,7 @@ impl App {
         Self::heading(ui,"Intelligence that stays local","One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.");
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
-            ui.label("Recommended: gemma4:12b-it-qat · 8,192-token context · one loaded model");
+            ui.label("Recommended: qwen3.5:9b · 8,192-token context · one loaded model");
             ui.label(RichText::new("A model's download size does not prove it fits in VRAM. Qualification checks Ollama's loaded-model counters and pins the digest.").color(MUTED));
             egui::Grid::new("ai_status")
                 .num_columns(2)
@@ -533,6 +533,18 @@ impl App {
             ui.text_edit_singleline(&mut self.settings.ollama_url);
             ui.label("Installed/downloadable local model tag");
             ui.text_edit_singleline(&mut self.settings.model);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Quick choices").small().color(MUTED));
+                for (label, tag) in [
+                    ("Qwen3.5 9B · recommended", "qwen3.5:9b"),
+                    ("gpt-oss 20B · high reasoning / tight VRAM", "gpt-oss:20b"),
+                    ("Gemma 4 12B QAT · conservative", "gemma4:12b-it-qat"),
+                ] {
+                    if ui.small_button(label).clicked() {
+                        self.settings.model = tag.into();
+                    }
+                }
+            });
             egui::ComboBox::from_id_salt("model_context")
                 .selected_text(format!("{} tokens", self.settings.num_ctx))
                 .show_ui(ui, |ui| {
