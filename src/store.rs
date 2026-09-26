@@ -69,10 +69,11 @@ impl Store {
                     |r| r.get(0),
                 )
                 .optional()?;
-            if let Some(bytes) = existing_check {
-                let check: String = vault.open_value("meta/vault_check", &bytes)?;
-                ensure!(check == "rejection-rejector:v1", "Wrong vault");
-            }
+            let bytes = existing_check.context(
+                "Existing database is missing its authenticated vault marker; refusing to migrate or adopt a new key",
+            )?;
+            let check: String = vault.open_value("meta/vault_check", &bytes)?;
+            ensure!(check == "rejection-rejector:v1", "Wrong vault");
         }
         if version == 0 {
             conn.execute_batch("BEGIN IMMEDIATE;
@@ -678,6 +679,37 @@ mod tests {
     }
 
     #[test]
+    fn existing_database_without_vault_marker_is_never_adopted() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                 CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                 PRAGMA user_version=1;",
+            )
+            .unwrap();
+        }
+        assert!(Store::open(&path, Vault::random()).is_err());
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE name='vault_check'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0);
+    }
+
+    #[test]
     fn wrong_key_cannot_mutate_a_pending_schema_migration() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("db");
@@ -739,6 +771,7 @@ mod tests {
     fn schema_v1_migrates_received_time_index() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("db");
+        let vault = Vault::random();
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch("CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
@@ -746,8 +779,15 @@ mod tests {
                 CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
                 PRAGMA user_version=1;").unwrap();
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [vault
+                    .seal("meta/vault_check", &"rejection-rejector:v1")
+                    .unwrap()],
+            )
+            .unwrap();
         }
-        let mut db = Store::open(&path, Vault::random()).unwrap();
+        let mut db = Store::open(&path, vault).unwrap();
         assert!(db
             .insert_stub(stub("after-migration", "thread"), Utc::now())
             .unwrap());
