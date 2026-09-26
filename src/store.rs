@@ -846,6 +846,55 @@ mod tests {
     }
 
     #[test]
+    fn schema_v2_delivery_records_migrate_to_message_level_keys() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let vault = Vault::random();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
+                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
+                 CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                 PRAGMA user_version=2;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [vault
+                    .seal("meta/vault_check", &"rejection-rejector:v1")
+                    .unwrap()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO deliveries(thread_key,item_id,attempt_at,status) VALUES(?1,?2,?3,'sent')",
+                ["thread-key", "old-item", "1"],
+            )
+            .unwrap();
+        }
+        let db = Store::open(&path, vault).unwrap();
+        let version: i64 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        let row: (String, String) = db
+            .conn
+            .query_row(
+                "SELECT item_id,status FROM deliveries WHERE item_id='old-item'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("old-item".into(), "sent".into()));
+        assert!(!db.thread_blocked("thread-key").unwrap());
+    }
+
+    #[test]
     fn related_metadata_changes_are_committed_together() {
         let d = tempfile::tempdir().unwrap();
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
