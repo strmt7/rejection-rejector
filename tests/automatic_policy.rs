@@ -46,6 +46,7 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
             claims_supported: true,
             professional: true,
             injection_free: true,
+            purpose_aligned: true,
             reason: "Synthetic passing audit".into(),
         }),
         model: settings.model.clone(),
@@ -123,6 +124,19 @@ fn failed_verification_holds() {
             .claims_supported = false
     });
 }
+#[test]
+fn generic_non_substantive_reply_holds() {
+    held(|j, _, _| {
+        j.analysis
+            .as_mut()
+            .unwrap()
+            .verification
+            .as_mut()
+            .unwrap()
+            .purpose_aligned = false
+    });
+}
+
 #[test]
 fn cooldown_holds() {
     held(|j, _, now| j.drafted_at = Some(now));

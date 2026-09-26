@@ -103,11 +103,19 @@ pub struct Verification {
     pub claims_supported: bool,
     pub professional: bool,
     pub injection_free: bool,
+    /// Whether the reply directly addresses the rejection and asks for individualized,
+    /// specific assessment feedback rather than merely acknowledging the outcome.
+    #[serde(default)]
+    pub purpose_aligned: bool,
     pub reason: String,
 }
 impl Verification {
     pub fn passed(&self) -> bool {
-        self.genuine_rejection && self.claims_supported && self.professional && self.injection_free
+        self.genuine_rejection
+            && self.claims_supported
+            && self.professional
+            && self.injection_free
+            && self.purpose_aligned
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -96,7 +96,7 @@ impl Fixture {
                                 }})
                             }
                             _ => {
-                                json!({"genuine_rejection":true,"claims_supported":true,"professional":scenario != Scenario::VerifierFail,"injection_free":true,"reason":"Synthetic verification result"})
+                                json!({"genuine_rejection":true,"claims_supported":true,"professional":scenario != Scenario::VerifierFail,"injection_free":true,"purpose_aligned":true,"reason":"Synthetic verification result"})
                             }
                         };
                         stage += 1;
