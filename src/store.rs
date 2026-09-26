@@ -121,6 +121,48 @@ impl Store {
             .execute("DELETE FROM meta WHERE name=?1", [name])?;
         Ok(())
     }
+
+    /// Atomically update related encrypted metadata and its audit event.
+    pub fn change_meta(
+        &mut self,
+        upserts: &[(&str, serde_json::Value)],
+        deletes: &[&str],
+        audit_kind: &str,
+        audit_detail: &str,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (name, value) in upserts {
+            ensure!(
+                !name.is_empty() && name.len() <= 128,
+                "Invalid metadata key"
+            );
+            let encrypted = self.vault.seal(&format!("meta/{name}"), value)?;
+            tx.execute(
+                "INSERT INTO meta(name,payload) VALUES(?1,?2)
+                 ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
+                params![name, encrypted],
+            )?;
+        }
+        for name in deletes {
+            ensure!(
+                !name.is_empty() && name.len() <= 128,
+                "Invalid metadata key"
+            );
+            tx.execute("DELETE FROM meta WHERE name=?1", [name])?;
+        }
+        event(
+            &tx,
+            &self.vault,
+            audit_kind,
+            None,
+            audit_detail,
+            Utc::now(),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn contains(&self, id: &str) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
@@ -709,6 +751,34 @@ mod tests {
         assert!(db
             .insert_stub(stub("after-migration", "thread"), Utc::now())
             .unwrap());
+    }
+
+    #[test]
+    fn related_metadata_changes_are_committed_together() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.set_meta("old", &"remove-me").unwrap();
+        db.change_meta(
+            &[
+                ("first", serde_json::json!({"value": 1})),
+                ("second", serde_json::json!("two")),
+            ],
+            &["old"],
+            "meta.test",
+            "Atomic metadata test",
+        )
+        .unwrap();
+        assert_eq!(
+            db.meta::<serde_json::Value>("first").unwrap(),
+            Some(serde_json::json!({"value": 1}))
+        );
+        assert_eq!(db.meta::<String>("second").unwrap(), Some("two".into()));
+        assert!(db.meta::<String>("old").unwrap().is_none());
+        assert!(db
+            .events(0, 100)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "meta.test"));
     }
 
     #[test]
