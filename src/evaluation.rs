@@ -116,6 +116,17 @@ mod tests {
             serde_json::from_str(include_str!("../tests/fixtures/classification.json")).unwrap();
         let unique: std::collections::HashSet<_> = rows.iter().map(|c| &c.id).collect();
         assert_eq!(rows.len(), unique.len());
-        assert!(rows.len() >= 10);
+        assert!(rows.len() >= 30);
+        for category in [
+            Category::Rejection,
+            Category::Opportunity,
+            Category::Other,
+            Category::Uncertain,
+        ] {
+            assert!(
+                rows.iter().filter(|row| row.expected == category).count() >= 5,
+                "Synthetic corpus needs at least five cases for {category:?}"
+            );
+        }
     }
 }
