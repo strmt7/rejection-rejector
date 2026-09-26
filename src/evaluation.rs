@@ -37,16 +37,13 @@ pub fn run(settings: &Settings, out: &Path) -> Result<()> {
                 let matched = verdict.category == c.expected;
                 correct += usize::from(matched);
                 rejection_tp += usize::from(
-                    verdict.category == Category::Rejection
-                        && c.expected == Category::Rejection,
+                    verdict.category == Category::Rejection && c.expected == Category::Rejection,
                 );
                 rejection_fp += usize::from(
-                    verdict.category == Category::Rejection
-                        && c.expected != Category::Rejection,
+                    verdict.category == Category::Rejection && c.expected != Category::Rejection,
                 );
                 rejection_fn += usize::from(
-                    verdict.category != Category::Rejection
-                        && c.expected == Category::Rejection,
+                    verdict.category != Category::Rejection && c.expected == Category::Rejection,
                 );
                 rows.push(serde_json::json!({
                     "id": c.id,

@@ -177,7 +177,10 @@ impl Store {
         let mut next = job.clone();
         next.revision += 1;
         next.updated_at = Utc::now();
-        let received_at = next.email.as_ref().map(|email| email.received_at.timestamp());
+        let received_at = next
+            .email
+            .as_ref()
+            .map(|email| email.received_at.timestamp());
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -611,7 +614,9 @@ mod tests {
         }
         assert!(Store::open(&path, Vault::random()).is_err());
         let conn = Connection::open(&path).unwrap();
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(version, 1);
         let mut columns = conn.prepare("PRAGMA table_info(items)").unwrap();
         let names = columns
@@ -658,7 +663,9 @@ mod tests {
                 PRAGMA user_version=1;").unwrap();
         }
         let mut db = Store::open(&path, Vault::random()).unwrap();
-        assert!(db.insert_stub(stub("after-migration", "thread"), Utc::now()).unwrap());
+        assert!(db
+            .insert_stub(stub("after-migration", "thread"), Utc::now())
+            .unwrap());
     }
 
     #[test]

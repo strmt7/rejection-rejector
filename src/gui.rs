@@ -564,8 +564,8 @@ impl App {
             && self.settings.model == s.settings.model
             && self.settings.num_ctx == s.settings.num_ctx
             && self.settings.ollama_url == s.settings.ollama_url;
-        let signature_ready =
-            !self.settings.signature.trim().is_empty() && self.settings.signature.trim() != "Your name";
+        let signature_ready = !self.settings.signature.trim().is_empty()
+            && self.settings.signature.trim() != "Your name";
         let automatic_prerequisites =
             s.connected && s.send_scope && qualified_model_matches_draft && signature_ready;
         Self::heading(
@@ -663,11 +663,18 @@ impl App {
                 for (label, ready) in [
                     ("Gmail connected", s.connected),
                     ("Gmail send permission granted", s.send_scope),
-                    ("Current model configuration qualified & pinned", qualified_model_matches_draft),
+                    (
+                        "Current model configuration qualified & pinned",
+                        qualified_model_matches_draft,
+                    ),
                     ("Non-placeholder signature set", signature_ready),
                 ] {
                     ui.horizontal(|ui| {
-                        Self::badge(ui, if ready { "READY" } else { "REQUIRED" }, if ready { MINT } else { AMBER });
+                        Self::badge(
+                            ui,
+                            if ready { "READY" } else { "REQUIRED" },
+                            if ready { MINT } else { AMBER },
+                        );
                         ui.label(label);
                     });
                 }

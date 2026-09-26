@@ -224,9 +224,14 @@ impl Engine {
     }
 
     pub fn evaluate_model(&mut self) -> Result<PathBuf> {
-        ensure!(!self.demo, "Synthetic demo mode does not run the configured model");
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not run the configured model"
+        );
         let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-        let path = self.directory.join(format!("model-evaluation-{stamp}.json"));
+        let path = self
+            .directory
+            .join(format!("model-evaluation-{stamp}.json"));
         evaluation::run(&self.settings, &path)?;
         self.db.log(
             "model.evaluated",

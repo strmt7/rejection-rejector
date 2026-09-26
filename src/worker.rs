@@ -284,10 +284,7 @@ fn run(
                         r
                     }
                     Command::EvaluateModel => {
-                        busy(
-                            &shared,
-                            "Running the local synthetic evaluation suite…",
-                        );
+                        busy(&shared, "Running the local synthetic evaluation suite…");
                         e.evaluate_model().map(|_| ())
                     }
                     Command::List { review: r, page: p } => {
