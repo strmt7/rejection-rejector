@@ -470,6 +470,10 @@ impl App {
         }
     }
     fn local_ai(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        let model_config_dirty = self.settings.model != s.settings.model
+            || self.settings.num_ctx != s.settings.num_ctx
+            || self.settings.ollama_url != s.settings.ollama_url
+            || self.settings.llm_timeout_seconds != s.settings.llm_timeout_seconds;
         Self::heading(ui,"Intelligence that stays local","One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.");
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
@@ -526,7 +530,7 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        s.busy.is_empty() && !s.demo,
+                        s.busy.is_empty() && !s.demo && !model_config_dirty,
                         egui::Button::new("3  Download model"),
                     )
                     .clicked()
@@ -535,7 +539,7 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        s.busy.is_empty() && !s.demo,
+                        s.busy.is_empty() && !s.demo && !model_config_dirty,
                         egui::Button::new("4  Refresh status"),
                     )
                     .clicked()
@@ -544,7 +548,7 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        s.busy.is_empty() && !s.demo,
+                        s.busy.is_empty() && !s.demo && !model_config_dirty,
                         egui::Button::new("5  Qualify & pin"),
                     )
                     .clicked()
@@ -553,7 +557,10 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        s.busy.is_empty() && !s.demo && s.settings.model_digest.is_some(),
+                        s.busy.is_empty()
+                            && !s.demo
+                            && !model_config_dirty
+                            && s.settings.model_digest.is_some(),
                         egui::Button::new("Evaluate synthetic suite"),
                     )
                     .clicked()
@@ -561,6 +568,12 @@ impl App {
                     self.worker.command(Command::EvaluateModel);
                 }
             });
+            if model_config_dirty {
+                ui.colored_label(
+                    AMBER,
+                    "Model configuration has unsaved changes. Save it below before downloading, refreshing status, qualifying, or evaluating.",
+                );
+            }
         });
         ui.add_space(16.0);
         Self::card(ui, |ui| {
