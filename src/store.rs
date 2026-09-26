@@ -160,7 +160,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (name, value) in upserts {
             ensure!(
-                !name.is_empty() && name.len() <= 128,
+                !name.is_empty() && name.len() <= 512,
                 "Invalid metadata key"
             );
             let encrypted = self.vault.seal(&format!("meta/{name}"), value)?;
@@ -172,7 +172,7 @@ impl Store {
         }
         for name in deletes {
             ensure!(
-                !name.is_empty() && name.len() <= 128,
+                !name.is_empty() && name.len() <= 512,
                 "Invalid metadata key"
             );
             tx.execute("DELETE FROM meta WHERE name=?1", [name])?;

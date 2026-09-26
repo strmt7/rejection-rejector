@@ -102,10 +102,10 @@ pub fn synchronize<P: Provider>(
     ensure!(!latest.is_empty(), "Gmail did not return a history cursor");
     state.history_id = Some(latest);
     state.last_poll = Some(now);
-    db.set_meta(&key, &state)?;
-    db.log(
+    db.change_meta(
+        &[(&key, serde_json::to_value(&state)?)],
+        &[],
         "sync.incremental",
-        None,
         &format!("Stored {inserted} new identities"),
     )?;
     Ok(inserted)
@@ -162,10 +162,10 @@ fn full_sync<P: Provider>(
         last_full: Some(now),
         lookback_days: settings.lookback_days,
     };
-    db.set_meta(&key, &state)?;
-    db.log(
+    db.change_meta(
+        &[(&key, serde_json::to_value(&state)?)],
+        &[],
         "sync.reconciled",
-        None,
         &format!("Stored {n} new identities; existing content unchanged"),
     )?;
     Ok(n)
@@ -233,5 +233,10 @@ mod tests {
         let calls = f.calls;
         synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap();
         assert_eq!(calls, f.calls);
+        assert!(db
+            .events(0, 100)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.kind.as_str(), "sync.reconciled" | "sync.incremental")));
     }
 }
