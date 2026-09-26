@@ -1,7 +1,7 @@
 use crate::{
     config::{Mode, Settings, PROMPT_VERSION},
     evaluation,
-    gmail::Gmail,
+    gmail::{Gmail, SendFailureKind},
     mail,
     oauth::{self, Credentials},
     ollama::{self, ModelStatus, Ollama},
@@ -546,10 +546,18 @@ impl Engine {
                 self.db.finish_send(id, Some(provider_id))?;
                 Ok(())
             }
-            Err(_) => {
+            Err(error) if error.kind == SendFailureKind::NotAccepted => {
+                self.db.cancel_rejected_send(
+                    id,
+                    "Gmail definitively rejected the send request; no email was accepted",
+                )?;
+                anyhow::bail!("{}", error.message)
+            }
+            Err(error) => {
                 self.db.finish_send(id, None)?;
                 anyhow::bail!(
-                    "Delivery outcome uncertain. Do not resend. Use Reconcile to check Sent mail."
+                    "{} Do not resend. Use Reconcile to check Gmail Sent.",
+                    error.message
                 )
             }
         }
