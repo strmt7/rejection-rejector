@@ -9,7 +9,7 @@ Standalone Rust library, native Windows-oriented desktop application and CLI.
 - Exact polling presets **1 / 2 / 4 / 8 / 24 hours** and lookback presets **1 / 3 / 7 / 14 / 28 days**; tightening the lookback immediately clears out-of-window actionable content.
 - Human Review mode with original/reply side-by-side, edit/save/regenerate/dismiss, stale-revision protection and exact-send confirmation.
 - Explicit Automatic mode with enrollment/backlog controls, cooldown, rolling attempt caps, multilingual deterministic conflict guards, model/draft/context/fingerprint checks and fresh Gmail conversation preflight.
-- Encrypted SQLite payloads, Windows Credential Manager key storage, durable per-conversation send reservations and uncertain-delivery reconciliation without blind retries.
+- Encrypted SQLite payloads, Windows Credential Manager key storage, durable at-most-once records per rejection message, thread blocking for active/uncertain delivery, and reconciliation without blind retries.
 - Native Overview, Review, Activity, Local AI and Settings screens; Review is disabled in Automatic mode.
 - Ollama install/start/download controls plus privacy-safe `rr doctor` and synthetic `rr evaluate` diagnostics.
 - Reusable Rust core and optional authenticated read-only loopback integration API for later connection to the separate job-seeker application.

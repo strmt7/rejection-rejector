@@ -580,7 +580,7 @@ impl Engine {
         }
         for id in self.db.ready_ids(&self.account)? {
             let job = self.owned(&id)?;
-            if self.db.thread_reserved(&job.stub.thread_key())?
+            if self.db.thread_blocked(&job.stub.thread_key())?
                 || !auto_blocks(&job, &self.settings, &self.account, Utc::now()).is_empty()
             {
                 continue;
