@@ -183,6 +183,17 @@ impl Settings {
         }
         Ok(())
     }
+    pub fn repair_legacy_automatic_state(&mut self) -> bool {
+        if self.mode == Mode::Automatic && self.model_digest.is_none() {
+            self.mode = Mode::HumanReview;
+            self.sending_enabled = false;
+            self.automatic_confirmed = false;
+            self.automatic_since = None;
+            return true;
+        }
+        false
+    }
+
     pub fn interval_seconds(&self) -> i64 {
         i64::from(self.poll_hours) * 3600
     }
@@ -295,6 +306,24 @@ mod tests {
         };
         assert!(s.validate().is_err());
         s.model_digest = Some("a".repeat(64));
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn legacy_automatic_state_without_model_pin_repairs_fail_closed() {
+        let mut s = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            signature: "Test Applicant".into(),
+            ..Default::default()
+        };
+        assert!(s.repair_legacy_automatic_state());
+        assert_eq!(s.mode, Mode::HumanReview);
+        assert!(!s.sending_enabled);
+        assert!(!s.automatic_confirmed);
+        assert!(s.automatic_since.is_none());
         s.validate().unwrap();
     }
 
