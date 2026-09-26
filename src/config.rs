@@ -173,6 +173,10 @@ impl Settings {
                 "Automatic mode requires explicit sending and automatic-mode consent"
             );
             ensure!(
+                self.model_digest.is_some(),
+                "Qualify and pin the local model before enabling Automatic mode"
+            );
+            ensure!(
                 self.automatic_since.is_some(),
                 "Automatic enrollment time is missing"
             );
@@ -279,6 +283,21 @@ mod tests {
         .validate()
         .is_err());
     }
+    #[test]
+    fn automatic_requires_a_qualified_model_pin() {
+        let mut s = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            signature: "Test Applicant".into(),
+            ..Default::default()
+        };
+        assert!(s.validate().is_err());
+        s.model_digest = Some("a".repeat(64));
+        s.validate().unwrap();
+    }
+
     #[test]
     fn no_remote_inference() {
         for u in [
