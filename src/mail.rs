@@ -403,7 +403,10 @@ mod tests {
 
     #[test]
     fn reply_subject_is_prefixed_once() {
-        assert_eq!(reply_subject("Application update"), "Re: Application update");
+        assert_eq!(
+            reply_subject("Application update"),
+            "Re: Application update"
+        );
         for subject in [
             "Re: Application update",
             "AW: Bewerbung",
