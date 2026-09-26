@@ -60,6 +60,10 @@ impl Engine {
         settings.validate()?;
         let creds: Option<Credentials> = db.meta("google_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
+        if !account.is_empty() {
+            let now = Utc::now();
+            db.defer_review_outside_window(&account, settings.cutoff(now), now)?;
+        }
         let mut e = Self {
             db,
             settings,
@@ -152,12 +156,21 @@ impl Engine {
             !settings.sending_enabled || self.send_scope(),
             "Reconnect Gmail with send permission before enabling delivery"
         );
+        let tightened_window = settings.lookback_days < self.settings.lookback_days;
         self.db.set_meta("settings", &settings)?;
         self.settings = settings;
+        if tightened_window && !self.account.is_empty() {
+            let now = Utc::now();
+            self.db.defer_review_outside_window(
+                &self.account,
+                self.settings.cutoff(now),
+                now,
+            )?;
+        }
         self.db.log(
             "settings.changed",
             None,
-            "Settings updated; mode and send gates revalidated",
+            "Settings updated; mode, age window and send gates revalidated",
         )?;
         Ok(())
     }
