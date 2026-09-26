@@ -466,11 +466,8 @@ mod tests {
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let now = Utc::now();
         assert_eq!(
-            db.insert_stubs(
-                vec![stub("a", "ta"), stub("b", "tb"), stub("a", "ta")],
-                now,
-            )
-            .unwrap(),
+            db.insert_stubs(vec![stub("a", "ta"), stub("b", "tb"), stub("a", "ta")], now,)
+                .unwrap(),
             2
         );
         assert_eq!(
