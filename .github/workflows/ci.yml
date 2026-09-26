@@ -1,0 +1,56 @@
+name: Rust CI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --lib --no-default-features
+      - run: cargo clippy --lib --no-default-features
+      - name: Source and toolchain evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          rustc --version > artifacts/toolchain.txt
+          cargo --version >> artifacts/toolchain.txt
+          git rev-parse HEAD > artifacts/COMMIT.txt
+          cp Cargo.lock artifacts/ 2>/dev/null || true
+          git archive --format=zip HEAD -o artifacts/source.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-${{ matrix.os }}
+          path: artifacts/
+  remove-obsolete-branch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Delete only the user-requested, fully preserved temporary branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          branch='feat/local-first-v0.1'
+          if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+            git merge-base --is-ancestor "origin/$branch" HEAD
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+          fi

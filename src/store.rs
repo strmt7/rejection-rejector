@@ -1,0 +1,172 @@
+use anyhow::{ensure, Context, Result};
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use serde::{de::DeserializeOwned, Serialize};
+use std::{path::Path, time::Duration};
+use crate::{types::*, vault::{write_new_private, Vault}};
+
+pub struct Store { conn: Connection, vault: Vault }
+fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> Result<Job> {
+    let job: Job = vault.open_value(&format!("item/{id}"), bytes)?;
+    ensure!(job.id == id && job.revision == revision && job.state.db() == state, "Authenticated record metadata mismatch");
+    Ok(job)
+}
+fn event(tx: &Transaction<'_>, vault: &Vault, kind: &str, item: Option<&str>, detail: &str, at: DateTime<Utc>) -> Result<()> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let e = AuditEvent { seq: 0, at, kind: kind.into(), item_id: item.map(str::to_owned), detail: detail.into() };
+    tx.execute("INSERT INTO events(event_id,payload) VALUES(?1,?2)", params![id, vault.seal(&format!("event/{id}"), &e)?])?;
+    Ok(())
+}
+impl Store {
+    pub fn open(path: &Path, vault: Vault) -> Result<Self> {
+        if !path.exists() { write_new_private(path, b"")?; }
+        ensure!(!std::fs::symlink_metadata(path)?.file_type().is_symlink(), "Database must not be a symlink");
+        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?; }
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        ensure!(version <= 1, "Database belongs to a newer app version");
+        conn.execute_batch("BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+            CREATE INDEX IF NOT EXISTS items_queue ON items(account_key,state,retry_at,created_at);
+            CREATE TABLE IF NOT EXISTS deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+            CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(attempt_at);
+            CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+            PRAGMA user_version=1; COMMIT;")?;
+        let mut db = Self { conn, vault };
+        match db.meta::<String>("vault_check")? {
+            Some(s) => ensure!(s == "rejection-rejector:v1", "Wrong vault"),
+            None => db.set_meta("vault_check", &"rejection-rejector:v1")?,
+        }
+        Ok(db)
+    }
+    pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
+        let bytes: Option<Vec<u8>> = self.conn.query_row("SELECT payload FROM meta WHERE name=?1", [name], |r| r.get(0)).optional()?;
+        bytes.map(|b| self.vault.open_value(&format!("meta/{name}"), &b)).transpose()
+    }
+    pub fn set_meta<T: Serialize>(&mut self, name: &str, value: &T) -> Result<()> {
+        self.conn.execute("INSERT INTO meta(name,payload) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload", params![name, self.vault.seal(&format!("meta/{name}"), value)?])?;
+        Ok(())
+    }
+    pub fn delete_meta(&mut self, name: &str) -> Result<()> { self.conn.execute("DELETE FROM meta WHERE name=?1", [name])?; Ok(()) }
+    pub fn contains(&self, id: &str) -> Result<bool> { Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)", [id], |r| r.get(0))?) }
+    pub fn insert_stub(&mut self, stub: Stub, now: DateTime<Utc>) -> Result<bool> {
+        let j = Job::new(stub, now);
+        if self.contains(&j.id)? { return Ok(false); }
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n = tx.execute("INSERT OR IGNORE INTO items(id,account_key,state,revision,created_at,updated_at,retry_at,payload) VALUES(?1,?2,?3,0,?4,?4,0,?5)", params![j.id, hash(&j.stub.account), j.state.db(), now.timestamp(), self.vault.seal(&format!("item/{}", j.id), &j)?])?;
+        if n == 1 { event(&tx, &self.vault, "email.queued", Some(&j.id), "New provider identity stored", now)?; }
+        tx.commit()?;
+        Ok(n == 1)
+    }
+    pub fn get(&self, id: &str) -> Result<Job> {
+        let (b, r, s): (Vec<u8>, u64, String) = self.conn.query_row("SELECT payload,revision,state FROM items WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?.context("Message not found")?;
+        decode(&self.vault, id, &b, r, &s)
+    }
+    pub fn save(&mut self, job: &mut Job, kind: &str, detail: &str) -> Result<()> {
+        let old = job.revision;
+        let mut next = job.clone();
+        next.revision += 1;
+        next.updated_at = Utc::now();
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,payload=?6 WHERE id=?1 AND revision=?7", params![next.id, next.state.db(), next.revision, next.updated_at.timestamp(), next.retry_at, self.vault.seal(&format!("item/{}", next.id), &next)?, old])?;
+        ensure!(changed == 1, "Stale revision: reload the message before acting");
+        event(&tx, &self.vault, kind, Some(&next.id), detail, next.updated_at)?;
+        tx.commit()?;
+        *job = next;
+        Ok(())
+    }
+    pub fn list(&self, account: &str, review_only: bool, page: u32, limit: u32) -> Result<Vec<Job>> {
+        let limit = limit.clamp(1, 100);
+        let mut q = self.conn.prepare("SELECT id,payload,revision,state FROM items WHERE account_key=?1 AND (?2=0 OR state IN ('ready','attention')) ORDER BY created_at DESC,id LIMIT ?3 OFFSET ?4")?;
+        let rows = q.query_map(params![hash(account), review_only, limit, u64::from(page)*u64::from(limit)], |r| Ok((r.get::<_,String>(0)?, r.get::<_,Vec<u8>>(1)?, r.get::<_,u64>(2)?, r.get::<_,String>(3)?)))?;
+        rows.map(|r| { let (id,b,rev,s)=r?; decode(&self.vault,&id,&b,rev,&s) }).collect()
+    }
+    pub fn next_queued(&self, account: &str, now: DateTime<Utc>) -> Result<Option<Job>> {
+        let id: Option<String> = self.conn.query_row("SELECT id FROM items WHERE account_key=?1 AND state='queued' AND retry_at<=?2 ORDER BY created_at,id LIMIT 1", params![hash(account),now.timestamp()], |r| r.get(0)).optional()?;
+        id.map(|id| self.get(&id)).transpose()
+    }
+    pub fn ready_ids(&self, account: &str) -> Result<Vec<String>> {
+        let mut q = self.conn.prepare("SELECT id FROM items WHERE account_key=?1 AND state='ready' ORDER BY created_at,id")?;
+        let rows = q.query_map([hash(account)], |r| r.get::<_,String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>,_>>()?)
+    }
+    pub fn wake_deferred(&mut self, account: &str) -> Result<usize> {
+        let ids: Vec<String> = { let mut q=self.conn.prepare("SELECT id FROM items WHERE account_key=?1 AND state='deferred'")?; let r=q.query_map([hash(account)], |r| r.get(0))?; r.collect::<std::result::Result<Vec<_>,_>>()? };
+        for id in &ids { let mut j=self.get(id)?; j.state=JobState::Queued; j.retry_at=0; j.attempts=0; self.save(&mut j,"email.requeued","Lookback expanded")?; }
+        Ok(ids.len())
+    }
+    pub fn counts(&self, account: &str) -> Result<Counts> {
+        let mut c=Counts::default();
+        let mut q=self.conn.prepare("SELECT state,COUNT(*) FROM items WHERE account_key=?1 GROUP BY state")?;
+        let r=q.query_map([hash(account)], |r| Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?)))?;
+        for row in r { let(s,n)=row?; c.stored+=n; match s.as_str() { "queued"=>c.queued+=n,"ready"|"attention"=>c.review+=n,"sent"=>c.sent+=n,"sending"|"uncertain"=>c.uncertain+=n,_=>() } }
+        c.attempts_24h=self.conn.query_row("SELECT COUNT(*) FROM deliveries WHERE attempt_at>=?1",[Utc::now().timestamp()-86400], |r| r.get(0))?;
+        Ok(c)
+    }
+    pub fn thread_reserved(&self, key: &str) -> Result<bool> { Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1)",[key], |r| r.get(0))?) }
+    pub fn reserve_send(&mut self, snapshot: &Job, limit: u16, now: DateTime<Utc>) -> Result<Job> {
+        ensure!(snapshot.state.reviewable(), "Message is not reviewable");
+        let tx=self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let(b,r,s):(Vec<u8>,u64,String)=tx.query_row("SELECT payload,revision,state FROM items WHERE id=?1",[&snapshot.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let mut j=decode(&self.vault,&snapshot.id,&b,r,&s)?;
+        ensure!(j.revision==snapshot.revision && j.state==snapshot.state,"Send approval is stale");
+        let attempts:u64=tx.query_row("SELECT COUNT(*) FROM deliveries WHERE attempt_at>=?1",[now.timestamp()-86400], |r| r.get(0))?;
+        ensure!(attempts<u64::from(limit),"Rolling 24-hour attempt limit reached");
+        let taken:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1)",[j.stub.thread_key()], |r| r.get(0))?;
+        ensure!(!taken,"Conversation already has a delivery reservation; reconcile instead of resending");
+        tx.execute("INSERT INTO deliveries(thread_key,item_id,attempt_at,status) VALUES(?1,?2,?3,'reserved')",params![j.stub.thread_key(),j.id,now.timestamp()])?;
+        j.state=JobState::Sending; j.revision+=1; j.updated_at=now;
+        tx.execute("UPDATE items SET state='sending',revision=?2,updated_at=?3,payload=?4 WHERE id=?1",params![j.id,j.revision,now.timestamp(),self.vault.seal(&format!("item/{}",j.id),&j)?])?;
+        event(&tx,&self.vault,"delivery.reserved",Some(&j.id),"Durable reservation before network dispatch",now)?;
+        tx.commit()?;
+        Ok(j)
+    }
+    pub fn finish_send(&mut self, id: &str, provider_id: Option<String>) -> Result<Job> {
+        let mut j=self.get(id)?;
+        ensure!(matches!(j.state,JobState::Sending|JobState::Uncertain),"No unresolved delivery");
+        j.state=if provider_id.is_some(){JobState::Sent}else{JobState::Uncertain}; j.provider_sent_id=provider_id; j.revision+=1; j.updated_at=Utc::now();
+        let tx=self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let encrypted=j.provider_sent_id.as_ref().map(|p|self.vault.seal(&format!("delivery/{id}"),p)).transpose()?;
+        tx.execute("UPDATE deliveries SET status=?2,provider_id=?3 WHERE item_id=?1",params![id,j.state.db(),encrypted])?;
+        tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1",params![id,j.state.db(),j.revision,j.updated_at.timestamp(),self.vault.seal(&format!("item/{id}"),&j)?])?;
+        event(&tx,&self.vault,if j.state==JobState::Sent{"delivery.sent"}else{"delivery.uncertain"},Some(id),"Reservation retained permanently",j.updated_at)?;
+        tx.commit()?;
+        Ok(j)
+    }
+    pub fn recover_interrupted_sends(&mut self) -> Result<usize> {
+        let ids:Vec<String>={let mut q=self.conn.prepare("SELECT id FROM items WHERE state='sending'")?;let r=q.query_map([],|r|r.get(0))?;r.collect::<std::result::Result<Vec<_>,_>>()?};
+        for id in &ids { self.finish_send(id,None)?; }
+        Ok(ids.len())
+    }
+    pub fn log(&mut self, kind:&str, item:Option<&str>, detail:&str) -> Result<()> { let tx=self.conn.transaction()?; event(&tx,&self.vault,kind,item,detail,Utc::now())?; tx.commit()?; Ok(()) }
+    pub fn latest_event_seq(&self) -> Result<i64> { Ok(self.conn.query_row("SELECT COALESCE(MAX(seq),0) FROM events",[], |r|r.get(0))?) }
+    pub fn events(&self, after:i64, limit:u32) -> Result<Vec<AuditEvent>> {
+        let mut q=self.conn.prepare("SELECT seq,event_id,payload FROM events WHERE seq>?1 ORDER BY seq LIMIT ?2")?;
+        let rows=q.query_map(params![after,limit.clamp(1,500)], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Vec<u8>>(2)?)))?;
+        rows.map(|r|{let(seq,id,b)=r?;let mut e:AuditEvent=self.vault.open_value(&format!("event/{id}"),&b)?;e.seq=seq;Ok(e)}).collect()
+    }
+    /// Prune message content while retaining deduplication and delivery identities.
+    pub fn purge(&mut self, days:u16) -> Result<usize> {
+        ensure!((30..=3650).contains(&days),"Invalid retention");
+        let before=(Utc::now()-chrono::Duration::days(i64::from(days))).timestamp();
+        let ids:Vec<String>={let mut q=self.conn.prepare("SELECT id FROM items WHERE state IN ('sent','dismissed','other') AND updated_at<?1")?;let r=q.query_map([before],|r|r.get(0))?;r.collect::<std::result::Result<Vec<_>,_>>()?};
+        let mut n=0;
+        for id in ids { let mut j=self.get(&id)?; if j.email.is_some()||j.draft.is_some()||j.analysis.is_some() { j.email=None;j.draft=None;j.analysis=None;j.flags=vec!["Content pruned; identity retained".into()];self.save(&mut j,"content.pruned","Retention policy")?;n+=1; } }
+        self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;
+        Ok(n)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn stub(id:&str,t:&str)->Stub { Stub{account:"me@example.com".into(),provider_id:id.into(),thread_id:t.into(),source:Source::Gmail} }
+    fn ready(db:&mut Store,id:&str,t:&str)->Job { let s=stub(id,t);let key=s.id();db.insert_stub(s,Utc::now()).unwrap();let mut j=db.get(&key).unwrap();j.state=JobState::Ready;db.save(&mut j,"test","ready").unwrap();j }
+    #[test] fn dedup_and_stale_revisions() {let d=tempfile::tempdir().unwrap();let mut db=Store::open(&d.path().join("db"),Vault::random()).unwrap();let s=stub("one","t");assert!(db.insert_stub(s.clone(),Utc::now()).unwrap());assert!(!db.insert_stub(s.clone(),Utc::now()).unwrap());let mut a=db.get(&s.id()).unwrap();let mut b=a.clone();db.save(&mut a,"test","first").unwrap();assert!(db.save(&mut b,"test","stale").is_err());}
+    #[test] fn crash_never_releases_reservation() {let d=tempfile::tempdir().unwrap();let v=Vault::random();let p=d.path().join("db");let mut db=Store::open(&p,v.clone()).unwrap();let a=ready(&mut db,"a","same");let b=ready(&mut db,"b","same");db.reserve_send(&a,10,Utc::now()).unwrap();assert!(db.reserve_send(&b,10,Utc::now()).is_err());drop(db);let mut db=Store::open(&p,v).unwrap();assert_eq!(db.recover_interrupted_sends().unwrap(),1);assert_eq!(db.get(&a.id).unwrap().state,JobState::Uncertain);assert!(db.reserve_send(&b,10,Utc::now()).is_err());}
+    #[test] fn cap_counts_uncertain_attempts() {let d=tempfile::tempdir().unwrap();let mut db=Store::open(&d.path().join("db"),Vault::random()).unwrap();let a=ready(&mut db,"a","a");let b=ready(&mut db,"b","b");db.reserve_send(&a,1,Utc::now()).unwrap();db.finish_send(&a.id,None).unwrap();assert!(db.reserve_send(&b,1,Utc::now()).is_err());}
+    #[test] fn secret_not_in_plaintext() {let d=tempfile::tempdir().unwrap();let mut db=Store::open(&d.path().join("db"),Vault::random()).unwrap();db.set_meta("oauth",&"REFRESH_TOKEN_SENTINEL").unwrap();db.insert_stub(stub("message123","thread123"),Utc::now()).unwrap();drop(db);for entry in std::fs::read_dir(d.path()).unwrap(){let b=std::fs::read(entry.unwrap().path()).unwrap();for needle in ["REFRESH_TOKEN_SENTINEL","me@example.com","message123"]{assert!(!b.windows(needle.len()).any(|w|w==needle.as_bytes()));}}}
+    #[test] fn wrong_key_fails_closed() {let d=tempfile::tempdir().unwrap();let p=d.path().join("db");drop(Store::open(&p,Vault::random()).unwrap());assert!(Store::open(&p,Vault::random()).is_err());}
+}
