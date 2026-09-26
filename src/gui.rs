@@ -499,7 +499,16 @@ impl App {
                 if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
-                        egui::Button::new("4  Qualify & pin"),
+                        egui::Button::new("4  Refresh status"),
+                    )
+                    .clicked()
+                {
+                    self.worker.command(Command::InspectModel);
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
+                        egui::Button::new("5  Qualify & pin"),
                     )
                     .clicked()
                 {
