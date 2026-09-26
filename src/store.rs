@@ -231,6 +231,48 @@ impl Store {
         }
         Ok(ids.len())
     }
+    /// Remove actionable content that falls outside a newly tightened age window.
+    /// Provider identities remain as deduplication tombstones and can be requeued if the
+    /// lookback is expanded later.
+    pub fn defer_review_outside_window(
+        &mut self,
+        account: &str,
+        cutoff: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<usize> {
+        let ids: Vec<String> = {
+            let mut q = self.conn.prepare(
+                "SELECT id FROM items WHERE account_key=?1 AND state IN ('ready','attention')",
+            )?;
+            let rows = q.query_map([hash(account)], |r| r.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let mut deferred = 0usize;
+        for id in ids {
+            let mut job = self.get(&id)?;
+            let outside = job
+                .email
+                .as_ref()
+                .is_some_and(|email| email.received_at < cutoff || email.received_at > now);
+            if outside {
+                job.state = JobState::Deferred;
+                job.email = None;
+                job.analysis = None;
+                job.draft = None;
+                job.drafted_at = None;
+                job.retry_at = 0;
+                job.flags = vec!["Outside selected age window; private content removed".into()];
+                self.save(
+                    &mut job,
+                    "email.outside_window",
+                    "Age window tightened; identity retained and private content removed",
+                )?;
+                deferred += 1;
+            }
+        }
+        Ok(deferred)
+    }
+
     pub fn counts(&self, account: &str) -> Result<Counts> {
         let mut c = Counts::default();
         let mut q = self
@@ -484,6 +526,45 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn tightened_window_defers_and_clears_private_content() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let identity = stub("old", "thread-old");
+        let id = identity.id();
+        db.insert_stub(identity, now).unwrap();
+        let mut job = db.get(&id).unwrap();
+        let mut email = crate::ollama::sample_email("Old rejection", "We will not proceed.");
+        email.stub = job.stub.clone();
+        email.received_at = now - chrono::Duration::days(10);
+        job.email = Some(email);
+        job.draft = Some(Draft {
+            body: "Please provide specific feedback on the assessment.".into(),
+            origin: "test".into(),
+        });
+        job.drafted_at = Some(now);
+        job.state = JobState::Ready;
+        db.save(&mut job, "test", "reviewable").unwrap();
+
+        assert_eq!(
+            db.defer_review_outside_window(
+                "me@example.com",
+                now - chrono::Duration::days(1),
+                now,
+            )
+            .unwrap(),
+            1
+        );
+        let deferred = db.get(&id).unwrap();
+        assert_eq!(deferred.state, JobState::Deferred);
+        assert!(deferred.email.is_none());
+        assert!(deferred.draft.is_none());
+        assert!(deferred.analysis.is_none());
+        assert!(deferred.drafted_at.is_none());
+        assert!(db.list("me@example.com", true, 0, 25).unwrap().is_empty());
     }
 
     #[test]
