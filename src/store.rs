@@ -1015,7 +1015,10 @@ mod tests {
         db.insert_stub(identity, old).unwrap();
         let mut job = db.get(&id).unwrap();
         job.state = JobState::Dismissed;
-        job.email = Some(crate::ollama::sample_email("Private subject", "Private body"));
+        job.email = Some(crate::ollama::sample_email(
+            "Private subject",
+            "Private body",
+        ));
         job.draft = Some(Draft {
             body: "Private draft with enough content for retention testing.".into(),
             origin: "human".into(),
@@ -1024,10 +1027,12 @@ mod tests {
         job.attempts = 2;
         job.retry_at = old.timestamp();
         db.save(&mut job, "test", "old completed content").unwrap();
-        db.conn.execute(
-            "UPDATE items SET updated_at=?2 WHERE id=?1",
-            params![id, old.timestamp()],
-        ).unwrap();
+        db.conn
+            .execute(
+                "UPDATE items SET updated_at=?2 WHERE id=?1",
+                params![id, old.timestamp()],
+            )
+            .unwrap();
         assert_eq!(db.purge(30).unwrap(), 1);
         let pruned = db.get(&id).unwrap();
         assert_eq!(pruned.stub.provider_id, "retained-id");
