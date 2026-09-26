@@ -83,8 +83,13 @@ impl Store {
                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
                 CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
-                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
-                PRAGMA user_version=2; COMMIT;")?;
+                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);")?;
+            let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [marker],
+            )?;
+            conn.execute_batch("PRAGMA user_version=2; COMMIT;")?;
         } else if version == 1 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE items ADD COLUMN received_at INTEGER;
@@ -95,11 +100,11 @@ impl Store {
                 "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);",
             )?;
         }
-        let mut db = Self { conn, vault };
-        match db.meta::<String>("vault_check")? {
-            Some(s) => ensure!(s == "rejection-rejector:v1", "Wrong vault"),
-            None => db.set_meta("vault_check", &"rejection-rejector:v1")?,
-        }
+        let db = Self { conn, vault };
+        let check = db
+            .meta::<String>("vault_check")?
+            .context("Database vault marker is missing after initialization")?;
+        ensure!(check == "rejection-rejector:v1", "Wrong vault");
         Ok(db)
     }
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
@@ -676,6 +681,32 @@ mod tests {
         assert!(deferred.analysis.is_none());
         assert!(deferred.drafted_at.is_none());
         assert!(db.list("me@example.com", true, 0, 25).unwrap().is_empty());
+    }
+
+    #[test]
+    fn new_database_creates_schema_and_vault_marker_together() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let vault = Vault::random();
+        let db = Store::open(&path, vault).unwrap();
+        assert_eq!(
+            db.meta::<String>("vault_check").unwrap(),
+            Some("rejection-rejector:v1".into())
+        );
+        drop(db);
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE name='vault_check'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 1);
     }
 
     #[test]
