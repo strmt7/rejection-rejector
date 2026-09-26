@@ -177,14 +177,7 @@ impl Store {
             );
             tx.execute("DELETE FROM meta WHERE name=?1", [name])?;
         }
-        event(
-            &tx,
-            &self.vault,
-            audit_kind,
-            None,
-            audit_detail,
-            Utc::now(),
-        )?;
+        event(&tx, &self.vault, audit_kind, None, audit_detail, Utc::now())?;
         tx.commit()?;
         Ok(())
     }
@@ -930,10 +923,7 @@ mod tests {
         let candidate = ready(&mut db, "cancelled", "cancelled-thread");
         db.reserve_send(&candidate, 10, Utc::now()).unwrap();
         let restored = db
-            .release_unsent_reservation(
-                &candidate.id,
-                "Synthetic pause before network dispatch",
-            )
+            .release_unsent_reservation(&candidate.id, "Synthetic pause before network dispatch")
             .unwrap();
         assert_eq!(restored.state, JobState::Attention);
         assert_eq!(db.counts("me@example.com").unwrap().uncertain, 0);
