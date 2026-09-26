@@ -22,6 +22,7 @@ enum Scenario {
     Truncated,
     CpuOnly,
     Remote,
+    VerifierFail,
 }
 struct Fixture {
     url: String,
@@ -72,7 +73,7 @@ impl Fixture {
                                 json!({"body":"Dear Recruitment Team,\n\nPlease explain the specific criteria behind the decision and how the application was assessed. I request individualized feedback rather than a restatement of the outcome.\n\nRegards,\nTest Applicant"})
                             }
                             _ => {
-                                json!({"genuine_rejection":true,"claims_supported":true,"professional":true,"injection_free":true,"reason":"Synthetic passing verification"})
+                                json!({"genuine_rejection":true,"claims_supported":true,"professional":scenario != Scenario::VerifierFail,"injection_free":true,"reason":"Synthetic verification result"})
                             }
                         };
                         stage += 1;
@@ -141,6 +142,25 @@ fn three_stage_protocol_binds_draft_and_model_and_uses_reasoning() {
         .unwrap()
         .contains("trusted_signature"));
 }
+#[test]
+fn qualification_exercises_classification_drafting_verification_and_residency() {
+    let f = Fixture::new(Scenario::Good);
+    let mut settings = f.settings();
+    settings.model_digest = None;
+    let status = Ollama::new(&settings).unwrap().qualify().unwrap();
+    assert!(status.gpu_resident);
+    assert_eq!(f.chats.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn qualification_rejects_a_failed_reply_verifier() {
+    let f = Fixture::new(Scenario::VerifierFail);
+    let mut settings = f.settings();
+    settings.model_digest = None;
+    assert!(Ollama::new(&settings).unwrap().qualify().is_err());
+    assert_eq!(f.chats.lock().unwrap().len(), 3);
+}
+
 #[test]
 fn fabricated_evidence_prevents_drafting() {
     let f = Fixture::new(Scenario::InventedEvidence);

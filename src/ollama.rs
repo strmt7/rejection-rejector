@@ -185,13 +185,29 @@ impl Ollama {
     }
     pub fn qualify(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
+        let mut pinned = self.settings.clone();
+        pinned.model_digest = Some(info.digest.clone());
+        let candidate = Self::new(&pinned)?;
         let email=sample_email("Your application","Thank you for applying for the engineer position. We have decided not to move forward with your application.");
-        let verdict = self.classify(&email)?;
+        let (analysis, draft, flags) = candidate.analyze(&email)?;
         ensure!(
-            verdict.0.category == Category::Rejection,
-            "Model failed the rejection smoke test"
+            analysis.verdict.category == Category::Rejection,
+            "Model failed the rejection classification smoke test"
         );
-        let status = self.residency(&info.digest)?;
+        ensure!(draft.is_some(), "Model failed the reply-drafting smoke test");
+        ensure!(
+            analysis
+                .verification
+                .as_ref()
+                .is_some_and(Verification::passed),
+            "Model failed the reply-verification smoke test"
+        );
+        ensure!(
+            analysis.gpu_resident && flags.is_empty(),
+            "Full local pipeline qualification failed: {}",
+            flags.join("; ")
+        );
+        let status = candidate.residency(&info.digest)?;
         ensure!(status.gpu_resident, "{}", status.message);
         Ok(status)
     }
