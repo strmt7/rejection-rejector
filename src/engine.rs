@@ -702,6 +702,9 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
     if mail::auto_language_conflict(&email.subject, &email.text) {
         reasons.push("Conflicting or suspicious email language".into());
     }
+    if mail::automatic_draft_conflict(&draft.body, &s.signature) {
+        reasons.push("Draft requires Human review because of escalation or link content".into());
+    }
     if email
         .header("auto-submitted")
         .is_some_and(|value| !value.eq_ignore_ascii_case("no"))
