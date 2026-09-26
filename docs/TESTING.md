@@ -39,7 +39,7 @@ With the desktop application closed, run:
 .\rr.exe evaluate --out .\model-evaluation.json
 ```
 
-This records actual results from the configured local model on 12 synthetic fixtures without sending email. No model score is prefilled. The small corpus is a regression aid, not representative production accuracy or a best-model ranking.
+This first runs the same full local qualification used by the app (classification, draft, verification and GPU-residency checks), then records actual classification results from the configured local model on 12 synthetic fixtures without sending email. The report includes exact digest/context, accuracy, rejection true/false positives and false negatives, precision, recall and mean per-case latency. No model score is prefilled. The small corpus is a regression aid, not representative production accuracy or a best-model ranking.
 
 ## Remaining owner-environment acceptance
 
