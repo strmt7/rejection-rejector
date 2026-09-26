@@ -44,6 +44,9 @@ pub struct App {
     frames: u32,
     local_error: String,
     started: Instant,
+    editor_account: String,
+    close_confirmation: bool,
+    close_approved: bool,
 }
 impl App {
     pub fn new(
@@ -54,6 +57,9 @@ impl App {
     ) -> Self {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
+        style.visuals.override_text_color = Some(Color32::from_rgb(222, 231, 240));
+        style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(34, 44, 58);
+        style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(47, 65, 79);
         style.visuals.panel_fill = BG;
         style.visuals.window_fill = PANEL;
         style.visuals.extreme_bg_color = BG;
@@ -93,6 +99,9 @@ impl App {
             frames: 0,
             local_error: String::new(),
             started: Instant::now(),
+            editor_account: String::new(),
+            close_confirmation: false,
+            close_approved: false,
         }
     }
     fn navigate(&mut self, tab: Tab) {
@@ -121,6 +130,9 @@ impl App {
         ui.label(RichText::new(text).color(color).strong());
     }
     fn select(&mut self, id: String) {
+        if self.modal_open() {
+            return;
+        }
         if self.dirty {
             self.pending_select = Some(id);
         } else {
@@ -128,6 +140,14 @@ impl App {
         }
     }
     fn sync_view(&mut self, s: &Snapshot) {
+        if s.initialized && self.editor_account != s.account {
+            self.editor_account = s.account.clone();
+            self.editor.clear();
+            self.editor_key = None;
+            self.dirty = false;
+            self.pending_select = None;
+            self.send_confirmation = None;
+        }
         if s.initialized && (!self.settings_loaded || s.settings_revision != self.settings_revision)
         {
             self.settings = s.settings.clone();
@@ -309,67 +329,6 @@ impl App {
                     }
                 }
             });
-    }
-    fn review(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
-        Self::heading(
-            ui,
-            "Review before you reply",
-            "Read the original, refine your response, and send only the exact version you approve.",
-        );
-        if s.settings.mode != Mode::HumanReview {
-            ui.label("Review is disabled in Automatic mode. Change the mode in Settings.");
-            return;
-        }
-        let height = (ui.available_height() - 10.0).max(400.0);
-        ui.horizontal_top(|ui|{
-            ui.allocate_ui_with_layout(Vec2::new(255.0,height),egui::Layout::top_down(egui::Align::Min),|ui|self.queue(ui,s));
-            ui.separator();
-            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(),height),egui::Layout::top_down(egui::Align::Min),|ui|{
-                let Some(job)=s.selected.as_ref()else{ui.add_space(40.0);ui.heading("Select a message");ui.label("Your original email and editable reply will appear here.");return;};
-                let email=job.email.as_ref();
-                if !job.state.reviewable(){ui.colored_label(AMBER,format!("This message is {}. Select another item.",job.state.label()));}
-                ui.columns(2,|cols|{
-                    Self::card(&mut cols[0],|ui|{
-                        ui.label(RichText::new("ORIGINAL EMAIL").small().color(MUTED));
-                        if let Some(email)=email {
-                            ui.label(RichText::new(&email.subject).strong().size(18.0));
-                            ui.label(RichText::new(&email.from).color(MUTED));
-                            ui.label(RichText::new(email.received_at.with_timezone(&chrono::Local).format("%d %b %Y · %H:%M").to_string()).small().color(MUTED));
-                            ui.separator();
-                            egui::ScrollArea::vertical().id_salt("original_body").max_height((height-290.0).max(180.0)).show(ui,|ui|{ui.add(egui::Label::new(&email.text).wrap().selectable(true));});
-                        }else{ui.label("The original has not been fetched. Regenerate to retry processing.");}
-                    });
-                    Self::card(&mut cols[1],|ui|{
-                        ui.horizontal(|ui|{ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));if self.dirty{ui.colored_label(AMBER,"Unsaved");}});
-                        ui.label(RichText::new("Assertive. Specific. Professional.").strong().size(18.0));
-                        if let Some(email)=email{ui.label(RichText::new(format!("To: {}",email.recipient().unwrap_or_else(|_|"Invalid recipient".into()))).color(MUTED));}
-                        ui.separator();
-                        let editable=job.state.reviewable()&&s.busy.is_empty();
-                        let response=ui.add_enabled(editable,egui::TextEdit::multiline(&mut self.editor).desired_width(f32::INFINITY).desired_rows(17).font(egui::TextStyle::Body));
-                        if response.changed(){self.dirty=true;}
-                        ui.label(RichText::new(format!("{} words",self.editor.split_whitespace().count())).small().color(MUTED));
-                    });
-                });
-                if let Some(a)=&job.analysis {
-                    ui.collapsing("Why this was detected",|ui|{ui.label(&a.verdict.explanation);ui.label(format!("Evidence: {}",a.verdict.evidence));ui.label(format!("Model score: {}/100 (not a calibrated probability)",a.verdict.confidence));if let Some(v)=&a.verification{ui.label(format!("Reply audit: {}",v.reason));}});
-                }
-                for flag in &job.flags{ui.colored_label(AMBER,flag);}
-                let available=s.busy.is_empty()&&job.state.reviewable();
-                ui.horizontal_wrapped(|ui|{
-                    if ui.add_enabled(available&&self.dirty,egui::Button::new("Save changes")).clicked(){
-                        match crate::mail::validate_draft(&self.editor){
-                            Ok(())=>{self.local_error.clear();self.worker.command(Command::Edit{id:job.id.clone(),revision:job.revision,body:self.editor.clone()});},
-                            Err(error)=>self.local_error=error.to_string(),
-                        }
-                    }
-                    if ui.add_enabled(available&&!self.dirty&&!s.demo,egui::Button::new("Regenerate with local AI")).clicked(){self.worker.command(Command::Regenerate{id:job.id.clone(),revision:job.revision});}
-                    if ui.add_enabled(available&&!self.dirty,egui::Button::new("Dismiss")).clicked(){self.worker.command(Command::Dismiss{id:job.id.clone(),revision:job.revision});}
-                    let can_send=available&&!self.dirty&&visible_draft_matches(job,&self.editor)&&s.settings.sending_enabled&&!s.demo&&!self.worker.paused.load(Ordering::SeqCst);
-                    if ui.add_enabled(can_send,egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT)).clicked(){self.send_confirmation=Some(job.clone());}
-                });
-                if !s.settings.sending_enabled{ui.label(RichText::new("Sending is disabled. Enable it explicitly in Settings after connecting Gmail with send permission.").small().color(MUTED));}
-            });
-        });
     }
     fn activity(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::heading(
@@ -753,6 +712,24 @@ impl App {
         }
     }
     fn dialogs(&mut self, ctx: &egui::Context, s: &Snapshot) {
+        if self.close_confirmation {
+            egui::Window::new("Unsaved reply — close application?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(
+                        "Your edited reply has not been saved. Closing will discard this text.",
+                    );
+                    if ui.button("Keep editing").clicked() {
+                        self.close_confirmation = false;
+                    }
+                    if ui.button("Discard unsaved text and close").clicked() {
+                        self.close_approved = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+        }
         if self.pending_select.is_some() {
             egui::Window::new("Unsaved reply")
                 .collapsible(false)
@@ -795,6 +772,10 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(250));
         let s = self.worker.view();
         self.sync_view(&s);
+        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.close_approved {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_confirmation = true;
+        }
         if self.screenshot.is_some() {
             // Screenshot mode is restricted to synthetic demo data.
             ctx.request_repaint();
@@ -840,7 +821,7 @@ impl eframe::App for App {
         egui::SidePanel::left("navigation").exact_width(210.0).resizable(false).frame(egui::Frame::default().fill(PANEL).inner_margin(18)).show(ctx,|ui|{
             ui.add_space(8.0);ui.label(RichText::new("RR").size(34.0).strong().color(MINT));ui.label(RichText::new("REJECTION\nREJECTOR").size(17.0).strong());ui.label(RichText::new("YOUR VOICE, RETURNED.").size(10.0).color(MUTED));ui.add_space(28.0);
             for(tab,label)in[(Tab::Overview,"Overview"),(Tab::Review,"Review"),(Tab::Activity,"Activity"),(Tab::LocalAi,"Local AI"),(Tab::Settings,"Settings")]{
-                let enabled=tab!=Tab::Review||s.settings.mode==Mode::HumanReview;
+                let enabled=(tab!=Tab::Review||s.settings.mode==Mode::HumanReview)&&!self.modal_open();
                 if ui.add_enabled(enabled,egui::Button::new(label).selected(self.tab==tab).min_size(Vec2::new(170.0,42.0))).clicked(){self.navigate(tab);}
             }
             ui.add_space(24.0);ui.separator();ui.label(RichText::new("DELIVERY CONTROL").small().color(MUTED));
@@ -931,5 +912,50 @@ mod tests {
         assert!(!visible_draft_matches(&job, "Changed but not saved reply"));
         job.draft = None;
         assert!(!visible_draft_matches(&job, ""));
+    }
+}
+
+mod review;
+impl App {
+    fn modal_open(&self) -> bool {
+        self.pending_select.is_some()
+            || self.send_confirmation.is_some()
+            || self.install_confirmation
+            || self.close_confirmation
+    }
+    /// Presentation-only demo navigation; CLI permits this only with --demo.
+    pub fn set_demo_view(&mut self, name: &str) {
+        self.navigate(match name {
+            "overview" => Tab::Overview,
+            "activity" => Tab::Activity,
+            "local-ai" => Tab::LocalAi,
+            "settings" => Tab::Settings,
+            _ => Tab::Review,
+        });
+    }
+}
+fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
+    key.is_some_and(|(id, revision)| id == &job.id && *revision == job.revision)
+}
+#[cfg(test)]
+mod editor_binding_regressions {
+    use super::*;
+    #[test]
+    fn selection_and_revision_are_both_required() {
+        let email = crate::ollama::sample_email("Synthetic", "Not selected");
+        let job = Job::new(email.stub, chrono::Utc::now());
+        assert!(editor_binding_matches(
+            &job,
+            Some(&(job.id.clone(), job.revision))
+        ));
+        assert!(!editor_binding_matches(
+            &job,
+            Some(&(job.id.clone(), job.revision + 1))
+        ));
+        assert!(!editor_binding_matches(
+            &job,
+            Some(&("another-message".into(), job.revision))
+        ));
+        assert!(!editor_binding_matches(&job, None));
     }
 }

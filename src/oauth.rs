@@ -59,6 +59,10 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
         pairs.iter().filter(|(k, _)| k == "state").count() == 1,
         "Invalid OAuth state count"
     );
+    ensure!(
+        pairs.iter().filter(|(k, _)| k == "code").count() == 1,
+        "Exactly one OAuth authorization code is required"
+    );
     let q: HashMap<_, _> = pairs.into_iter().collect();
     let actual = q.get("state").map(|v| v.as_ref()).unwrap_or("");
     ensure!(
@@ -224,5 +228,13 @@ mod tests {
     fn pkce_entropy() {
         assert_eq!(secret().len(), 43);
         assert_ne!(secret(), secret());
+    }
+}
+
+#[cfg(test)]
+mod callback_regressions {
+    #[test]
+    fn duplicated_authorization_codes_are_rejected() {
+        assert!(super::callback_code("/callback?state=s&code=a&code=b", "s").is_err());
     }
 }

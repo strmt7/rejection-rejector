@@ -393,6 +393,7 @@ impl Engine {
             job.revision == revision && job.state.reviewable(),
             "Approval is stale or message is not reviewable"
         );
+        mail::validate_job_identity(&job)?;
         let body = &job.draft.as_ref().context("Draft is missing")?.body;
         ensure!(
             hash(body) == expected_hash,
@@ -439,6 +440,10 @@ impl Engine {
             "Original message changed; review it again"
         );
         let thread = gmail.thread(&job.stub.thread_id)?;
+        ensure!(
+            thread.messages.iter().any(|m| m.id == job.stub.provider_id),
+            "Original message is no longer in the conversation"
+        );
         for message in thread.messages {
             if message.id != job.stub.provider_id {
                 let at = message
@@ -562,6 +567,9 @@ impl Engine {
 
 pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -> Vec<String> {
     let mut reasons = Vec::new();
+    if mail::validate_job_identity(job).is_err() {
+        reasons.push("Queue/message identity mismatch".into());
+    }
     if s.mode != Mode::Automatic || !s.sending_enabled || !s.automatic_confirmed {
         reasons.push("Automatic mode not explicitly armed".into());
     }
