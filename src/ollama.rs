@@ -194,7 +194,10 @@ impl Ollama {
             analysis.verdict.category == Category::Rejection,
             "Model failed the rejection classification smoke test"
         );
-        ensure!(draft.is_some(), "Model failed the reply-drafting smoke test");
+        ensure!(
+            draft.is_some(),
+            "Model failed the reply-drafting smoke test"
+        );
         ensure!(
             analysis
                 .verification
