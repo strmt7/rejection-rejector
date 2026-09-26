@@ -83,7 +83,13 @@ fn no_automatic_consent_holds() {
 }
 #[test]
 fn changed_draft_holds() {
-    held(|j, _, _| j.draft.as_mut().unwrap().body.push_str(" An unverified claim."));
+    held(|j, _, _| {
+        j.draft
+            .as_mut()
+            .unwrap()
+            .body
+            .push_str(" An unverified claim.")
+    });
 }
 #[test]
 fn human_edit_never_inherits_automatic_approval() {
@@ -107,7 +113,15 @@ fn non_gpu_resident_analysis_holds() {
 }
 #[test]
 fn failed_verification_holds() {
-    held(|j, _, _| j.analysis.as_mut().unwrap().verification.as_mut().unwrap().claims_supported = false);
+    held(|j, _, _| {
+        j.analysis
+            .as_mut()
+            .unwrap()
+            .verification
+            .as_mut()
+            .unwrap()
+            .claims_supported = false
+    });
 }
 #[test]
 fn cooldown_holds() {
@@ -127,8 +141,20 @@ fn different_reply_to_holds() {
 }
 #[test]
 fn lists_and_loops_hold() {
-    held(|j, _, _| { j.email.as_mut().unwrap().headers.insert("list-id".into(), vec!["list.example.com".into()]); });
-    held(|j, _, _| { j.email.as_mut().unwrap().headers.insert("auto-submitted".into(), vec!["auto-replied".into()]); });
+    held(|j, _, _| {
+        j.email
+            .as_mut()
+            .unwrap()
+            .headers
+            .insert("list-id".into(), vec!["list.example.com".into()]);
+    });
+    held(|j, _, _| {
+        j.email
+            .as_mut()
+            .unwrap()
+            .headers
+            .insert("auto-submitted".into(), vec!["auto-replied".into()]);
+    });
 }
 #[test]
 fn spam_and_trashed_mail_hold() {

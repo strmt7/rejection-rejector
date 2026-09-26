@@ -1,5 +1,9 @@
 # Setup and operation
 
+## Windows runtime
+
+The x64 binaries require Microsoft Visual C++ v14 Redistributable. See [WINDOWS-RUNTIME.md](WINDOWS-RUNTIME.md) for the official source and missing-DLL guidance.
+
 ## Safe preview and storage
 
 Run `rejection-rejector.exe --demo` for synthetic offline data. It uses a temporary encrypted database and cannot connect to Gmail or send anything. Real data goes to the OS local application-data directory; override with `--data-dir <absolute-path>`. Never choose a public repository or shared/synchronized directory.
@@ -72,3 +76,5 @@ Pruning removes old completed content, not deduplication/reservation identities.
 - API busy: retry later with backoff; do not bypass the worker by editing SQLite.
 
 Linux development requires desktop libraries and a strong private `RR_VAULT_PASSPHRASE` of 20+ characters for a real workspace. Argon2 derives the key. Demo needs no passphrase. Never commit the passphrase.
+
+Linux runtime note: X11 rendering requires `libxkbcommon-x11-0` in addition to the build libraries. CI installs `libxkbcommon-x11-dev`, which supplies the runtime dependency.
