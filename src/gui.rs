@@ -364,7 +364,10 @@ impl App {
                     };
                     if ui
                         .add_sized(
-                            [ui.available_width(), if role.is_empty() { 82.0 } else { 102.0 }],
+                            [
+                                ui.available_width(),
+                                if role.is_empty() { 82.0 } else { 102.0 },
+                            ],
                             egui::Button::new(RichText::new(title).size(13.5))
                                 .selected(selected)
                                 .wrap(),

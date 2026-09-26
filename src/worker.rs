@@ -397,8 +397,7 @@ fn run(
                 process_due = Instant::now() + Duration::from_secs(1);
             } else {
                 process_failures = process_failures.saturating_add(1);
-                process_due =
-                    Instant::now() + bounded_backoff(30, process_failures, 5 * 60);
+                process_due = Instant::now() + bounded_backoff(30, process_failures, 5 * 60);
             }
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
@@ -411,8 +410,7 @@ fn run(
                 }
                 Err(_) => {
                     automatic_failures = automatic_failures.saturating_add(1);
-                    auto_due =
-                        Instant::now() + bounded_backoff(30, automatic_failures, 10 * 60);
+                    auto_due = Instant::now() + bounded_backoff(30, automatic_failures, 10 * 60);
                 }
             }
             if !matches!(result, Ok(false)) {
@@ -423,9 +421,7 @@ fn run(
     }
     Ok(())
 }
-fn unique_query(
-    url: &url::Url,
-) -> Result<std::collections::BTreeMap<String, String>> {
+fn unique_query(url: &url::Url) -> Result<std::collections::BTreeMap<String, String>> {
     let mut query = std::collections::BTreeMap::new();
     for (key, value) in url.query_pairs() {
         let key = key.into_owned();
@@ -457,32 +453,38 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
     let query = unique_query(&u)?;
     match u.path() {
         "/v1/capabilities" => {
-            ensure!(query.is_empty(), "Capabilities endpoint takes no query parameters");
+            ensure!(
+                query.is_empty(),
+                "Capabilities endpoint takes no query parameters"
+            );
             Ok(json!({
-            "api_version": 1,
-            "application_version": env!("CARGO_PKG_VERSION"),
-            "read_only": true,
-            "mail_provider": "gmail",
-            "modes": ["human_review", "automatic"],
-            "features": {
-                "encrypted_local_store": true,
-                "incremental_sync": true,
-                "local_ollama": true,
-                "review_queue": true,
-                "automatic_policy": true,
-                "delivery_reconciliation": true,
-                "events": true
-            },
-            "poll_hours": crate::config::POLL_HOURS,
-            "lookback_days": crate::config::LOOKBACK_DAYS
-        }))
-        },
+                "api_version": 1,
+                "application_version": env!("CARGO_PKG_VERSION"),
+                "read_only": true,
+                "mail_provider": "gmail",
+                "modes": ["human_review", "automatic"],
+                "features": {
+                    "encrypted_local_store": true,
+                    "incremental_sync": true,
+                    "local_ollama": true,
+                    "review_queue": true,
+                    "automatic_policy": true,
+                    "delivery_reconciliation": true,
+                    "events": true
+                },
+                "poll_hours": crate::config::POLL_HOURS,
+                "lookback_days": crate::config::LOOKBACK_DAYS
+            }))
+        }
         "/v1/status" => {
-            ensure!(query.is_empty(), "Status endpoint takes no query parameters");
+            ensure!(
+                query.is_empty(),
+                "Status endpoint takes no query parameters"
+            );
             Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?}),
             )
-        },
+        }
         "/v1/items" => {
             ensure!(
                 query.keys().all(|key| key == "page"),
