@@ -40,7 +40,7 @@ fn unicode_reply_roundtrips_with_one_recipient_and_thread_headers() {
     );
     assert_eq!(
         parsed.headers.get_first_value("Subject").unwrap(),
-        original.subject
+        format!("Re: {}", original.subject)
     );
     assert_eq!(
         parsed.headers.get_first_value("In-Reply-To").unwrap(),
@@ -56,6 +56,19 @@ fn unicode_reply_roundtrips_with_one_recipient_and_thread_headers() {
         job.draft.as_ref().unwrap().body
     );
 }
+#[test]
+fn existing_reply_prefix_is_not_duplicated() {
+    let (mut job, settings) = candidate();
+    job.email.as_mut().unwrap().subject = "Re: Existing thread".into();
+    let raw = mail::raw_reply(&job, &settings, "candidate@example.com", Utc::now()).unwrap();
+    let bytes = URL_SAFE_NO_PAD.decode(raw).unwrap();
+    let parsed = mailparse::parse_mail(&bytes).unwrap();
+    assert_eq!(
+        parsed.headers.get_first_value("Subject").unwrap(),
+        "Re: Existing thread"
+    );
+}
+
 #[test]
 fn cross_message_or_thread_payload_cannot_be_composed() {
     for mutate in [0, 1, 2, 3] {
