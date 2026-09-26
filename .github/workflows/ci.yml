@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      package_windows:
+        description: Create the user-facing Windows ZIP for this manually requested run
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -70,7 +76,7 @@ jobs:
         if: runner.os == 'Linux'
         run: timeout 120s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
       - name: Build Windows release binaries
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.package_windows
         run: cargo build --locked --release --bins
       - name: Verify tracked source was not modified
         run: git diff --exit-code HEAD
@@ -86,7 +92,7 @@ jobs:
           cp Cargo.lock artifacts/
           git archive --format=zip HEAD -o artifacts/rejection-rejector-source.zip
       - name: Collect Windows package
-        if: runner.os == 'Windows' && success()
+        if: runner.os == 'Windows' && success() && github.event_name == 'workflow_dispatch' && inputs.package_windows
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

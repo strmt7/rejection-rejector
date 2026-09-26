@@ -26,7 +26,7 @@
 
 ## Windows
 
-Download the Windows package from a successful **Rust CI** run on `main`, extract `rejection-rejector-windows-x64.zip`, and launch `rejection-rejector.exe`. The package contains the desktop binary, `rr.exe`, documentation and exact build-commit evidence. The binaries are unsigned; verify their origin and hash. Do not disable Windows security globally.
+Development CI compiles and tests the Windows desktop/CLI on every `main` commit, but **does not publish a user-facing Windows package on normal pushes**. Packaging is intentionally gated behind an explicit manual workflow input and should remain unused until a release build is requested. When packaging is later enabled, the ZIP will include the desktop binary, `rr.exe`, documentation and exact build-commit/hash evidence.
 
 Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).
 
