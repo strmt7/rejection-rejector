@@ -319,7 +319,9 @@ fn run(
                         }
                         Ok(())
                     }
-                    Command::Api { .. } => unreachable!(),
+                    Command::Api { .. } => {
+                        Err(anyhow::anyhow!("Internal API command reached the wrong dispatcher"))
+                    }
                 };
                 if settings_changed {
                     if let Ok(mut s) = shared.lock() {
