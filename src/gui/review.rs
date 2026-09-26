@@ -3,7 +3,11 @@ use super::*;
 
 impl App {
     pub(super) fn review(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
-        Self::heading(ui, "Review before you reply", "Read the original, refine your response, and send only the exact version you approve.");
+        Self::heading(
+            ui,
+            "Review before you reply",
+            "Read the original, refine your response, and send only the exact version you approve.",
+        );
         if s.settings.mode != Mode::HumanReview {
             ui.label("Review is disabled in Automatic mode. Change the mode in Settings.");
             return;

@@ -25,21 +25,31 @@ fn main() -> eframe::Result<()> {
     // Fail closed instead of silently writing private state into the current directory.
     let dir = match args.data_dir {
         Some(path) => path,
-        None => rejection_rejector::config::data_dir().map_err(|e| eframe::Error::AppCreation(e.into()))?,
+        None => rejection_rejector::config::data_dir()
+            .map_err(|e| eframe::Error::AppCreation(e.into()))?,
     };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: eframe::egui::ViewportBuilder::default()
             .with_visible(true)
-            .with_inner_size([args.demo_width.unwrap_or(1440) as f32, args.demo_height.unwrap_or(940) as f32])
+            .with_inner_size([
+                args.demo_width.unwrap_or(1440) as f32,
+                args.demo_height.unwrap_or(940) as f32,
+            ])
             .with_min_inner_size([1180.0, 760.0]),
         ..Default::default()
     };
-    eframe::run_native("Rejection Rejector", options, Box::new(move |cc| {
-        let mut app = rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
-        if let Some(view) = &args.demo_view { app.set_demo_view(view); }
-        Ok(Box::new(app))
-    }))
+    eframe::run_native(
+        "Rejection Rejector",
+        options,
+        Box::new(move |cc| {
+            let mut app = rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
+            if let Some(view) = &args.demo_view {
+                app.set_demo_view(view);
+            }
+            Ok(Box::new(app))
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -54,7 +64,15 @@ mod tests {
     #[test]
     fn ordinary_start_and_bounded_demo_window_are_valid() {
         assert!(Args::try_parse_from(["rr"]).is_ok());
-        assert!(Args::try_parse_from(["rr", "--demo", "--demo-width", "1180", "--demo-height", "760"]).is_ok());
+        assert!(Args::try_parse_from([
+            "rr",
+            "--demo",
+            "--demo-width",
+            "1180",
+            "--demo-height",
+            "760"
+        ])
+        .is_ok());
         assert!(Args::try_parse_from(["rr", "--demo", "--demo-width", "10"]).is_err());
     }
 }
