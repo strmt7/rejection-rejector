@@ -192,6 +192,11 @@ fn report(shared: &Arc<Mutex<Snapshot>>, result: &Result<()>) {
         }
     }
 }
+fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
+    let shift = failures.saturating_sub(1).min(6);
+    Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
+}
+
 fn run(
     mut e: Engine,
     rx: Receiver<Command>,
@@ -227,6 +232,8 @@ fn run(
     let mut sync_retry = Instant::now();
     let mut auto_due = Instant::now();
     let mut process_due = Instant::now();
+    let mut process_failures = 0u32;
+    let mut automatic_failures = 0u32;
     while !e.stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
@@ -385,16 +392,33 @@ fn run(
             );
             let result = e.process_one().map(|_| ());
             report(&shared, &result);
-            process_due = Instant::now() + Duration::from_secs(if result.is_ok() { 1 } else { 30 });
+            if result.is_ok() {
+                process_failures = 0;
+                process_due = Instant::now() + Duration::from_secs(1);
+            } else {
+                process_failures = process_failures.saturating_add(1);
+                process_due =
+                    Instant::now() + bounded_backoff(30, process_failures, 5 * 60);
+            }
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if Instant::now() >= auto_due {
             let result = e.automatic_tick();
+            match &result {
+                Ok(_) => {
+                    automatic_failures = 0;
+                    auto_due = Instant::now() + Duration::from_secs(30);
+                }
+                Err(_) => {
+                    automatic_failures = automatic_failures.saturating_add(1);
+                    auto_due =
+                        Instant::now() + bounded_backoff(30, automatic_failures, 10 * 60);
+                }
+            }
             if !matches!(result, Ok(false)) {
                 report(&shared, &result.map(|_| ()));
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
-            auto_due = Instant::now() + Duration::from_secs(30);
         }
     }
     Ok(())
@@ -469,6 +493,14 @@ mod tests {
             value["poll_hours"],
             serde_json::json!(crate::config::POLL_HOURS)
         );
+    }
+
+    #[test]
+    fn retry_backoff_is_bounded_and_resets_by_caller() {
+        assert_eq!(bounded_backoff(30, 1, 300), Duration::from_secs(30));
+        assert_eq!(bounded_backoff(30, 2, 300), Duration::from_secs(60));
+        assert_eq!(bounded_backoff(30, 4, 300), Duration::from_secs(240));
+        assert_eq!(bounded_backoff(30, 20, 300), Duration::from_secs(300));
     }
 
     #[test]
