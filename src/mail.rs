@@ -89,6 +89,14 @@ pub fn current_text(s: &str) -> String {
             || (l.starts_with("il ") && l.contains("ha scritto"))
             || (l.starts_with("el ") && l.contains("escribió"))
             || (l.starts_with("em ") && l.contains("escreveu"))
+            || (l.starts_with("op ") && l.contains("schreef"))
+            || (l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε")))
+            || l.contains("oorspronkelijk bericht")
+            || l.contains("doorgestuurd bericht")
+            || l.contains("αρχικό μήνυμα")
+            || l.contains("αρχικο μηνυμα")
+            || l.contains("προωθημένο μήνυμα")
+            || l.contains("προωθημενο μηνυμα")
             || l.contains("messaggio inoltrato")
             || l.contains("mensaje reenviado")
             || l.contains("mensagem encaminhada")
@@ -405,6 +413,32 @@ mod tests {
     fn draft_controls_rejected() {
         assert!(validate_draft("This is a sufficiently long message\u{202e}").is_err());
     }
+    #[test]
+    fn dutch_and_greek_quoted_history_is_removed() {
+        let dutch = "We nodigen u graag uit voor een gesprek.\nOp dinsdag schreef Recruiter:\nUw sollicitatie is afgewezen.";
+        assert_eq!(
+            current_text(dutch),
+            "We nodigen u graag uit voor een gesprek."
+        );
+        let greek = "Θα θέλαμε να σας καλέσουμε σε συνέντευξη.\nΣτις 20 Σεπτεμβρίου έγραψε Recruiter:\nΑποφασίσαμε να μην προχωρήσουμε με την υποψηφιότητά σας.";
+        assert_eq!(
+            current_text(greek),
+            "Θα θέλαμε να σας καλέσουμε σε συνέντευξη."
+        );
+    }
+
+    #[test]
+    fn localized_forwarded_markers_are_removed() {
+        assert_eq!(
+            current_text("Current text\nDoorgestuurd bericht\nOld rejection"),
+            "Current text"
+        );
+        assert_eq!(
+            current_text("Τρέχον μήνυμα\nΠροωθημένο μήνυμα\nΠαλιά απόρριψη"),
+            "Τρέχον μήνυμα"
+        );
+    }
+
     #[test]
     fn automatic_conflict_guard_is_multilingual_and_conservative() {
         for text in [
