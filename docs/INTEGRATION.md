@@ -13,6 +13,7 @@ The server accepts GET only, an exact literal-loopback Host header and the valid
 ```powershell
 $token = Read-Host 'Local API token'
 $headers = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod 'http://127.0.0.1:8734/v1/capabilities' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/status' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/items?page=0' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
@@ -20,6 +21,7 @@ Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 
 | Endpoint | Result |
 |---|---|
+| /v1/capabilities | API/application versions, read-only contract, provider, modes, supported features and schedule presets |
 | /v1/status | Version, account, mode, pause/send settings, counts and last successful sync |
 | /v1/items?page=N | Page of 25 account-owned jobs with retained original/draft content |
 | /v1/items/ID | One account-owned job |
