@@ -85,6 +85,23 @@ pub struct Sent {
     pub id: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendFailureKind {
+    NotAccepted,
+    Uncertain,
+}
+#[derive(Debug)]
+pub struct SendFailure {
+    pub kind: SendFailureKind,
+    pub message: String,
+}
+impl std::fmt::Display for SendFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for SendFailure {}
+
 pub struct Gmail {
     creds: Credentials,
     token: Option<(String, Instant)>,
@@ -239,21 +256,74 @@ impl Gmail {
         )
     }
     /// Exactly one application-level send request; no automatic network retry is performed here.
-    pub fn send(&mut self, raw: &str, thread_id: &str) -> Result<String> {
-        ensure!(
-            self.can_send(),
-            "Google send permission has not been granted"
-        );
-        validate_id(thread_id)?;
-        let token = self.access()?;
-        let response = net::client(60, false)?
+    pub fn send(
+        &mut self,
+        raw: &str,
+        thread_id: &str,
+    ) -> std::result::Result<String, SendFailure> {
+        if !self.can_send() {
+            return Err(SendFailure {
+                kind: SendFailureKind::NotAccepted,
+                message: "Google send permission has not been granted".into(),
+            });
+        }
+        if let Err(error) = validate_id(thread_id) {
+            return Err(SendFailure {
+                kind: SendFailureKind::NotAccepted,
+                message: error.to_string(),
+            });
+        }
+        let token = self.access().map_err(|error| SendFailure {
+            kind: SendFailureKind::NotAccepted,
+            message: format!("Google authorization failed before dispatch: {error}"),
+        })?;
+        let client = net::client(60, false).map_err(|error| SendFailure {
+            kind: SendFailureKind::NotAccepted,
+            message: format!("Gmail client could not be created: {error}"),
+        })?;
+        let response = client
             .post(format!("{ROOT}/messages/send"))
             .bearer_auth(token)
             .json(&serde_json::json!({"raw":raw,"threadId":thread_id}))
             .send()
-            .context("Gmail send outcome is uncertain")?;
-        let sent: Sent = net::json(response, 32768)?;
-        validate_id(&sent.id)?;
+            .map_err(|error| SendFailure {
+                kind: if error.is_connect() {
+                    SendFailureKind::NotAccepted
+                } else {
+                    SendFailureKind::Uncertain
+                },
+                message: if error.is_connect() {
+                    "Could not connect to Gmail; the message was not dispatched".into()
+                } else {
+                    "Gmail transport ended without a reliable delivery result".into()
+                },
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(SendFailure {
+                kind: if status.is_client_error() {
+                    SendFailureKind::NotAccepted
+                } else {
+                    SendFailureKind::Uncertain
+                },
+                message: if status.is_client_error() {
+                    format!("Gmail rejected the send request (HTTP {})", status.as_u16())
+                } else {
+                    format!(
+                        "Gmail returned HTTP {}; delivery outcome is uncertain",
+                        status.as_u16()
+                    )
+                },
+            });
+        }
+        let sent: Sent = net::json(response, 32768).map_err(|_| SendFailure {
+            kind: SendFailureKind::Uncertain,
+            message: "Gmail accepted the request but returned an unreadable response; delivery outcome is uncertain".into(),
+        })?;
+        validate_id(&sent.id).map_err(|_| SendFailure {
+            kind: SendFailureKind::Uncertain,
+            message: "Gmail accepted the request but returned an invalid message identifier; delivery outcome is uncertain".into(),
+        })?;
         Ok(sent.id)
     }
     pub fn find_sent(&mut self, message_id: &str) -> Result<Option<String>> {

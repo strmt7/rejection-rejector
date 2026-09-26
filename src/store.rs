@@ -392,6 +392,49 @@ impl Store {
         tx.commit()?;
         Ok(j)
     }
+    pub fn cancel_rejected_send(&mut self, id: &str, detail: &str) -> Result<Job> {
+        let mut job = self.get(id)?;
+        ensure!(
+            job.state == JobState::Sending,
+            "No reserved send is available to cancel"
+        );
+        job.state = JobState::Attention;
+        job.revision += 1;
+        job.updated_at = Utc::now();
+        job.flags.push(detail.into());
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let removed = tx.execute(
+            "DELETE FROM deliveries WHERE item_id=?1 AND status='reserved'",
+            [id],
+        )?;
+        ensure!(
+            removed == 1,
+            "Reserved delivery was not found; refusing to release conversation lock"
+        );
+        tx.execute(
+            "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1",
+            params![
+                id,
+                job.state.db(),
+                job.revision,
+                job.updated_at.timestamp(),
+                self.vault.seal(&format!("item/{id}"), &job)?
+            ],
+        )?;
+        event(
+            &tx,
+            &self.vault,
+            "delivery.rejected",
+            Some(id),
+            detail,
+            job.updated_at,
+        )?;
+        tx.commit()?;
+        Ok(job)
+    }
+
     pub fn finish_send(&mut self, id: &str, provider_id: Option<String>) -> Result<Job> {
         let mut j = self.get(id)?;
         ensure!(
@@ -696,6 +739,21 @@ mod tests {
         assert_eq!(db.get(&a.id).unwrap().state, JobState::Uncertain);
         assert!(db.reserve_send(&b, 10, Utc::now()).is_err());
     }
+    #[test]
+    fn definite_provider_rejection_releases_reservation_for_review() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let first = ready(&mut db, "first", "same-thread");
+        let second = ready(&mut db, "second", "same-thread");
+        db.reserve_send(&first, 10, Utc::now()).unwrap();
+        let restored = db
+            .cancel_rejected_send(&first.id, "Synthetic HTTP 403")
+            .unwrap();
+        assert_eq!(restored.state, JobState::Attention);
+        assert!(!db.thread_reserved(&first.stub.thread_key()).unwrap());
+        db.reserve_send(&second, 10, Utc::now()).unwrap();
+    }
+
     #[test]
     fn cap_counts_uncertain_attempts() {
         let d = tempfile::tempdir().unwrap();
