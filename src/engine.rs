@@ -20,6 +20,61 @@ use std::{
     },
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DispatchFailureKind {
+    Retryable,
+    ReviewRequired,
+    StateHandled,
+}
+#[derive(Debug)]
+struct DispatchFailure {
+    kind: DispatchFailureKind,
+    message: String,
+}
+impl DispatchFailure {
+    fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            kind: DispatchFailureKind::Retryable,
+            message: message.into(),
+        }
+    }
+    fn review(message: impl Into<String>) -> Self {
+        Self {
+            kind: DispatchFailureKind::ReviewRequired,
+            message: message.into(),
+        }
+    }
+    fn handled(message: impl Into<String>) -> Self {
+        Self {
+            kind: DispatchFailureKind::StateHandled,
+            message: message.into(),
+        }
+    }
+}
+impl std::fmt::Display for DispatchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for DispatchFailure {}
+
+fn dispatch_require(
+    condition: bool,
+    kind: DispatchFailureKind,
+    message: impl Into<String>,
+) -> std::result::Result<(), DispatchFailure> {
+    if condition {
+        Ok(())
+    } else {
+        let message = message.into();
+        Err(match kind {
+            DispatchFailureKind::Retryable => DispatchFailure::retryable(message),
+            DispatchFailureKind::ReviewRequired => DispatchFailure::review(message),
+            DispatchFailureKind::StateHandled => DispatchFailure::handled(message),
+        })
+    }
+}
+
 pub struct Engine {
     pub db: Store,
     pub settings: Settings,
@@ -475,125 +530,214 @@ impl Engine {
         expected_hash: &str,
         automatic: bool,
     ) -> Result<()> {
-        ensure!(!self.demo, "Demo messages cannot be sent");
-        ensure!(
+        self.send_attempt(id, revision, expected_hash, automatic)
+            .map_err(anyhow::Error::new)
+    }
+
+    fn send_attempt(
+        &mut self,
+        id: &str,
+        revision: u64,
+        expected_hash: &str,
+        automatic: bool,
+    ) -> std::result::Result<(), DispatchFailure> {
+        dispatch_require(
+            !self.demo,
+            DispatchFailureKind::ReviewRequired,
+            "Demo messages cannot be sent",
+        )?;
+        dispatch_require(
             !self.paused.load(Ordering::SeqCst) && !self.stop.load(Ordering::SeqCst),
-            "Paused or stopping; sending is blocked"
-        );
-        ensure!(self.settings.sending_enabled, "Sending is disabled");
-        ensure!(
+            DispatchFailureKind::Retryable,
+            "Paused or stopping; sending is blocked",
+        )?;
+        dispatch_require(
+            self.settings.sending_enabled,
+            DispatchFailureKind::Retryable,
+            "Sending is disabled",
+        )?;
+        dispatch_require(
             automatic || self.settings.mode == Mode::HumanReview,
-            "Manual sending is only available in Human review mode"
-        );
-        let job = self.owned(id)?;
-        ensure!(
+            DispatchFailureKind::ReviewRequired,
+            "Manual sending is only available in Human review mode",
+        )?;
+        let job = self
+            .owned(id)
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        dispatch_require(
             job.revision == revision && job.state.reviewable(),
-            "Approval is stale or message is not reviewable"
-        );
-        mail::validate_job_identity(&job)?;
-        let body = &job.draft.as_ref().context("Draft is missing")?.body;
-        ensure!(
+            DispatchFailureKind::ReviewRequired,
+            "Approval is stale or message is not reviewable",
+        )?;
+        mail::validate_job_identity(&job)
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        let body = &job
+            .draft
+            .as_ref()
+            .ok_or_else(|| DispatchFailure::review("Draft is missing"))?
+            .body;
+        dispatch_require(
             hash(body) == expected_hash,
-            "Reply changed after confirmation"
-        );
-        mail::validate_draft(body)?;
-        let original = job.email.as_ref().context("Original message missing")?;
-        ensure!(
+            DispatchFailureKind::ReviewRequired,
+            "Reply changed after confirmation",
+        )?;
+        mail::validate_draft(body)
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        let original = job
+            .email
+            .as_ref()
+            .ok_or_else(|| DispatchFailure::review("Original message missing"))?;
+        dispatch_require(
             mail::hard_blocks(original, &self.account).is_empty(),
-            "Message is blocked by mailbox safety checks"
-        );
-        ensure!(
+            DispatchFailureKind::ReviewRequired,
+            "Message is blocked by mailbox safety checks",
+        )?;
+        dispatch_require(
             original.received_at >= self.settings.cutoff(Utc::now()),
-            "Original message is outside the selected age window"
-        );
+            DispatchFailureKind::ReviewRequired,
+            "Original message is outside the selected age window",
+        )?;
         if automatic {
-            ensure!(
+            dispatch_require(
                 auto_blocks(&job, &self.settings, &self.account, Utc::now()).is_empty(),
-                "Automatic send conditions were not satisfied"
-            );
-            let status = Ollama::new(&self.settings)?.inspect()?;
-            ensure!(
-                status.digest
-                    == job
-                        .analysis
-                        .as_ref()
-                        .context("Missing analysis")?
-                        .model_digest,
-                "Model changed since analysis"
-            );
+                DispatchFailureKind::ReviewRequired,
+                "Automatic send conditions were not satisfied",
+            )?;
+            let status = Ollama::new(&self.settings)
+                .and_then(|ollama| ollama.inspect())
+                .map_err(|error| {
+                    DispatchFailure::retryable(format!(
+                        "Local model pre-send check is temporarily unavailable: {error}"
+                    ))
+                })?;
+            let analyzed_digest = &job
+                .analysis
+                .as_ref()
+                .ok_or_else(|| DispatchFailure::review("Missing analysis"))?
+                .model_digest;
+            dispatch_require(
+                &status.digest == analyzed_digest,
+                DispatchFailureKind::ReviewRequired,
+                "Model changed since analysis",
+            )?;
         }
-        let gmail = self.gmail.as_mut().context("Gmail is not connected")?;
-        ensure!(gmail.can_send(), "Google send permission is missing");
-        ensure!(
-            mail::mailbox(&gmail.profile()?.email_address)? == self.account,
-            "Connected account changed"
-        );
-        let fresh = gmail
-            .email(&job.stub)?
-            .context("Original message no longer exists")?;
-        ensure!(
+
+        let gmail = self
+            .gmail
+            .as_mut()
+            .ok_or_else(|| DispatchFailure::retryable("Gmail is not connected"))?;
+        dispatch_require(
+            gmail.can_send(),
+            DispatchFailureKind::Retryable,
+            "Google send permission is missing",
+        )?;
+        let profile = gmail.profile().map_err(|error| {
+            DispatchFailure::retryable(format!(
+                "Gmail account preflight is temporarily unavailable: {error}"
+            ))
+        })?;
+        let profile_account = mail::mailbox(&profile.email_address)
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        dispatch_require(
+            profile_account == self.account,
+            DispatchFailureKind::ReviewRequired,
+            "Connected account changed",
+        )?;
+        let fresh = match gmail.email(&job.stub) {
+            Ok(Some(email)) => email,
+            Ok(None) => {
+                return Err(DispatchFailure::review(
+                    "Original message no longer exists",
+                ))
+            }
+            Err(error) if error.kind == FetchFailureKind::Infrastructure => {
+                return Err(DispatchFailure::retryable(error.message))
+            }
+            Err(error) => return Err(DispatchFailure::review(error.message)),
+        };
+        dispatch_require(
             fresh.fingerprint() == original.fingerprint()
                 && mail::hard_blocks(&fresh, &self.account).is_empty(),
-            "Original message changed; review it again"
-        );
-        let thread = gmail.thread(&job.stub.thread_id)?;
-        ensure!(
-            thread.messages.iter().any(|m| m.id == job.stub.provider_id),
-            "Original message is no longer in the conversation"
-        );
+            DispatchFailureKind::ReviewRequired,
+            "Original message changed; review it again",
+        )?;
+        let thread = gmail.thread(&job.stub.thread_id).map_err(|error| {
+            DispatchFailure::retryable(format!(
+                "Gmail conversation preflight is temporarily unavailable: {error}"
+            ))
+        })?;
+        dispatch_require(
+            thread.messages.iter().any(|message| message.id == job.stub.provider_id),
+            DispatchFailureKind::ReviewRequired,
+            "Original message is no longer in the conversation",
+        )?;
         for message in thread.messages {
             if message.id != job.stub.provider_id {
-                let at = message
-                    .internal_date
-                    .parse::<i64>()
-                    .context("Invalid thread date")?;
-                ensure!(
+                let at = message.internal_date.parse::<i64>().map_err(|_| {
+                    DispatchFailure::review("Conversation contains an invalid provider timestamp")
+                })?;
+                dispatch_require(
                     at < original.received_at.timestamp_millis(),
-                    "Newer conversation activity exists; no reply sent"
-                );
+                    DispatchFailureKind::ReviewRequired,
+                    "Newer conversation activity exists; review it before replying",
+                )?;
             }
         }
-        let raw = mail::raw_reply(&job, &self.settings, &self.account, Utc::now())?;
-        ensure!(
+        let raw = mail::raw_reply(&job, &self.settings, &self.account, Utc::now())
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        dispatch_require(
             !self.paused.load(Ordering::SeqCst) && !self.stop.load(Ordering::SeqCst),
-            "Paused before dispatch; nothing sent"
-        );
+            DispatchFailureKind::Retryable,
+            "Paused before dispatch; nothing sent",
+        )?;
         self.db
-            .reserve_send(&job, self.settings.daily_send_limit, Utc::now())?;
-        // The check is repeated after reservation; cancellation consumes the reservation conservatively.
+            .reserve_send(&job, self.settings.daily_send_limit, Utc::now())
+            .map_err(|error| DispatchFailure::retryable(error.to_string()))?;
+
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
-            self.db.release_unsent_reservation(
-                id,
-                "Dispatch was cancelled before the Gmail network request; no email was sent",
-            )?;
-            anyhow::bail!("Dispatch cancelled before Gmail accepted any request");
+            self.db
+                .release_unsent_reservation(
+                    id,
+                    "Dispatch was cancelled before the Gmail network request; no email was sent",
+                )
+                .map_err(|error| DispatchFailure::handled(error.to_string()))?;
+            return Err(DispatchFailure::handled(
+                "Dispatch cancelled before Gmail accepted any request",
+            ));
         }
         match self
             .gmail
             .as_mut()
-            .context("Gmail disconnected")?
+            .ok_or_else(|| DispatchFailure::handled("Gmail disconnected after reservation"))?
             .send(&raw, &job.stub.thread_id)
         {
             Ok(provider_id) => {
-                self.db.finish_send(id, Some(provider_id))?;
+                self.db
+                    .finish_send(id, Some(provider_id))
+                    .map_err(|error| DispatchFailure::handled(error.to_string()))?;
                 Ok(())
             }
             Err(error) if error.kind == SendFailureKind::NotAccepted => {
-                self.db.release_unsent_reservation(
-                    id,
-                    "Gmail definitively rejected the send request; no email was accepted",
-                )?;
-                anyhow::bail!("{}", error.message)
+                self.db
+                    .release_unsent_reservation(
+                        id,
+                        "Gmail definitively rejected the send request; no email was accepted",
+                    )
+                    .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+                Err(DispatchFailure::handled(error.message))
             }
             Err(error) => {
-                self.db.finish_send(id, None)?;
-                anyhow::bail!(
+                self.db
+                    .finish_send(id, None)
+                    .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+                Err(DispatchFailure::handled(format!(
                     "{} Do not resend. Use Reconcile to check Gmail Sent.",
                     error.message
-                )
+                )))
             }
         }
     }
+
     pub fn automatic_tick(&mut self) -> Result<bool> {
         if self.settings.mode != Mode::Automatic
             || !self.settings.sending_enabled
@@ -613,20 +757,22 @@ impl Engine {
                 continue;
             }
             let fingerprint = hash(&job.draft.as_ref().context("Missing draft")?.body);
-            if let Err(error) = self.send(&id, job.revision, &fingerprint, true) {
-                let mut current = self.owned(&id)?;
-                if current.state.reviewable() {
-                    current.state = JobState::Attention;
-                    current
-                        .flags
-                        .push(format!("Automatic dispatch stopped: {error}"));
-                    self.db.save(
-                        &mut current,
-                        "automatic.held",
-                        "Preflight failed; requires human review",
-                    )?;
+            if let Err(error) = self.send_attempt(&id, job.revision, &fingerprint, true) {
+                if error.kind == DispatchFailureKind::ReviewRequired {
+                    let mut current = self.owned(&id)?;
+                    if current.state.reviewable() {
+                        current.state = JobState::Attention;
+                        current
+                            .flags
+                            .push(format!("Automatic dispatch held: {}", error.message));
+                        self.db.save(
+                            &mut current,
+                            "automatic.held",
+                            "Deterministic preflight failed; requires human review",
+                        )?;
+                    }
                 }
-                return Err(error);
+                return Err(anyhow::Error::new(error));
             }
             return Ok(true);
         }
