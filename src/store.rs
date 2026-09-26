@@ -550,12 +550,8 @@ mod tests {
         db.save(&mut job, "test", "reviewable").unwrap();
 
         assert_eq!(
-            db.defer_review_outside_window(
-                "me@example.com",
-                now - chrono::Duration::days(1),
-                now,
-            )
-            .unwrap(),
+            db.defer_review_outside_window("me@example.com", now - chrono::Duration::days(1), now,)
+                .unwrap(),
             1
         );
         let deferred = db.get(&id).unwrap();
