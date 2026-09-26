@@ -226,7 +226,7 @@ pub fn auto_language_conflict(text: &str) -> bool {
     .any(|s| lower.contains(s))
 }
 
-fn reply_subject(subject: &str) -> String {
+pub fn reply_subject(subject: &str) -> String {
     let trimmed = subject.trim();
     let lower = trimmed.to_lowercase();
     let already_reply = ["re:", "aw:", "sv:", "antw:", "rif:"]

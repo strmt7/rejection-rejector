@@ -811,7 +811,7 @@ if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.co
         }
         if let Some(job) = self.send_confirmation.clone() {
             egui::Window::new("Confirm this exact reply").collapsible(false).resizable(true).default_width(600.0).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0]).show(ctx,|ui|{
-            if let Some(e)=&job.email{ui.label(RichText::new(format!("To: {}",e.recipient().unwrap_or_default())).strong());ui.label(format!("Subject: {}",e.subject));}
+            if let Some(e)=&job.email{ui.label(RichText::new(format!("To: {}",e.recipient().unwrap_or_default())).strong());ui.label(format!("Subject: {}",crate::mail::reply_subject(&e.subject)));}
             ui.separator();let body=job.draft.as_ref().map(|d|d.body.as_str()).unwrap_or("");egui::ScrollArea::vertical().max_height(400.0).show(ui,|ui|{ui.label(body);});
             ui.colored_label(AMBER,"Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.");
             ui.horizontal(|ui|{if ui.button("Cancel").clicked(){self.send_confirmation=None;}
