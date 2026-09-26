@@ -107,10 +107,7 @@ impl Engine {
         // Fail closed during an account switch. Persist the complete connection
         // state and audit event together before publishing it to the in-memory engine.
         let mut settings = self.settings.clone();
-        settings.sending_enabled = false;
-        settings.mode = Mode::HumanReview;
-        settings.automatic_confirmed = false;
-        settings.automatic_since = None;
+        settings.disarm_delivery();
         self.db.change_meta(
             &[
                 ("settings", serde_json::to_value(&settings)?),
@@ -131,10 +128,7 @@ impl Engine {
     }
     pub fn disconnect(&mut self) -> Result<()> {
         let mut settings = self.settings.clone();
-        settings.sending_enabled = false;
-        settings.mode = Mode::HumanReview;
-        settings.automatic_confirmed = false;
-        settings.automatic_since = None;
+        settings.disarm_delivery();
         self.db.change_meta(
             &[("settings", serde_json::to_value(&settings)?)],
             &["google_credentials", "account"],
@@ -166,6 +160,7 @@ impl Engine {
             || settings.ollama_url != self.settings.ollama_url
         {
             settings.model_digest = None;
+            settings.disarm_delivery();
             self.model = ModelStatus::default();
         } else {
             settings.model_digest = self.settings.model_digest.clone();

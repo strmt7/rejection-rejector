@@ -78,7 +78,7 @@ Pruning removes old completed content, not deduplication/reservation identities.
 ## Troubleshooting
 
 - Lock error: close the other GUI/worker, do not bypass a live lock.
-- Changed model digest: inspect and explicitly qualify/pin again.
+- Changed model/context/Ollama endpoint: saving the new configuration disarms delivery and returns to Human Review; inspect and explicitly qualify/pin again before re-enabling sending/Automatic.
 - GPU check failed: close other models/workloads; verify backend GPU support and context.
 - Input too long: review manually, shorten optional candidate facts, or use 16,384 context and requalify.
 - Google refresh failed: check consent expiry/admin policy and reconnect.

@@ -183,12 +183,16 @@ impl Settings {
         }
         Ok(())
     }
+    pub fn disarm_delivery(&mut self) {
+        self.mode = Mode::HumanReview;
+        self.sending_enabled = false;
+        self.automatic_confirmed = false;
+        self.automatic_since = None;
+    }
+
     pub fn repair_legacy_automatic_state(&mut self) -> bool {
         if self.mode == Mode::Automatic && self.model_digest.is_none() {
-            self.mode = Mode::HumanReview;
-            self.sending_enabled = false;
-            self.automatic_confirmed = false;
-            self.automatic_since = None;
+            self.disarm_delivery();
             return true;
         }
         false
@@ -307,6 +311,24 @@ mod tests {
         assert!(s.validate().is_err());
         s.model_digest = Some("a".repeat(64));
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn disarm_delivery_clears_all_unattended_send_state() {
+        let mut s = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            signature: "Test Applicant".into(),
+            model_digest: Some("a".repeat(64)),
+            ..Default::default()
+        };
+        s.disarm_delivery();
+        assert_eq!(s.mode, Mode::HumanReview);
+        assert!(!s.sending_enabled);
+        assert!(!s.automatic_confirmed);
+        assert!(s.automatic_since.is_none());
     }
 
     #[test]
