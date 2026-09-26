@@ -551,6 +551,14 @@ impl App {
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        let qualified_model_matches_draft = s.settings.model_digest.is_some()
+            && self.settings.model == s.settings.model
+            && self.settings.num_ctx == s.settings.num_ctx
+            && self.settings.ollama_url == s.settings.ollama_url;
+        let signature_ready =
+            !self.settings.signature.trim().is_empty() && self.settings.signature.trim() != "Your name";
+        let automatic_prerequisites =
+            s.connected && s.send_scope && qualified_model_matches_draft && signature_ready;
         Self::heading(
             ui,
             "Settings",
@@ -642,6 +650,18 @@ impl App {
             );
             if self.settings.mode == Mode::Automatic {
                 ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
+                ui.label(RichText::new("Automatic prerequisites").strong());
+                for (label, ready) in [
+                    ("Gmail connected", s.connected),
+                    ("Gmail send permission granted", s.send_scope),
+                    ("Current model configuration qualified & pinned", qualified_model_matches_draft),
+                    ("Non-placeholder signature set", signature_ready),
+                ] {
+                    ui.horizontal(|ui| {
+                        Self::badge(ui, if ready { "READY" } else { "REQUIRED" }, if ready { MINT } else { AMBER });
+                        ui.label(label);
+                    });
+                }
                 ui.checkbox(
                     &mut self.settings.automatic_confirmed,
                     "I authorize automatic replies that pass the app's checks",
@@ -720,9 +740,13 @@ impl App {
             ui.label(RichText::new("A copied token grants access to your local email data. Keep it private; never put it in source control.").small().color(AMBER));
         });
         ui.add_space(12.0);
+        let automatic_ready_to_save = self.settings.mode != Mode::Automatic
+            || (automatic_prerequisites
+                && self.settings.sending_enabled
+                && self.settings.automatic_confirmed);
         if ui
             .add_enabled(
-                s.busy.is_empty(),
+                s.busy.is_empty() && automatic_ready_to_save,
                 egui::Button::new(RichText::new("Save settings").strong().color(BG)).fill(MINT),
             )
             .clicked()
