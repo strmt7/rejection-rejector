@@ -3,11 +3,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-pub fn hash(value: impl AsRef<[u8]>) -> String { format!("{:x}", Sha256::digest(value.as_ref())) }
+pub fn hash(value: impl AsRef<[u8]>) -> String {
+    format!("{:x}", Sha256::digest(value.as_ref()))
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all="snake_case")]
-pub enum Source { Gmail, Demo }
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Gmail,
+    Demo,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stub {
     pub account: String,
@@ -16,8 +21,22 @@ pub struct Stub {
     pub source: Source,
 }
 impl Stub {
-    pub fn id(&self) -> String { hash(format!("{}\0{:?}\0{}",self.account.to_lowercase(),self.source,self.provider_id)) }
-    pub fn thread_key(&self) -> String { hash(format!("{}\0{:?}\0{}",self.account.to_lowercase(),self.source,self.thread_id)) }
+    pub fn id(&self) -> String {
+        hash(format!(
+            "{}\0{:?}\0{}",
+            self.account.to_lowercase(),
+            self.source,
+            self.provider_id
+        ))
+    }
+    pub fn thread_key(&self) -> String {
+        hash(format!(
+            "{}\0{:?}\0{}",
+            self.account.to_lowercase(),
+            self.source,
+            self.thread_id
+        ))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Email {
@@ -35,19 +54,36 @@ pub struct Email {
 }
 impl Email {
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.get(name).and_then(|v| v.first()).map(String::as_str)
+        self.headers
+            .get(name)
+            .and_then(|v| v.first())
+            .map(String::as_str)
     }
     pub fn recipient(&self) -> anyhow::Result<String> {
         crate::mail::mailbox(self.reply_to.as_deref().unwrap_or(&self.from))
     }
     pub fn fingerprint(&self) -> String {
         // Gmail labels can legitimately change. They are checked separately at send time.
-        hash(format!("{}\0{}\0{}\0{}\0{}\0{}\0{}",self.stub.id(),self.from,self.reply_to.as_deref().unwrap_or(""),self.subject,self.text,self.received_at.timestamp_millis(),self.message_id))
+        hash(format!(
+            "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+            self.stub.id(),
+            self.from,
+            self.reply_to.as_deref().unwrap_or(""),
+            self.subject,
+            self.text,
+            self.received_at.timestamp_millis(),
+            self.message_id
+        ))
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all="snake_case")]
-pub enum Category { Rejection, Opportunity, Other, Uncertain }
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    Rejection,
+    Opportunity,
+    Other,
+    Uncertain,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {
@@ -70,7 +106,9 @@ pub struct Verification {
     pub reason: String,
 }
 impl Verification {
-    pub fn passed(&self) -> bool { self.genuine_rejection && self.claims_supported && self.professional && self.injection_free }
+    pub fn passed(&self) -> bool {
+        self.genuine_rejection && self.claims_supported && self.professional && self.injection_free
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Analysis {
@@ -86,18 +124,53 @@ pub struct Analysis {
     pub gpu_resident: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Draft { pub body: String, pub origin: String }
+pub struct Draft {
+    pub body: String,
+    pub origin: String,
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all="snake_case")]
-pub enum JobState { Queued, Ready, Attention, Other, Deferred, Dismissed, Sending, Sent, Uncertain }
+#[serde(rename_all = "snake_case")]
+pub enum JobState {
+    Queued,
+    Ready,
+    Attention,
+    Other,
+    Deferred,
+    Dismissed,
+    Sending,
+    Sent,
+    Uncertain,
+}
 impl JobState {
     pub fn db(self) -> &'static str {
-        match self { Self::Queued=>"queued",Self::Ready=>"ready",Self::Attention=>"attention",Self::Other=>"other",Self::Deferred=>"deferred",Self::Dismissed=>"dismissed",Self::Sending=>"sending",Self::Sent=>"sent",Self::Uncertain=>"uncertain" }
+        match self {
+            Self::Queued => "queued",
+            Self::Ready => "ready",
+            Self::Attention => "attention",
+            Self::Other => "other",
+            Self::Deferred => "deferred",
+            Self::Dismissed => "dismissed",
+            Self::Sending => "sending",
+            Self::Sent => "sent",
+            Self::Uncertain => "uncertain",
+        }
     }
     pub fn label(self) -> &'static str {
-        match self { Self::Queued=>"Awaiting analysis",Self::Ready=>"Ready",Self::Attention=>"Needs attention",Self::Other=>"Not a rejection",Self::Deferred=>"Outside current scope",Self::Dismissed=>"Dismissed",Self::Sending=>"Sending",Self::Sent=>"Sent",Self::Uncertain=>"Delivery uncertain" }
+        match self {
+            Self::Queued => "Awaiting analysis",
+            Self::Ready => "Ready",
+            Self::Attention => "Needs attention",
+            Self::Other => "Not a rejection",
+            Self::Deferred => "Outside current scope",
+            Self::Dismissed => "Dismissed",
+            Self::Sending => "Sending",
+            Self::Sent => "Sent",
+            Self::Uncertain => "Delivery uncertain",
+        }
     }
-    pub fn reviewable(self) -> bool { matches!(self,Self::Ready|Self::Attention) }
+    pub fn reviewable(self) -> bool {
+        matches!(self, Self::Ready | Self::Attention)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -118,7 +191,22 @@ pub struct Job {
 }
 impl Job {
     pub fn new(stub: Stub, now: DateTime<Utc>) -> Self {
-        Self {id:stub.id(),stub,state:JobState::Queued,email:None,analysis:None,draft:None,drafted_at:None,flags:vec![],revision:0,attempts:0,retry_at:0,created_at:now,updated_at:now,provider_sent_id:None}
+        Self {
+            id: stub.id(),
+            stub,
+            state: JobState::Queued,
+            email: None,
+            analysis: None,
+            draft: None,
+            drafted_at: None,
+            flags: vec![],
+            revision: 0,
+            attempts: 0,
+            retry_at: 0,
+            created_at: now,
+            updated_at: now,
+            provider_sent_id: None,
+        }
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -139,4 +227,10 @@ pub struct Counts {
     pub attempts_24h: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AuditEvent { pub seq: i64, pub at: DateTime<Utc>, pub kind: String, pub item_id: Option<String>, pub detail: String }
+pub struct AuditEvent {
+    pub seq: i64,
+    pub at: DateTime<Utc>,
+    pub kind: String,
+    pub item_id: Option<String>,
+    pub detail: String,
+}
