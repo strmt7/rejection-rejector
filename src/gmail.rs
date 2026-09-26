@@ -256,11 +256,7 @@ impl Gmail {
         )
     }
     /// Exactly one application-level send request; no automatic network retry is performed here.
-    pub fn send(
-        &mut self,
-        raw: &str,
-        thread_id: &str,
-    ) -> std::result::Result<String, SendFailure> {
+    pub fn send(&mut self, raw: &str, thread_id: &str) -> std::result::Result<String, SendFailure> {
         if !self.can_send() {
             return Err(SendFailure {
                 kind: SendFailureKind::NotAccepted,

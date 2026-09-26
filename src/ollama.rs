@@ -87,7 +87,11 @@ pub struct Ollama {
 
 fn model_name_matches(configured: &str, actual: &str) -> bool {
     actual == configured
-        || (!configured.rsplit('/').next().unwrap_or(configured).contains(':')
+        || (!configured
+            .rsplit('/')
+            .next()
+            .unwrap_or(configured)
+            .contains(':')
             && actual == format!("{configured}:latest"))
 }
 
@@ -544,18 +548,9 @@ mod tests {
     #[test]
     fn ollama_latest_tag_matches_an_untagged_configuration() {
         assert!(model_name_matches("qwen3.5", "qwen3.5:latest"));
-        assert!(model_name_matches(
-            "example/model",
-            "example/model:latest"
-        ));
-        assert!(model_name_matches(
-            "gemma4:12b-it-qat",
-            "gemma4:12b-it-qat"
-        ));
-        assert!(!model_name_matches(
-            "gemma4:12b-it-qat",
-            "gemma4:latest"
-        ));
+        assert!(model_name_matches("example/model", "example/model:latest"));
+        assert!(model_name_matches("gemma4:12b-it-qat", "gemma4:12b-it-qat"));
+        assert!(!model_name_matches("gemma4:12b-it-qat", "gemma4:latest"));
         assert!(!model_name_matches("qwen3.5:9b", "qwen3.5:latest"));
     }
 
