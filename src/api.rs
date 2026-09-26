@@ -15,7 +15,7 @@ use tiny_http::{Header, Method, Response, Server};
 fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a str> {
     let mut values = headers
         .iter()
-        .filter(|header| header.field.equiv(name))
+        .filter(|header| header.field.to_string().eq_ignore_ascii_case(name))
         .map(|header| header.value.as_str());
     let value = values.next()?;
     if values.next().is_some() {
