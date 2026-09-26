@@ -60,7 +60,7 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 2, "Database belongs to a newer app version");
+        ensure!(version <= 3, "Database belongs to a newer app version");
         if version > 0 {
             let existing_check: Option<Vec<u8>> = conn
                 .query_row(
@@ -81,23 +81,42 @@ impl Store {
                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
-                CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);")?;
             let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
             conn.execute(
                 "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
                 [marker],
             )?;
-            conn.execute_batch("PRAGMA user_version=2; COMMIT;")?;
+            conn.execute_batch("PRAGMA user_version=3; COMMIT;")?;
         } else if version == 1 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE items ADD COLUMN received_at INTEGER;
                 CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
-                PRAGMA user_version=2; COMMIT;")?;
+                ALTER TABLE deliveries RENAME TO deliveries_v2;
+                CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                INSERT INTO deliveries(item_id,thread_key,attempt_at,status,provider_id)
+                    SELECT item_id,thread_key,attempt_at,status,provider_id FROM deliveries_v2;
+                DROP TABLE deliveries_v2;
+                CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
+                PRAGMA user_version=3; COMMIT;")?;
+        } else if version == 2 {
+            conn.execute_batch("BEGIN IMMEDIATE;
+                ALTER TABLE deliveries RENAME TO deliveries_v2;
+                CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                INSERT INTO deliveries(item_id,thread_key,attempt_at,status,provider_id)
+                    SELECT item_id,thread_key,attempt_at,status,provider_id FROM deliveries_v2;
+                DROP TABLE deliveries_v2;
+                CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
+                PRAGMA user_version=3; COMMIT;")?;
         } else {
             conn.execute_batch(
-                "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);",
+                "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
+                 CREATE INDEX IF NOT EXISTS deliveries_thread_state ON deliveries(thread_key,status);",
             )?;
         }
         let db = Self { conn, vault };
@@ -376,9 +395,9 @@ impl Store {
         )?;
         Ok(c)
     }
-    pub fn thread_reserved(&self, key: &str) -> Result<bool> {
+    pub fn thread_blocked(&self, key: &str) -> Result<bool> {
         Ok(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1)",
+            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1 AND status IN ('reserved','uncertain'))",
             [key],
             |r| r.get(0),
         )?)
@@ -407,16 +426,25 @@ impl Store {
             attempts < u64::from(limit),
             "Rolling 24-hour attempt limit reached"
         );
-        let taken: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1)",
+        let item_taken: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE item_id=?1)",
+            [&j.id],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            !item_taken,
+            "This rejection message already has a delivery record; it will not be sent twice"
+        );
+        let thread_blocked: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1 AND status IN ('reserved','uncertain'))",
             [j.stub.thread_key()],
             |r| r.get(0),
         )?;
         ensure!(
-            !taken,
-            "Conversation already has a delivery reservation; reconcile instead of resending"
+            !thread_blocked,
+            "Conversation has an active or uncertain delivery; reconcile it before replying again"
         );
-        tx.execute("INSERT INTO deliveries(thread_key,item_id,attempt_at,status) VALUES(?1,?2,?3,'reserved')",params![j.stub.thread_key(),j.id,now.timestamp()])?;
+        tx.execute("INSERT INTO deliveries(item_id,thread_key,attempt_at,status) VALUES(?1,?2,?3,'reserved')",params![j.id,j.stub.thread_key(),now.timestamp()])?;
         j.state = JobState::Sending;
         j.revision += 1;
         j.updated_at = now;
@@ -528,7 +556,7 @@ impl Store {
                 "delivery.uncertain"
             },
             Some(id),
-            "Reservation retained permanently",
+            "Message-level delivery record retained; uncertain thread remains blocked",
             j.updated_at,
         )?;
         tx.commit()?;
@@ -698,7 +726,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let markers: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM meta WHERE name='vault_check'",
@@ -891,7 +919,7 @@ mod tests {
             .release_unsent_reservation(&first.id, "Synthetic HTTP 403")
             .unwrap();
         assert_eq!(restored.state, JobState::Attention);
-        assert!(!db.thread_reserved(&first.stub.thread_key()).unwrap());
+        assert!(!db.thread_blocked(&first.stub.thread_key()).unwrap());
         db.reserve_send(&second, 10, Utc::now()).unwrap();
     }
 
@@ -909,7 +937,20 @@ mod tests {
             .unwrap();
         assert_eq!(restored.state, JobState::Attention);
         assert_eq!(db.counts("me@example.com").unwrap().uncertain, 0);
-        assert!(!db.thread_reserved(&candidate.stub.thread_key()).unwrap());
+        assert!(!db.thread_blocked(&candidate.stub.thread_key()).unwrap());
+    }
+
+    #[test]
+    fn a_sent_reply_does_not_block_a_later_distinct_rejection_in_the_same_thread() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let first = ready(&mut db, "first-rejection", "same-thread");
+        let later = ready(&mut db, "later-rejection", "same-thread");
+        db.reserve_send(&first, 10, Utc::now()).unwrap();
+        db.finish_send(&first.id, Some("gmail-sent-id".into()))
+            .unwrap();
+        assert!(!db.thread_blocked(&first.stub.thread_key()).unwrap());
+        db.reserve_send(&later, 10, Utc::now()).unwrap();
     }
 
     #[test]

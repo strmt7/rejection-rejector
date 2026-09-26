@@ -20,7 +20,7 @@
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
 | Automatic | Explicit authorization, cooldown, send-attempt cap, source/draft/model checks and conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
-| Recovery | Durable per-conversation reservation; uncertain sends are reconciled, never blindly retried |
+| Recovery | Durable at-most-once record per rejection message; active/uncertain threads are blocked until reconciliation |
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API |
 | Testing | Synthetic demo, Rust regression tests, model evaluation fixtures and Windows/Linux CI |
 
