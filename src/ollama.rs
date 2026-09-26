@@ -492,6 +492,16 @@ pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
             "Rejection evidence is not an exact quote from current input"
         );
     }
+    let source_lower = source.to_lowercase();
+    for (label, value) in [("company", &v.company), ("position", &v.position)] {
+        let value = value.trim();
+        if !value.is_empty() {
+            ensure!(
+                source_lower.contains(&value.to_lowercase()),
+                "Model {label} extraction is not grounded in the current email"
+            );
+        }
+    }
     Ok(())
 }
 pub fn ollama_executable() -> Result<PathBuf> {
@@ -583,6 +593,37 @@ mod tests {
         assert!(validate_verdict(&v, "Please book an interview").is_err());
         validate_verdict(&v, "You were not selected").unwrap();
     }
+    #[test]
+    fn extracted_company_and_position_must_be_grounded() {
+        let mut verdict = Verdict {
+            category: Category::Rejection,
+            confidence: 99,
+            evidence: "not selected".into(),
+            explanation: "Explicit rejection".into(),
+            company: "Acme".into(),
+            position: "Process Engineer".into(),
+            language: "en".into(),
+        };
+        validate_verdict(
+            &verdict,
+            "Acme says your Process Engineer application was not selected",
+        )
+        .unwrap();
+        verdict.company = "Invented Corp".into();
+        assert!(validate_verdict(
+            &verdict,
+            "Acme says your Process Engineer application was not selected",
+        )
+        .is_err());
+        verdict.company.clear();
+        verdict.position = "Quantum Wizard".into();
+        assert!(validate_verdict(
+            &verdict,
+            "Acme says your Process Engineer application was not selected",
+        )
+        .is_err());
+    }
+
     #[test]
     fn profile_changes_invalidate_verification() {
         let a = Settings::default();
