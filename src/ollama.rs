@@ -136,8 +136,10 @@ impl Ollama {
             "Cloud-backed models are forbidden"
         );
         ensure!(
-            show.pointer("/details/format").and_then(Value::as_str) == Some("gguf"),
-            "A locally installed GGUF model is required"
+            show.pointer("/details/format")
+                .and_then(Value::as_str)
+                .is_some_and(|format| !format.trim().is_empty()),
+            "Local model format metadata is missing"
         );
         ensure!(
             show.get("model_info")
