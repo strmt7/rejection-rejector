@@ -1,0 +1,125 @@
+use anyhow::{bail, ensure, Result};
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine};
+use chrono::{DateTime, Utc};
+use crate::{config::Settings, types::{Email, Job, Source}};
+
+pub fn mailbox(input: &str) -> Result<String> {
+    ensure!(input.len() <= 512 && !input.chars().any(char::is_control), "Invalid mailbox characters");
+    let parsed = mailparse::addrparse(input)?;
+    ensure!(parsed.len() == 1, "Exactly one mailbox is required");
+    let value = match &parsed[0] {
+        mailparse::MailAddr::Single(a) => a.addr.to_lowercase(),
+        _ => bail!("Mailbox groups are not supported"),
+    };
+    let pieces: Vec<_> = value.split('@').collect();
+    ensure!(pieces.len() == 2, "Invalid mailbox");
+    let (local, domain) = (pieces[0], pieces[1]);
+    ensure!(!local.is_empty() && local.len() <= 64 && !local.starts_with('.') && !local.ends_with('.') && !local.contains(".."), "Invalid mailbox local part");
+    ensure!(local.bytes().all(|c| c.is_ascii_alphanumeric() || b".!#$%&'+/=?^_`{|}~-".contains(&c)), "Unsupported mailbox local part");
+    ensure!(!domain.is_empty() && domain.len() <= 253, "Invalid mailbox domain");
+    ensure!(domain.split('.').all(|p| !p.is_empty() && p.len() <= 63 && !p.starts_with('-') && !p.ends_with('-') && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')), "Invalid mailbox domain");
+    Ok(value)
+}
+
+pub fn valid_message_id(s: &str) -> bool {
+    s.len() >= 5 && s.len() <= 250 && s.starts_with('<') && s.ends_with('>') && s.contains('@')
+        && s[1..s.len()-1].bytes().all(|b| b.is_ascii_graphic() && b != b'<' && b != b'>')
+}
+
+pub fn bounded_text(s: &str, bytes: usize) -> (&str, bool) {
+    if s.len() <= bytes { return (s, true); }
+    let mut end = bytes;
+    while !s.is_char_boundary(end) { end -= 1; }
+    (&s[..end], false)
+}
+
+/// Strip common quoted/forwarded sections. Not a universal email quote parser.
+pub fn current_text(s: &str) -> String {
+    let mut lines = Vec::new();
+    for line in s.lines() {
+        let t = line.trim();
+        let l = t.to_lowercase();
+        if l.contains("-----original message-----") || l.contains("---------- forwarded message")
+            || l.contains("begin forwarded message") || (l.starts_with("on ") && l.ends_with("wrote:"))
+            || (l.starts_with("am ") && l.contains("schrieb")) || (l.starts_with("le ") && l.contains("écrit")) { break; }
+        if !t.starts_with('>') { lines.push(t); }
+    }
+    lines.join("\n")
+}
+
+pub fn validate_draft(text: &str) -> Result<()> {
+    ensure!((20..=6000).contains(&text.len()) && text.split_whitespace().count() <= 400, "Reply must be 20..6000 bytes and at most 400 words");
+    ensure!(!text.chars().any(|c| (c.is_control() && c != '\n' && c != '\t') || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')), "Reply contains unsafe control characters");
+    Ok(())
+}
+
+pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if email.stub.source != Source::Gmail { reasons.push("Demo messages can never be sent".into()); }
+    if email.stub.account != account { reasons.push("Connected account does not match".into()); }
+    if !valid_message_id(&email.message_id) { reasons.push("Missing or invalid original Message-ID".into()); }
+    if email.subject.len() > 1000 || email.subject.chars().any(char::is_control) { reasons.push("Invalid subject header".into()); }
+    for name in ["from", "reply-to", "message-id"] {
+        if email.headers.get(name).is_some_and(|v| v.len() > 1) { reasons.push(format!("Ambiguous duplicate {name} header")); }
+    }
+    match email.recipient() {
+        Ok(to) => {
+            let local = to.split('@').next().unwrap_or("").replace(['-', '_', '.'], "");
+            if ["noreply", "donotreply", "mailerdaemon", "postmaster"].iter().any(|p| local.contains(p)) { reasons.push("Recipient does not accept replies".into()); }
+            if to == account { reasons.push("Self-reply blocked".into()); }
+        }
+        Err(_) => reasons.push("Recipient is not a single valid mailbox".into()),
+    }
+    if email.header("auto-submitted").is_some_and(|v| !v.eq_ignore_ascii_case("no") && !v.eq_ignore_ascii_case("auto-generated")) { reasons.push("Automatic reply loop prevented".into()); }
+    if email.headers.contains_key("x-rejection-rejector") { reasons.push("Own agent message".into()); }
+    if email.labels.iter().any(|l| matches!(l.as_str(), "SENT" | "DRAFT" | "TRASH" | "SPAM")) { reasons.push("Message is sent, draft, trashed or spam".into()); }
+    reasons
+}
+
+/// A second, deterministic filter for automatic sends; the LLM is still the classifier.
+pub fn auto_language_conflict(text: &str) -> bool {
+    let lower = current_text(text).to_lowercase();
+    ["invite you to", "schedule an interview", "pleased to offer", "would like to offer", "zum vorstellungsgespräch", "proposer un entretien", "ignore previous instructions", "system prompt", "ignore all instructions"].iter().any(|s| lower.contains(s))
+}
+
+fn encoded_subject(subject: &str) -> String {
+    let mut out = Vec::new();
+    let mut part = String::new();
+    for c in subject.chars() {
+        if part.len() + c.len_utf8() > 42 { out.push(format!("=?UTF-8?B?{}?=", STANDARD.encode(part.as_bytes()))); part.clear(); }
+        part.push(c);
+    }
+    if !part.is_empty() { out.push(format!("=?UTF-8?B?{}?=", STANDARD.encode(part.as_bytes()))); }
+    out.join("\r\n ")
+}
+
+pub fn outgoing_id(job: &Job) -> String { format!("<rr.{}@rejection-rejector.invalid>", job.id) }
+
+pub fn raw_reply(job: &Job, settings: &Settings, account: &str, now: DateTime<Utc>) -> Result<String> {
+    let email = job.email.as_ref().ok_or_else(|| anyhow::anyhow!("Original email is missing"))?;
+    let draft = job.draft.as_ref().ok_or_else(|| anyhow::anyhow!("Reply is missing"))?;
+    ensure!(hard_blocks(email, account).is_empty(), "Mailbox safety checks failed");
+    ensure!(mailbox(account)? == account && settings.sending_enabled, "Sending is disabled or account is invalid");
+    validate_draft(&draft.body)?;
+    let mut refs: Vec<String> = email.references.iter().filter(|r| valid_message_id(r)).rev().take(8).cloned().collect();
+    refs.reverse();
+    if !refs.contains(&email.message_id) { refs.push(email.message_id.clone()); }
+    let body = STANDARD.encode(draft.body.replace("\r\n", "\n").replace('\n', "\r\n"));
+    let wrapped = body.as_bytes().chunks(76).map(|c| std::str::from_utf8(c).expect("base64 is ASCII")).collect::<Vec<_>>().join("\r\n");
+    let raw = format!("From: {account}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: {}\r\nIn-Reply-To: {}\r\nReferences: {}\r\nAuto-Submitted: auto-replied\r\nX-Auto-Response-Suppress: All\r\nX-Rejection-Rejector: 0.1.0\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{wrapped}\r\n", email.recipient()?, encoded_subject(&email.subject), now.to_rfc2822(), outgoing_id(job), email.message_id, refs.join("\r\n "));
+    Ok(URL_SAFE_NO_PAD.encode(raw.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test] fn mailbox_rejects_injection_and_multiple_targets() {
+        for s in ["a@b.com\r\nBcc: c@d.com", "a@b.com,c@d.com", "team: a@b.com;", "a@-bad.com", "a..b@c.com"] { assert!(mailbox(s).is_err(), "{s}"); }
+        assert_eq!(mailbox("Recruiter <HR@Example.com>").unwrap(), "hr@example.com");
+    }
+    #[test] fn message_ids_are_strict() { for s in ["", "<>", "a@b", "<<a@b>>", "<a@b>\n"] { assert!(!valid_message_id(s)); } assert!(valid_message_id("<a@b.com>")); }
+    #[test] fn quoted_rejection_is_removed() { assert_eq!(current_text("Hello\n> old rejection\nOn Tuesday wrote:\nnot selected"), "Hello"); }
+    #[test] fn utf8_bounds_are_safe() { assert_eq!(bounded_text("αβγ", 3), ("α", false)); }
+    #[test] fn draft_controls_rejected() { assert!(validate_draft("This is a sufficiently long message\u{202e}").is_err()); }
+    #[test] fn unicode_header_folding() { let s = encoded_subject(&"Δοκιμή ".repeat(30)); assert!(s.split("\r\n").all(|line| line.len() < 78)); }
+}
