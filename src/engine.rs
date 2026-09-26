@@ -104,37 +104,46 @@ impl Engine {
         let mut gmail = Gmail::new(credentials.clone());
         let profile = gmail.profile()?;
         let account = mail::mailbox(&profile.email_address)?;
-        // Fail closed during an account switch, including if a later storage operation fails.
-        self.settings.sending_enabled = false;
-        self.settings.mode = Mode::HumanReview;
-        self.settings.automatic_confirmed = false;
-        self.settings.automatic_since = None;
-        self.db.set_meta("settings", &self.settings)?;
-        self.db.set_meta("google_credentials", &credentials)?;
-        self.db.set_meta("account", &account)?;
-        self.account = account;
-        self.gmail = Some(gmail);
-        self.db.log(
+        // Fail closed during an account switch. Persist the complete connection
+        // state and audit event together before publishing it to the in-memory engine.
+        let mut settings = self.settings.clone();
+        settings.sending_enabled = false;
+        settings.mode = Mode::HumanReview;
+        settings.automatic_confirmed = false;
+        settings.automatic_since = None;
+        self.db.change_meta(
+            &[
+                ("settings", serde_json::to_value(&settings)?),
+                (
+                    "google_credentials",
+                    serde_json::to_value(&credentials)?,
+                ),
+                ("account", serde_json::to_value(&account)?),
+            ],
+            &[],
             "account.connected",
-            None,
             "Google credentials encrypted locally; sending remains disabled",
         )?;
+        self.settings = settings;
+        self.account = account;
+        self.gmail = Some(gmail);
         Ok(())
     }
     pub fn disconnect(&mut self) -> Result<()> {
-        self.settings.sending_enabled = false;
-        self.settings.mode = Mode::HumanReview;
-        self.settings.automatic_confirmed = false;
-        self.db.set_meta("settings", &self.settings)?;
-        self.db.delete_meta("google_credentials")?;
-        self.db.delete_meta("account")?;
-        self.gmail = None;
-        self.account.clear();
-        self.db.log(
+        let mut settings = self.settings.clone();
+        settings.sending_enabled = false;
+        settings.mode = Mode::HumanReview;
+        settings.automatic_confirmed = false;
+        settings.automatic_since = None;
+        self.db.change_meta(
+            &[("settings", serde_json::to_value(&settings)?)],
+            &["google_credentials", "account"],
             "account.disconnected",
-            None,
             "Local credentials removed; revoke Google consent separately if desired",
         )?;
+        self.settings = settings;
+        self.gmail = None;
+        self.account.clear();
         Ok(())
     }
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<()> {
