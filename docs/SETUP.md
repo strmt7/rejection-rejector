@@ -31,7 +31,7 @@ Open **Local AI**, using `gemma4:12b-it-qat` and 8,192 context initially.
 1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
 3. **Download model** retrieves weights through the local Ollama API with progress. No email is sent to the registry.
-4. **Qualify & pin** checks local GGUF metadata and cloud markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.
+4. **Qualify & pin** checks installed local model metadata and cloud/remote markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.
 
 Equivalent environment for a server you start yourself:
 
@@ -71,9 +71,9 @@ Pause blocks future dispatch but cannot recall a request already sent to Gmail. 
 
 ## Recovery and retention
 
-A send timeout becomes Uncertain with a permanent conversation reservation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered.
+An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection returns the rejection message to Human Review instead of pretending delivery may have occurred. Completed Sent records are permanent per-message at-most-once tombstones, but they do not block a later distinct rejection in the same thread.
 
-Pruning removes old completed content, not deduplication/reservation identities. Pending/uncertain records remain. Invoke pruning explicitly; it is not automatic physical erasure. Close the app before copying database files. A database copy without its Credential Manager key is not portable. Do not delete the OS credential or vault-id; key loss is unrecoverable in v0.1.
+Pruning removes old completed content, not deduplication/delivery identities. Pending/uncertain records remain. Invoke pruning explicitly; it is not automatic physical erasure. Close the app before copying database files. A database copy without its Credential Manager key is not portable. Do not delete the OS credential or vault-id; key loss is unrecoverable in v0.1.
 
 ## Troubleshooting
 
