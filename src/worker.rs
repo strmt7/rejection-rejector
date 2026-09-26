@@ -318,8 +318,10 @@ fn run(
                         let t = e.db.meta::<String>("api_token")?;
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = t;
-                            s.api_token_expires =
-                                s.api_token.as_ref().map(|_| Instant::now() + Duration::from_secs(60));
+                            s.api_token_expires = s
+                                .api_token
+                                .as_ref()
+                                .map(|_| Instant::now() + Duration::from_secs(60));
                         }
                         Ok(())
                     }
