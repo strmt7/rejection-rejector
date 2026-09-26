@@ -32,7 +32,7 @@ jobs:
           fi
           if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi
           cargo fmt --all
-          git add Cargo.lock src tests
+          git add Cargo.lock src tests README.md docs
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -55,12 +55,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ always() }}
       - name: Prepare artifacts
         shell: bash
         run: mkdir -p artifacts
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb openbox scrot dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev xvfb openbox scrot dbus-x11
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Core tests
@@ -68,12 +70,12 @@ jobs:
         run: set -o pipefail; cargo test --locked --lib --no-default-features 2>&1 | tee artifacts/core-tests.log
       - name: Native GUI and CLI build
         run: cargo build --locked --bins
-      - name: All-feature tests
+      - name: All-feature and automatic-policy tests
         shell: bash
         run: set -o pipefail; cargo test --locked --all-features 2>&1 | tee artifacts/all-tests.log
-      - name: Clippy
+      - name: Clippy without warnings
         shell: bash
-        run: set -o pipefail; cargo clippy --locked --all-targets --all-features 2>&1 | tee artifacts/clippy.log
+        run: set -o pipefail; cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee artifacts/clippy.log
       - name: Headless offline smoke test
         shell: bash
         run: set -o pipefail; cargo run --locked --no-default-features --bin rr -- demo 2>&1 | tee artifacts/headless-demo.log

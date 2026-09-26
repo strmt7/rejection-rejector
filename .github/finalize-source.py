@@ -1,0 +1,7 @@
+"""One-time reviewed lint/runtime documentation fixes; CI removes this file."""
+from pathlib import Path
+p=Path('src/vault.rs');s=p.read_text();old='use base64::{engine::general_purpose::STANDARD, Engine};';assert s.count(old)==1;s=s.replace(old,'#[cfg(any(windows, target_os = "macos"))]\n'+old);p.write_text(s)
+p=Path('src/worker.rs');s=p.read_text();assert 'use anyhow::{Context, Result};' in s;p.write_text(s.replace('use anyhow::{Context, Result};','use anyhow::Result;'))
+p=Path('src/gui.rs');s=p.read_text();assert s.count('egui::Stroke::new(1.0,')==3;s=s.replace('egui::Stroke::new(1.0,','egui::Stroke::new(1.0_f32,');s=s.replace('self.frames % 120 == 0','self.frames.is_multiple_of(120)');s=s.replace(';}if',';}\nif');p.write_text(s)
+p=Path('README.md');s=p.read_text();needle='Safe offline preview:';assert needle in s;s=s.replace(needle,'Windows prerequisite: install Microsoft\'s latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).\n\n'+needle);p.write_text(s)
+p=Path('docs/SETUP.md');s=p.read_text();s=s.replace('## Safe preview and storage','## Windows runtime\n\nThe x64 binaries require Microsoft Visual C++ v14 Redistributable. See [WINDOWS-RUNTIME.md](WINDOWS-RUNTIME.md) for the official source and missing-DLL guidance.\n\n## Safe preview and storage');s+='\nLinux runtime note: X11 rendering requires `libxkbcommon-x11-0` in addition to the build libraries. CI installs `libxkbcommon-x11-dev`, which supplies the runtime dependency.\n';p.write_text(s)
