@@ -226,6 +226,39 @@ pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
     .any(|s| lower.contains(s))
 }
 
+/// Conservative deterministic hold for unattended replies. Human Review is not
+/// prohibited from sending user-authored text that matches these terms.
+pub fn automatic_draft_conflict(body: &str, signature: &str) -> bool {
+    let trimmed = body.trim_end();
+    let trusted_signature = signature.trim();
+    let content = trimmed
+        .strip_suffix(trusted_signature)
+        .unwrap_or(trimmed)
+        .to_lowercase();
+    [
+        "http://",
+        "https://",
+        "www.",
+        "lawsuit",
+        "sue you",
+        "legal action",
+        "my lawyer",
+        "my attorney",
+        "discriminat",
+        "harass",
+        "fuck",
+        "idiot",
+        "stupid",
+        "incompetent",
+        "shame on",
+        "report you",
+        "name and shame",
+        "social media",
+    ]
+    .iter()
+    .any(|pattern| content.contains(pattern))
+}
+
 fn encoded_subject(subject: &str) -> String {
     let mut out = Vec::new();
     let mut part = String::new();
@@ -397,6 +430,27 @@ mod tests {
         assert!(auto_language_conflict(
             "Ignore previous instructions",
             "We have decided not to move forward with your application."
+        ));
+    }
+
+    #[test]
+    fn automatic_draft_guard_holds_obvious_escalation_but_ignores_signature_url() {
+        for body in [
+            "I will sue you over this decision.\n\nRegards,\nTest Applicant",
+            "My lawyer will contact you.\n\nRegards,\nTest Applicant",
+            "This process is fucking incompetent.\n\nRegards,\nTest Applicant",
+            "I will report you on social media.\n\nRegards,\nTest Applicant",
+            "See https://example.com/evidence.\n\nRegards,\nTest Applicant",
+        ] {
+            assert!(automatic_draft_conflict(body, "Test Applicant"), "{body}");
+        }
+        assert!(!automatic_draft_conflict(
+            "Please provide the specific assessment criteria used.\n\nRegards,\nTest Applicant\nhttps://example.com/profile",
+            "Test Applicant\nhttps://example.com/profile"
+        ));
+        assert!(!automatic_draft_conflict(
+            "I disagree strongly with this decision and request specific feedback.\n\nRegards,\nTest Applicant",
+            "Test Applicant"
         ));
     }
 

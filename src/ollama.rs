@@ -348,6 +348,14 @@ impl Ollama {
         if mail::auto_language_conflict(&email.subject, &email.text) {
             flags.push("Conflicting opportunity language or possible prompt injection".into());
         }
+        if draft.as_ref().is_some_and(|draft| {
+            mail::automatic_draft_conflict(&draft.body, &self.settings.signature)
+        }) {
+            flags.push(
+                "Draft contains escalation, abusive language, or an unsolicited link; Human review required"
+                    .into(),
+            );
+        }
         let verified_hash = if verification.as_ref().is_some_and(Verification::passed) {
             draft.as_ref().map(|d| hash(&d.body))
         } else {
