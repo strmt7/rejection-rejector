@@ -36,6 +36,14 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed:
+
+```powershell
+.\rr.exe doctor
+```
+
+It reports local Gmail permission/configuration state, Ollama reachability, model pin/install state and current Ollama GPU-residency status without printing message bodies or credentials.
+
 Real setup: [docs/SETUP.md](docs/SETUP.md). Configure your own Gmail OAuth Desktop client and signature, install/start Ollama, download the model, then **Qualify & pin**. Start in Human review with sending disabled.
 
 ## Build

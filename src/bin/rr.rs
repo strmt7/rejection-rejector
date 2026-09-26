@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rejection_rejector::{config, engine::Engine, worker::Worker};
+use rejection_rejector::{config, engine::Engine, ollama::Ollama, worker::Worker};
 use std::{
     path::PathBuf,
     sync::{
@@ -25,6 +25,8 @@ enum Action {
     Status,
     /// Print a synthetic offline status; never connects to Gmail.
     Demo,
+    /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
+    Doctor,
     /// Evaluate the configured local model on bundled synthetic fixtures (never sends email).
     Evaluate {
         #[arg(long)]
@@ -51,6 +53,69 @@ fn main() -> Result<()> {
                     anyhow::bail!("{}", s.error);
                 }
             }
+        }
+        Action::Doctor => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let mut installed = false;
+            let mut digest_matches = false;
+            let mut gpu_resident_now = false;
+            let mut model_message = String::new();
+            let local_ai = Ollama::new(&e.settings)?;
+            let ollama_healthy = local_ai.healthy();
+            if ollama_healthy {
+                match local_ai.inspect() {
+                    Ok(info) => {
+                        installed = info.installed;
+                        digest_matches = e.settings.model_digest.as_ref() == Some(&info.digest);
+                        match local_ai.residency(&info.digest) {
+                            Ok(status) => {
+                                gpu_resident_now = status.gpu_resident;
+                                model_message = status.message;
+                            }
+                            Err(error) => {
+                                model_message = format!(
+                                    "Model is installed but not currently qualified as GPU-resident: {error}"
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        model_message = format!("Model inspection failed: {error}");
+                    }
+                }
+            } else {
+                model_message = "Ollama is not reachable on the configured loopback address".into();
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "gmail": {
+                        "connected_locally": e.connected(),
+                        "send_scope_granted": e.send_scope(),
+                        "sending_enabled": e.settings.sending_enabled
+                    },
+                    "schedule": {
+                        "poll_hours": e.settings.poll_hours,
+                        "lookback_days": e.settings.lookback_days
+                    },
+                    "mode": e.settings.mode,
+                    "local_ai": {
+                        "ollama_healthy": ollama_healthy,
+                        "model": e.settings.model,
+                        "digest_pinned": e.settings.model_digest.is_some(),
+                        "installed_and_pin_matches": installed && digest_matches,
+                        "gpu_resident_now": gpu_resident_now,
+                        "message": model_message
+                    },
+                    "note": "gpu_resident_now is a point-in-time Ollama check; Qualify & pin performs the full classification/draft/verification pipeline."
+                }))?
+            );
         }
         Action::Status | Action::Demo => {
             let demo = matches!(args.command, Action::Demo);
