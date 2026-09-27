@@ -10,6 +10,8 @@ Rejection Rejector supports an optional, local administrator policy overlay. It 
 
 A configured relative override is rejected. A malformed or unsupported policy fails startup rather than silently disabling policy enforcement.
 
+For higher-assurance deployments, provision `RR_ENTERPRISE_POLICY_SHA256` independently from the policy file. It must contain the exact 64-hex SHA-256 digest of the deployed policy bytes. When configured, a missing policy file or any byte-level drift fails startup/reload closed. This is an integrity/provenance pin, not a digital signature: protect the environment/MDM source that provisions the pin separately from the policy file.
+
 ## Policy v1
 
 ```json
@@ -44,13 +46,17 @@ Policy can only make the user configuration more restrictive. It never grants ca
    ```powershell
    rr.exe validate-policy C:\staging\policy.json
    ```
-3. Deploy to the machine-wide default path with administrator-controlled ACLs.
-4. Restart Rejection Rejector.
-5. Verify the effective policy:
+3. Compute the exact policy digest from the bytes that will be deployed:
+   ```powershell
+   (Get-FileHash C:\staging\policy.json -Algorithm SHA256).Hash.ToLowerInvariant()
+   ```
+4. Deploy the policy to the machine-wide default path with administrator-controlled ACLs. For high-assurance environments, separately provision the digest as `RR_ENTERPRISE_POLICY_SHA256` through the enterprise configuration mechanism.
+5. Restart Rejection Rejector.
+6. Verify the effective policy:
    ```powershell
    rr.exe policy-status
    ```
-6. Export redacted diagnostics if audit evidence is needed:
+7. Export redacted diagnostics if audit evidence is needed:
    ```powershell
    rr.exe diagnostics --out diagnostics.json
    ```
@@ -66,6 +72,8 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - A disallowed persisted model is replaced by the first approved model at startup, and model/task qualification is invalidated.
 - Interactive selection of a disallowed model fails instead of being silently rewritten.
 - Invalid policy is a startup failure.
-- Policy application is re-run on every settings mutation.
+- If `RR_ENTERPRISE_POLICY_SHA256` is configured, missing or modified policy bytes fail closed.
+- Policy status reports whether digest pin enforcement is active and whether the loaded bytes match.
+- Policy application is re-run on every settings mutation and hot-reload.
 
 This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Enterprise packaging and signed deployment remain separate release concerns.
