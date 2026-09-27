@@ -31,6 +31,7 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
 ];
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
+pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v2";
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +63,8 @@ pub struct TaskQualification {
     pub digest: String,
     pub prompt_version: String,
     pub context_hash: String,
+    #[serde(default)]
+    pub suite_hash: String,
     pub task_score: f64,
     pub fixture_count: u32,
     pub qualified_at: DateTime<Utc>,
@@ -221,6 +224,15 @@ impl Settings {
                 "Invalid task-qualification context hash"
             );
             ensure!(
+                qualification.suite_hash.is_empty()
+                    || (qualification.suite_hash.len() == 64
+                        && qualification
+                            .suite_hash
+                            .bytes()
+                            .all(|c| c.is_ascii_hexdigit())),
+                "Invalid task-qualification suite hash"
+            );
+            ensure!(
                 qualification.task_score.is_finite()
                     && (0.0..=100.0).contains(&qualification.task_score),
                 "Invalid task-qualification score"
@@ -254,7 +266,9 @@ impl Settings {
                 Some(&qualification.digest) == self.model_digest.as_ref()
                     && qualification.model == self.model
                     && qualification.prompt_version == PROMPT_VERSION
-                    && qualification.context_hash == settings_context_hash(self),
+                    && qualification.context_hash == settings_context_hash(self)
+                    && qualification.suite_hash == evaluation_suite_hash()
+                    && qualification.suite_hash == evaluation_suite_hash(),
                 "Task-specific model qualification is stale; evaluate the current configuration again"
             );
             ensure!(
@@ -297,6 +311,18 @@ impl Settings {
     pub fn cutoff(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         now - chrono::Duration::days(i64::from(self.lookback_days))
     }
+}
+
+pub fn evaluation_suite_hash() -> String {
+    let mut digest = Sha256::new();
+    digest.update(EVALUATION_CONTRACT_VERSION.as_bytes());
+    digest.update([0]);
+    digest.update(include_bytes!("../tests/fixtures/classification.json"));
+    digest.update([0]);
+    digest.update(
+        b"weights:fp_avoidance=.35,recall=.20,pipeline=.20,accuracy=.15,completion=.10;eligibility:complete,fp=0,unsafe_drafts=0,recall>=.90,pipeline>=.90,gpu_resident",
+    );
+    format!("{:x}", digest.finalize())
 }
 
 pub fn settings_context_hash(settings: &Settings) -> String {
@@ -367,6 +393,7 @@ mod tests {
             digest: settings.model_digest.clone().unwrap(),
             prompt_version: PROMPT_VERSION.into(),
             context_hash: settings_context_hash(settings),
+            suite_hash: evaluation_suite_hash(),
             task_score: 100.0,
             fixture_count: 32,
             qualified_at: Utc::now(),
