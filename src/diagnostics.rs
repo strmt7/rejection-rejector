@@ -88,6 +88,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "last_poll": engine.last_poll()?,
             "paused": paused
         },
+        "enterprise_policy": engine.enterprise_policy_status(),
         "delivery_policy": {
             "mode": engine.settings.mode,
             "sending_enabled": engine.settings.sending_enabled,
@@ -178,6 +179,7 @@ mod tests {
         assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
         assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
+        assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
     }
 }
