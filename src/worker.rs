@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 use std::{
     path::PathBuf,
     sync::{
@@ -42,7 +43,7 @@ pub struct Snapshot {
     pub events: Vec<AuditEvent>,
     pub page: u32,
     pub review_only: bool,
-    pub api_token: Option<String>,
+    pub api_token: Option<Zeroizing<String>>,
     pub api_token_expires: Option<Instant>,
     pub api_listening: bool,
 }
@@ -96,6 +97,7 @@ pub enum Command {
     Purge,
     RevealApiToken,
     HideApiToken,
+    RotateApiToken,
     Api {
         path: String,
         reply: Sender<Value>,
@@ -130,6 +132,7 @@ impl Command {
             Self::Purge => OperationKind::PurgeRetention,
             Self::RevealApiToken => OperationKind::RevealApiToken,
             Self::HideApiToken => OperationKind::HideApiToken,
+            Self::RotateApiToken => OperationKind::RotateApiToken,
             Self::Api { .. } => OperationKind::ApiRequest,
         }
     }
@@ -504,7 +507,7 @@ fn run(
                     Command::Reconcile(id) => e.reconcile(&id),
                     Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
                     Command::RevealApiToken => {
-                        let t = e.db.meta::<String>("api_token")?;
+                        let t = e.db.meta::<String>("api_token")?.map(Zeroizing::new);
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = t;
                             s.api_token_expires = s
@@ -518,6 +521,23 @@ fn run(
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = None;
                             s.api_token_expires = None;
+                        }
+                        Ok(())
+                    }
+                    Command::RotateApiToken => {
+                        let replacement = Zeroizing::new(oauth::secret());
+                        e.db.change_meta(
+                            &[("api_token", json!(replacement.as_str()))],
+                            &[],
+                            "api.token_rotated",
+                            "Integration API token rotated; active listener disabled until restart",
+                        )?;
+                        api_disabled.store(true, Ordering::SeqCst);
+                        if let Ok(mut s) = shared.lock() {
+                            s.api_listening = false;
+                            s.api_token = Some(replacement);
+                            s.api_token_expires =
+                                Some(Instant::now() + Duration::from_secs(60));
                         }
                         Ok(())
                     }
