@@ -289,16 +289,7 @@ impl Settings {
         if self.mode != Mode::Automatic {
             return false;
         }
-        let task_current = self
-            .task_qualification
-            .as_ref()
-            .is_some_and(|qualification| {
-                self.model_digest.as_ref() == Some(&qualification.digest)
-                    && self.model == qualification.model
-                    && qualification.prompt_version == PROMPT_VERSION
-                    && qualification.context_hash == settings_context_hash(self)
-            });
-        if self.model_digest.is_none() || !task_current {
+        if self.model_digest.is_none() || !self.task_qualification_current() {
             self.disarm_delivery();
             return true;
         }
@@ -310,6 +301,16 @@ impl Settings {
     }
     pub fn cutoff(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         now - chrono::Duration::days(i64::from(self.lookback_days))
+    }
+
+    pub fn task_qualification_current(&self) -> bool {
+        self.task_qualification.as_ref().is_some_and(|qualification| {
+            self.model_digest.as_ref() == Some(&qualification.digest)
+                && self.model == qualification.model
+                && qualification.prompt_version == PROMPT_VERSION
+                && qualification.context_hash == settings_context_hash(self)
+                && qualification.suite_hash == crate::evaluation::evaluation_suite_hash()
+        })
     }
 }
 
