@@ -5,7 +5,7 @@ use crate::{
     ollama::{self, ModelStatus, Ollama},
     types::*,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use serde_json::{Value, json};
