@@ -48,6 +48,13 @@ enum Action {
     },
     /// Verify a backup directory against the active vault without modifying it.
     VerifyBackup { path: PathBuf },
+    /// Restore a verified same-vault backup. The GUI/worker must be closed.
+    RestoreBackup {
+        path: PathBuf,
+        /// Destructive-operation acknowledgement; must be exactly RESTORE.
+        #[arg(long)]
+        confirm: String,
+    },
     /// Export a privacy-safe local diagnostics JSON report. Nothing is uploaded.
     Diagnostics {
         #[arg(long)]
@@ -275,6 +282,14 @@ fn main() -> Result<()> {
             )?;
             let manifest = recovery::verify_backup(&e.db, &path)?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        Action::RestoreBackup { path, confirm } => {
+            anyhow::ensure!(
+                confirm == "RESTORE",
+                "Restore requires --confirm RESTORE"
+            );
+            let report = recovery::restore_backup(&dir, &path)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Action::Diagnostics { out } => {
             let e = Engine::open(
