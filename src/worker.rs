@@ -314,11 +314,7 @@ fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()
         }
     }
 }
-fn report_silent_success(
-    shared: &Arc<Mutex<Snapshot>>,
-    kind: OperationKind,
-    message: &str,
-) {
+fn report_silent_success(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, message: &str) {
     if let Ok(mut s) = shared.lock() {
         s.busy.clear();
         s.error.clear();
@@ -390,7 +386,10 @@ fn run(
     while !e.stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
-                let operation = shared.lock().ok().map(|snapshot| snapshot.operation.clone());
+                let operation = shared
+                    .lock()
+                    .ok()
+                    .map(|snapshot| snapshot.operation.clone());
                 let data = api_query_with_operation(&e, &path, operation.as_ref())
                     .unwrap_or_else(|_| json!({"error":"Invalid request or unavailable resource"}));
                 let _ = reply.try_send(data);
@@ -526,9 +525,7 @@ fn run(
                         "Internal API command reached the wrong dispatcher"
                     )),
                 };
-                if settings_changed
-                    && let Ok(mut s) = shared.lock()
-                {
+                if settings_changed && let Ok(mut s) = shared.lock() {
                     s.settings_revision += 1;
                 }
                 report(&shared, operation, &result);
@@ -558,11 +555,7 @@ fn run(
                     policy_due = Instant::now() + Duration::from_secs(60);
                     if changed {
                         let completed: Result<()> = Ok(());
-                        report(
-                            &shared,
-                            OperationKind::EnterprisePolicyReload,
-                            &completed,
-                        );
+                        report(&shared, OperationKind::EnterprisePolicyReload, &completed);
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
                             && let Ok(mut snapshot) = shared.lock()
@@ -584,15 +577,10 @@ fn run(
                 }
                 Err(error) => {
                     policy_failures = policy_failures.saturating_add(1);
-                    policy_due =
-                        Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
+                    policy_due = Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
-                    report(
-                        &shared,
-                        OperationKind::EnterprisePolicyReload,
-                        &failed,
-                    );
+                    report(&shared, OperationKind::EnterprisePolicyReload, &failed);
                 }
             }
         }
