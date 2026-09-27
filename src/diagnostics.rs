@@ -125,10 +125,10 @@ pub fn report(engine: &Engine) -> Result<Value> {
 
 pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
     let data = report(engine)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     write_new_private(path, &serde_json::to_vec_pretty(&data)?)?;
     Ok(())
