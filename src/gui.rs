@@ -652,16 +652,16 @@ impl App {
             && self.settings.model == s.settings.model
             && self.settings.num_ctx == s.settings.num_ctx
             && self.settings.ollama_url == s.settings.ollama_url;
-        let task_qualification_ready = self
-            .settings
-            .task_qualification
-            .as_ref()
-            .is_some_and(|qualification| {
-                self.settings.model_digest.as_ref() == Some(&qualification.digest)
-                    && self.settings.model == qualification.model
-                    && qualification.prompt_version == crate::config::PROMPT_VERSION
-                    && qualification.context_hash == settings_context_hash(&self.settings)
-            });
+        let task_qualification_ready =
+            self.settings
+                .task_qualification
+                .as_ref()
+                .is_some_and(|qualification| {
+                    self.settings.model_digest.as_ref() == Some(&qualification.digest)
+                        && self.settings.model == qualification.model
+                        && qualification.prompt_version == crate::config::PROMPT_VERSION
+                        && qualification.context_hash == settings_context_hash(&self.settings)
+                });
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
         let automatic_prerequisites = s.connected
