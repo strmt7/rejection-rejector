@@ -698,24 +698,24 @@ impl App {
                     }
                 });
                 ui.label("Administrator policy is enforced at startup and on every settings update; locked controls cannot be bypassed through the GUI.");
-                let mut constraints = Vec::new();
+                let mut constraints = Vec::<String>::new();
                 if s.enterprise_policy.force_human_review {
-                    constraints.push("Human Review forced");
+                    constraints.push("Human Review forced".into());
                 }
                 if s.enterprise_policy.prohibit_sending {
-                    constraints.push("sending prohibited");
+                    constraints.push("sending prohibited".into());
                 }
                 if s.enterprise_policy.prohibit_integration_api {
-                    constraints.push("integration API prohibited");
+                    constraints.push("integration API prohibited".into());
                 }
                 if let Some(limit) = s.enterprise_policy.max_daily_send_limit {
-                    constraints.push(Box::leak(format!("max {limit} sends/24h").into_boxed_str()));
+                    constraints.push(format!("max {limit} sends/24h"));
                 }
                 if let Some(minutes) = s.enterprise_policy.min_cooldown_minutes {
-                    constraints.push(Box::leak(format!("cooldown ≥ {minutes} min").into_boxed_str()));
+                    constraints.push(format!("cooldown ≥ {minutes} min"));
                 }
                 if let Some(days) = s.enterprise_policy.min_retention_days {
-                    constraints.push(Box::leak(format!("retention ≥ {days} days").into_boxed_str()));
+                    constraints.push(format!("retention ≥ {days} days"));
                 }
                 ui.label(constraints.join(" · "));
             });
