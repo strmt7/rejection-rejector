@@ -2,18 +2,34 @@
 
 Default candidate for new workspaces: **`qwen3.5:9b-q8_0`** in Ollama, 8,192 context, one request/model at a time.
 
-## Why this default
+## Why this provisional default
 
-The selection is use-case-specific rather than a generic leaderboard claim. On 2026-09-27, Ollama lists Qwen3.5 9B Q4 at about **6.6 GB** and the official **Q8_0 build at about 11 GB**, both with thinking support and a 256K model context. The Q8 build is the quality-first default because it uses a substantially less aggressive quantization while still leaving useful room beneath the application's conservative 14 GiB residency budget on a 16 GiB GPU. Qwen's published model-card comparison reports Qwen3.5 9B ahead of gpt-oss-20B on several language/reasoning measures relevant to this task. Those public benchmarks do not prove superiority on this application's mailbox workload, so the app still requires local qualification and offers a synthetic task-specific evaluation.
+This selection is intentionally **task-specific**, not a generic leaderboard choice. For Rejection Rejector the useful proxies are strict instruction following, multilingual understanding, structured output, text classification, grounded extraction and concise professional writing—not coding or math scores by themselves.
 
-Three useful alternatives remain selectable in the GUI:
-- **`qwen3.5:9b`** — about **6.6 GB** in Ollama. This is the lower-VRAM Q4 choice when the Q8 build cannot remain fully GPU-resident with the configured context.
-- **`gpt-oss:20b`** — about **14 GB** in Ollama, 128K context. It is a strong reasoning candidate but leaves very little headroom on a 16 GiB GPU, so it must pass the same runtime residency gate before any private inference.
-- **`gemma4:12b-it-qat`** — about **7.2 GB** in Ollama and a conservative memory choice retained for comparison/compatibility.
+As of 2026-09-27:
 
-Explicit tags are used for defaults/presets. The app pins the exact installed digest after qualification because registry tags can change.
+- **`qwen3.5:9b-q8_0`** is about **11 GB** in Ollama with a 256K model context. Qwen's published 9B results include IFEval 91.5, MultiChallenge 54.5, MMMLU 81.2 and MMLU-ProX 76.3. Those are unusually relevant to this app's instruction-following and multilingual classification workload, and Q8 leaves materially more VRAM headroom than 13–14 GB alternatives.
+- **`granite4.2:8b-q8_0`** is about **9.3 GB** and is a particularly relevant recent challenger: IBM explicitly lists text classification, extraction, multilingual business dialogue, thinking and structured JSON among Granite 4.2's supported capabilities. Its published 8B IFBench score is 79.33.
+- **`gemma4:12b-it-q8_0`** is about **13 GB**. Gemma 4 12B is a newer dense model with strong broad reasoning and multilingual results and native system-prompt support; it has less VRAM headroom, so it must prove both task quality and full residency locally.
+- **`ministral-3:14b`** is about **9.1 GB** and explicitly targets multilingual use, system-prompt adherence and JSON output. It remains a useful challenger despite being older than Granite 4.2/Gemma 4.
+- **`qwen3.5:9b`** (~6.6 GB Q4) remains the lower-VRAM fallback.
+- **`gpt-oss:20b`** (~14 GB MXFP4) remains a reasoning baseline, but its training mix was mostly English and its memory headroom is tight for a 16 GiB card.
 
-The app uses local `/api/chat`, thinking, structured JSON, a fixed seed and low temperature. Email text is treated as untrusted data. Byte budgets and completion checks fail closed for automatic delivery.
+Very new models are not automatically added merely because of release date. For example, Qwen3.8-Flash-Next (~105 GB local), NVIDIA Nemotron 3.5 Lightning (~25 GB) and Muse Glimmer (~18 GB) fail the fully-resident 16 GiB constraint before task quality is considered.
+
+The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use **Compare installed candidates** or:
+
+```powershell
+.\rr.exe compare-models --out .\model-bakeoff.json
+```
+
+The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on the repository's multilingual rejection/opportunity/ambiguous/prompt-injection fixtures. A recommendation is emitted only when a model completes every case, has **zero rejection false positives**, produces **zero drafts for non-rejections**, reaches at least **90% rejection recall** and **90% verified rejection-pipeline success**, and passes the full-GPU-residency gate.
+
+The task score weights non-rejection false-positive avoidance most heavily because accidentally replying to an interview, offer, quoted historical rejection or injected message is worse than conservatively holding a true rejection for human review.
+
+Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It also requires **Ollama 0.34.0 or newer**; older runtimes are rejected rather than assumed to have identical structured-output and model behavior.
+
+The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic seeding and low temperature. Email text is untrusted data. Input budgets and incomplete generations fail closed for Automatic mode.
 
 ## Qualification
 
@@ -32,14 +48,17 @@ The 14 GiB application budget deliberately leaves nominal room on a 16 GiB card.
 
 This does **not** identify the physical GPU, prove single-device allocation on every backend, measure transient whole-device peaks, include every display workload, or stress-test every near-capacity prompt. It may reject workable configurations and is not hardware certification. Existing Ollama servers are not silently reconfigured.
 
-Before Automatic, run `rr doctor` and the synthetic evaluation from the Local AI tab (or `rr evaluate --out model-evaluation.json`). Independently label private messages including real rejections, offers, invitations, quoted threads and suspicious instructions. Measure false rejections, precision/recall, unsupported claims and unsafe responses separately. Record digest, prompt version, context, runtime/backend/driver, latency and whole-device peaks. Re-evaluate after changes.
+Before Automatic, run `rr doctor`, evaluate the configured model, and preferably compare the installed challengers with `rr compare-models --out model-bakeoff.json`. Independently label private messages including real rejections, offers, invitations, quoted threads and suspicious instructions. Measure false rejections, precision/recall, unsupported claims and unsafe responses separately. Record digest, prompt version, context, runtime/backend/driver, latency and whole-device peaks. Re-evaluate after changes.
 
 Bundled synthetic cases are regression/smoke tests, not representative mailbox accuracy. Same-model verification is correlated, and model confidence scores are not calibrated probabilities.
 
 Sources checked 2026-09-27:
-- https://ollama.com/library/qwen3.5
+- https://ollama.com/library/qwen3.5/tags
 - https://huggingface.co/Qwen/Qwen3.5-9B
-- https://ollama.com/library/gpt-oss:20b
-- https://openai.com/index/introducing-gpt-oss/
-- https://registry.ollama.com/library/gemma4/tags
-- https://github.com/ollama/ollama/blob/main/docs/context-length.mdx
+- https://ollama.com/library/granite4.2
+- https://huggingface.co/ibm-granite/granite-4.2-8b
+- https://ollama.com/library/gemma4/tags
+- https://ollama.com/library/ministral-3
+- https://ollama.com/library/gpt-oss
+- https://openai.com/index/gpt-oss-model-card/
+- https://github.com/ollama/ollama/releases
