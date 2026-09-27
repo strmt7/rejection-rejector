@@ -48,7 +48,8 @@ jobs:
             'Rust CI',
             'Supply-chain security',
             'CodeQL Rust security',
-            'OpenSSF Scorecard'
+            'OpenSSF Scorecard',
+            'Workflow static analysis'
           )
           $deadline = (Get-Date).AddMinutes(15)
           while ($true) {
