@@ -15,6 +15,23 @@ use tiny_http::{Header, Method, Response, Server};
 pub const API_VERSION: u32 = 1;
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
 
+fn error_body(
+    code: &str,
+    message: &str,
+    retryable: bool,
+    request_id: &str,
+) -> serde_json::Value {
+    json!({
+        "api_version": API_VERSION,
+        "request_id": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable
+        }
+    })
+}
+
 fn direct_get(path: &str) -> Option<serde_json::Value> {
     match path {
         "/v1/live" => Some(json!({
@@ -65,6 +82,7 @@ pub fn start(
                 Ok(None) => continue,
                 Err(_) => break,
             };
+            let request_id = uuid::Uuid::new_v4().to_string();
             let auth = unique_header(request.headers(), "Authorization");
             let host = unique_header(request.headers(), "Host");
             let origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
@@ -72,11 +90,35 @@ pub fn start(
                 || host != Some(format!("127.0.0.1:{port}").as_str())
                 || origin
             {
-                (401, json!({"error":"Unauthorized"}))
+                (
+                    401,
+                    error_body(
+                        "unauthorized",
+                        "Authentication, Host or Origin policy rejected the request",
+                        false,
+                        &request_id,
+                    ),
+                )
             } else if request.method() != &Method::Get {
-                (405, json!({"error":"Read-only API"}))
+                (
+                    405,
+                    error_body(
+                        "method_not_allowed",
+                        "The integration API is read-only",
+                        false,
+                        &request_id,
+                    ),
+                )
             } else if request.url().len() > 2000 || !request.url().starts_with("/v1/") {
-                (404, json!({"error":"Unknown route"}))
+                (
+                    404,
+                    error_body(
+                        "route_not_found",
+                        "Unknown API route",
+                        false,
+                        &request_id,
+                    ),
+                )
             } else if let Some(body) = direct_get(request.url()) {
                 (200, body)
             } else {
@@ -88,18 +130,36 @@ pub fn start(
                     })
                     .is_err()
                 {
-                    (503, json!({"error":"Worker busy"}))
+                    (
+                        503,
+                        error_body(
+                            "worker_busy",
+                            "The worker command queue is busy",
+                            true,
+                            &request_id,
+                        ),
+                    )
                 } else {
                     match rx.recv_timeout(Duration::from_secs(3)) {
-                        Ok(data) => (
-                            if data.get("error").is_some() {
-                                400
-                            } else {
-                                200
-                            },
-                            data,
+                        Ok(data) if data.get("error").is_some() => (
+                            400,
+                            error_body(
+                                "invalid_request",
+                                "The request was invalid or the requested resource is unavailable",
+                                false,
+                                &request_id,
+                            ),
                         ),
-                        Err(_) => (503, json!({"error":"Worker busy; retry later"})),
+                        Ok(data) => (200, data),
+                        Err(_) => (
+                            503,
+                            error_body(
+                                "worker_timeout",
+                                "The worker did not answer before the local API deadline",
+                                true,
+                                &request_id,
+                            ),
+                        ),
                     }
                 }
             };
@@ -115,6 +175,10 @@ pub fn start(
                 .with_header(
                     Header::from_bytes("X-Content-Type-Options", "nosniff")
                         .expect("constant header"),
+                )
+                .with_header(
+                    Header::from_bytes("X-Request-ID", request_id.as_bytes())
+                        .expect("UUID request ID is valid header content"),
                 );
             let _ = request.respond(response);
         }
@@ -146,6 +210,16 @@ mod tests {
         assert!(spec["paths"]["/v1/health"].is_object());
         assert!(spec["paths"]["/v1/audit/anchor"].is_object());
         assert!(direct_get("/v1/unknown").is_none());
+    }
+
+    #[test]
+    fn error_envelope_has_stable_machine_readable_fields() {
+        let body = error_body("worker_busy", "Synthetic", true, "request-123");
+        assert_eq!(body["api_version"], API_VERSION);
+        assert_eq!(body["request_id"], "request-123");
+        assert_eq!(body["error"]["code"], "worker_busy");
+        assert_eq!(body["error"]["retryable"], true);
+        assert_eq!(body["error"]["message"], "Synthetic");
     }
 
     #[test]
