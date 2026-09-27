@@ -728,6 +728,7 @@ fn api_query_with_operation(
             Ok(json!({
                 "api_version": crate::api::API_VERSION,
                 "application_version": env!("CARGO_PKG_VERSION"),
+                "settings_format_version": crate::config::SETTINGS_FORMAT_VERSION,
                 "read_only": true,
                 "mail_provider": "gmail",
                 "modes": ["human_review", "automatic"],
@@ -748,7 +749,9 @@ fn api_query_with_operation(
                     "verified_backup_bundle": true,
                     "task_model_bakeoff": true,
                     "typed_operation_status": true,
-                    "enterprise_policy": true
+                    "typed_audit_events": true,
+                    "enterprise_policy": true,
+                    "enterprise_policy_digest_pin": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
@@ -772,6 +775,7 @@ fn api_query_with_operation(
             );
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
+                "settings_format_version": e.settings.settings_format_version,
                 "healthy": readiness.workspace_ready,
                 "readiness": readiness,
                 "database": {
@@ -830,7 +834,7 @@ fn api_query_with_operation(
                 "Status endpoint takes no query parameters"
             );
             Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"settings_format_version":e.settings.settings_format_version,"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
             )
         }
         "/v1/items" => {
