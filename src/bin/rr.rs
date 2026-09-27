@@ -45,9 +45,7 @@ enum Action {
         out: PathBuf,
     },
     /// Verify a backup directory against the active vault without modifying it.
-    VerifyBackup {
-        path: PathBuf,
-    },
+    VerifyBackup { path: PathBuf },
     /// Export a privacy-safe local diagnostics JSON report. Nothing is uploaded.
     Diagnostics {
         #[arg(long)]
