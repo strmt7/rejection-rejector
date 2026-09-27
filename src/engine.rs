@@ -292,7 +292,26 @@ impl Engine {
         self.db.log(
             "model.evaluated",
             None,
-            &format!("Synthetic model evaluation saved as {}", path.display()),
+            &format!("Task-specific model evaluation saved as {}", path.display()),
+        )?;
+        Ok(path)
+    }
+
+    pub fn compare_models(&mut self) -> Result<PathBuf> {
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not run installed local models"
+        );
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        let path = self.directory.join(format!("model-bakeoff-{stamp}.json"));
+        evaluation::compare_installed(&self.settings, &path)?;
+        self.db.log(
+            "models.compared",
+            None,
+            &format!(
+                "Task-specific installed-model bake-off saved as {}",
+                path.display()
+            ),
         )?;
         Ok(path)
     }
@@ -869,6 +888,9 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
     }
     if !s.include_backlog && s.automatic_since.is_none_or(|t| email.received_at < t) {
         reasons.push("Predates automatic-mode enrollment".into());
+    }
+    if !mail::clear_rejection_language(&email.subject, &email.text) {
+        reasons.push("No independent clear rejection phrase in the current message".into());
     }
     if mail::auto_language_conflict(&email.subject, &email.text) {
         reasons.push("Conflicting or suspicious email language".into());

@@ -26,9 +26,9 @@ Official references:
 
 ## Ollama and local AI
 
-Open **Local AI**, using `qwen3.5:9b` and 8,192 context initially. The GUI also offers `gpt-oss:20b` and `gemma4:12b-it-qat` quick choices; changing model/context disarms delivery until the new configuration is qualified.
+Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a provisional task-specific default, not a permanent leaderboard choice. The current curated challengers include `granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, `ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. Changing model/context disarms delivery until the new configuration is qualified.
 
-1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
+1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.34.0 or newer** and rejects older runtimes rather than assuming identical structured-output/model behavior. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
 3. **Download model** retrieves weights through the local Ollama API with progress. No email is sent to the registry.
 4. **Qualify & pin** checks installed local model metadata and cloud/remote markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.

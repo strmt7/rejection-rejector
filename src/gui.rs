@@ -1,6 +1,6 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
-    config::{Mode, Settings, Tone, LOOKBACK_DAYS, POLL_HOURS},
+    config::{Mode, Settings, Tone, LOOKBACK_DAYS, MODEL_CANDIDATES, POLL_HOURS},
     types::{hash, Job, JobState},
     worker::{Command, Snapshot, Worker},
 };
@@ -480,7 +480,7 @@ impl App {
         Self::heading(ui,"Intelligence that stays local","One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.");
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
-            ui.label("Recommended: qwen3.5:9b · 8,192-token context · one loaded model");
+            ui.label("Provisional default: qwen3.5:9b-q8_0 · validate against the task suite before Automatic mode");
             ui.label(RichText::new("A model's download size does not prove it fits in VRAM. Qualification checks Ollama's loaded-model counters and pins the digest.").color(MUTED));
             egui::Grid::new("ai_status")
                 .num_columns(2)
@@ -564,11 +564,21 @@ impl App {
                             && !s.demo
                             && !model_config_dirty
                             && s.settings.model_digest.is_some(),
-                        egui::Button::new("Evaluate synthetic suite"),
+                        egui::Button::new("Evaluate current model"),
                     )
                     .clicked()
                 {
                     self.worker.command(Command::EvaluateModel);
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo && !model_config_dirty,
+                        egui::Button::new("Compare installed candidates"),
+                    )
+                    .on_hover_text("Runs the full recruiting-email bake-off only on curated candidate models that are already installed. Nothing is downloaded automatically.")
+                    .clicked()
+                {
+                    self.worker.command(Command::CompareModels);
                 }
             });
             if model_config_dirty {
@@ -588,11 +598,7 @@ impl App {
             ui.text_edit_singleline(&mut self.settings.model);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Quick choices").small().color(MUTED));
-                for (label, tag) in [
-                    ("Qwen3.5 9B · recommended", "qwen3.5:9b"),
-                    ("gpt-oss 20B · high reasoning / tight VRAM", "gpt-oss:20b"),
-                    ("Gemma 4 12B QAT · conservative", "gemma4:12b-it-qat"),
-                ] {
+                for (label, tag) in MODEL_CANDIDATES {
                     if ui.small_button(label).clicked() {
                         self.settings.model = tag.into();
                     }
