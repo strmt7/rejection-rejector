@@ -333,6 +333,27 @@ fn report_silent_success(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, mes
     }
 }
 
+fn rotate_api_token(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    api_disabled: &Arc<AtomicBool>,
+) -> Result<()> {
+    let replacement = Zeroizing::new(oauth::secret());
+    e.db.change_meta(
+        &[("api_token", json!(replacement.as_str()))],
+        &[],
+        "security.api_token_rotated",
+        "Integration API token rotated; active listener disabled until restart",
+    )?;
+    api_disabled.store(true, Ordering::SeqCst);
+    if let Ok(mut snapshot) = shared.lock() {
+        snapshot.api_listening = false;
+        snapshot.api_token = Some(replacement);
+        snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
+    }
+    Ok(())
+}
+
 fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
     let shift = failures.saturating_sub(1).min(6);
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
@@ -525,21 +546,7 @@ fn run(
                         Ok(())
                     }
                     Command::RotateApiToken => {
-                        let replacement = Zeroizing::new(oauth::secret());
-                        e.db.change_meta(
-                            &[("api_token", json!(replacement.as_str()))],
-                            &[],
-                            "api.token_rotated",
-                            "Integration API token rotated; active listener disabled until restart",
-                        )?;
-                        api_disabled.store(true, Ordering::SeqCst);
-                        if let Ok(mut s) = shared.lock() {
-                            s.api_listening = false;
-                            s.api_token = Some(replacement);
-                            s.api_token_expires =
-                                Some(Instant::now() + Duration::from_secs(60));
-                        }
-                        Ok(())
+                        rotate_api_token(&mut e, &shared, &api_disabled)
                     }
                     Command::Api { .. } => Err(anyhow::anyhow!(
                         "Internal API command reached the wrong dispatcher"
@@ -1093,6 +1100,50 @@ mod tests {
             bounded_backoff(15 * 60, 20, 60 * 60),
             Duration::from_secs(60 * 60)
         );
+    }
+
+    #[test]
+    fn api_token_rotation_revokes_listener_and_never_logs_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let old = "OLD_API_TOKEN_CANARY_SHOULD_NOT_SURVIVE_1234567890".to_string();
+        engine.db.set_meta("api_token", &old).unwrap();
+
+        let shared = Arc::new(Mutex::new(Snapshot {
+            api_listening: true,
+            ..Snapshot::default()
+        }));
+        let disabled = Arc::new(AtomicBool::new(false));
+        rotate_api_token(&mut engine, &shared, &disabled).unwrap();
+
+        assert!(disabled.load(Ordering::SeqCst));
+        let stored: String = engine.db.meta("api_token").unwrap().unwrap();
+        assert_ne!(stored, old);
+        assert!(stored.len() >= 40);
+
+        let snapshot = shared.lock().unwrap();
+        assert!(!snapshot.api_listening);
+        assert_eq!(
+            snapshot.api_token.as_ref().map(|token| token.as_str()),
+            Some(stored.as_str())
+        );
+        drop(snapshot);
+
+        let events = engine.db.events(0, 100).unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.kind == "security.api_token_rotated")
+            .unwrap();
+        assert_eq!(event.domain, AuditDomain::Security);
+        assert_eq!(event.severity, AuditSeverity::Security);
+        assert!(!event.detail.contains(&old));
+        assert!(!event.detail.contains(&stored));
     }
 
     #[test]
