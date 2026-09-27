@@ -192,8 +192,10 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     }))
 }
 
-pub fn run(settings: &Settings, out: &Path) -> Result<()> {
-    write_report(out, &evaluate(settings)?)
+pub fn run(settings: &Settings, out: &Path) -> Result<serde_json::Value> {
+    let report = evaluate(settings)?;
+    write_report(out, &report)?;
+    Ok(report)
 }
 
 /// Compare only models already installed in Ollama. Nothing is downloaded implicitly.
