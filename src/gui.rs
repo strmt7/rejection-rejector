@@ -1002,26 +1002,38 @@ impl App {
                     "Not listening"
                 });
             });
-            if ui.button("Reveal API token for integration").clicked() {
-                self.worker.command(Command::RevealApiToken);
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Reveal API token for integration").clicked() {
+                    self.worker.command(Command::RevealApiToken);
+                }
+                if ui
+                    .add_enabled(
+                        !s.demo && s.busy.is_empty(),
+                        egui::Button::new("Rotate API token"),
+                    )
+                    .on_hover_text("Immediately revokes the currently listening token by stopping the API listener, stores a new encrypted token, and requires restart before the API can listen again.")
+                    .clicked()
+                {
+                    self.worker.command(Command::RotateApiToken);
+                }
+            });
             if let Some(token) = &s.api_token {
                 ui.horizontal_wrapped(|ui| {
-                    ui.monospace(token);
+                    ui.monospace(token.as_str());
                     if ui.button("Copy token").clicked() {
-                        ui.ctx().copy_text(token.clone());
+                        ui.ctx().copy_text(token.as_str().to_owned());
                     }
                     if ui.button("Hide token").clicked() {
                         self.worker.command(Command::HideApiToken);
                     }
                 });
                 ui.label(
-                    RichText::new("The on-screen token hides automatically after 60 seconds.")
+                    RichText::new("The on-screen token hides automatically after 60 seconds. After rotation, restart the app/worker before integrations reconnect.")
                         .small()
                         .color(MUTED),
                 );
             }
-            ui.label(RichText::new("A copied token grants access to your local email data. Keep it private; never put it in source control.").small().color(AMBER));
+            ui.label(RichText::new("A copied token grants access to your local email data. Keep it private; rotate it immediately after suspected exposure and never put it in source control.").small().color(AMBER));
         });
         ui.add_space(12.0);
         let automatic_ready_to_save = self.settings.mode != Mode::Automatic
