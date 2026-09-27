@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rejection_rejector::{config, engine::Engine, ollama::Ollama, worker::Worker};
+use rejection_rejector::{config, engine::Engine, ollama::Ollama, recovery, worker::Worker};
 use std::{
     path::PathBuf,
     sync::{
@@ -36,6 +36,17 @@ enum Action {
     CompareModels {
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Verify the active encrypted database structure and authenticated vault marker.
+    Integrity,
+    /// Create a checksum-bound same-vault backup directory. Existing paths are never overwritten.
+    Backup {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Verify a backup directory against the active vault without modifying it.
+    VerifyBackup {
+        path: PathBuf,
     },
 }
 fn main() -> Result<()> {
@@ -169,6 +180,43 @@ fn main() -> Result<()> {
                 "Task-specific model comparison written to {}",
                 out.display()
             );
+        }
+        Action::Integrity => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            e.db.integrity_check()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "schema_version": e.db.schema_version()?,
+                    "note": "SQLite quick_check, foreign-key integrity and authenticated vault marker passed."
+                }))?
+            );
+        }
+        Action::Backup { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let manifest = recovery::create_backup(&e.db, &e.directory, &out)?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        Action::VerifyBackup { path } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let manifest = recovery::verify_backup(&e.db, &path)?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
         }
     }
     Ok(())
