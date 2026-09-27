@@ -237,8 +237,6 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
     Ok(manifest)
 }
 
-
-
 /// Restore a backup into a workspace while the desktop/worker is stopped.
 ///
 /// This operation acquires the same exclusive instance lock as the application.
@@ -376,7 +374,9 @@ fn restore_backup_with_vault(
         for (original, saved) in moved.iter().rev() {
             let _ = fs::rename(saved, original);
         }
-        return Err(error.context("Restore validation failed; previous database files were rolled back"));
+        return Err(
+            error.context("Restore validation failed; previous database files were rolled back")
+        );
     }
 
     let report = RestoreReport {
