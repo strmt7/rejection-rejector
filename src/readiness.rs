@@ -25,19 +25,13 @@ pub fn operational_indicators(
     connected: bool,
     now: DateTime<Utc>,
 ) -> OperationalIndicators {
-    let sync_age_seconds = last_poll.map(|poll| {
-        now.signed_duration_since(poll)
-            .num_seconds()
-            .max(0)
-    });
+    let sync_age_seconds =
+        last_poll.map(|poll| now.signed_duration_since(poll).num_seconds().max(0));
     let freshness_window = settings.interval_seconds().saturating_mul(2);
-    let sync_fresh = connected
-        && sync_age_seconds.is_some_and(|age| age <= freshness_window);
+    let sync_fresh = connected && sync_age_seconds.is_some_and(|age| age <= freshness_window);
 
-    let task_qualification_age_seconds = settings
-        .task_qualification
-        .as_ref()
-        .map(|qualification| {
+    let task_qualification_age_seconds =
+        settings.task_qualification.as_ref().map(|qualification| {
             now.signed_duration_since(qualification.qualified_at)
                 .num_seconds()
                 .max(0)
