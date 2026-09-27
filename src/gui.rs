@@ -57,7 +57,8 @@ impl App {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        let mut style = (*cc.egui_ctx.style()).clone();
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
+        let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
         style.visuals = egui::Visuals::dark();
         style.visuals.override_text_color = Some(Color32::from_rgb(222, 231, 240));
         style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(34, 44, 58);
@@ -88,7 +89,7 @@ impl App {
         style
             .text_styles
             .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
-        cc.egui_ctx.set_style(style);
+        cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
         Self {
             worker: Worker::spawn(dir, demo),
             tab: if demo { Tab::Review } else { Tab::Overview },
@@ -1011,9 +1012,9 @@ impl eframe::App for App {
                 self.worker.command(Command::Select(j.id.clone()));
             }
         }
-        egui::TopBottomPanel::bottom("status_bar")
+        egui::Panel::bottom("status_bar")
             .frame(egui::Frame::default().fill(PANEL).inner_margin(12))
-            .show(ctx, |ui| {
+            .show(root_ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if !s.busy.is_empty() {
                         ui.spinner();
@@ -1041,7 +1042,7 @@ impl eframe::App for App {
                     ui.colored_label(Color32::LIGHT_RED, &self.local_error);
                 }
             });
-        egui::SidePanel::left("navigation").exact_width(210.0).resizable(false).frame(egui::Frame::default().fill(PANEL).inner_margin(18)).show(ctx,|ui|{
+        egui::Panel::left("navigation").exact_size(210.0).resizable(false).frame(egui::Frame::default().fill(PANEL).inner_margin(18)).show(root_ui,|ui|{
             ui.add_space(8.0);ui.label(RichText::new("RR").size(34.0).strong().color(MINT));ui.label(RichText::new("REJECTION\nREJECTOR").size(17.0).strong());ui.label(RichText::new("YOUR VOICE, RETURNED.").size(10.0).color(MUTED));ui.add_space(28.0);
             for(tab,label)in[(Tab::Overview,"Overview"),(Tab::Review,"Review"),(Tab::Activity,"Activity"),(Tab::LocalAi,"Local AI"),(Tab::Settings,"Settings")]{
                 let enabled=(tab!=Tab::Review||s.settings.mode==Mode::HumanReview)&&!self.modal_open();
@@ -1053,7 +1054,7 @@ impl eframe::App for App {
             ui.label(RichText::new("Pause blocks future dispatch. A request already sent to Gmail cannot be recalled.").small().color(MUTED));
             ui.add_space(18.0);ui.label(RichText::new(format!("v{} · Rust native",env!("CARGO_PKG_VERSION"))).small().color(MUTED));
         });
-        egui::CentralPanel::default().frame(egui::Frame::default().fill(BG).inner_margin(24)).show(ctx,|ui|{
+        egui::CentralPanel::default().frame(egui::Frame::default().fill(BG).inner_margin(24)).show(root_ui,|ui|{
             if s.fatal{ui.heading("The workspace could not open");ui.label(&s.error);ui.label("Close any other instance using this data directory. On Windows, ensure Credential Manager is available. Never replace a missing vault key for an existing database.");return;}
             if !s.initialized{ui.spinner();ui.heading("Opening encrypted local workspace…");return;}
             if self.tab==Tab::Review{self.review(ui,&s);}else{egui::ScrollArea::vertical().id_salt("main_scroll").show(ui,|ui|match self.tab{Tab::Overview=>self.overview(ui,&s),Tab::Activity=>self.activity(ui,&s),Tab::LocalAi=>self.local_ai(ui,&s),Tab::Settings=>self.settings(ui,&s),Tab::Review=>()});}
