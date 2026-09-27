@@ -1083,18 +1083,12 @@ pub fn automatic_policy(
             "Analysis identity is stale",
         );
     }
-    match &settings.task_qualification {
-        Some(qualification)
-            if qualification.model == settings.model
-                && Some(&qualification.digest) == settings.model_digest.as_ref()
-                && qualification.prompt_version == PROMPT_VERSION
-                && qualification.context_hash == settings_context_hash(settings)
-                && qualification.suite_hash == evaluation_suite_hash() => {}
-        _ => push_policy_block(
+    if !settings.task_qualification_current() {
+        push_policy_block(
             &mut blocks,
             AutomaticPolicyCode::TaskQualificationStale,
             "Task-specific model qualification is missing or stale",
-        ),
+        );
     }
     if job.drafted_at.is_none_or(|time| {
         now.signed_duration_since(time).num_minutes() < i64::from(settings.cooldown_minutes)
