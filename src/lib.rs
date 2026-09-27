@@ -13,6 +13,7 @@ pub mod net;
 pub mod oauth;
 pub mod ollama;
 pub mod recovery;
+pub mod readiness;
 pub mod store;
 pub mod sync;
 pub mod types;
