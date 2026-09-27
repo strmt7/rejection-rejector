@@ -1,6 +1,7 @@
 use anyhow::{ensure, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
@@ -54,6 +55,18 @@ pub enum Tone {
     Strong,
     Reconsideration,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TaskQualification {
+    pub model: String,
+    pub digest: String,
+    pub prompt_version: String,
+    pub context_hash: String,
+    pub task_score: f64,
+    pub fixture_count: u32,
+    pub qualified_at: DateTime<Utc>,
+}
+
 impl Tone {
     pub fn label(self) -> &'static str {
         match self {
@@ -89,6 +102,7 @@ pub struct Settings {
     pub candidate_context: String,
     pub model: String,
     pub model_digest: Option<String>,
+    pub task_qualification: Option<TaskQualification>,
     pub ollama_url: String,
     pub num_ctx: u32,
     pub llm_timeout_seconds: u64,
@@ -114,6 +128,7 @@ impl Default for Settings {
             candidate_context: String::new(),
             model: DEFAULT_MODEL.into(),
             model_digest: None,
+            task_qualification: None,
             ollama_url: "http://127.0.0.1:11434".into(),
             num_ctx: 8192,
             llm_timeout_seconds: 600,
@@ -183,6 +198,38 @@ impl Settings {
                 "Invalid model digest"
             );
         }
+        if let Some(qualification) = &self.task_qualification {
+            validate_model_name(&qualification.model)?;
+            let digest = qualification
+                .digest
+                .strip_prefix("sha256:")
+                .unwrap_or(&qualification.digest);
+            ensure!(
+                digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
+                "Invalid task-qualification model digest"
+            );
+            ensure!(
+                qualification.prompt_version == PROMPT_VERSION,
+                "Task qualification belongs to another prompt version"
+            );
+            ensure!(
+                qualification.context_hash.len() == 64
+                    && qualification
+                        .context_hash
+                        .bytes()
+                        .all(|c| c.is_ascii_hexdigit()),
+                "Invalid task-qualification context hash"
+            );
+            ensure!(
+                qualification.task_score.is_finite()
+                    && (0.0..=100.0).contains(&qualification.task_score),
+                "Invalid task-qualification score"
+            );
+            ensure!(
+                qualification.fixture_count > 0,
+                "Task qualification must record evaluated fixtures"
+            );
+        }
         if self.sending_enabled {
             ensure!(
                 self.signature.trim() != "Your name",
@@ -197,6 +244,17 @@ impl Settings {
             ensure!(
                 self.model_digest.is_some(),
                 "Qualify and pin the local model before enabling Automatic mode"
+            );
+            let qualification = self
+                .task_qualification
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Run the task-specific model evaluation before enabling Automatic mode"))?;
+            ensure!(
+                Some(&qualification.digest) == self.model_digest.as_ref()
+                    && qualification.model == self.model
+                    && qualification.prompt_version == PROMPT_VERSION
+                    && qualification.context_hash == settings_context_hash(self),
+                "Task-specific model qualification is stale; evaluate the current configuration again"
             );
             ensure!(
                 self.automatic_since.is_some(),
@@ -226,6 +284,20 @@ impl Settings {
     pub fn cutoff(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         now - chrono::Duration::days(i64::from(self.lookback_days))
     }
+}
+
+pub fn settings_context_hash(settings: &Settings) -> String {
+    let mut digest = Sha256::new();
+    for value in [
+        settings.candidate_context.as_str(),
+        settings.signature.as_str(),
+        settings.tone.instruction(),
+        &settings.num_ctx.to_string(),
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    format!("{:x}", digest.finalize())
 }
 
 pub fn validate_local_url(value: &str) -> Result<()> {
