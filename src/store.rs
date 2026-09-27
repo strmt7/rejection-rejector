@@ -1137,6 +1137,104 @@ mod tests {
     }
 
     #[test]
+    fn schema_v3_backfills_and_verifies_audit_chain() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let vault = Vault::random();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
+                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
+                 CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
+                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                 PRAGMA user_version=3;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [vault
+                    .seal("meta/vault_check", &"rejection-rejector:v1")
+                    .unwrap()],
+            )
+            .unwrap();
+            let event_id = "legacy-event";
+            let legacy = AuditEvent {
+                seq: 0,
+                at: Utc::now(),
+                kind: "legacy.test".into(),
+                item_id: None,
+                detail: "historical encrypted event".into(),
+            };
+            conn.execute(
+                "INSERT INTO events(event_id,payload) VALUES(?1,?2)",
+                params![
+                    event_id,
+                    vault
+                        .seal(&format!("event/{event_id}"), &legacy)
+                        .unwrap()
+                ],
+            )
+            .unwrap();
+        }
+
+        let db = Store::open(&path, vault).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 4);
+        db.verify_audit_chain().unwrap();
+        let events = db.events(0, 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "legacy.test");
+    }
+
+    #[test]
+    fn audit_chain_detects_ciphertext_tampering() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.log("audit.first", None, "first").unwrap();
+        db.log("audit.second", None, "second").unwrap();
+        db.verify_audit_chain().unwrap();
+
+        let mut payload: Vec<u8> = db
+            .conn
+            .query_row(
+                "SELECT payload FROM events ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        payload[payload.len() / 2] ^= 0x01;
+        db.conn
+            .execute(
+                "UPDATE events SET payload=?1 WHERE seq=(SELECT MAX(seq) FROM events)",
+                [payload],
+            )
+            .unwrap();
+        assert!(db.verify_audit_chain().is_err());
+        assert!(db.integrity_check().is_err());
+    }
+
+    #[test]
+    fn audit_chain_detects_tail_truncation() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.log("audit.first", None, "first").unwrap();
+        db.log("audit.second", None, "second").unwrap();
+        db.verify_audit_chain().unwrap();
+
+        db.conn
+            .execute(
+                "DELETE FROM events WHERE seq=(SELECT MAX(seq) FROM events)",
+                [],
+            )
+            .unwrap();
+        assert!(db.verify_audit_chain().is_err());
+    }
+
+    #[test]
     fn related_metadata_changes_are_committed_together() {
         let d = tempfile::tempdir().unwrap();
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
