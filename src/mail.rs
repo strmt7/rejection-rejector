@@ -229,6 +229,8 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "non dare seguito",
         "non possiamo procedere con la sua candidatura",
         "non possiamo procedere con la tua candidatura",
+        "abbiamo deciso di non procedere",
+        "non procederemo con la candidatura",
         "non è stata selezionata",
         "non è stato selezionato",
         "abbiamo scelto altri candidati",
@@ -241,13 +243,19 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         // Portuguese
         "não daremos seguimento",
         "não podemos prosseguir com a sua candidatura",
+        "decidimos não avançar com a sua candidatura",
+        "não avançar com a sua candidatura",
         "não foi selecionado",
         "não foi selecionada",
         "decidimos seguir com outros candidatos",
         // Dutch
         "niet verder met uw sollicitatie",
         "niet verder met je sollicitatie",
+        "niet verder in behandeling",
         "niet geselecteerd",
+        // Greek
+        "αποφασίσαμε να μην προχωρήσουμε",
+        "αποφασισαμε να μην προχωρησουμε",
     ]
     .iter()
     .any(|phrase| lower.contains(phrase))
@@ -514,6 +522,7 @@ mod tests {
             "No continuaremos con su candidatura.",
             "Não daremos seguimento à sua candidatura.",
             "We gaan niet verder met uw sollicitatie.",
+            "Αποφασίσαμε να μην προχωρήσουμε με την υποψηφιότητά σας.",
         ] {
             assert!(clear_rejection_language("", text), "{text}");
         }
