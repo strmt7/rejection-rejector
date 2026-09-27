@@ -20,3 +20,6 @@ settings.private.json
 *.key
 Thumbs.db
 .DS_Store
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
