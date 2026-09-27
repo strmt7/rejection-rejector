@@ -1,7 +1,8 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
     config::{
-        settings_context_hash, Mode, Settings, Tone, LOOKBACK_DAYS, MODEL_CANDIDATES, POLL_HOURS,
+        evaluation_suite_hash, settings_context_hash, Mode, Settings, Tone, LOOKBACK_DAYS,
+        MODEL_CANDIDATES, POLL_HOURS,
     },
     types::{hash, Job, JobState},
     worker::{Command, Snapshot, Worker},
@@ -662,6 +663,7 @@ impl App {
                         && self.settings.model == qualification.model
                         && qualification.prompt_version == crate::config::PROMPT_VERSION
                         && qualification.context_hash == settings_context_hash(&self.settings)
+                        && qualification.suite_hash == evaluation_suite_hash()
                 });
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
