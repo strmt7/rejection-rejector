@@ -26,6 +26,8 @@ pub struct EnterprisePolicy {
 pub struct PolicyStatus {
     pub active: bool,
     pub digest: Option<String>,
+    pub digest_pin_enforced: bool,
+    pub digest_pin_matches: bool,
     pub force_human_review: bool,
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
@@ -122,6 +124,7 @@ impl EnterprisePolicy {
 pub struct LoadedPolicy {
     pub policy: EnterprisePolicy,
     pub digest: String,
+    pub expected_digest: Option<String>,
 }
 
 impl LoadedPolicy {
@@ -129,6 +132,11 @@ impl LoadedPolicy {
         PolicyStatus {
             active: true,
             digest: Some(self.digest.clone()),
+            digest_pin_enforced: self.expected_digest.is_some(),
+            digest_pin_matches: self
+                .expected_digest
+                .as_ref()
+                .is_none_or(|expected| expected == &self.digest),
             force_human_review: self.policy.force_human_review,
             prohibit_sending: self.policy.prohibit_sending,
             prohibit_integration_api: self.policy.prohibit_integration_api,
@@ -145,6 +153,8 @@ pub fn inactive_status() -> PolicyStatus {
     PolicyStatus {
         active: false,
         digest: None,
+        digest_pin_enforced: false,
+        digest_pin_matches: false,
         force_human_review: false,
         prohibit_sending: false,
         prohibit_integration_api: false,
@@ -154,6 +164,22 @@ pub fn inactive_status() -> PolicyStatus {
         allowed_model_count: 0,
         allowed_models: vec![],
     }
+}
+
+fn normalize_digest_pin(value: &str) -> Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    ensure!(
+        normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "RR_ENTERPRISE_POLICY_SHA256 must be exactly 64 hexadecimal characters"
+    );
+    Ok(normalized)
+}
+
+fn configured_digest_pin() -> Result<Option<String>> {
+    std::env::var("RR_ENTERPRISE_POLICY_SHA256")
+        .ok()
+        .map(|value| normalize_digest_pin(&value))
+        .transpose()
 }
 
 fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
@@ -183,16 +209,32 @@ pub fn default_policy_path() -> Result<Option<PathBuf>> {
 }
 
 pub fn load_optional() -> Result<Option<LoadedPolicy>> {
+    let expected_digest = configured_digest_pin()?;
     let Some(path) = default_policy_path()? else {
+        ensure!(
+            expected_digest.is_none(),
+            "Enterprise policy digest pin is configured but no policy path is available"
+        );
         return Ok(None);
     };
     if !path.exists() {
+        ensure!(
+            expected_digest.is_none(),
+            "Enterprise policy digest pin is configured but the policy file is missing"
+        );
         return Ok(None);
     }
-    load_file(&path).map(Some)
+    load_file_with_expected_digest(&path, expected_digest).map(Some)
 }
 
 pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
+    load_file_with_expected_digest(path, None)
+}
+
+fn load_file_with_expected_digest(
+    path: &Path,
+    expected_digest: Option<String>,
+) -> Result<LoadedPolicy> {
     ensure!(
         path.is_absolute(),
         "Enterprise policy path must be absolute"
@@ -216,7 +258,17 @@ pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
         serde_json::from_slice(&bytes).context("Enterprise policy is invalid JSON")?;
     policy.validate()?;
     let digest = format!("{:x}", Sha256::digest(&bytes));
-    Ok(LoadedPolicy { policy, digest })
+    if let Some(expected) = &expected_digest {
+        ensure!(
+            &digest == expected,
+            "Enterprise policy digest does not match RR_ENTERPRISE_POLICY_SHA256"
+        );
+    }
+    Ok(LoadedPolicy {
+        policy,
+        digest,
+        expected_digest,
+    })
 }
 
 #[cfg(test)]
@@ -286,6 +338,41 @@ mod tests {
             validate_explicit_policy_path(PathBuf::from("/etc/rejection-rejector/policy.json"))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn digest_pin_rejects_policy_drift() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.json");
+        let body = br#"{"version":1,"prohibit_sending":true}"#;
+        std::fs::write(&path, body).unwrap();
+        let digest = format!("{:x}", Sha256::digest(body));
+
+        let loaded =
+            load_file_with_expected_digest(&path, Some(digest.clone())).unwrap();
+        assert_eq!(loaded.digest, digest);
+        assert!(loaded.status().digest_pin_enforced);
+        assert!(loaded.status().digest_pin_matches);
+
+        std::fs::write(
+            &path,
+            br#"{"version":1,"prohibit_sending":false}"#,
+        )
+        .unwrap();
+        assert!(
+            load_file_with_expected_digest(&path, Some(digest)).is_err()
+        );
+    }
+
+    #[test]
+    fn digest_pin_validation_is_strict() {
+        assert_eq!(
+            normalize_digest_pin(&"A".repeat(64)).unwrap(),
+            "a".repeat(64)
+        );
+        for invalid in ["", "abc", &"g".repeat(64), &"a".repeat(63), &"a".repeat(65)] {
+            assert!(normalize_digest_pin(invalid).is_err());
+        }
     }
 
     #[test]
