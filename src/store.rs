@@ -515,6 +515,22 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let persisted_state: String = tx
+            .query_row(
+                "SELECT state FROM items WHERE id=?1 AND revision=?2",
+                params![next.id, old],
+                |row| row.get(0),
+            )
+            .optional()?
+            .context("Stale revision: reload the message before acting")?;
+        let persisted_state = JobState::from_db(&persisted_state)
+            .context("Database contains an unknown job state")?;
+        ensure!(
+            persisted_state.can_transition_to(next.state),
+            "Illegal job-state transition: {} -> {}",
+            persisted_state.db(),
+            next.state.db()
+        );
         let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,received_at=COALESCE(?6,received_at),payload=?7 WHERE id=?1 AND revision=?8", params![next.id, next.state.db(), next.revision, next.updated_at.timestamp(), next.retry_at, received_at, self.vault.seal(&format!("item/{}", next.id), &next)?, old])?;
         ensure!(
             changed == 1,
@@ -1304,6 +1320,32 @@ mod tests {
         db.save(&mut a, "test", "first").unwrap();
         assert!(db.save(&mut b, "test", "stale").is_err());
     }
+    #[test]
+    fn save_rejects_illegal_persisted_state_transitions() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let id = stub("state-machine", "thread").id();
+        db.insert_stub(stub("state-machine", "thread"), Utc::now())
+            .unwrap();
+
+        let mut job = db.get(&id).unwrap();
+        job.state = JobState::Sent;
+        assert!(db.save(&mut job, "test", "illegal jump").is_err());
+        assert_eq!(db.get(&id).unwrap().state, JobState::Queued);
+
+        let mut job = db.get(&id).unwrap();
+        job.state = JobState::Ready;
+        db.save(&mut job, "test", "legal analysis result").unwrap();
+        let mut terminal = db.get(&id).unwrap();
+        terminal.state = JobState::Dismissed;
+        db.save(&mut terminal, "test", "legal dismissal").unwrap();
+
+        let mut reopen = db.get(&id).unwrap();
+        reopen.state = JobState::Ready;
+        assert!(db.save(&mut reopen, "test", "illegal reopen").is_err());
+        assert_eq!(db.get(&id).unwrap().state, JobState::Dismissed);
+    }
+
     #[test]
     fn crash_never_releases_reservation() {
         let d = tempfile::tempdir().unwrap();
