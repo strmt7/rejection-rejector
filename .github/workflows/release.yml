@@ -9,6 +9,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
   id-token: write
   attestations: write
@@ -37,6 +38,59 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_REF" = "refs/heads/main"
+      - name: Require green security and verification workflows for this exact commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'Rust CI',
+            'Supply-chain security',
+            'CodeQL Rust security',
+            'OpenSSF Scorecard'
+          )
+          $deadline = (Get-Date).AddMinutes(15)
+          while ($true) {
+            $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&per_page=100" | ConvertFrom-Json
+            $missing = @()
+            $pending = @()
+            foreach ($name in $required) {
+              $runs = @($payload.workflow_runs | Where-Object {
+                $_.name -eq $name -and $_.head_sha -eq $env:GITHUB_SHA
+              } | Sort-Object run_number -Descending)
+              if ($runs.Count -eq 0) {
+                $missing += $name
+                continue
+              }
+              $run = $runs[0]
+              if ($run.status -ne 'completed') {
+                $pending += "$name ($($run.status))"
+                continue
+              }
+              if ($run.conclusion -ne 'success') {
+                throw "Release gate failed: $name concluded '$($run.conclusion)' for $env:GITHUB_SHA"
+              }
+            }
+            if ($missing.Count -eq 0 -and $pending.Count -eq 0) {
+              Write-Host "All required workflows are green for $env:GITHUB_SHA"
+              break
+            }
+            if ((Get-Date) -ge $deadline) {
+              throw "Release gate timed out. Missing: $($missing -join ', '); pending: $($pending -join ', ')"
+            }
+            Write-Host "Waiting for exact-commit gates. Missing: $($missing -join ', '); pending: $($pending -join ', ')"
+            Start-Sleep -Seconds 15
+          }
+      - name: Confirm main has not moved during release gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $line = git ls-remote origin refs/heads/main
+          $remote = (($line -split '\s+')[0]).Trim()
+          if ($remote -ne $env:GITHUB_SHA) {
+            throw "main moved from $env:GITHUB_SHA to $remote while release validation was running; retrigger from the new head"
+          }
       - name: Pinned Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -67,7 +121,7 @@ jobs:
           mkdir -p artifacts
           find . -maxdepth 2 -name 'rejection-rejector.cdx.json' -exec cp {} artifacts/rejection-rejector.cdx.json \;
           test -s artifacts/rejection-rejector.cdx.json
-      - name: Assemble deterministic evidence package
+      - name: Assemble release evidence package
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
