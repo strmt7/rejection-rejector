@@ -11,6 +11,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
+pub const DATABASE_SCHEMA_VERSION: i64 = 4;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct BackupVerificationSummary {
     pub schema_version: i64,
@@ -206,7 +208,10 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 4, "Database belongs to a newer app version");
+        ensure!(
+            version <= DATABASE_SCHEMA_VERSION,
+            "Database belongs to a newer app version"
+        );
         if version > 0 {
             let existing_check: Option<Vec<u8>> = conn
                 .query_row(
@@ -289,14 +294,33 @@ impl Store {
             .query_row("PRAGMA user_version", [], |row| row.get(0))?)
     }
 
-    /// Validate SQLite structure and foreign-key integrity and authenticate the
-    /// vault marker before reporting the store as healthy.
-    pub fn integrity_check(&self) -> Result<()> {
-        check_connection_integrity(&self.conn)?;
+    /// Bounded runtime readiness check suitable for health endpoints.
+    ///
+    /// This authenticates the vault marker and audit-head metadata and confirms
+    /// the migrated schema, but deliberately does not scan every row/event.
+    pub fn readiness_check(&self) -> Result<()> {
+        let probe: i64 = self.conn.query_row("SELECT 1", [], |row| row.get(0))?;
+        ensure!(probe == 1, "Database readiness probe failed");
+        ensure!(
+            self.schema_version()? == DATABASE_SCHEMA_VERSION,
+            "Database schema is not at the current migrated version"
+        );
         let marker = self
             .meta::<String>("vault_check")?
             .context("Database vault marker is missing")?;
         ensure!(marker == "rejection-rejector:v1", "Wrong vault marker");
+        let head = self
+            .meta::<String>("audit_head")?
+            .context("Audit journal head is missing")?;
+        ensure!(valid_audit_hash(&head), "Audit journal head is invalid");
+        Ok(())
+    }
+
+    /// Deep database integrity check for explicit diagnostics/recovery operations.
+    /// This may scan SQLite structures and the complete tamper-evident audit chain.
+    pub fn integrity_check(&self) -> Result<()> {
+        self.readiness_check()?;
+        check_connection_integrity(&self.conn)?;
         self.verify_audit_chain()?;
         Ok(())
     }
@@ -1389,6 +1413,15 @@ mod tests {
             )
             .unwrap();
         assert!(db.verify_audit_chain().is_err());
+    }
+
+    #[test]
+    fn bounded_readiness_and_deep_integrity_both_pass_on_healthy_store() {
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.readiness_check().unwrap();
+        db.integrity_check().unwrap();
+        assert_eq!(db.schema_version().unwrap(), DATABASE_SCHEMA_VERSION);
     }
 
     #[test]
