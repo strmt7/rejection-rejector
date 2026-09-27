@@ -44,6 +44,12 @@ Local AI qualification now exercises all three reasoning stages—classification
 
 The headless CLI gained `rr doctor`, which reports only non-sensitive Gmail permission/configuration flags, schedule/mode, Ollama reachability, model pin/install state and current residency. CI also smoke-tests this command in an isolated encrypted workspace.
 
+## Professional hardening round — 27 September 2026
+
+Automatic mode now requires an independent deterministic clear-rejection phrase in the current de-quoted message in addition to the local model classification, same-model verification, conflict guards and fresh Gmail preflight. This is deliberately stricter than Human Review: a correlated model/verifier false positive can no longer authorize unattended sending on its own. Regression coverage includes ambiguous model-only negatives and quoted historical rejections.
+
+The 16 GiB quality profile now recommends the official `qwen3.5:9b-q8_0` Ollama build (about 11 GB in the registry) at 8,192 context. The previous Q4 build remains a lower-VRAM quick choice, while `gpt-oss:20b` remains an optional tighter-memory reasoning candidate. All choices still require the application's end-to-end qualification, digest pin and full-GPU-residency gate; registry size is not treated as physical VRAM certification.
+
 ## Final acceptance rule
 
 The deliverable is only considered build-verified when the newest `main` workflow completes successfully on both Windows and Linux after all of the rounds above. The Windows ZIP must contain an exact `COMMIT.txt`, toolchain evidence and SHA-256 manifests. Live Gmail consent/delivery, model accuracy on the owner's private corpus and physical 16 GiB GPU behavior remain explicit owner-environment acceptance checks.
