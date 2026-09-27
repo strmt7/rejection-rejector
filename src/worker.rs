@@ -140,10 +140,10 @@ impl Worker {
         }
     }
     pub fn command(&self, command: Command) {
-        if self.tx.try_send(command).is_err() {
-            if let Ok(mut s) = self.snapshot.lock() {
-                s.error = "Command queue is busy. Wait for the current operation to finish.".into();
-            }
+        if self.tx.try_send(command).is_err()
+            && let Ok(mut s) = self.snapshot.lock()
+        {
+            s.error = "Command queue is busy. Wait for the current operation to finish.".into();
         }
     }
     pub fn view(&self) -> Snapshot {
@@ -396,10 +396,10 @@ fn run(
                         "Internal API command reached the wrong dispatcher"
                     )),
                 };
-                if settings_changed {
-                    if let Ok(mut s) = shared.lock() {
-                        s.settings_revision += 1;
-                    }
+                if settings_changed
+                    && let Ok(mut s) = shared.lock()
+                {
+                    s.settings_revision += 1;
                 }
                 report(&shared, &result);
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
@@ -407,14 +407,13 @@ fn run(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
-        if let Ok(mut snapshot) = shared.lock() {
-            if snapshot
+        if let Ok(mut snapshot) = shared.lock()
+            && snapshot
                 .api_token_expires
                 .is_some_and(|until| Instant::now() >= until)
-            {
-                snapshot.api_token = None;
-                snapshot.api_token_expires = None;
-            }
+        {
+            snapshot.api_token = None;
+            snapshot.api_token_expires = None;
         }
         if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
             continue;
