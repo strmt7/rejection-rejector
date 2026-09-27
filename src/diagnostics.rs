@@ -29,9 +29,17 @@ pub fn report(engine: &Engine) -> Result<Value> {
     };
 
     let mut event_kinds = BTreeMap::<String, u64>::new();
+    let mut event_domains = BTreeMap::<String, u64>::new();
+    let mut event_severities = BTreeMap::<String, u64>::new();
     let latest = engine.db.latest_event_seq()?;
     for event in engine.db.events((latest - 200).max(0), 200)? {
         *event_kinds.entry(event.kind).or_default() += 1;
+        *event_domains
+            .entry(event.domain.as_str().to_owned())
+            .or_default() += 1;
+        *event_severities
+            .entry(event.severity.as_str().to_owned())
+            .or_default() += 1;
     }
 
     let qualification = engine.settings.task_qualification.as_ref().map(|q| {
@@ -119,7 +127,12 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "port": engine.settings.api_port,
             "read_only": true
         },
-        "recent_audit_event_kinds": event_kinds,
+        "recent_audit": {
+            "window": 200,
+            "event_kinds": event_kinds,
+            "domains": event_domains,
+            "severities": event_severities
+        },
         "note": "Redacted local diagnostic report. Review it before sharing. Rejection Rejector never uploads this report automatically."
     }))
 }
@@ -181,5 +194,7 @@ mod tests {
         assert_eq!(report["privacy"]["automatic_upload"], false);
         assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
+        assert!(report["recent_audit"]["domains"].is_object());
+        assert!(report["recent_audit"]["severities"].is_object());
     }
 }
