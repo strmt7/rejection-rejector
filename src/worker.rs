@@ -506,6 +506,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "delivery_reconciliation": true,
                     "events": true,
                     "database_integrity": true,
+                    "tamper_evident_audit_chain": true,
+                    "external_audit_anchor": true,
                     "verified_backup_bundle": true,
                     "task_model_bakeoff": true
                 },
@@ -524,7 +526,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 "healthy": integrity_ok,
                 "database": {
                     "integrity_ok": integrity_ok,
-                    "schema_version": e.db.schema_version()?
+                    "schema_version": e.db.schema_version()?,
+                    "audit_head": e.db.audit_head()?
                 },
                 "gmail": {
                     "connected": e.connected(),
@@ -542,6 +545,28 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 },
                 "counts": e.db.counts(&e.account)?,
                 "last_poll": e.last_poll()?
+            }))
+        }
+        "/v1/audit/anchor" => {
+            ensure!(query.is_empty(), "Audit anchor endpoint takes no query parameters");
+            e.db.verify_audit_chain()?;
+            Ok(json!({
+                "algorithm": "sha256-chain-v1",
+                "head": e.db.audit_head()?,
+                "verified": true
+            }))
+        }
+        "/v1/audit/contains" => {
+            ensure!(
+                query.keys().all(|key| key == "head"),
+                "Audit contains endpoint accepts only head"
+            );
+            let head = query
+                .get("head")
+                .context("Audit contains endpoint requires head")?;
+            Ok(json!({
+                "head": head,
+                "known": e.db.contains_audit_anchor(head)?
             }))
         }
         "/v1/status" => {
@@ -677,6 +702,31 @@ mod tests {
             .filter_map(|block| block["code"].as_str())
             .collect::<Vec<_>>();
         assert!(codes.contains(&"automatic_mode_not_armed"));
+    }
+
+    #[test]
+    fn audit_anchor_api_supports_external_rollback_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        let first = api_query(&engine, "/v1/audit/anchor").unwrap();
+        let head = first["head"].as_str().unwrap().to_owned();
+        assert_eq!(head.len(), 64);
+        engine.db.log("test.anchor.advance", None, "advance").unwrap();
+
+        let contains = api_query(&engine, &format!("/v1/audit/contains?head={head}")).unwrap();
+        assert_eq!(contains["known"], true);
+        assert_ne!(
+            api_query(&engine, "/v1/audit/anchor").unwrap()["head"],
+            head
+        );
+        assert!(api_query(&engine, "/v1/audit/contains?head=not-a-hash").is_err());
     }
 
     #[test]
