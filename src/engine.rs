@@ -1005,7 +1005,11 @@ pub fn automatic_policy(
         };
     };
     for message in mail::hard_blocks(email, account) {
-        block(AutomaticPolicyCode::MailboxSafetyBlock, message);
+        push_policy_block(
+            &mut blocks,
+            AutomaticPolicyCode::MailboxSafetyBlock,
+            message,
+        );
     }
 
     let Some(analysis) = job.analysis.as_ref() else {
@@ -1020,7 +1024,11 @@ pub fn automatic_policy(
         };
     };
     let Some(draft) = job.draft.as_ref() else {
-        block(AutomaticPolicyCode::DraftMissing, "Draft missing");
+        push_policy_block(
+            &mut blocks,
+            AutomaticPolicyCode::DraftMissing,
+            "Draft missing",
+        );
         return AutomaticPolicyDecision {
             eligible: false,
             blocks,
