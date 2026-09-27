@@ -111,7 +111,10 @@ impl Ollama {
         net::client(3, true)
             .and_then(|client| {
                 let response = client.get(self.url("/api/version")).send()?;
-                ensure!(response.status().is_success(), "Ollama version endpoint returned an error");
+                ensure!(
+                    response.status().is_success(),
+                    "Ollama version endpoint returned an error"
+                );
                 Ok(())
             })
             .is_ok()
@@ -634,7 +637,10 @@ mod tests {
     fn ollama_latest_tag_matches_an_untagged_configuration() {
         assert!(model_name_matches("qwen3.5", "qwen3.5:latest"));
         assert!(model_name_matches("example/model", "example/model:latest"));
-        assert!(model_name_matches("gemma4:12b-it-q8_0", "gemma4:12b-it-q8_0"));
+        assert!(model_name_matches(
+            "gemma4:12b-it-q8_0",
+            "gemma4:12b-it-q8_0"
+        ));
         assert!(!model_name_matches("gemma4:12b-it-q8_0", "gemma4:latest"));
         assert!(!model_name_matches("qwen3.5:9b", "qwen3.5:latest"));
     }
