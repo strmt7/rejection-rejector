@@ -130,25 +130,40 @@ mod tests {
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {
         let root = tempfile::tempdir().unwrap();
-        let engine = Engine::open(
+        let mut engine = Engine::open(
             root.path().to_path_buf(),
             true,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
+        engine.settings.signature = "SENSITIVE_SIGNATURE_CANARY".into();
+        engine.settings.candidate_context = "SENSITIVE_PROFILE_CANARY".into();
+        engine
+            .db
+            .set_meta("api_token", &"SENSITIVE_API_TOKEN_CANARY")
+            .unwrap();
+        engine
+            .db
+            .set_meta("refresh_token_test", &"SENSITIVE_REFRESH_TOKEN_CANARY")
+            .unwrap();
+
         let report = report(&engine).unwrap();
         let text = report.to_string();
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",
             "Alex Morgan",
-            "candidate_context",
-            "api_token",
-            "refresh_token",
+            "SENSITIVE_SIGNATURE_CANARY",
+            "SENSITIVE_PROFILE_CANARY",
+            "SENSITIVE_API_TOKEN_CANARY",
+            "SENSITIVE_REFRESH_TOKEN_CANARY",
         ] {
             assert!(!text.contains(forbidden), "diagnostics leaked {forbidden}");
         }
+        assert_eq!(report["privacy"]["contains_api_token"], false);
+        assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
+        assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
     }
