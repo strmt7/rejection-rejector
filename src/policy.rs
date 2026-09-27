@@ -19,7 +19,7 @@ pub struct EnterprisePolicy {
     pub allowed_models: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PolicyStatus {
     pub active: bool,
     pub digest: Option<String>,
@@ -30,6 +30,7 @@ pub struct PolicyStatus {
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
     pub allowed_model_count: usize,
+    pub allowed_models: Vec<String>,
 }
 
 impl EnterprisePolicy {
@@ -117,6 +118,7 @@ impl LoadedPolicy {
             min_cooldown_minutes: self.policy.min_cooldown_minutes,
             min_retention_days: self.policy.min_retention_days,
             allowed_model_count: self.policy.allowed_models.len(),
+            allowed_models: self.policy.allowed_models.clone(),
         }
     }
 }
@@ -132,6 +134,7 @@ pub fn inactive_status() -> PolicyStatus {
         min_cooldown_minutes: None,
         min_retention_days: None,
         allowed_model_count: 0,
+        allowed_models: vec![],
     }
 }
 
