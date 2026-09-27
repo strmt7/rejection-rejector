@@ -12,6 +12,7 @@ pub mod mail;
 pub mod net;
 pub mod oauth;
 pub mod ollama;
+pub mod policy;
 pub mod readiness;
 pub mod recovery;
 pub mod store;
