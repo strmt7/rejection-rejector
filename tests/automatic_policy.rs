@@ -2,7 +2,7 @@
 use chrono::{DateTime, Duration, Utc};
 use rejection_rejector::{
     config::{settings_context_hash, Mode, Settings, TaskQualification, PROMPT_VERSION},
-    engine::auto_blocks,
+    engine::{auto_blocks, automatic_policy, AutomaticPolicyCode},
     ollama,
     types::*,
 };
@@ -90,6 +90,23 @@ fn fully_qualified_synthetic_candidate_passes_policy_only() {
 #[test]
 fn no_automatic_consent_holds() {
     held(|_, s, _| s.automatic_confirmed = false);
+}
+#[test]
+fn policy_reason_codes_are_stable_and_machine_readable() {
+    let (job, mut settings, now) = eligible();
+    settings.automatic_confirmed = false;
+    let decision = automatic_policy(&job, &settings, "candidate@example.com", now);
+    assert!(!decision.eligible);
+    assert!(decision
+        .blocks
+        .iter()
+        .any(|block| block.code == AutomaticPolicyCode::AutomaticModeNotArmed));
+    let json = serde_json::to_value(&decision).unwrap();
+    assert!(json["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|block| block["code"] == "automatic_mode_not_armed"));
 }
 #[test]
 fn changed_draft_holds() {
