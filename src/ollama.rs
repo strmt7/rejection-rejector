@@ -1,5 +1,5 @@
 use crate::{
-    config::{Settings, GPU_BUDGET_BYTES, PROMPT_VERSION},
+    config::{Settings, GPU_BUDGET_BYTES, MIN_OLLAMA_VERSION, PROMPT_VERSION},
     mail, net,
     types::*,
 };
@@ -106,11 +106,34 @@ impl Ollama {
         format!("{}{path}", self.settings.ollama_url.trim_end_matches('/'))
     }
     pub fn healthy(&self) -> bool {
-        net::client(3, true)
-            .and_then(|c| net::json::<Value>(c.get(self.url("/api/version")).send()?, 32768))
-            .is_ok()
+        self.runtime_version().is_ok()
+    }
+    pub fn runtime_version(&self) -> Result<String> {
+        let value: Value = net::json(
+            net::client(3, true)?
+                .get(self.url("/api/version"))
+                .send()
+                .context("Ollama version check failed")?,
+            32768,
+        )?;
+        let version = value
+            .get("version")
+            .and_then(Value::as_str)
+            .context("Ollama did not report a runtime version")?
+            .trim()
+            .to_owned();
+        let parsed = parse_version(&version).context("Ollama returned an invalid version")?;
+        ensure!(
+            parsed >= MIN_OLLAMA_VERSION,
+            "Ollama {version} is too old; install the latest stable release (minimum supported {}.{}.{})",
+            MIN_OLLAMA_VERSION.0,
+            MIN_OLLAMA_VERSION.1,
+            MIN_OLLAMA_VERSION.2
+        );
+        Ok(version)
     }
     pub fn inspect(&self) -> Result<ModelStatus> {
+        self.runtime_version()?;
         let tags: Tags = net::json(
             net::client(10, true)?.get(self.url("/api/tags")).send()?,
             2 * 1024 * 1024,
@@ -467,6 +490,19 @@ impl Ollama {
         anyhow::bail!("Ollama did not become ready; inspect its local logs")
     }
 }
+fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
+    let core = value
+        .trim()
+        .trim_start_matches('v')
+        .split(['-', '+'])
+        .next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
 pub fn context_hash(s: &Settings) -> String {
     hash(format!(
         "{}\0{}\0{}\0{}",
@@ -570,6 +606,16 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_version_parser_orders_stable_releases() {
+        assert_eq!(parse_version("0.34.0"), Some((0, 34, 0)));
+        assert_eq!(parse_version("v0.34.1"), Some((0, 34, 1)));
+        assert_eq!(parse_version("0.34.0-rc1"), Some((0, 34, 0)));
+        assert!(parse_version("not-a-version").is_none());
+        assert!((0, 34, 0) >= MIN_OLLAMA_VERSION);
+        assert!((0, 33, 9) < MIN_OLLAMA_VERSION);
+    }
+
     #[test]
     fn ollama_latest_tag_matches_an_untagged_configuration() {
         assert!(model_name_matches("qwen3.5", "qwen3.5:latest"));
