@@ -52,7 +52,7 @@ pub enum Command {
         send: bool,
     },
     Disconnect,
-    Settings(Settings),
+    Settings(Box<Settings>),
     InstallOllama,
     StartOllama,
     PullModel,
@@ -270,7 +270,7 @@ fn run(
                         e.disconnect()
                     }
                     Command::Settings(s) => {
-                        let r = e.update_settings(s);
+                        let r = e.update_settings(*s);
                         settings_changed = r.is_ok();
                         r
                     }
