@@ -64,15 +64,17 @@ mod tests {
     #[test]
     fn ordinary_start_and_bounded_demo_window_are_valid() {
         assert!(Args::try_parse_from(["rr"]).is_ok());
-        assert!(Args::try_parse_from([
-            "rr",
-            "--demo",
-            "--demo-width",
-            "1180",
-            "--demo-height",
-            "760"
-        ])
-        .is_ok());
+        assert!(
+            Args::try_parse_from([
+                "rr",
+                "--demo",
+                "--demo-width",
+                "1180",
+                "--demo-height",
+                "760"
+            ])
+            .is_ok()
+        );
         assert!(Args::try_parse_from(["rr", "--demo", "--demo-width", "10"]).is_err());
     }
 }

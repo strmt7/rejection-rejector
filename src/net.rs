@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use std::{io::Read, time::Duration};

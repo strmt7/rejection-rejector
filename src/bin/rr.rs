@@ -4,8 +4,8 @@ use rejection_rejector::{config, engine::Engine, ollama::Ollama, recovery, worke
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -64,7 +64,9 @@ fn main() -> Result<()> {
                 paused.store(true, Ordering::SeqCst);
                 stop.store(true, Ordering::SeqCst);
             })?;
-            println!("Rejection Rejector worker running. Ctrl+C pauses dispatch and exits. Close the GUI before running this command.");
+            println!(
+                "Rejection Rejector worker running. Ctrl+C pauses dispatch and exits. Close the GUI before running this command."
+            );
             while !worker.stop.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_secs(1));
                 let s = worker.view();

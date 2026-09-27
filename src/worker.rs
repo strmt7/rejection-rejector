@@ -1,19 +1,19 @@
 use crate::{
     config::Settings,
-    engine::{automatic_policy, Engine},
+    engine::{Engine, automatic_policy},
     oauth,
     ollama::{self, ModelStatus, Ollama},
     types::*,
 };
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
-use crossbeam_channel::{bounded, Receiver, Sender};
-use serde_json::{json, Value};
+use crossbeam_channel::{Receiver, Sender, bounded};
+use serde_json::{Value, json};
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -276,7 +276,10 @@ fn run(
                         e.synchronize().map(|_| ())
                     }
                     Command::Connect { path, send } => {
-                        busy(&shared,"Complete Google sign-in in your browser. This expires after five minutes.");
+                        busy(
+                            &shared,
+                            "Complete Google sign-in in your browser. This expires after five minutes.",
+                        );
                         let r = e.connect(&path, send);
                         settings_changed = r.is_ok();
                         r
@@ -669,8 +672,7 @@ mod tests {
     use super::*;
     #[test]
     fn openapi_contract_covers_every_public_v1_route() {
-        let spec: serde_json::Value =
-            serde_json::from_str(crate::api::OPENAPI_DOCUMENT).unwrap();
+        let spec: serde_json::Value = serde_json::from_str(crate::api::OPENAPI_DOCUMENT).unwrap();
         let paths = spec["paths"].as_object().unwrap();
         for expected in [
             "/v1/live",

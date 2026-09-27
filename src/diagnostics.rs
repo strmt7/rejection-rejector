@@ -1,6 +1,6 @@
 use crate::{engine::Engine, ollama::Ollama, vault::write_new_private};
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
 pub fn report(engine: &Engine) -> Result<Value> {
@@ -9,12 +9,8 @@ pub fn report(engine: &Engine) -> Result<Value> {
         .ok()
         .map(|metadata| metadata.len());
     let counts = engine.db.counts(&engine.account)?;
-    let paused = engine
-        .paused
-        .load(std::sync::atomic::Ordering::SeqCst);
-    let stopping = engine
-        .stop
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
+    let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
     let readiness = crate::readiness::assess(
         &engine.settings,
         integrity.is_ok(),
@@ -142,7 +138,7 @@ pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::engine::Engine;
-    use std::sync::{atomic::AtomicBool, Arc};
+    use std::sync::{Arc, atomic::AtomicBool};
 
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {

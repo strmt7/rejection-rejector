@@ -1,12 +1,12 @@
 use crate::{
     mail, net,
-    oauth::{Credentials, Tokens, TOKEN_URL},
+    oauth::{Credentials, TOKEN_URL, Tokens},
     types::{Email, Source, Stub},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use base64::{
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
     Engine,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
 use chrono::{TimeZone, Utc};
 use mailparse::{MailHeaderMap, ParsedMail};

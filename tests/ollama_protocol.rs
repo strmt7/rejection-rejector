@@ -1,14 +1,14 @@
 //! Mock HTTP protocol tests, not real-model accuracy or physical-GPU measurements.
 use rejection_rejector::{
-    config::{Settings, DEFAULT_MODEL},
-    ollama::{sample_email, Ollama},
+    config::{DEFAULT_MODEL, Settings},
+    ollama::{Ollama, sample_email},
     types::Category,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -166,10 +166,12 @@ fn three_stage_protocol_binds_draft_and_model_and_uses_reasoning() {
         assert!(call["format"].is_object());
         assert!(call.get("tools").is_none());
     }
-    assert!(calls[2]["messages"][1]["content"]
-        .as_str()
-        .unwrap()
-        .contains("trusted_signature"));
+    assert!(
+        calls[2]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("trusted_signature")
+    );
 }
 #[test]
 fn qualification_exercises_classification_drafting_verification_and_residency() {
@@ -185,10 +187,12 @@ fn qualification_exercises_classification_drafting_verification_and_residency() 
 #[test]
 fn generated_reply_outside_length_envelope_is_rejected() {
     let f = Fixture::new(Scenario::BadLength);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert_eq!(f.warms.lock().unwrap().len(), 1);
     assert_eq!(f.chats.lock().unwrap().len(), 2);
 }
@@ -196,10 +200,12 @@ fn generated_reply_outside_length_envelope_is_rejected() {
 #[test]
 fn altered_signature_is_rejected_before_verification() {
     let f = Fixture::new(Scenario::BadSignature);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert_eq!(f.warms.lock().unwrap().len(), 1);
     assert_eq!(f.chats.lock().unwrap().len(), 2);
 }
@@ -217,20 +223,24 @@ fn qualification_rejects_a_failed_reply_verifier() {
 #[test]
 fn fabricated_evidence_prevents_drafting() {
     let f = Fixture::new(Scenario::InventedEvidence);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert_eq!(f.chats.lock().unwrap().len(), 1);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
 #[test]
 fn truncated_generation_prevents_drafting() {
     let f = Fixture::new(Scenario::Truncated);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert_eq!(f.chats.lock().unwrap().len(), 1);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
 }
@@ -250,10 +260,12 @@ fn local_non_gguf_model_formats_are_allowed_when_residency_passes() {
 #[test]
 fn cloud_marker_blocks_before_any_email_inference() {
     let f = Fixture::new(Scenario::Remote);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert!(f.chats.lock().unwrap().is_empty());
     assert!(f.warms.lock().unwrap().is_empty());
 }
@@ -269,10 +281,12 @@ fn changed_digest_blocks_before_any_email_inference() {
 #[test]
 fn cpu_offload_is_blocked_before_private_email_inference() {
     let f = Fixture::new(Scenario::CpuOnly);
-    assert!(Ollama::new(&f.settings())
-        .unwrap()
-        .analyze(&email())
-        .is_err());
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
     assert_eq!(f.warms.lock().unwrap().len(), 1);
     assert!(f.chats.lock().unwrap().is_empty());
 }

@@ -208,11 +208,7 @@ impl JobState {
             ),
             Self::Ready | Self::Attention => matches!(
                 next,
-                Self::Queued
-                    | Self::Attention
-                    | Self::Dismissed
-                    | Self::Deferred
-                    | Self::Sending
+                Self::Queued | Self::Attention | Self::Dismissed | Self::Deferred | Self::Sending
             ),
             Self::Deferred => next == Self::Queued,
             Self::Sending => matches!(next, Self::Attention | Self::Sent | Self::Uncertain),
@@ -283,7 +279,6 @@ pub struct AuditEvent {
     pub item_id: Option<String>,
     pub detail: String,
 }
-
 
 #[cfg(test)]
 mod job_state_tests {

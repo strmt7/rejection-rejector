@@ -2,7 +2,7 @@ use crate::{
     store::Store,
     vault::{private_dir, write_new_private},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

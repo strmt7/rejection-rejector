@@ -1,13 +1,13 @@
 use crate::{
     config::{
-        settings_context_hash, Settings, GPU_BUDGET_BYTES, MIN_OLLAMA_VERSION, PROMPT_VERSION,
+        GPU_BUDGET_BYTES, MIN_OLLAMA_VERSION, PROMPT_VERSION, Settings, settings_context_hash,
     },
     mail, net,
     types::*,
 };
-use anyhow::{ensure, Context, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read},
     path::PathBuf,
@@ -223,7 +223,10 @@ impl Ollama {
         let data = payload.to_string();
         // Conservative byte-based budget plus template allowance; never silently truncate a request.
         let predict = 1536u32;
-        ensure!(system.len()+data.len()+predict as usize+512<=self.settings.num_ctx as usize,"Input exceeds safe context budget. Shorten candidate context/reply or select 16384 context and requalify the GPU");
+        ensure!(
+            system.len() + data.len() + predict as usize + 512 <= self.settings.num_ctx as usize,
+            "Input exceeds safe context budget. Shorten candidate context/reply or select 16384 context and requalify the GPU"
+        );
         let result:Chat=net::json(net::client(self.settings.llm_timeout_seconds,true)?.post(self.url("/api/chat"))
             .json(&json!({"model":self.settings.model,"stream":false,"think":true,"keep_alive":"5m","format":schema,
                 "messages":[{"role":"system","content":system},{"role":"user","content":data}],
@@ -246,7 +249,10 @@ impl Ollama {
         let mut pinned = self.settings.clone();
         pinned.model_digest = Some(info.digest.clone());
         let candidate = Self::new(&pinned)?;
-        let email=sample_email("Your application","Thank you for applying for the engineer position. We have decided not to move forward with your application.");
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying for the engineer position. We have decided not to move forward with your application.",
+        );
         let (analysis, draft, flags) = candidate.analyze(&email)?;
         ensure!(
             analysis.verdict.category == Category::Rejection,
@@ -672,18 +678,22 @@ mod tests {
         )
         .unwrap();
         verdict.company = "Invented Corp".into();
-        assert!(validate_verdict(
-            &verdict,
-            "Acme says your Process Engineer application was not selected",
-        )
-        .is_err());
+        assert!(
+            validate_verdict(
+                &verdict,
+                "Acme says your Process Engineer application was not selected",
+            )
+            .is_err()
+        );
         verdict.company.clear();
         verdict.position = "Quantum Wizard".into();
-        assert!(validate_verdict(
-            &verdict,
-            "Acme says your Process Engineer application was not selected",
-        )
-        .is_err());
+        assert!(
+            validate_verdict(
+                &verdict,
+                "Acme says your Process Engineer application was not selected",
+            )
+            .is_err()
+        );
     }
 
     #[test]

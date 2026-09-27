@@ -1,6 +1,6 @@
 use crate::net;
-use anyhow::{bail, ensure, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use anyhow::{Context, Result, bail, ensure};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -163,7 +163,10 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
                         "Authorization not accepted. Retry from the application.",
                     )
                 };
-                let response=format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",text.len());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
                 let _ = stream.write_all(response.as_bytes());
                 if let Ok(Some(code)) = result {
                     break code;
@@ -196,7 +199,9 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     let can_send = granted.split_whitespace().any(|s| s == SEND_SCOPE);
     ensure!(!send || can_send, "Gmail send permission was not granted");
     let Some(refresh_token) = tokens.refresh_token else {
-        bail!("No refresh token returned. Revoke this app's old consent in your Google account and reconnect");
+        bail!(
+            "No refresh token returned. Revoke this app's old consent in your Google account and reconnect"
+        );
     };
     Ok(Credentials {
         client_id: config.installed.client_id,
