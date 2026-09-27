@@ -1,5 +1,7 @@
 use crate::{
-    config::{Settings, GPU_BUDGET_BYTES, MIN_OLLAMA_VERSION, PROMPT_VERSION},
+    config::{
+        settings_context_hash, Settings, GPU_BUDGET_BYTES, MIN_OLLAMA_VERSION, PROMPT_VERSION,
+    },
     mail, net,
     types::*,
 };
@@ -520,14 +522,8 @@ fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-pub fn context_hash(s: &Settings) -> String {
-    hash(format!(
-        "{}\0{}\0{}\0{}",
-        s.candidate_context,
-        s.signature,
-        s.tone.instruction(),
-        s.num_ctx
-    ))
+pub fn context_hash(settings: &Settings) -> String {
+    settings_context_hash(settings)
 }
 pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
     ensure!(
