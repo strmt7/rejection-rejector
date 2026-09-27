@@ -861,6 +861,22 @@ impl App {
                         self.worker.command(Command::Backup { out });
                     }
                 }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Export diagnostics…"),
+                    )
+                    .on_hover_text("Writes a redacted JSON report locally. No email content, account address, recipients, OAuth credentials, API token, signature or candidate facts are included.")
+                    .clicked()
+                {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Save Rejection Rejector diagnostics")
+                        .set_file_name("rejection-rejector-diagnostics.json")
+                        .save_file()
+                    {
+                        self.worker.command(Command::Diagnostics { out: path });
+                    }
+                }
             });
             ui.label(
                 RichText::new("Backups preserve the encrypted database and vault identifier. Recovery on another machine still requires the original OS-protected master key.")
