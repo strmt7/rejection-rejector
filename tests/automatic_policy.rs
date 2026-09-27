@@ -1,7 +1,7 @@
 //! Pure-policy regression tests: no network, credentials, live model or email sending.
 use chrono::{DateTime, Duration, Utc};
 use rejection_rejector::{
-    config::{Mode, Settings, PROMPT_VERSION},
+    config::{settings_context_hash, Mode, Settings, TaskQualification, PROMPT_VERSION},
     engine::auto_blocks,
     ollama,
     types::*,
@@ -9,7 +9,7 @@ use rejection_rejector::{
 
 fn eligible() -> (Job, Settings, DateTime<Utc>) {
     let now = Utc::now();
-    let settings = Settings {
+    let mut settings = Settings {
         mode: Mode::Automatic,
         sending_enabled: true,
         automatic_confirmed: true,
@@ -18,6 +18,15 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
         model_digest: Some("a".repeat(64)),
         ..Settings::default()
     };
+    settings.task_qualification = Some(TaskQualification {
+        model: settings.model.clone(),
+        digest: settings.model_digest.clone().unwrap(),
+        prompt_version: PROMPT_VERSION.into(),
+        context_hash: settings_context_hash(&settings),
+        task_score: 100.0,
+        fixture_count: 32,
+        qualified_at: now - Duration::hours(2),
+    });
     settings.validate().unwrap();
     let mut email = ollama::sample_email(
         "Your engineer application",
@@ -103,6 +112,12 @@ fn changed_candidate_facts_hold() {
 #[test]
 fn changed_model_digest_holds() {
     held(|_, s, _| s.model_digest = Some("b".repeat(64)));
+}
+#[test]
+fn stale_task_qualification_holds() {
+    held(|_, s, _| {
+        s.task_qualification.as_mut().unwrap().context_hash = "b".repeat(64);
+    });
 }
 #[test]
 fn truncated_input_holds() {
