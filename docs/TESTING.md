@@ -31,15 +31,23 @@ Actual image inspection found and led to fixes for a horizontal-layout inheritan
 
 Screenshot/view/size switches require --demo, so automated capture cannot open a real mailbox. Demo content and responses are synthetic, not claims about real model behavior.
 
-## Model evaluation
+## Model evaluation and task-specific model selection
 
-With the desktop application closed, run:
+With the desktop application closed, run the configured model through the complete synthetic recruiting pipeline:
 
 ```powershell
 .\rr.exe evaluate --out .\model-evaluation.json
 ```
 
-This first runs the same full local qualification used by the app (classification, draft, verification and GPU-residency checks), then records actual classification results from the configured local model on 32 synthetic fixtures spanning English, German, French, Italian, Spanish, Portuguese, Dutch and Greek, including mixed/quoted/suspicious cases without sending email. The report includes exact digest/context, accuracy, rejection true/false positives and false negatives, precision, recall and mean per-case latency. No model score is prefilled. The corpus is still a regression aid, not representative production accuracy or a best-model ranking.
+To compare curated candidate models that you have **explicitly installed** in Ollama:
+
+```powershell
+.\rr.exe compare-models --out .\model-bakeoff.json
+```
+
+The comparison never downloads multiple large models implicitly. It skips absent candidates.
+
+Each evaluated model first runs the same local qualification used by the app, then processes all 32 synthetic fixtures through the complete classification/draft/verification pipeline. The report tracks classification accuracy, rejection false positives/false negatives, verified rejection-draft success, unsafe drafts on non-rejections, latency and residency. The application-specific score weights non-rejection false-positive avoidance most heavily because replying to an interview, offer, quoted old rejection or injected message is the costliest error here. The report includes exact digest/context, accuracy, rejection true/false positives and false negatives, precision, recall and mean per-case latency. No model score is prefilled. The corpus is still a regression aid, not representative production accuracy or a best-model ranking.
 
 ## Remaining owner-environment acceptance
 
