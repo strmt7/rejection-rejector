@@ -700,6 +700,26 @@ impl App {
                     }
                 });
                 ui.label("Administrator policy is enforced at startup and on every settings update; locked controls cannot be bypassed through the GUI.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Policy provenance");
+                    if s.enterprise_policy.digest_pin_enforced {
+                        Self::badge(
+                            ui,
+                            if s.enterprise_policy.digest_pin_matches {
+                                "DIGEST PIN VERIFIED"
+                            } else {
+                                "DIGEST PIN MISMATCH"
+                            },
+                            if s.enterprise_policy.digest_pin_matches {
+                                MINT
+                            } else {
+                                Color32::LIGHT_RED
+                            },
+                        );
+                    } else {
+                        Self::badge(ui, "ACL / FILE TRUST ONLY", AMBER);
+                    }
+                });
                 let mut constraints = Vec::<String>::new();
                 if s.enterprise_policy.force_human_review {
                     constraints.push("Human Review forced".into());
