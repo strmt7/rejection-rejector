@@ -71,12 +71,13 @@ pub fn start(
     token: String,
     commands: Sender<Command>,
     stop: Arc<AtomicBool>,
+    disabled: Arc<AtomicBool>,
 ) -> Result<()> {
     ensure!(token.len() >= 40, "API token lacks required entropy");
     let server = Server::http(format!("127.0.0.1:{port}"))
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
-        while !stop.load(Ordering::SeqCst) {
+        while !stop.load(Ordering::SeqCst) && !disabled.load(Ordering::SeqCst) {
             let request = match server.recv_timeout(Duration::from_millis(250)) {
                 Ok(Some(r)) => r,
                 Ok(None) => continue,
