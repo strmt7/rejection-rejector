@@ -193,7 +193,8 @@ fn quoted_old_rejection_does_not_authorize_automatic_reply() {
         let analysis = j.analysis.as_mut().unwrap();
         analysis.verdict.category = Category::Rejection;
         analysis.verdict.confidence = 99;
-        analysis.verdict.evidence = "We have decided not to move forward with your application.".into();
+        analysis.verdict.evidence =
+            "We have decided not to move forward with your application.".into();
         analysis.email_fingerprint = email.fingerprint();
     });
 }
