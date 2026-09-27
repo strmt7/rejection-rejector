@@ -1,5 +1,8 @@
 use crate::{
-    config::{settings_context_hash, Mode, Settings, TaskQualification, PROMPT_VERSION},
+    config::{
+        evaluation_suite_hash, settings_context_hash, Mode, Settings, TaskQualification,
+        PROMPT_VERSION,
+    },
     evaluation,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
     mail,
@@ -393,6 +396,7 @@ impl Engine {
                 digest: digest.clone(),
                 prompt_version: PROMPT_VERSION.into(),
                 context_hash: settings_context_hash(&self.settings),
+                suite_hash: evaluation_suite_hash(),
                 task_score,
                 fixture_count: u32::try_from(fixture_count)
                     .context("Evaluation fixture count is outside supported range")?,
@@ -1084,7 +1088,8 @@ pub fn automatic_policy(
             if qualification.model == settings.model
                 && Some(&qualification.digest) == settings.model_digest.as_ref()
                 && qualification.prompt_version == PROMPT_VERSION
-                && qualification.context_hash == settings_context_hash(settings) => {}
+                && qualification.context_hash == settings_context_hash(settings)
+                && qualification.suite_hash == evaluation_suite_hash() => {}
         _ => push_policy_block(
             &mut blocks,
             AutomaticPolicyCode::TaskQualificationStale,
