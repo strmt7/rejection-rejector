@@ -8,6 +8,7 @@ use rusqlite::{
     backup::Backup, params, Connection, OptionalExtension, Transaction, TransactionBehavior,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
 pub struct Store {
@@ -22,6 +23,23 @@ fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> 
     );
     Ok(job)
 }
+const AUDIT_GENESIS: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+fn audit_hash(previous_hash: &str, event_id: &str, payload: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"rejection-rejector-audit-v1\0");
+    for part in [previous_hash.as_bytes(), event_id.as_bytes(), payload] {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn valid_audit_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn event(
     tx: &Transaction<'_>,
     vault: &Vault,
@@ -38,10 +56,112 @@ fn event(
         item_id: item.map(str::to_owned),
         detail: detail.into(),
     };
+    let payload = vault.seal(&format!("event/{id}"), &e)?;
+    let previous_hash: Option<String> = tx
+        .query_row(
+            "SELECT event_hash FROM events ORDER BY seq DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let previous_hash = previous_hash.unwrap_or_else(|| AUDIT_GENESIS.to_owned());
+    ensure!(
+        valid_audit_hash(&previous_hash),
+        "Audit journal predecessor hash is invalid"
+    );
+    let event_hash = audit_hash(&previous_hash, &id, &payload);
     tx.execute(
-        "INSERT INTO events(event_id,payload) VALUES(?1,?2)",
-        params![id, vault.seal(&format!("event/{id}"), &e)?],
+        "INSERT INTO events(event_id,payload,prev_hash,event_hash) VALUES(?1,?2,?3,?4)",
+        params![id, payload, previous_hash, event_hash],
     )?;
+    tx.execute(
+        "INSERT INTO meta(name,payload) VALUES('audit_head',?1)
+         ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
+        [vault.seal("meta/audit_head", &event_hash)?],
+    )?;
+    Ok(())
+}
+
+fn migrate_audit_chain(conn: &Connection, vault: &Vault) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "ALTER TABLE events ADD COLUMN prev_hash TEXT;
+         ALTER TABLE events ADD COLUMN event_hash TEXT;",
+    )?;
+    let rows: Vec<(i64, String, Vec<u8>)> = {
+        let mut query = tx.prepare("SELECT seq,event_id,payload FROM events ORDER BY seq")?;
+        let mapped = query.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        mapped.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+
+    let mut previous_hash = AUDIT_GENESIS.to_owned();
+    for (seq, event_id, payload) in rows {
+        let event_hash = audit_hash(&previous_hash, &event_id, &payload);
+        tx.execute(
+            "UPDATE events SET prev_hash=?2,event_hash=?3 WHERE seq=?1",
+            params![seq, previous_hash, event_hash],
+        )?;
+        previous_hash = event_hash;
+    }
+    tx.execute(
+        "INSERT INTO meta(name,payload) VALUES('audit_head',?1)
+         ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
+        [vault.seal("meta/audit_head", &previous_hash)?],
+    )?;
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS events_hash ON events(event_hash);
+         PRAGMA user_version=4;",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn verify_audit_chain_connection(conn: &Connection, vault: &Vault) -> Result<()> {
+    let encrypted_head: Vec<u8> = conn
+        .query_row(
+            "SELECT payload FROM meta WHERE name='audit_head'",
+            [],
+            |row| row.get(0),
+        )
+        .context("Audit journal head is missing")?;
+    let expected_head: String = vault.open_value("meta/audit_head", &encrypted_head)?;
+    ensure!(
+        valid_audit_hash(&expected_head),
+        "Audit journal head is invalid"
+    );
+
+    let mut query =
+        conn.prepare("SELECT event_id,payload,prev_hash,event_hash FROM events ORDER BY seq")?;
+    let rows = query.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Vec<u8>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    let mut previous_hash = AUDIT_GENESIS.to_owned();
+    for row in rows {
+        let (event_id, payload, stored_previous, stored_hash) = row?;
+        ensure!(
+            stored_previous == previous_hash,
+            "Audit journal chain link mismatch"
+        );
+        ensure!(
+            valid_audit_hash(&stored_hash),
+            "Audit journal event hash is invalid"
+        );
+        let computed = audit_hash(&stored_previous, &event_id, &payload);
+        ensure!(computed == stored_hash, "Audit journal event was modified");
+        previous_hash = stored_hash;
+    }
+    ensure!(
+        previous_hash == expected_head,
+        "Audit journal head does not match stored events"
+    );
     Ok(())
 }
 fn check_connection_integrity(conn: &Connection) -> Result<()> {
@@ -76,7 +196,7 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 3, "Database belongs to a newer app version");
+        ensure!(version <= 4, "Database belongs to a newer app version");
         if version > 0 {
             let existing_check: Option<Vec<u8>> = conn
                 .query_row(
@@ -100,13 +220,19 @@ impl Store {
                 CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
-                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);")?;
+                CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL,prev_hash TEXT NOT NULL,event_hash TEXT NOT NULL);
+                CREATE UNIQUE INDEX events_hash ON events(event_hash);")?;
             let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
+            let audit_head = vault.seal("meta/audit_head", &AUDIT_GENESIS)?;
             conn.execute(
                 "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
                 [marker],
             )?;
-            conn.execute_batch("PRAGMA user_version=3; COMMIT;")?;
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('audit_head',?1)",
+                [audit_head],
+            )?;
+            conn.execute_batch("PRAGMA user_version=4; COMMIT;")?;
         } else if version == 1 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE items ADD COLUMN received_at INTEGER;
@@ -129,17 +255,23 @@ impl Store {
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 PRAGMA user_version=3; COMMIT;")?;
-        } else {
+        } else if version >= 3 {
             conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
                  CREATE INDEX IF NOT EXISTS deliveries_thread_state ON deliveries(thread_key,status);",
             )?;
+        }
+        let current_version: i64 =
+            conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version == 3 {
+            migrate_audit_chain(&conn, &vault)?;
         }
         let db = Self { conn, vault };
         let check = db
             .meta::<String>("vault_check")?
             .context("Database vault marker is missing after initialization")?;
         ensure!(check == "rejection-rejector:v1", "Wrong vault");
+        db.verify_audit_chain()?;
         Ok(db)
     }
     pub fn schema_version(&self) -> Result<i64> {
@@ -156,7 +288,12 @@ impl Store {
             .meta::<String>("vault_check")?
             .context("Database vault marker is missing")?;
         ensure!(marker == "rejection-rejector:v1", "Wrong vault marker");
+        self.verify_audit_chain()?;
         Ok(())
+    }
+
+    pub fn verify_audit_chain(&self) -> Result<()> {
+        verify_audit_chain_connection(&self.conn, &self.vault)
     }
 
     /// Create a consistent online copy of the encrypted SQLite database.
@@ -224,6 +361,7 @@ impl Store {
             marker == "rejection-rejector:v1",
             "Backup belongs to another vault"
         );
+        verify_audit_chain_connection(&connection, &self.vault)?;
         Ok(version)
     }
 
@@ -823,7 +961,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         let markers: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM meta WHERE name='vault_check'",
