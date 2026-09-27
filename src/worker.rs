@@ -60,6 +60,8 @@ pub enum Command {
     QualifyModel,
     EvaluateModel,
     CompareModels,
+    IntegrityCheck,
+    Backup { out: PathBuf },
     List {
         review: bool,
         page: u32,
@@ -306,6 +308,14 @@ fn run(
                             "Comparing installed candidate models on the recruiting-email pipeline…",
                         );
                         e.compare_models().map(|_| ())
+                    }
+                    Command::IntegrityCheck => {
+                        busy(&shared, "Checking encrypted database integrity…");
+                        e.db.integrity_check()
+                    }
+                    Command::Backup { out } => {
+                        busy(&shared, "Creating and verifying encrypted same-vault backup…");
+                        crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
                     }
                     Command::List { review: r, page: p } => {
                         review = r;
