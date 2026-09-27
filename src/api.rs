@@ -11,6 +11,7 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 use tiny_http::{Header, Method, Response, Server};
+use zeroize::Zeroizing;
 
 pub const API_VERSION: u32 = 1;
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
@@ -69,6 +70,7 @@ pub fn start(
     disabled: Arc<AtomicBool>,
 ) -> Result<()> {
     ensure!(token.len() >= 40, "API token lacks required entropy");
+    let token = Zeroizing::new(token);
     let server = Server::http(format!("127.0.0.1:{port}"))
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
@@ -82,7 +84,7 @@ pub fn start(
             let auth = unique_header(request.headers(), "Authorization");
             let host = unique_header(request.headers(), "Host");
             let origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
-            let (status, body) = if !authorized(auth, &token)
+            let (status, body) = if !authorized(auth, token.as_str())
                 || host != Some(format!("127.0.0.1:{port}").as_str())
                 || origin
             {
