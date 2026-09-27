@@ -379,7 +379,7 @@ fn restore_backup_with_vault(
         );
     }
 
-    let report = RestoreReport {
+    let mut report = RestoreReport {
         format_version: 1,
         restored_at: Utc::now(),
         source_backup_created_at: manifest.created_at,
@@ -395,10 +395,15 @@ fn restore_backup_with_vault(
         }),
         note: "Restore completed after staged same-vault authentication and post-install verification. Previous database files are retained under the recovery directory when present.".into(),
     };
-    write_new_private(
-        &rollback_dir.join("restore-report.json"),
-        &serde_json::to_vec_pretty(&report)?,
-    )?;
+    let report_path = rollback_dir.join("restore-report.json");
+    if let Err(error) = serde_json::to_vec_pretty(&report)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| write_new_private(&report_path, &bytes))
+    {
+        report.note.push_str(&format!(
+            " The optional local restore-report file could not be written: {error}"
+        ));
+    }
     Ok(report)
 }
 
