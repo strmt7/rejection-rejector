@@ -1,4 +1,7 @@
-use crate::{store::Store, vault::{private_dir, write_new_private}};
+use crate::{
+    store::Store,
+    vault::{private_dir, write_new_private},
+};
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -50,12 +53,20 @@ fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
         path.display()
     );
     let metadata = fs::metadata(path)?;
-    ensure!(metadata.len() <= limit, "{} exceeds size limit", path.display());
+    ensure!(
+        metadata.len() <= limit,
+        "{} exceeds size limit",
+        path.display()
+    );
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     fs::File::open(path)?
         .take(limit + 1)
         .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= limit, "{} exceeds size limit", path.display());
+    ensure!(
+        bytes.len() as u64 <= limit,
+        "{} exceeds size limit",
+        path.display()
+    );
     Ok(bytes)
 }
 
