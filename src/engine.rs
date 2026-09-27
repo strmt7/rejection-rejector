@@ -303,14 +303,15 @@ impl Engine {
             "Synthetic demo mode does not run installed local models"
         );
         let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-        let path = self
-            .directory
-            .join(format!("model-bakeoff-{stamp}.json"));
+        let path = self.directory.join(format!("model-bakeoff-{stamp}.json"));
         evaluation::compare_installed(&self.settings, &path)?;
         self.db.log(
             "models.compared",
             None,
-            &format!("Task-specific installed-model bake-off saved as {}", path.display()),
+            &format!(
+                "Task-specific installed-model bake-off saved as {}",
+                path.display()
+            ),
         )?;
         Ok(path)
     }
