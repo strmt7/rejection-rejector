@@ -2,6 +2,7 @@
 //! Native local-first core. Constructing this library never sends email.
 pub mod api;
 pub mod config;
+pub mod diagnostics;
 pub mod engine;
 pub mod evaluation;
 pub mod gmail;
