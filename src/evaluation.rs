@@ -1,5 +1,5 @@
 use crate::{
-    config::{Settings, MODEL_CANDIDATES},
+    config::{evaluation_suite_hash, Settings, EVALUATION_CONTRACT_VERSION, MODEL_CANDIDATES},
     mail,
     ollama::{sample_email, Ollama},
     types::Category,
@@ -178,6 +178,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
 
     Ok(serde_json::json!({
         "timestamp": chrono::Utc::now(),
+        "suite": EVALUATION_CONTRACT_VERSION,
+        "suite_hash": evaluation_suite_hash(),
         "model": pinned.model,
         "digest": qualified.digest,
         "context": pinned.num_ctx,
@@ -255,7 +257,8 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
 
     let report = serde_json::json!({
         "timestamp": chrono::Utc::now(),
-        "suite": "rejection-rejector-task-bakeoff-v1",
+        "suite": EVALUATION_CONTRACT_VERSION,
+        "suite_hash": evaluation_suite_hash(),
         "weights": {
             "non_rejection_false_positive_avoidance": 0.35,
             "rejection_recall": 0.20,
@@ -331,6 +334,14 @@ mod tests {
         assert!(tags.contains("granite4.2:8b-q8_0"));
         assert!(tags.contains("gemma4:12b-it-q8_0"));
         assert!(tags.contains("ministral-3:14b"));
+    }
+
+    #[test]
+    fn suite_fingerprint_is_stable_shape_and_content_bound() {
+        let hash = evaluation_suite_hash();
+        assert_eq!(hash.len(), 64);
+        assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(hash, crate::config::settings_context_hash(&Settings::default()));
     }
 
     #[test]
