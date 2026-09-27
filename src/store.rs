@@ -11,6 +11,16 @@ use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
+#[derive(Clone, Debug, Serialize)]
+pub struct BackupVerificationSummary {
+    pub schema_version: i64,
+    pub audit_head: Option<String>,
+    pub metadata_records: u64,
+    pub item_records: u64,
+    pub audit_events: u64,
+    pub delivery_records: u64,
+}
+
 pub struct Store {
     conn: Connection,
     vault: Vault,
@@ -352,7 +362,7 @@ impl Store {
 
     /// Verify a backup without modifying it. The encrypted vault marker must
     /// authenticate under this Store's current master key.
-    pub fn verify_backup_file(&self, path: &Path) -> Result<(i64, Option<String>)> {
+    pub fn verify_backup_file(&self, path: &Path) -> Result<BackupVerificationSummary> {
         ensure!(path.is_file(), "Backup database file is missing");
         ensure!(
             !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
@@ -363,12 +373,28 @@ impl Store {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         check_connection_integrity(&connection)?;
-        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_version = self.schema_version()?;
         ensure!(
             (1..=current_version).contains(&version),
             "Backup schema version is not supported by this application"
         );
+
+        let mut metadata_records = 0u64;
+        {
+            let mut statement = connection.prepare("SELECT name,payload FROM meta ORDER BY name")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (name, payload) = row?;
+                let _: serde_json::Value =
+                    self.vault.open_value(&format!("meta/{name}"), &payload)?;
+                metadata_records += 1;
+            }
+        }
+
         let encrypted: Vec<u8> = connection
             .query_row(
                 "SELECT payload FROM meta WHERE name='vault_check'",
@@ -381,6 +407,77 @@ impl Store {
             marker == "rejection-rejector:v1",
             "Backup belongs to another vault"
         );
+
+        let mut item_records = 0u64;
+        {
+            let mut statement =
+                connection.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, payload, revision, state) = row?;
+                decode(&self.vault, &id, &payload, revision, &state)?;
+                item_records += 1;
+            }
+        }
+
+        let mut audit_events = 0u64;
+        {
+            let mut statement =
+                connection.prepare("SELECT event_id,payload FROM events ORDER BY seq")?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (event_id, payload) = row?;
+                let _: AuditEvent =
+                    self.vault.open_value(&format!("event/{event_id}"), &payload)?;
+                audit_events += 1;
+            }
+        }
+
+        let orphan_deliveries: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM deliveries d LEFT JOIN items i ON i.id=d.item_id WHERE i.id IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            orphan_deliveries == 0,
+            "Backup contains {orphan_deliveries} delivery record(s) without an item"
+        );
+
+        let mut delivery_records = 0u64;
+        {
+            let mut statement = connection.prepare(
+                "SELECT item_id,status,provider_id FROM deliveries ORDER BY item_id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (item_id, status, provider_id) = row?;
+                ensure!(
+                    matches!(status.as_str(), "reserved" | "uncertain" | "sent"),
+                    "Backup contains unknown delivery state"
+                );
+                if let Some(payload) = provider_id {
+                    let _: String =
+                        self.vault.open_value(&format!("delivery/{item_id}"), &payload)?;
+                }
+                delivery_records += 1;
+            }
+        }
+
         let audit_head = if version >= 4 {
             verify_audit_chain_connection(&connection, &self.vault)?;
             let encrypted: Vec<u8> = connection.query_row(
@@ -394,7 +491,15 @@ impl Store {
         } else {
             None
         };
-        Ok((version, audit_head))
+
+        Ok(BackupVerificationSummary {
+            schema_version: version,
+            audit_head,
+            metadata_records,
+            item_records,
+            audit_events,
+            delivery_records,
+        })
     }
 
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
