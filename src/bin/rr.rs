@@ -165,7 +165,10 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
             )?;
             rejection_rejector::evaluation::compare_installed(&e.settings, &out)?;
-            println!("Task-specific model comparison written to {}", out.display());
+            println!(
+                "Task-specific model comparison written to {}",
+                out.display()
+            );
         }
     }
     Ok(())
