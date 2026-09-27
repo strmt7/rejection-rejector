@@ -27,8 +27,13 @@ enum Action {
     Demo,
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
     Doctor,
-    /// Evaluate the configured local model on bundled synthetic fixtures (never sends email).
+    /// Evaluate the configured local model on the full synthetic recruiting pipeline.
     Evaluate {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Compare already-installed curated local models on the task-specific pipeline.
+    CompareModels {
         #[arg(long)]
         out: PathBuf,
     },
@@ -62,7 +67,8 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
             )?;
             let local_ai = Ollama::new(&e.settings)?;
-            let ollama_healthy = local_ai.healthy();
+            let runtime_version = local_ai.runtime_version().ok();
+            let ollama_healthy = runtime_version.is_some();
             let (installed, digest_matches, gpu_resident_now, model_message) = if ollama_healthy {
                 match local_ai.inspect() {
                     Ok(info) => {
@@ -115,6 +121,7 @@ fn main() -> Result<()> {
                     "mode": e.settings.mode,
                     "local_ai": {
                         "ollama_healthy": ollama_healthy,
+                        "runtime_version": runtime_version,
                         "model": e.settings.model,
                         "digest_pinned": e.settings.model_digest.is_some(),
                         "installed_and_pin_matches": installed && digest_matches,
@@ -148,7 +155,17 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
             )?;
             rejection_rejector::evaluation::run(&e.settings, &out)?;
-            println!("Evaluation written to {}", out.display());
+            println!("Task-specific evaluation written to {}", out.display());
+        }
+        Action::CompareModels { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            rejection_rejector::evaluation::compare_installed(&e.settings, &out)?;
+            println!("Task-specific model comparison written to {}", out.display());
         }
     }
     Ok(())
