@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const READ_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
@@ -26,6 +27,12 @@ pub struct Credentials {
     pub client_secret: String,
     pub refresh_token: String,
     pub can_send: bool,
+}
+impl Drop for Credentials {
+    fn drop(&mut self) {
+        self.client_secret.zeroize();
+        self.refresh_token.zeroize();
+    }
 }
 #[derive(Deserialize)]
 struct ClientFile {
@@ -100,7 +107,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
         listener.local_addr()?.port()
     );
     let state = secret();
-    let verifier = secret();
+    let verifier = Zeroizing::new(secret());
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let scope = if send {
         format!("{READ_SCOPE} {SEND_SCOPE}")
@@ -121,7 +128,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     ]);
     webbrowser::open(url.as_str()).context("Cannot open the system browser for Google sign-in")?;
     let start = Instant::now();
-    let code = loop {
+    let code = Zeroizing::new(loop {
         ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
         ensure!(
             start.elapsed() < Duration::from_secs(300),
@@ -177,7 +184,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
             }
             Err(e) => return Err(e.into()),
         }
-    };
+    });
     let response = net::client(30, false)?
         .post(TOKEN_URL)
         .form(&[
@@ -190,7 +197,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
         ])
         .send()
         .context("OAuth exchange failed")?;
-    let tokens: Tokens = net::json(response, 32768)?;
+    let mut tokens: Tokens = net::json(response, 32768)?;
     let granted = tokens.scope.as_deref().unwrap_or("");
     ensure!(
         granted.split_whitespace().any(|s| s == READ_SCOPE),
@@ -198,11 +205,13 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     );
     let can_send = granted.split_whitespace().any(|s| s == SEND_SCOPE);
     ensure!(!send || can_send, "Gmail send permission was not granted");
-    let Some(refresh_token) = tokens.refresh_token else {
+    let Some(refresh_token) = tokens.refresh_token.take() else {
+        tokens.access_token.zeroize();
         bail!(
             "No refresh token returned. Revoke this app's old consent in your Google account and reconnect"
         );
     };
+    tokens.access_token.zeroize();
     Ok(Credentials {
         client_id: config.installed.client_id,
         client_secret: config.installed.client_secret,
