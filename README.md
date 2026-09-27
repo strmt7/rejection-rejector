@@ -18,7 +18,7 @@
 | Sync | Durable incremental Gmail history queue; page-batched insert of missing identities only; cursor-expiry recovery |
 | Database | Embedded SQLite with authenticated encrypted payloads; Windows Credential Manager holds the key |
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
-| Automatic | Explicit authorization, cooldown, send-attempt cap, source/draft/model checks and conversation preflight |
+| Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once record per rejection message; active/uncertain threads are blocked until reconciliation |
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API |
@@ -62,7 +62,7 @@ No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQ
 
 The app or `rr run` must remain running for scheduled checks. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
 
-Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
+Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; the LLM classification and same-model verifier cannot authorize unattended sending by themselves. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
 
 GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. No key-export/recovery, signed installer or security certification is claimed.
 
