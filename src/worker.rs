@@ -568,12 +568,13 @@ fn run(
                     auto_due = Instant::now() + bounded_backoff(30, automatic_failures, 10 * 60);
                 }
             }
-            if !matches!(result, Ok(false)) {
-                report(
-                    &shared,
-                    OperationKind::AutomaticDispatch,
-                    &result.map(|_| ()),
-                );
+            let refresh_after_tick = !matches!(result, Ok(false));
+            report(
+                &shared,
+                OperationKind::AutomaticDispatch,
+                &result.map(|_| ()),
+            );
+            if refresh_after_tick {
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
         }
