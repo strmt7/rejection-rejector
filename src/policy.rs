@@ -138,14 +138,17 @@ pub fn inactive_status() -> PolicyStatus {
     }
 }
 
+fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
+    ensure!(
+        path.is_absolute(),
+        "RR_ENTERPRISE_POLICY must be an absolute path"
+    );
+    Ok(path)
+}
+
 pub fn default_policy_path() -> Result<Option<PathBuf>> {
     if let Some(explicit) = std::env::var_os("RR_ENTERPRISE_POLICY") {
-        let path = PathBuf::from(explicit);
-        ensure!(
-            path.is_absolute(),
-            "RR_ENTERPRISE_POLICY must be an absolute path"
-        );
-        return Ok(Some(path));
+        return Ok(Some(validate_explicit_policy_path(PathBuf::from(explicit))?));
     }
     #[cfg(windows)]
     {
@@ -238,13 +241,11 @@ mod tests {
 
     #[test]
     fn relative_policy_override_is_rejected_fail_closed() {
-        let previous = std::env::var_os("RR_ENTERPRISE_POLICY");
-        unsafe { std::env::set_var("RR_ENTERPRISE_POLICY", "relative-policy.json") };
-        assert!(default_policy_path().is_err());
-        match previous {
-            Some(value) => unsafe { std::env::set_var("RR_ENTERPRISE_POLICY", value) },
-            None => unsafe { std::env::remove_var("RR_ENTERPRISE_POLICY") },
-        }
+        assert!(validate_explicit_policy_path(PathBuf::from("relative-policy.json")).is_err());
+        #[cfg(windows)]
+        assert!(validate_explicit_policy_path(PathBuf::from(r"C:\ProgramData\RejectionRejector\policy.json")).is_ok());
+        #[cfg(not(windows))]
+        assert!(validate_explicit_policy_path(PathBuf::from("/etc/rejection-rejector/policy.json")).is_ok());
     }
 
     #[test]
