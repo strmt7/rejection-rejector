@@ -1,5 +1,5 @@
 use crate::{
-    config::{Mode, Settings, PROMPT_VERSION},
+    config::{settings_context_hash, Mode, Settings, TaskQualification, PROMPT_VERSION},
     evaluation,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
     mail,
@@ -207,15 +207,24 @@ impl Engine {
         if settings.mode == Mode::HumanReview {
             settings.automatic_confirmed = false;
         }
-        if settings.model != self.settings.model
+        let model_configuration_changed = settings.model != self.settings.model
             || settings.num_ctx != self.settings.num_ctx
-            || settings.ollama_url != self.settings.ollama_url
-        {
+            || settings.ollama_url != self.settings.ollama_url;
+        let task_context_changed =
+            settings_context_hash(&settings) != settings_context_hash(&self.settings);
+        if model_configuration_changed {
             settings.model_digest = None;
+            settings.task_qualification = None;
             settings.disarm_delivery();
             self.model = ModelStatus::default();
         } else {
             settings.model_digest = self.settings.model_digest.clone();
+            if task_context_changed {
+                settings.task_qualification = None;
+                settings.disarm_delivery();
+            } else {
+                settings.task_qualification = self.settings.task_qualification.clone();
+            }
         }
         settings.validate()?;
         ensure!(
@@ -239,15 +248,19 @@ impl Engine {
     }
     pub fn qualify(&mut self) -> Result<()> {
         let mut unpinned = self.settings.clone();
+        unpinned.disarm_delivery();
         unpinned.model_digest = None;
+        unpinned.task_qualification = None;
         let status = Ollama::new(&unpinned)?.qualify()?;
+        self.settings.disarm_delivery();
         self.settings.model_digest = Some(status.digest.clone());
+        self.settings.task_qualification = None;
         self.db.set_meta("settings", &self.settings)?;
         self.model = status;
         self.db.log(
             "model.qualified",
             None,
-            "Smoke test and Ollama residency check passed; model digest pinned",
+            "Smoke test and Ollama residency check passed; model digest pinned. Automatic mode remains disarmed until the task-specific evaluation passes.",
         )?;
         Ok(())
     }
@@ -288,13 +301,83 @@ impl Engine {
         let path = self
             .directory
             .join(format!("model-evaluation-{stamp}.json"));
-        evaluation::run(&self.settings, &path)?;
-        self.db.log(
-            "model.evaluated",
-            None,
-            &format!("Task-specific model evaluation saved as {}", path.display()),
-        )?;
+        self.evaluate_model_to(&path)?;
         Ok(path)
+    }
+
+    pub fn evaluate_model_to(&mut self, path: &Path) -> Result<()> {
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not run the configured model"
+        );
+        let report = evaluation::run(&self.settings, path)?;
+        let eligible = report
+            .pointer("/summary/recommendation_eligible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let digest = report
+            .get("digest")
+            .and_then(serde_json::Value::as_str)
+            .context("Evaluation report is missing model digest")?
+            .to_owned();
+        let report_model = report
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .context("Evaluation report is missing model name")?;
+        ensure!(
+            report_model == self.settings.model,
+            "Evaluation report model does not match the active configuration"
+        );
+
+        if eligible {
+            let task_score = report
+                .pointer("/summary/task_score")
+                .and_then(serde_json::Value::as_f64)
+                .context("Evaluation report is missing task score")?;
+            let fixture_count = report
+                .pointer("/summary/fixture_count")
+                .and_then(serde_json::Value::as_u64)
+                .context("Evaluation report is missing fixture count")?;
+            let qualification = TaskQualification {
+                model: self.settings.model.clone(),
+                digest: digest.clone(),
+                prompt_version: PROMPT_VERSION.into(),
+                context_hash: settings_context_hash(&self.settings),
+                task_score,
+                fixture_count: u32::try_from(fixture_count)
+                    .context("Evaluation fixture count is outside supported range")?,
+                qualified_at: Utc::now(),
+            };
+            self.settings.model_digest = Some(digest);
+            self.settings.task_qualification = Some(qualification);
+            self.settings.validate()?;
+            self.db.set_meta("settings", &self.settings)?;
+            self.db.log(
+                "model.task_qualified",
+                None,
+                &format!(
+                    "Task-specific model evaluation passed and was bound to the current configuration: {}",
+                    path.display()
+                ),
+            )?;
+            Ok(())
+        } else {
+            self.settings.task_qualification = None;
+            self.settings.disarm_delivery();
+            self.db.set_meta("settings", &self.settings)?;
+            self.db.log(
+                "model.task_rejected",
+                None,
+                &format!(
+                    "Task-specific model evaluation did not meet Automatic-mode gates: {}",
+                    path.display()
+                ),
+            )?;
+            anyhow::bail!(
+                "Task-specific evaluation did not meet Automatic-mode gates; report saved at {}",
+                path.display()
+            )
+        }
     }
 
     pub fn compare_models(&mut self) -> Result<PathBuf> {
@@ -876,6 +959,14 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
         || a.email_fingerprint != email.fingerprint()
     {
         reasons.push("Analysis identity is stale".into());
+    }
+    match &s.task_qualification {
+        Some(qualification)
+            if qualification.model == s.model
+                && Some(&qualification.digest) == s.model_digest.as_ref()
+                && qualification.prompt_version == PROMPT_VERSION
+                && qualification.context_hash == settings_context_hash(s) => {}
+        _ => reasons.push("Task-specific model qualification is missing or stale".into()),
     }
     if job
         .drafted_at
