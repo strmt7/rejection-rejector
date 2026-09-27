@@ -523,9 +523,20 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 "Health endpoint takes no query parameters"
             );
             let integrity_ok = e.db.integrity_check().is_ok();
+            let paused = e.paused.load(Ordering::SeqCst);
+            let stopping = e.stop.load(Ordering::SeqCst);
+            let readiness = crate::readiness::assess(
+                &e.settings,
+                integrity_ok,
+                e.connected(),
+                e.send_scope(),
+                paused,
+                stopping,
+            );
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
-                "healthy": integrity_ok,
+                "healthy": readiness.workspace_ready,
+                "readiness": readiness,
                 "database": {
                     "integrity_ok": integrity_ok,
                     "schema_version": e.db.schema_version()?,
@@ -536,8 +547,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "send_scope": e.send_scope()
                 },
                 "worker": {
-                    "paused": e.paused.load(Ordering::SeqCst),
-                    "stopping": e.stop.load(Ordering::SeqCst)
+                    "paused": paused,
+                    "stopping": stopping
                 },
                 "mode": e.settings.mode,
                 "sending_enabled": e.settings.sending_enabled,
