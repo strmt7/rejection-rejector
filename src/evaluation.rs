@@ -332,9 +332,8 @@ mod tests {
     }
 
     #[test]
-    fn task_score_prioritizes_false_positive_avoidance() {
-        let perfect_fp_avoidance = 100.0 * (0.35 + 0.20 + 0.20 + 0.15 + 0.10);
-        assert!((perfect_fp_avoidance - 100.0_f64).abs() < 1e-9);
-        assert!(0.35 > 0.20);
+    fn task_score_weights_sum_to_one() {
+        let total_weight: f64 = [0.35, 0.20, 0.20, 0.15, 0.10].iter().sum();
+        assert!((total_weight - 1.0).abs() < 1e-9);
     }
 }
