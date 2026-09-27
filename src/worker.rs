@@ -357,7 +357,8 @@ fn run(
     while !e.stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
-                let data = api_query(&e, &path)
+                let operation = shared.lock().ok().map(|snapshot| snapshot.operation.clone());
+                let data = api_query_with_operation(&e, &path, operation.as_ref())
                     .unwrap_or_else(|_| json!({"error":"Invalid request or unavailable resource"}));
                 let _ = reply.try_send(data);
             }
@@ -602,6 +603,14 @@ fn validate_api_item_id(id: &str) -> Result<()> {
 }
 
 fn api_query(e: &Engine, path: &str) -> Result<Value> {
+    api_query_with_operation(e, path, None)
+}
+
+fn api_query_with_operation(
+    e: &Engine,
+    path: &str,
+    operation: Option<&OperationStatus>,
+) -> Result<Value> {
     let u = url::Url::parse(&format!("http://127.0.0.1{path}"))?;
     ensure!(
         u.username().is_empty()
@@ -638,7 +647,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "tamper_evident_audit_chain": true,
                     "external_audit_anchor": true,
                     "verified_backup_bundle": true,
-                    "task_model_bakeoff": true
+                    "task_model_bakeoff": true,
+                    "typed_operation_status": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
@@ -675,7 +685,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 },
                 "worker": {
                     "paused": paused,
-                    "stopping": stopping
+                    "stopping": stopping,
+                    "operation": operation
                 },
                 "mode": e.settings.mode,
                 "sending_enabled": e.settings.sending_enabled,
@@ -718,7 +729,7 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 "Status endpoint takes no query parameters"
             );
             Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation}),
             )
         }
         "/v1/items" => {
@@ -822,6 +833,32 @@ mod tests {
             value["poll_hours"],
             serde_json::json!(crate::config::POLL_HOURS)
         );
+    }
+
+    #[test]
+    fn health_exposes_typed_operation_status_when_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let operation = OperationStatus {
+            kind: OperationKind::Backup,
+            state: OperationState::Failed,
+            code: Some("backup_failed".into()),
+            retryable: true,
+            message: "Synthetic failure".into(),
+            started_at: Some(Utc::now()),
+            finished_at: Some(Utc::now()),
+        };
+        let health = api_query_with_operation(&engine, "/v1/health", Some(&operation)).unwrap();
+        assert_eq!(health["worker"]["operation"]["kind"], "backup");
+        assert_eq!(health["worker"]["operation"]["state"], "failed");
+        assert_eq!(health["worker"]["operation"]["code"], "backup_failed");
+        assert_eq!(health["worker"]["operation"]["retryable"], true);
     }
 
     #[test]
