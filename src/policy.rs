@@ -354,20 +354,13 @@ mod tests {
         std::fs::write(&path, body).unwrap();
         let digest = format!("{:x}", Sha256::digest(body));
 
-        let loaded =
-            load_file_with_expected_digest(&path, Some(digest.clone())).unwrap();
+        let loaded = load_file_with_expected_digest(&path, Some(digest.clone())).unwrap();
         assert_eq!(loaded.digest, digest);
         assert!(loaded.status().digest_pin_enforced);
         assert!(loaded.status().digest_pin_matches);
 
-        std::fs::write(
-            &path,
-            br#"{"version":1,"prohibit_sending":false}"#,
-        )
-        .unwrap();
-        assert!(
-            load_file_with_expected_digest(&path, Some(digest)).is_err()
-        );
+        std::fs::write(&path, br#"{"version":1,"prohibit_sending":false}"#).unwrap();
+        assert!(load_file_with_expected_digest(&path, Some(digest)).is_err());
     }
 
     #[cfg(unix)]
