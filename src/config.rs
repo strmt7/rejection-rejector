@@ -317,7 +317,7 @@ impl Settings {
                     && self.model == qualification.model
                     && qualification.prompt_version == PROMPT_VERSION
                     && qualification.context_hash == settings_context_hash(self)
-                    && qualification.suite_hash == crate::evaluation::evaluation_suite_hash()
+                    && qualification.suite_hash == evaluation_suite_hash()
             })
     }
 }
