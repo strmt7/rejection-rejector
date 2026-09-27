@@ -1189,14 +1189,14 @@ pub fn automatic_policy(
             );
         }
     }
-    if let Some(reply) = &email.reply_to {
-        if mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok() {
-            push_policy_block(
-                &mut blocks,
-                AutomaticPolicyCode::ReplyToMismatch,
-                "Reply-To differs from sender; human review required",
-            );
-        }
+    if let Some(reply) = &email.reply_to
+        && mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok()
+    {
+        push_policy_block(
+            &mut blocks,
+            AutomaticPolicyCode::ReplyToMismatch,
+            "Reply-To differs from sender; human review required",
+        );
     }
 
     AutomaticPolicyDecision {
