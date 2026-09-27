@@ -387,13 +387,139 @@ pub struct OperationStatus {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditDomain {
+    Mail,
+    Delivery,
+    Model,
+    Settings,
+    Policy,
+    Security,
+    Recovery,
+    Integration,
+    Retention,
+    Storage,
+    Worker,
+    #[default]
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditSeverity {
+    #[default]
+    Info,
+    Warning,
+    Error,
+    Security,
+}
+
+pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
+    let domain = if kind.starts_with("email.")
+        || kind.starts_with("gmail.")
+        || kind.starts_with("account.")
+        || kind.starts_with("sync.")
+    {
+        AuditDomain::Mail
+    } else if kind.starts_with("delivery.") {
+        AuditDomain::Delivery
+    } else if kind.starts_with("model.") {
+        AuditDomain::Model
+    } else if kind.starts_with("settings.") {
+        AuditDomain::Settings
+    } else if kind.starts_with("policy.") || kind.starts_with("enterprise.") {
+        AuditDomain::Policy
+    } else if kind.starts_with("security.") || kind.starts_with("audit.") {
+        AuditDomain::Security
+    } else if kind.starts_with("backup.") || kind.starts_with("restore.") {
+        AuditDomain::Recovery
+    } else if kind.starts_with("api.") || kind.starts_with("integration.") {
+        AuditDomain::Integration
+    } else if kind.starts_with("content.") || kind.starts_with("retention.") {
+        AuditDomain::Retention
+    } else if kind.starts_with("database.") || kind.starts_with("storage.") {
+        AuditDomain::Storage
+    } else if kind.starts_with("worker.") {
+        AuditDomain::Worker
+    } else {
+        AuditDomain::Other
+    };
+
+    let severity = if kind.contains("security")
+        || kind.contains("tamper")
+        || kind.contains("integrity_failed")
+    {
+        AuditSeverity::Security
+    } else if kind.contains("failed") || kind.contains("error") || kind.contains("fatal") {
+        AuditSeverity::Error
+    } else if kind.contains("uncertain")
+        || kind.contains("rejected")
+        || kind.contains("repaired")
+        || kind.contains("blocked")
+        || kind.contains("disabled")
+    {
+        AuditSeverity::Warning
+    } else {
+        AuditSeverity::Info
+    };
+    (domain, severity)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub seq: i64,
     pub at: DateTime<Utc>,
     pub kind: String,
+    #[serde(default)]
+    pub domain: AuditDomain,
+    #[serde(default)]
+    pub severity: AuditSeverity,
     pub item_id: Option<String>,
     pub detail: String,
+}
+
+#[cfg(test)]
+mod audit_event_tests {
+    use super::*;
+
+    #[test]
+    fn audit_event_classification_is_stable_and_conservative() {
+        assert_eq!(
+            audit_attributes("delivery.uncertain"),
+            (AuditDomain::Delivery, AuditSeverity::Warning)
+        );
+        assert_eq!(
+            audit_attributes("model.task_rejected"),
+            (AuditDomain::Model, AuditSeverity::Warning)
+        );
+        assert_eq!(
+            audit_attributes("audit.integrity_failed"),
+            (AuditDomain::Security, AuditSeverity::Security)
+        );
+        assert_eq!(
+            audit_attributes("email.queued"),
+            (AuditDomain::Mail, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("unknown.event"),
+            (AuditDomain::Other, AuditSeverity::Info)
+        );
+    }
+
+    #[test]
+    fn legacy_audit_event_defaults_new_operational_fields() {
+        let value = serde_json::json!({
+            "seq": 1,
+            "at": "2026-09-27T00:00:00Z",
+            "kind": "legacy.event",
+            "item_id": null,
+            "detail": "legacy"
+        });
+        let event: AuditEvent = serde_json::from_value(value).unwrap();
+        assert_eq!(event.domain, AuditDomain::Other);
+        assert_eq!(event.severity, AuditSeverity::Info);
+    }
 }
 
 #[cfg(test)]
