@@ -292,6 +292,29 @@ impl Store {
         verify_audit_chain_connection(&self.conn, &self.vault)
     }
 
+    pub fn audit_head(&self) -> Result<String> {
+        let head = self
+            .meta::<String>("audit_head")?
+            .context("Audit journal head is missing")?;
+        ensure!(valid_audit_hash(&head), "Audit journal head is invalid");
+        Ok(head)
+    }
+
+    /// Check whether an externally persisted audit anchor is still represented
+    /// by this database's history. This enables rollback detection when another
+    /// trusted component stores previously observed heads.
+    pub fn contains_audit_anchor(&self, anchor: &str) -> Result<bool> {
+        ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
+        if anchor == AUDIT_GENESIS {
+            return Ok(true);
+        }
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE event_hash=?1)",
+            [anchor],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Create a consistent online copy of the encrypted SQLite database.
     ///
     /// This is a same-vault backup: application payloads remain encrypted and
@@ -329,7 +352,7 @@ impl Store {
 
     /// Verify a backup without modifying it. The encrypted vault marker must
     /// authenticate under this Store's current master key.
-    pub fn verify_backup_file(&self, path: &Path) -> Result<i64> {
+    pub fn verify_backup_file(&self, path: &Path) -> Result<(i64, Option<String>)> {
         ensure!(path.is_file(), "Backup database file is missing");
         ensure!(
             !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
@@ -341,9 +364,10 @@ impl Store {
         )?;
         check_connection_integrity(&connection)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let current_version = self.schema_version()?;
         ensure!(
-            version == self.schema_version()?,
-            "Backup schema version does not match the current database"
+            (1..=current_version).contains(&version),
+            "Backup schema version is not supported by this application"
         );
         let encrypted: Vec<u8> = connection
             .query_row(
@@ -357,8 +381,20 @@ impl Store {
             marker == "rejection-rejector:v1",
             "Backup belongs to another vault"
         );
-        verify_audit_chain_connection(&connection, &self.vault)?;
-        Ok(version)
+        let audit_head = if version >= 4 {
+            verify_audit_chain_connection(&connection, &self.vault)?;
+            let encrypted: Vec<u8> = connection.query_row(
+                "SELECT payload FROM meta WHERE name='audit_head'",
+                [],
+                |row| row.get(0),
+            )?;
+            let head: String = self.vault.open_value("meta/audit_head", &encrypted)?;
+            ensure!(valid_audit_hash(&head), "Backup audit head is invalid");
+            Some(head)
+        } else {
+            None
+        };
+        Ok((version, audit_head))
     }
 
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
