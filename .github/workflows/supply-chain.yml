@@ -35,13 +35,15 @@ jobs:
       - name: Install pinned security tooling from verified releases
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          tool: cargo-audit@0.22.2,cargo-deny@0.20.2,cargo-cyclonedx@0.5.9
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2,cargo-cyclonedx@0.5.9,cargo-machete@0.9.2
           checksum: true
           fallback: none
       - name: RustSec audit
         run: cargo audit --deny warnings
       - name: License, source and dependency policy
         run: cargo deny check advisories licenses bans sources
+      - name: Unused direct dependency check
+        run: cargo machete --skip-target-dir
       - name: Generate CycloneDX 1.5 SBOM
         run: |
           cargo cyclonedx --format json --spec-version 1.5 --all-features --target all --override-filename rejection-rejector.cdx
