@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -179,7 +179,11 @@ pub fn backup_manifest_path(directory: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{types::{Source, Stub}, vault::Vault};
+    use crate::{
+        types::{Source, Stub},
+        vault::Vault,
+    };
+    use std::io::Write;
 
     #[test]
     fn backup_bundle_verifies_and_detects_tampering() {
