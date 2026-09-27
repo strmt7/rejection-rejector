@@ -2,7 +2,10 @@ use crate::config::{Settings, validate_model_name};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 
@@ -37,19 +40,34 @@ impl EnterprisePolicy {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "Unsupported enterprise policy version");
         if let Some(limit) = self.max_daily_send_limit {
-            ensure!((1..=100).contains(&limit), "Enterprise daily send limit must be 1..100");
+            ensure!(
+                (1..=100).contains(&limit),
+                "Enterprise daily send limit must be 1..100"
+            );
         }
         if let Some(minutes) = self.min_cooldown_minutes {
-            ensure!((1..=1440).contains(&minutes), "Enterprise minimum cooldown must be 1..1440 minutes");
+            ensure!(
+                (1..=1440).contains(&minutes),
+                "Enterprise minimum cooldown must be 1..1440 minutes"
+            );
         }
         if let Some(days) = self.min_retention_days {
-            ensure!((30..=3650).contains(&days), "Enterprise minimum retention must be 30..3650 days");
+            ensure!(
+                (30..=3650).contains(&days),
+                "Enterprise minimum retention must be 30..3650 days"
+            );
         }
-        ensure!(self.allowed_models.len() <= 64, "Enterprise model allow-list is too large");
+        ensure!(
+            self.allowed_models.len() <= 64,
+            "Enterprise model allow-list is too large"
+        );
         let mut unique = std::collections::BTreeSet::new();
         for model in &self.allowed_models {
             validate_model_name(model)?;
-            ensure!(unique.insert(model), "Enterprise model allow-list contains duplicates");
+            ensure!(
+                unique.insert(model),
+                "Enterprise model allow-list contains duplicates"
+            );
         }
         Ok(())
     }
@@ -148,7 +166,9 @@ fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
 
 pub fn default_policy_path() -> Result<Option<PathBuf>> {
     if let Some(explicit) = std::env::var_os("RR_ENTERPRISE_POLICY") {
-        return Ok(Some(validate_explicit_policy_path(PathBuf::from(explicit))?));
+        return Ok(Some(validate_explicit_policy_path(PathBuf::from(
+            explicit,
+        ))?));
     }
     #[cfg(windows)]
     {
@@ -173,13 +193,25 @@ pub fn load_optional() -> Result<Option<LoadedPolicy>> {
 }
 
 pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
-    ensure!(path.is_absolute(), "Enterprise policy path must be absolute");
+    ensure!(
+        path.is_absolute(),
+        "Enterprise policy path must be absolute"
+    );
     ensure!(path.is_file(), "Enterprise policy file is missing");
-    ensure!(!fs::symlink_metadata(path)?.file_type().is_symlink(), "Enterprise policy file must not be a symlink");
+    ensure!(
+        !fs::symlink_metadata(path)?.file_type().is_symlink(),
+        "Enterprise policy file must not be a symlink"
+    );
     let metadata = fs::metadata(path)?;
-    ensure!(metadata.len() <= MAX_POLICY_BYTES, "Enterprise policy exceeds 64 KiB");
+    ensure!(
+        metadata.len() <= MAX_POLICY_BYTES,
+        "Enterprise policy exceeds 64 KiB"
+    );
     let bytes = fs::read(path)?;
-    ensure!(bytes.len() as u64 <= MAX_POLICY_BYTES, "Enterprise policy exceeds 64 KiB");
+    ensure!(
+        bytes.len() as u64 <= MAX_POLICY_BYTES,
+        "Enterprise policy exceeds 64 KiB"
+    );
     let policy: EnterprisePolicy =
         serde_json::from_slice(&bytes).context("Enterprise policy is invalid JSON")?;
     policy.validate()?;
@@ -190,7 +222,7 @@ pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Mode, DEFAULT_MODEL};
+    use crate::config::{DEFAULT_MODEL, Mode};
 
     fn policy() -> EnterprisePolicy {
         EnterprisePolicy {
@@ -243,9 +275,17 @@ mod tests {
     fn relative_policy_override_is_rejected_fail_closed() {
         assert!(validate_explicit_policy_path(PathBuf::from("relative-policy.json")).is_err());
         #[cfg(windows)]
-        assert!(validate_explicit_policy_path(PathBuf::from(r"C:\ProgramData\RejectionRejector\policy.json")).is_ok());
+        assert!(
+            validate_explicit_policy_path(PathBuf::from(
+                r"C:\ProgramData\RejectionRejector\policy.json"
+            ))
+            .is_ok()
+        );
         #[cfg(not(windows))]
-        assert!(validate_explicit_policy_path(PathBuf::from("/etc/rejection-rejector/policy.json")).is_ok());
+        assert!(
+            validate_explicit_policy_path(PathBuf::from("/etc/rejection-rejector/policy.json"))
+                .is_ok()
+        );
     }
 
     #[test]
