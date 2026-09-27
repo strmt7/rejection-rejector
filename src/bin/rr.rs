@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rejection_rejector::{config, engine::Engine, ollama::Ollama, recovery, worker::Worker};
+use rejection_rejector::{
+    config, engine::Engine, ollama::Ollama, policy, recovery, worker::Worker,
+};
 use std::{
     path::PathBuf,
     sync::{
@@ -51,11 +53,34 @@ enum Action {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Print the effective administrator enterprise-policy status.
+    PolicyStatus,
+    /// Validate and summarize an enterprise policy file without applying it.
+    ValidatePolicy {
+        path: PathBuf,
+    },
 }
 fn main() -> Result<()> {
     let args = Args::parse();
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
+        Action::ValidatePolicy { path } => {
+            let absolute = std::fs::canonicalize(&path)?;
+            let loaded = policy::load_file(&absolute)?;
+            println!("{}", serde_json::to_string_pretty(&loaded.status())?);
+        }
+        Action::PolicyStatus => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&e.enterprise_policy_status())?
+            );
+        }
         Action::Run => {
             let worker = Worker::spawn(dir, false);
             let stop = worker.stop.clone();
@@ -143,6 +168,7 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "configuration_readiness": readiness,
+                    "enterprise_policy": e.enterprise_policy_status(),
                     "database": {
                         "integrity_ok": database_integrity_ok,
                         "schema_version": e.db.schema_version()?,
@@ -183,7 +209,7 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?})
+                    &serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()})
                 )?
             );
         }
