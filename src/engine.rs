@@ -174,9 +174,10 @@ impl Engine {
         } else {
             policy::load_optional()?
         };
-        let policy_changed = enterprise_policy
-            .as_ref()
-            .is_some_and(|loaded| loaded.policy.enforce(&mut settings, true).unwrap_or(false));
+        let policy_changed = match &enterprise_policy {
+            Some(loaded) => loaded.policy.enforce(&mut settings, true)?,
+            None => false,
+        };
         settings.validate()?;
         if repaired || policy_changed {
             db.set_meta("settings", &settings)?;
