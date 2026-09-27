@@ -271,6 +271,119 @@ pub struct Counts {
     pub uncertain: u64,
     pub attempts_24h: u64,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationKind {
+    #[default]
+    Idle,
+    Refresh,
+    SyncMailbox,
+    ConnectGmail,
+    DisconnectGmail,
+    UpdateSettings,
+    InstallOllama,
+    StartOllama,
+    PullModel,
+    InspectModel,
+    QualifyModel,
+    EvaluateModel,
+    CompareModels,
+    IntegrityCheck,
+    Backup,
+    Diagnostics,
+    ListItems,
+    SelectItem,
+    EditDraft,
+    RegenerateDraft,
+    DismissItem,
+    SendReply,
+    ReconcileDelivery,
+    PurgeRetention,
+    RevealApiToken,
+    HideApiToken,
+    ApiRequest,
+    AnalyzeQueuedMail,
+    AutomaticDispatch,
+}
+impl OperationKind {
+    pub fn failure_code(self) -> &'static str {
+        match self {
+            Self::Idle => "operation_idle",
+            Self::Refresh => "refresh_failed",
+            Self::SyncMailbox => "mailbox_sync_failed",
+            Self::ConnectGmail => "gmail_connect_failed",
+            Self::DisconnectGmail => "gmail_disconnect_failed",
+            Self::UpdateSettings => "settings_update_failed",
+            Self::InstallOllama => "ollama_install_failed",
+            Self::StartOllama => "ollama_start_failed",
+            Self::PullModel => "model_download_failed",
+            Self::InspectModel => "model_inspection_failed",
+            Self::QualifyModel => "model_smoke_qualification_failed",
+            Self::EvaluateModel => "model_task_evaluation_failed",
+            Self::CompareModels => "model_comparison_failed",
+            Self::IntegrityCheck => "database_integrity_failed",
+            Self::Backup => "backup_failed",
+            Self::Diagnostics => "diagnostics_export_failed",
+            Self::ListItems => "item_listing_failed",
+            Self::SelectItem => "item_selection_failed",
+            Self::EditDraft => "draft_edit_failed",
+            Self::RegenerateDraft => "draft_regeneration_failed",
+            Self::DismissItem => "item_dismissal_failed",
+            Self::SendReply => "reply_send_failed",
+            Self::ReconcileDelivery => "delivery_reconciliation_failed",
+            Self::PurgeRetention => "retention_purge_failed",
+            Self::RevealApiToken => "api_token_reveal_failed",
+            Self::HideApiToken => "api_token_hide_failed",
+            Self::ApiRequest => "integration_api_request_failed",
+            Self::AnalyzeQueuedMail => "mail_analysis_failed",
+            Self::AutomaticDispatch => "automatic_dispatch_failed",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::Refresh
+                | Self::SyncMailbox
+                | Self::ConnectGmail
+                | Self::StartOllama
+                | Self::PullModel
+                | Self::InspectModel
+                | Self::QualifyModel
+                | Self::EvaluateModel
+                | Self::CompareModels
+                | Self::Backup
+                | Self::Diagnostics
+                | Self::SendReply
+                | Self::ReconcileDelivery
+                | Self::ApiRequest
+                | Self::AnalyzeQueuedMail
+                | Self::AutomaticDispatch
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationState {
+    #[default]
+    Idle,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperationStatus {
+    pub kind: OperationKind,
+    pub state: OperationState,
+    pub code: Option<String>,
+    pub retryable: bool,
+    pub message: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub seq: i64,
@@ -278,6 +391,32 @@ pub struct AuditEvent {
     pub kind: String,
     pub item_id: Option<String>,
     pub detail: String,
+}
+
+#[cfg(test)]
+mod operation_status_tests {
+    use super::*;
+
+    #[test]
+    fn operation_failure_codes_are_stable_and_nonempty() {
+        let kinds = [
+            OperationKind::SyncMailbox,
+            OperationKind::ConnectGmail,
+            OperationKind::UpdateSettings,
+            OperationKind::EvaluateModel,
+            OperationKind::IntegrityCheck,
+            OperationKind::Backup,
+            OperationKind::SendReply,
+            OperationKind::AutomaticDispatch,
+        ];
+        for kind in kinds {
+            let code = kind.failure_code();
+            assert!(!code.is_empty());
+            assert!(code.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
+        }
+        assert!(OperationKind::SyncMailbox.retryable());
+        assert!(!OperationKind::UpdateSettings.retryable());
+    }
 }
 
 #[cfg(test)]
