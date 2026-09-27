@@ -11,7 +11,7 @@
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
 | AI | Local Ollama classification, drafting and a separate same-model audit; structured outputs and exact evidence checks |
-| Model | `qwen3.5:9b` default, 8,192 context; gpt-oss 20B/Gemma 4 alternatives; explicit download and full classification/draft/verification/residency qualification |
+| Model | `qwen3.5:9b-q8_0` quality-first default, 8,192 context; Q4/gpt-oss 20B/Gemma 4 alternatives; explicit download and full classification/draft/verification/residency qualification |
 | GPU target | 16 GiB; conservative 14 GiB reported-residency budget, not physical peak certification |
 | Check interval | **1 / 2 / 4 / 8 / 24 hours** |
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
