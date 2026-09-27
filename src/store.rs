@@ -23,8 +23,7 @@ fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> 
     );
     Ok(job)
 }
-const AUDIT_GENESIS: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
+const AUDIT_GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 fn audit_hash(previous_hash: &str, event_id: &str, payload: &[u8]) -> String {
     let mut digest = Sha256::new();
@@ -90,9 +89,7 @@ fn migrate_audit_chain(conn: &Connection, vault: &Vault) -> Result<()> {
     )?;
     let rows: Vec<(i64, String, Vec<u8>)> = {
         let mut query = tx.prepare("SELECT seq,event_id,payload FROM events ORDER BY seq")?;
-        let mapped = query.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?;
+        let mapped = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
         mapped.collect::<std::result::Result<Vec<_>, _>>()?
     };
 
@@ -261,8 +258,7 @@ impl Store {
                  CREATE INDEX IF NOT EXISTS deliveries_thread_state ON deliveries(thread_key,status);",
             )?;
         }
-        let current_version: i64 =
-            conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if current_version == 3 {
             migrate_audit_chain(&conn, &vault)?;
         }
@@ -1174,9 +1170,7 @@ mod tests {
                 "INSERT INTO events(event_id,payload) VALUES(?1,?2)",
                 params![
                     event_id,
-                    vault
-                        .seal(&format!("event/{event_id}"), &legacy)
-                        .unwrap()
+                    vault.seal(&format!("event/{event_id}"), &legacy).unwrap()
                 ],
             )
             .unwrap();
