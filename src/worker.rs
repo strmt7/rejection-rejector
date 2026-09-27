@@ -314,6 +314,26 @@ fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()
         }
     }
 }
+fn report_silent_success(
+    shared: &Arc<Mutex<Snapshot>>,
+    kind: OperationKind,
+    message: &str,
+) {
+    if let Ok(mut s) = shared.lock() {
+        s.busy.clear();
+        s.error.clear();
+        s.operation = OperationStatus {
+            kind,
+            state: OperationState::Succeeded,
+            code: None,
+            retryable: false,
+            message: message.into(),
+            started_at: s.operation.started_at,
+            finished_at: Some(Utc::now()),
+        };
+    }
+}
+
 fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
     let shift = failures.saturating_sub(1).min(6);
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
@@ -536,13 +556,13 @@ fn run(
                 Ok(changed) => {
                     policy_failures = 0;
                     policy_due = Instant::now() + Duration::from_secs(60);
-                    let completed: Result<()> = Ok(());
-                    report(
-                        &shared,
-                        OperationKind::EnterprisePolicyReload,
-                        &completed,
-                    );
                     if changed {
+                        let completed: Result<()> = Ok(());
+                        report(
+                            &shared,
+                            OperationKind::EnterprisePolicyReload,
+                            &completed,
+                        );
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
                             && let Ok(mut snapshot) = shared.lock()
@@ -554,6 +574,12 @@ fn run(
                                 snapshot.settings_revision.saturating_add(1);
                         }
                         refresh(&e, &shared, selected.as_deref(), review, page)?;
+                    } else {
+                        report_silent_success(
+                            &shared,
+                            OperationKind::EnterprisePolicyReload,
+                            "Enterprise policy unchanged",
+                        );
                     }
                 }
                 Err(error) => {
@@ -647,11 +673,19 @@ fn run(
                 }
             }
             let refresh_after_tick = !matches!(result, Ok(false));
-            report(
-                &shared,
-                OperationKind::AutomaticDispatch,
-                &result.map(|_| ()),
-            );
+            if matches!(result, Ok(false)) {
+                report_silent_success(
+                    &shared,
+                    OperationKind::AutomaticDispatch,
+                    "No eligible automatic reply",
+                );
+            } else {
+                report(
+                    &shared,
+                    OperationKind::AutomaticDispatch,
+                    &result.map(|_| ()),
+                );
+            }
             if refresh_after_tick {
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
