@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
 pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
-pub const DEFAULT_MODEL: &str = "qwen3.5:9b";
+pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
 
