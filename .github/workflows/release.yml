@@ -1,0 +1,105 @@
+name: Attested Windows package
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PACKAGE to build an attested Windows package from the exact main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: attested-windows-package
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: inputs.confirmation == 'PACKAGE'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Assert workflow packages the triggering main commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = "refs/heads/main"
+      - name: Pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install pinned SBOM generator
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-cyclonedx@0.5.9
+          checksum: true
+          fallback: none
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo test --locked --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Build native release binaries
+        run: cargo build --locked --release --bins
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo cyclonedx --format json --spec-version 1.5 --all-features --target all --override-filename rejection-rejector.cdx
+          mkdir -p artifacts
+          find . -maxdepth 2 -name 'rejection-rejector.cdx.json' -exec cp {} artifacts/rejection-rejector.cdx.json \;
+          test -s artifacts/rejection-rejector.cdx.json
+      - name: Assemble deterministic evidence package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
+          Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
+          Copy-Item -Recurse docs artifacts/windows/docs
+          Copy-Item Cargo.lock artifacts/windows/
+          git rev-parse HEAD | Set-Content artifacts/windows/COMMIT.txt -Encoding ascii
+          rustc --version | Set-Content artifacts/windows/toolchain.txt -Encoding ascii
+          cargo --version | Add-Content artifacts/windows/toolchain.txt -Encoding ascii
+          $root = (Resolve-Path artifacts/windows).Path
+          Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\','/')
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $relative"
+          } | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
+          $packageHash = (Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$packageHash  rejection-rejector-windows-x64.zip" | Set-Content artifacts/SHA256.txt -Encoding ascii
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: artifacts/rejection-rejector-windows-x64.zip
+      - name: Attest package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: artifacts/rejection-rejector-windows-x64.zip
+          sbom-path: artifacts/rejection-rejector.cdx.json
+      - name: Upload package and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rejection-rejector-attested-windows-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
