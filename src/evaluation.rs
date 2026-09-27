@@ -341,7 +341,10 @@ mod tests {
         let hash = evaluation_suite_hash();
         assert_eq!(hash.len(), 64);
         assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        assert_ne!(hash, crate::config::settings_context_hash(&Settings::default()));
+        assert_ne!(
+            hash,
+            crate::config::settings_context_hash(&Settings::default())
+        );
     }
 
     #[test]
