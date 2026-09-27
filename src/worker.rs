@@ -113,13 +113,22 @@ impl Worker {
         let stop = Arc::new(AtomicBool::new(false));
         let (s, p, c, sender) = (snapshot.clone(), paused.clone(), stop.clone(), tx.clone());
         std::thread::spawn(move || {
-            let result = Engine::open(dir, demo, p, c.clone())
-                .and_then(|engine| run(engine, rx, s.clone(), sender));
-            if let Err(e) = result {
-                if let Ok(mut view) = s.lock() {
-                    view.error = format!("{e:#}");
-                    view.fatal = true;
-                    view.busy.clear();
+            let panic_pause = p.clone();
+            let panic_stop = c.clone();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Engine::open(dir, demo, p, c.clone())
+                    .and_then(|engine| run(engine, rx, s.clone(), sender))
+            }));
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => set_worker_fatal(&s, format!("{error:#}")),
+                Err(_) => {
+                    panic_pause.store(true, Ordering::SeqCst);
+                    panic_stop.store(true, Ordering::SeqCst);
+                    set_worker_fatal(
+                        &s,
+                        "Background worker crashed unexpectedly. Delivery is paused and this process must be restarted.".into(),
+                    );
                 }
             }
         });
@@ -145,6 +154,14 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.paused.store(true, Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
+    if let Ok(mut view) = shared.lock() {
+        view.error = message;
+        view.fatal = true;
+        view.busy.clear();
     }
 }
 
