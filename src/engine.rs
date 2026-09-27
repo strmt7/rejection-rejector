@@ -20,6 +20,45 @@ use std::{
     },
 };
 
+#[derive(
+    Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticPolicyCode {
+    QueueIdentityMismatch,
+    AutomaticModeNotArmed,
+    OriginalEmailMissing,
+    MailboxSafetyBlock,
+    LocalAnalysisMissing,
+    DraftMissing,
+    NotHighConfidenceRejection,
+    ModelVerificationOrResidencyFailed,
+    DraftVerificationStale,
+    AnalysisIdentityStale,
+    TaskQualificationStale,
+    CooldownActive,
+    OutsideAgeWindow,
+    PredatesAutomaticEnrollment,
+    MissingDeterministicRejectionEvidence,
+    ConflictingEmailLanguage,
+    DraftEscalationOrLink,
+    AutomaticReplyLoop,
+    AutomaticReplySuppressed,
+    ReplyToMismatch,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct AutomaticPolicyBlock {
+    pub code: AutomaticPolicyCode,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct AutomaticPolicyDecision {
+    pub eligible: bool,
+    pub blocks: Vec<AutomaticPolicyBlock>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DispatchFailureKind {
     Retryable,
@@ -917,82 +956,169 @@ impl Engine {
     }
 }
 
-pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -> Vec<String> {
-    let mut reasons = Vec::new();
-    if mail::validate_job_identity(job).is_err() {
-        reasons.push("Queue/message identity mismatch".into());
-    }
-    if s.mode != Mode::Automatic || !s.sending_enabled || !s.automatic_confirmed {
-        reasons.push("Automatic mode not explicitly armed".into());
-    }
-    let Some(email) = job.email.as_ref() else {
-        return vec!["Original email missing".into()];
+pub fn automatic_policy(
+    job: &Job,
+    settings: &Settings,
+    account: &str,
+    now: DateTime<Utc>,
+) -> AutomaticPolicyDecision {
+    let mut blocks = Vec::new();
+    let mut block = |code: AutomaticPolicyCode, message: impl Into<String>| {
+        blocks.push(AutomaticPolicyBlock {
+            code,
+            message: message.into(),
+        });
     };
-    reasons.extend(mail::hard_blocks(email, account));
-    let Some(a) = job.analysis.as_ref() else {
-        return vec!["Local analysis missing".into()];
+
+    if mail::validate_job_identity(job).is_err() {
+        block(
+            AutomaticPolicyCode::QueueIdentityMismatch,
+            "Queue/message identity mismatch",
+        );
+    }
+    if settings.mode != Mode::Automatic
+        || !settings.sending_enabled
+        || !settings.automatic_confirmed
+    {
+        block(
+            AutomaticPolicyCode::AutomaticModeNotArmed,
+            "Automatic mode not explicitly armed",
+        );
+    }
+
+    let Some(email) = job.email.as_ref() else {
+        block(
+            AutomaticPolicyCode::OriginalEmailMissing,
+            "Original email missing",
+        );
+        return AutomaticPolicyDecision {
+            eligible: false,
+            blocks,
+        };
+    };
+    for message in mail::hard_blocks(email, account) {
+        block(AutomaticPolicyCode::MailboxSafetyBlock, message);
+    }
+
+    let Some(analysis) = job.analysis.as_ref() else {
+        block(
+            AutomaticPolicyCode::LocalAnalysisMissing,
+            "Local analysis missing",
+        );
+        return AutomaticPolicyDecision {
+            eligible: false,
+            blocks,
+        };
     };
     let Some(draft) = job.draft.as_ref() else {
-        return vec!["Draft missing".into()];
+        block(AutomaticPolicyCode::DraftMissing, "Draft missing");
+        return AutomaticPolicyDecision {
+            eligible: false,
+            blocks,
+        };
     };
+
     if job.state != JobState::Ready
-        || a.verdict.category != Category::Rejection
-        || a.verdict.confidence < 95
+        || analysis.verdict.category != Category::Rejection
+        || analysis.verdict.confidence < 95
     {
-        reasons.push("Not a high-score reviewed rejection".into());
+        block(
+            AutomaticPolicyCode::NotHighConfidenceRejection,
+            "Not a high-score reviewed rejection",
+        );
     }
-    if !a.input_complete
-        || !a.gpu_resident
-        || !a.verification.as_ref().is_some_and(Verification::passed)
+    if !analysis.input_complete
+        || !analysis.gpu_resident
+        || !analysis
+            .verification
+            .as_ref()
+            .is_some_and(Verification::passed)
     {
-        reasons.push("Model verification or residency failed".into());
+        block(
+            AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
+            "Model verification or residency failed",
+        );
     }
     if draft.origin != "ollama-v1"
-        || a.verified_draft_hash.as_deref() != Some(hash(&draft.body).as_str())
+        || analysis.verified_draft_hash.as_deref() != Some(hash(&draft.body).as_str())
     {
-        reasons.push("Draft changed since verification".into());
+        block(
+            AutomaticPolicyCode::DraftVerificationStale,
+            "Draft changed since verification",
+        );
     }
-    if s.model_digest.as_ref() != Some(&a.model_digest)
-        || s.model != a.model
-        || a.prompt_version != PROMPT_VERSION
-        || a.context_hash != ollama::context_hash(s)
-        || a.email_fingerprint != email.fingerprint()
+    if settings.model_digest.as_ref() != Some(&analysis.model_digest)
+        || settings.model != analysis.model
+        || analysis.prompt_version != PROMPT_VERSION
+        || analysis.context_hash != ollama::context_hash(settings)
+        || analysis.email_fingerprint != email.fingerprint()
     {
-        reasons.push("Analysis identity is stale".into());
+        block(
+            AutomaticPolicyCode::AnalysisIdentityStale,
+            "Analysis identity is stale",
+        );
     }
-    match &s.task_qualification {
+    match &settings.task_qualification {
         Some(qualification)
-            if qualification.model == s.model
-                && Some(&qualification.digest) == s.model_digest.as_ref()
+            if qualification.model == settings.model
+                && Some(&qualification.digest) == settings.model_digest.as_ref()
                 && qualification.prompt_version == PROMPT_VERSION
-                && qualification.context_hash == settings_context_hash(s) => {}
-        _ => reasons.push("Task-specific model qualification is missing or stale".into()),
+                && qualification.context_hash == settings_context_hash(settings) => {}
+        _ => block(
+            AutomaticPolicyCode::TaskQualificationStale,
+            "Task-specific model qualification is missing or stale",
+        ),
     }
-    if job
-        .drafted_at
-        .is_none_or(|t| now.signed_duration_since(t).num_minutes() < i64::from(s.cooldown_minutes))
+    if job.drafted_at.is_none_or(|time| {
+        now.signed_duration_since(time).num_minutes()
+            < i64::from(settings.cooldown_minutes)
+    }) {
+        block(
+            AutomaticPolicyCode::CooldownActive,
+            "Cooldown active",
+        );
+    }
+    if email.received_at < settings.cutoff(now) || email.received_at > now {
+        block(
+            AutomaticPolicyCode::OutsideAgeWindow,
+            "Outside selected age window",
+        );
+    }
+    if !settings.include_backlog
+        && settings
+            .automatic_since
+            .is_none_or(|time| email.received_at < time)
     {
-        reasons.push("Cooldown active".into());
-    }
-    if email.received_at < s.cutoff(now) || email.received_at > now {
-        reasons.push("Outside selected age window".into());
-    }
-    if !s.include_backlog && s.automatic_since.is_none_or(|t| email.received_at < t) {
-        reasons.push("Predates automatic-mode enrollment".into());
+        block(
+            AutomaticPolicyCode::PredatesAutomaticEnrollment,
+            "Predates automatic-mode enrollment",
+        );
     }
     if !mail::clear_rejection_language(&email.subject, &email.text) {
-        reasons.push("No independent clear rejection phrase in the current message".into());
+        block(
+            AutomaticPolicyCode::MissingDeterministicRejectionEvidence,
+            "No independent clear rejection phrase in the current message",
+        );
     }
     if mail::auto_language_conflict(&email.subject, &email.text) {
-        reasons.push("Conflicting or suspicious email language".into());
+        block(
+            AutomaticPolicyCode::ConflictingEmailLanguage,
+            "Conflicting or suspicious email language",
+        );
     }
-    if mail::automatic_draft_conflict(&draft.body, &s.signature) {
-        reasons.push("Draft requires Human review because of escalation or link content".into());
+    if mail::automatic_draft_conflict(&draft.body, &settings.signature) {
+        block(
+            AutomaticPolicyCode::DraftEscalationOrLink,
+            "Draft requires Human review because of escalation or link content",
+        );
     }
     if email.header("auto-submitted").is_some_and(|value| {
         !value.eq_ignore_ascii_case("no") && !value.eq_ignore_ascii_case("auto-generated")
     }) {
-        reasons.push("Automatic reply-loop marker requires Human review".into());
+        block(
+            AutomaticPolicyCode::AutomaticReplyLoop,
+            "Automatic reply-loop marker requires Human review",
+        );
     }
     for name in [
         "list-id",
@@ -1001,16 +1127,37 @@ pub fn auto_blocks(job: &Job, s: &Settings, account: &str, now: DateTime<Utc>) -
         "x-auto-response-suppress",
     ] {
         if email.headers.contains_key(name) {
-            reasons.push(format!("Automatic replies suppressed by {name}"));
+            block(
+                AutomaticPolicyCode::AutomaticReplySuppressed,
+                format!("Automatic replies suppressed by {name}"),
+            );
         }
     }
     if let Some(reply) = &email.reply_to {
         if mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok() {
-            reasons.push("Reply-To differs from sender; human review required".into());
+            block(
+                AutomaticPolicyCode::ReplyToMismatch,
+                "Reply-To differs from sender; human review required",
+            );
         }
     }
-    reasons
+
+    AutomaticPolicyDecision {
+        eligible: blocks.is_empty(),
+        blocks,
+    }
 }
+
+/// Compatibility helper for existing UI/tests. Integrations should prefer
+/// `automatic_policy` and its stable reason codes.
+pub fn auto_blocks(job: &Job, settings: &Settings, account: &str, now: DateTime<Utc>) -> Vec<String> {
+    automatic_policy(job, settings, account, now)
+        .blocks
+        .into_iter()
+        .map(|block| block.message)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
