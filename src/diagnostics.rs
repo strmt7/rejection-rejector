@@ -1,8 +1,4 @@
-use crate::{
-    engine::Engine,
-    ollama::Ollama,
-    vault::write_new_private,
-};
+use crate::{engine::Engine, ollama::Ollama, vault::write_new_private};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path};
@@ -129,10 +125,7 @@ pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::engine::Engine;
-    use std::sync::{
-        atomic::AtomicBool,
-        Arc,
-    };
+    use std::sync::{atomic::AtomicBool, Arc};
 
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {
