@@ -179,6 +179,47 @@ impl JobState {
     pub fn reviewable(self) -> bool {
         matches!(self, Self::Ready | Self::Attention)
     }
+
+    pub fn from_db(value: &str) -> Option<Self> {
+        Some(match value {
+            "queued" => Self::Queued,
+            "ready" => Self::Ready,
+            "attention" => Self::Attention,
+            "other" => Self::Other,
+            "deferred" => Self::Deferred,
+            "dismissed" => Self::Dismissed,
+            "sending" => Self::Sending,
+            "sent" => Self::Sent,
+            "uncertain" => Self::Uncertain,
+            _ => return None,
+        })
+    }
+
+    /// Persisted lifecycle invariant. Same-state saves are allowed for metadata,
+    /// retry counters, retention pruning and other non-transition updates.
+    pub fn can_transition_to(self, next: Self) -> bool {
+        if self == next {
+            return true;
+        }
+        match self {
+            Self::Queued => matches!(
+                next,
+                Self::Ready | Self::Attention | Self::Other | Self::Deferred
+            ),
+            Self::Ready | Self::Attention => matches!(
+                next,
+                Self::Queued
+                    | Self::Attention
+                    | Self::Dismissed
+                    | Self::Deferred
+                    | Self::Sending
+            ),
+            Self::Deferred => next == Self::Queued,
+            Self::Sending => matches!(next, Self::Attention | Self::Sent | Self::Uncertain),
+            Self::Uncertain => next == Self::Sent,
+            Self::Other | Self::Dismissed | Self::Sent => false,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -241,4 +282,53 @@ pub struct AuditEvent {
     pub kind: String,
     pub item_id: Option<String>,
     pub detail: String,
+}
+
+
+#[cfg(test)]
+mod job_state_tests {
+    use super::JobState;
+
+    #[test]
+    fn persisted_state_machine_rejects_terminal_reopen_and_illegal_jumps() {
+        assert!(JobState::Queued.can_transition_to(JobState::Ready));
+        assert!(JobState::Queued.can_transition_to(JobState::Deferred));
+        assert!(!JobState::Queued.can_transition_to(JobState::Sent));
+
+        assert!(JobState::Ready.can_transition_to(JobState::Sending));
+        assert!(JobState::Attention.can_transition_to(JobState::Queued));
+        assert!(!JobState::Ready.can_transition_to(JobState::Sent));
+
+        assert!(JobState::Deferred.can_transition_to(JobState::Queued));
+        assert!(!JobState::Deferred.can_transition_to(JobState::Ready));
+
+        assert!(JobState::Sending.can_transition_to(JobState::Uncertain));
+        assert!(JobState::Sending.can_transition_to(JobState::Sent));
+        assert!(JobState::Uncertain.can_transition_to(JobState::Sent));
+        assert!(!JobState::Uncertain.can_transition_to(JobState::Ready));
+
+        for terminal in [JobState::Other, JobState::Dismissed, JobState::Sent] {
+            assert!(terminal.can_transition_to(terminal));
+            assert!(!terminal.can_transition_to(JobState::Queued));
+            assert!(!terminal.can_transition_to(JobState::Ready));
+        }
+    }
+
+    #[test]
+    fn database_state_round_trip_is_complete() {
+        for state in [
+            JobState::Queued,
+            JobState::Ready,
+            JobState::Attention,
+            JobState::Other,
+            JobState::Deferred,
+            JobState::Dismissed,
+            JobState::Sending,
+            JobState::Sent,
+            JobState::Uncertain,
+        ] {
+            assert_eq!(JobState::from_db(state.db()), Some(state));
+        }
+        assert_eq!(JobState::from_db("unknown"), None);
+    }
 }
