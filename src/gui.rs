@@ -1,6 +1,8 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
-    config::{Mode, Settings, Tone, LOOKBACK_DAYS, MODEL_CANDIDATES, POLL_HOURS},
+    config::{
+        settings_context_hash, Mode, Settings, Tone, LOOKBACK_DAYS, MODEL_CANDIDATES, POLL_HOURS,
+    },
     types::{hash, Job, JobState},
     worker::{Command, Snapshot, Worker},
 };
@@ -511,6 +513,21 @@ impl App {
                         &s.model.message
                     });
                     ui.end_row();
+                    ui.label("Task qualification");
+                    if let Some(qualification) = &s.settings.task_qualification {
+                        ui.label(format!(
+                            "PASS · score {:.1}/100 · {} fixtures · {}",
+                            qualification.task_score,
+                            qualification.fixture_count,
+                            qualification
+                                .qualified_at
+                                .with_timezone(&chrono::Local)
+                                .format("%d %b %Y %H:%M")
+                        ));
+                    } else {
+                        ui.label("Not passed for current configuration");
+                    }
+                    ui.end_row();
                 });
             ui.horizontal_wrapped(|ui| {
                 if ui
@@ -627,7 +644,7 @@ impl App {
                 self.worker
                     .command(Command::Settings(self.settings.clone()));
             }
-            ui.label(RichText::new("Qualification is a smoke test and an Ollama-reported residency check, not proof of peak whole-device memory or best-in-class accuracy. The evaluation button writes a timestamped JSON report into this app's local data directory; it uses synthetic fixtures only and sends no email. Test on your actual GPU and mailbox before using Automatic.").small().color(AMBER));
+            ui.label(RichText::new("Qualify & pin is only a smoke/residency test. Automatic mode additionally requires the full task-specific evaluation to pass for the exact model digest, prompt version, signature/tone/candidate facts and context size. Editing those inputs invalidates that qualification. The suite is synthetic and sends no email; independently labelled private mailbox acceptance is still required for serious deployment.").small().color(AMBER));
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
@@ -635,10 +652,23 @@ impl App {
             && self.settings.model == s.settings.model
             && self.settings.num_ctx == s.settings.num_ctx
             && self.settings.ollama_url == s.settings.ollama_url;
+        let task_qualification_ready = self
+            .settings
+            .task_qualification
+            .as_ref()
+            .is_some_and(|qualification| {
+                self.settings.model_digest.as_ref() == Some(&qualification.digest)
+                    && self.settings.model == qualification.model
+                    && qualification.prompt_version == crate::config::PROMPT_VERSION
+                    && qualification.context_hash == settings_context_hash(&self.settings)
+            });
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
-        let automatic_prerequisites =
-            s.connected && s.send_scope && qualified_model_matches_draft && signature_ready;
+        let automatic_prerequisites = s.connected
+            && s.send_scope
+            && qualified_model_matches_draft
+            && task_qualification_ready
+            && signature_ready;
         Self::heading(
             ui,
             "Settings",
@@ -735,8 +765,12 @@ impl App {
                     ("Gmail connected", s.connected),
                     ("Gmail send permission granted", s.send_scope),
                     (
-                        "Current model configuration qualified & pinned",
+                        "Current model smoke-qualified & pinned",
                         qualified_model_matches_draft,
+                    ),
+                    (
+                        "Task-specific evaluation passed for this exact configuration",
+                        task_qualification_ready,
                     ),
                     ("Non-placeholder signature set", signature_ready),
                 ] {
