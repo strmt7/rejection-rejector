@@ -328,6 +328,7 @@ mod tests {
             MODEL_CANDIDATES.iter().map(|(_, tag)| *tag).collect();
         assert_eq!(tags.len(), MODEL_CANDIDATES.len());
         assert!(tags.contains("qwen3.5:9b-q8_0"));
+        assert!(tags.contains("granite4.2:8b-q8_0"));
         assert!(tags.contains("gemma4:12b-it-q8_0"));
         assert!(tags.contains("ministral-3:14b"));
     }
