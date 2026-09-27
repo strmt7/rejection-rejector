@@ -27,6 +27,6 @@ Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 | /v1/items/ID | One account-owned job |
 | /v1/events?after=SEQ | Up to 100 audit events; persist the highest returned sequence |
 
-Responses use Cache-Control: no-store. HTTP 503 means the single worker is busy, for example during local inference: use bounded backoff rather than bypassing the worker and opening SQLite directly. SQLite internals are not a stable integration contract.
+Responses use `Cache-Control: no-store` and every response carries an `X-Request-ID` UUID for local correlation. Errors use a stable envelope: `api_version`, `request_id`, and `error { code, message, retryable }`. HTTP 503 codes such as `worker_busy` or `worker_timeout` are retryable with bounded backoff; do not bypass the worker and open SQLite directly. `/v1/health` and `/v1/status` also expose typed worker operation state so clients can distinguish sync, model evaluation, backup, delivery and other operations without scraping UI strings. SQLite internals are not a stable integration contract.
 
-Version 0.1 has no write/send HTTP routes, automatic webhook uploads or cross-service synchronization. The reserved api_allow_writes setting rejects true. Enabling, disabling or changing the API listener requires a restart.
+Version 0.1 has no write/send HTTP routes, automatic webhook uploads or cross-service synchronization. The reserved `api_allow_writes` setting rejects true. Enabling, disabling or changing the API listener requires a restart. Enterprise policy can prohibit the integration API entirely; effective policy identity and constraints are visible through authenticated health/status diagnostics.
