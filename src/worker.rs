@@ -1,6 +1,6 @@
 use crate::{
     config::Settings,
-    engine::Engine,
+    engine::{automatic_policy, Engine},
     oauth,
     ollama::{self, ModelStatus, Ollama},
     types::*,
@@ -502,6 +502,7 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "local_ollama": true,
                     "review_queue": true,
                     "automatic_policy": true,
+                    "automatic_policy_reason_codes": true,
                     "delivery_reconciliation": true,
                     "events": true,
                     "database_integrity": true,
@@ -577,6 +578,24 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 .unwrap_or(0);
             Ok(json!({"events":e.db.events(after.max(0),100)?}))
         }
+        path if path.starts_with("/v1/items/") && path.ends_with("/automatic-policy") => {
+            ensure!(
+                query.is_empty(),
+                "Automatic-policy endpoint takes no query parameters"
+            );
+            let id = path
+                .trim_start_matches("/v1/items/")
+                .trim_end_matches("/automatic-policy")
+                .trim_end_matches('/');
+            validate_api_item_id(id)?;
+            let job = e.owned(id)?;
+            Ok(serde_json::to_value(automatic_policy(
+                &job,
+                &e.settings,
+                &e.account,
+                Utc::now(),
+            ))?)
+        }
         path if path.starts_with("/v1/items/") => {
             ensure!(query.is_empty(), "Item endpoint takes no query parameters");
             let id = path.trim_start_matches("/v1/items/");
@@ -632,6 +651,29 @@ mod tests {
         assert!(api_query(&engine, "/v1/status?extra=1").is_err());
         assert!(api_query(&engine, "/v1/items?page=1&extra=2").is_err());
         assert!(api_query(&engine, "/v1/events?after=0&after=1").is_err());
+    }
+
+    #[test]
+    fn automatic_policy_api_returns_stable_reason_codes() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let job = engine.db.list(&engine.account, true, 0, 25).unwrap().remove(0);
+        let value =
+            api_query(&engine, &format!("/v1/items/{}/automatic-policy", job.id)).unwrap();
+        assert_eq!(value["eligible"], false);
+        let codes = value["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|block| block["code"].as_str())
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"automatic_mode_not_armed"));
     }
 
     #[test]
