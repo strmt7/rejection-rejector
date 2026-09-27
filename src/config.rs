@@ -451,6 +451,21 @@ mod tests {
         );
     }
     #[test]
+    fn legacy_settings_json_without_version_migrates_to_current() {
+        let value = serde_json::json!({
+            "poll_hours": 2,
+            "lookback_days": 14,
+            "signature": "Legacy User"
+        });
+        let settings: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(settings.settings_format_version, SETTINGS_FORMAT_VERSION);
+        assert_eq!(settings.poll_hours, 2);
+        assert_eq!(settings.lookback_days, 14);
+        assert_eq!(settings.signature, "Legacy User");
+        settings.validate().unwrap();
+    }
+
+    #[test]
     fn settings_format_version_defaults_and_future_versions_fail_closed() {
         let current = Settings::default();
         assert_eq!(current.settings_format_version, SETTINGS_FORMAT_VERSION);
