@@ -404,6 +404,24 @@ pub enum AuditDomain {
     #[default]
     Other,
 }
+impl AuditDomain {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mail => "mail",
+            Self::Delivery => "delivery",
+            Self::Model => "model",
+            Self::Settings => "settings",
+            Self::Policy => "policy",
+            Self::Security => "security",
+            Self::Recovery => "recovery",
+            Self::Integration => "integration",
+            Self::Retention => "retention",
+            Self::Storage => "storage",
+            Self::Worker => "worker",
+            Self::Other => "other",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -413,6 +431,16 @@ pub enum AuditSeverity {
     Warning,
     Error,
     Security,
+}
+impl AuditSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+            Self::Security => "security",
+        }
+    }
 }
 
 pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
