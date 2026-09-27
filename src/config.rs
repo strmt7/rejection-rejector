@@ -34,6 +34,10 @@ pub const PROMPT_VERSION: &str = "rr-prompts-v1";
 pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v2";
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 
+fn default_settings_format_version() -> u32 {
+    SETTINGS_FORMAT_VERSION
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
@@ -98,6 +102,7 @@ impl Tone {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    #[serde(default = "default_settings_format_version")]
     pub settings_format_version: u32,
     pub poll_hours: u8,
     pub lookback_days: u8,
@@ -282,7 +287,6 @@ impl Settings {
                     && qualification.model == self.model
                     && qualification.prompt_version == PROMPT_VERSION
                     && qualification.context_hash == settings_context_hash(self)
-                    && qualification.suite_hash == evaluation_suite_hash()
                     && qualification.suite_hash == evaluation_suite_hash(),
                 "Task-specific model qualification is stale; evaluate the current configuration again"
             );
@@ -463,6 +467,18 @@ mod tests {
         assert_eq!(settings.lookback_days, 14);
         assert_eq!(settings.signature, "Legacy User");
         settings.validate().unwrap();
+    }
+
+    #[test]
+    fn legacy_settings_without_explicit_format_version_upgrade_to_current() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("settings_format_version");
+        let legacy: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(legacy.settings_format_version, SETTINGS_FORMAT_VERSION);
+        legacy.validate().unwrap();
     }
 
     #[test]
