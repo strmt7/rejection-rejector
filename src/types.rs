@@ -302,6 +302,7 @@ pub enum OperationKind {
     RevealApiToken,
     HideApiToken,
     ApiRequest,
+    EnterprisePolicyReload,
     AnalyzeQueuedMail,
     AutomaticDispatch,
 }
@@ -335,6 +336,7 @@ impl OperationKind {
             Self::RevealApiToken => "api_token_reveal_failed",
             Self::HideApiToken => "api_token_hide_failed",
             Self::ApiRequest => "integration_api_request_failed",
+            Self::EnterprisePolicyReload => "enterprise_policy_reload_failed",
             Self::AnalyzeQueuedMail => "mail_analysis_failed",
             Self::AutomaticDispatch => "automatic_dispatch_failed",
         }
@@ -357,6 +359,7 @@ impl OperationKind {
                 | Self::SendReply
                 | Self::ReconcileDelivery
                 | Self::ApiRequest
+                | Self::EnterprisePolicyReload
                 | Self::AnalyzeQueuedMail
                 | Self::AutomaticDispatch
         )
