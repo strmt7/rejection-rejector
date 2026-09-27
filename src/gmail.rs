@@ -15,6 +15,7 @@ use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
 };
+use zeroize::{Zeroize, Zeroizing};
 
 const ROOT: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 #[derive(Clone, Debug, Deserialize)]
@@ -121,7 +122,7 @@ impl std::error::Error for SendFailure {}
 
 pub struct Gmail {
     creds: Credentials,
-    token: Option<(String, Instant)>,
+    token: Option<(Zeroizing<String>, Instant)>,
 }
 impl Gmail {
     pub fn new(creds: Credentials) -> Self {
@@ -130,7 +131,7 @@ impl Gmail {
     pub fn can_send(&self) -> bool {
         self.creds.can_send
     }
-    fn access(&mut self) -> Result<String> {
+    fn access(&mut self) -> Result<Zeroizing<String>> {
         if let Some((token, until)) = &self.token
             && Instant::now() < *until
         {
@@ -146,10 +147,14 @@ impl Gmail {
             ])
             .send()
             .context("Google token refresh failed; reconnect if consent expired")?;
-        let t: Tokens = net::json(response, 32768)?;
+        let mut t: Tokens = net::json(response, 32768)?;
         let until = Instant::now() + Duration::from_secs(t.expires_in.saturating_sub(60).max(1));
-        self.token = Some((t.access_token.clone(), until));
-        Ok(t.access_token)
+        let access_token = Zeroizing::new(std::mem::take(&mut t.access_token));
+        self.token = Some((access_token.clone(), until));
+        if let Some(refresh_token) = &mut t.refresh_token {
+            refresh_token.zeroize();
+        }
+        Ok(access_token)
     }
     fn get(
         &mut self,
@@ -159,7 +164,7 @@ impl Gmail {
         let token = self.access()?;
         net::client(45, false)?
             .get(format!("{ROOT}{path}"))
-            .bearer_auth(token)
+            .bearer_auth(token.as_str())
             .query(params)
             .send()
             .context("Gmail request failed")
