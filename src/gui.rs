@@ -642,7 +642,7 @@ impl App {
                 .clicked()
             {
                 self.worker
-                    .command(Command::Settings(self.settings.clone()));
+                    .command(Command::Settings(Box::new(self.settings.clone())));
             }
             ui.label(RichText::new("Qualify & pin is only a smoke/residency test. Automatic mode additionally requires the full task-specific evaluation to pass for the exact model digest, prompt version, signature/tone/candidate facts and context size. Editing those inputs invalidates that qualification. The suite is synthetic and sends no email; independently labelled private mailbox acceptance is still required for serious deployment.").small().color(AMBER));
         });
@@ -930,7 +930,7 @@ impl App {
             .clicked()
         {
             self.worker
-                .command(Command::Settings(self.settings.clone()));
+                .command(Command::Settings(Box::new(self.settings.clone())));
         }
     }
     fn dialogs(&mut self, ctx: &egui::Context, s: &Snapshot) {
