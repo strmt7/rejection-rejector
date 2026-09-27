@@ -246,12 +246,11 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
             .pointer("/report/summary/task_score")
             .and_then(serde_json::Value::as_f64);
         let model = candidate.get("model").and_then(serde_json::Value::as_str);
-        if eligible {
-            if let (Some(score), Some(model)) = (score, model) {
-                if winner.as_ref().is_none_or(|(_, best)| score > *best) {
-                    winner = Some((model.to_owned(), score));
-                }
-            }
+        if eligible
+            && let (Some(score), Some(model)) = (score, model)
+            && winner.as_ref().is_none_or(|(_, best)| score > *best)
+        {
+            winner = Some((model.to_owned(), score));
         }
     }
 
@@ -283,10 +282,10 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
 }
 
 fn write_report(out: &Path, report: &serde_json::Value) -> Result<()> {
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     write_new_private(out, &serde_json::to_vec_pretty(report)?)?;
     Ok(())
