@@ -990,7 +990,8 @@ if ui.add_enabled(s.busy.is_empty()&&!self.worker.paused.load(Ordering::SeqCst),
     }
 }
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx();
         ctx.request_repaint_after(Duration::from_millis(250));
         let s = self.worker.view();
         self.sync_view(&s);
