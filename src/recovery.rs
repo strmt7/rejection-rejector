@@ -27,6 +27,8 @@ pub struct BackupManifest {
     pub database_sha256: String,
     pub vault_id_file: String,
     pub vault_id: String,
+    #[serde(default)]
+    pub audit_head: String,
     pub portable: bool,
     pub recovery_note: String,
 }
@@ -113,7 +115,7 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
         write_new_private(&temporary.join(VAULT_ID_NAME), vault_id.as_bytes())?;
 
         let manifest = BackupManifest {
-            format_version: 1,
+            format_version: 2,
             app_version: env!("CARGO_PKG_VERSION").into(),
             created_at: Utc::now(),
             schema_version: store.schema_version()?,
@@ -121,6 +123,7 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
             database_sha256: sha256_file(&database)?,
             vault_id_file: VAULT_ID_NAME.into(),
             vault_id,
+            audit_head: store.audit_head()?,
             portable: false,
             recovery_note: "Same-vault backup. Restoring on another machine requires the original OS-protected master key; this directory does not contain that key.".into(),
         };
@@ -155,7 +158,10 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
     let manifest_bytes = read_small(&directory.join(MANIFEST_NAME), 64 * 1024)?;
     let manifest: BackupManifest =
         serde_json::from_slice(&manifest_bytes).context("Backup manifest is invalid")?;
-    ensure!(manifest.format_version == 1, "Unsupported backup format");
+    ensure!(
+        matches!(manifest.format_version, 1 | 2),
+        "Unsupported backup format"
+    );
     ensure!(
         manifest.database_file == DATABASE_NAME && manifest.vault_id_file == VAULT_ID_NAME,
         "Backup manifest contains unexpected file names"
@@ -175,11 +181,18 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
         actual_hash == manifest.database_sha256,
         "Backup database checksum mismatch"
     );
-    let schema = store.verify_backup_file(&database)?;
+    let (schema, audit_head) = store.verify_backup_file(&database)?;
     ensure!(
         schema == manifest.schema_version,
         "Backup schema does not match its manifest"
     );
+    if manifest.format_version >= 2 {
+        let audit_head = audit_head.context("Version 2 backup is missing an audit chain")?;
+        ensure!(
+            manifest.audit_head == audit_head,
+            "Backup audit head does not match its manifest"
+        );
+    }
     Ok(manifest)
 }
 
@@ -221,6 +234,8 @@ mod tests {
         let destination = root.path().join("backup");
         let manifest = create_backup(&store, &data, &destination).unwrap();
         assert_eq!(manifest.vault_id, vault_id);
+        assert_eq!(manifest.format_version, 2);
+        assert_eq!(manifest.audit_head.len(), 64);
         assert!(!manifest.portable);
         verify_backup(&store, &destination).unwrap();
         assert!(backup_manifest_path(&destination).is_file());
