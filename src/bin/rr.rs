@@ -89,6 +89,14 @@ fn main() -> Result<()> {
             let database_bytes = std::fs::metadata(e.directory.join("state.sqlite3"))
                 .ok()
                 .map(|metadata| metadata.len());
+            let readiness = rejection_rejector::readiness::assess(
+                &e.settings,
+                database_integrity_ok,
+                e.connected(),
+                e.send_scope(),
+                false,
+                false,
+            );
             let local_ai = Ollama::new(&e.settings)?;
             let runtime_version = local_ai.runtime_version().ok();
             let ollama_healthy = runtime_version.is_some();
@@ -132,6 +140,7 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
+                    "configuration_readiness": readiness,
                     "database": {
                         "integrity_ok": database_integrity_ok,
                         "schema_version": e.db.schema_version()?,
