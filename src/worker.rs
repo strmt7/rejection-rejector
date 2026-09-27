@@ -26,6 +26,7 @@ pub struct Snapshot {
     pub notice: String,
     pub error: String,
     pub operation: OperationStatus,
+    pub enterprise_policy: crate::policy::PolicyStatus,
     pub settings: Settings,
     pub settings_revision: u64,
     pub account: String,
@@ -240,6 +241,7 @@ fn refresh(
     s.connected = e.connected();
     s.send_scope = e.send_scope();
     s.demo = e.demo;
+    s.enterprise_policy = e.enterprise_policy_status();
     s.settings = e.settings.clone();
     s.counts = counts;
     s.model = e.model.clone();
@@ -648,7 +650,8 @@ fn api_query_with_operation(
                     "external_audit_anchor": true,
                     "verified_backup_bundle": true,
                     "task_model_bakeoff": true,
-                    "typed_operation_status": true
+                    "typed_operation_status": true,
+                    "enterprise_policy": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
@@ -688,6 +691,7 @@ fn api_query_with_operation(
                     "stopping": stopping,
                     "operation": operation
                 },
+                "enterprise_policy": e.enterprise_policy_status(),
                 "mode": e.settings.mode,
                 "sending_enabled": e.settings.sending_enabled,
                 "model": {
@@ -729,7 +733,7 @@ fn api_query_with_operation(
                 "Status endpoint takes no query parameters"
             );
             Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
             )
         }
         "/v1/items" => {
@@ -823,6 +827,7 @@ mod tests {
         let health = api_query(&engine, "/v1/health").unwrap();
         assert_eq!(health["healthy"], true);
         assert_eq!(health["database"]["integrity_ok"], true);
+        assert_eq!(health["enterprise_policy"]["active"], false);
         assert!(health.get("account").is_none());
 
         let value = api_query(&engine, "/v1/capabilities").unwrap();
