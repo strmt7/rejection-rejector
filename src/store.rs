@@ -58,10 +58,13 @@ fn event(
     at: DateTime<Utc>,
 ) -> Result<()> {
     let id = uuid::Uuid::new_v4().to_string();
+    let (domain, severity) = audit_attributes(kind);
     let e = AuditEvent {
         seq: 0,
         at,
         kind: kind.into(),
+        domain,
+        severity,
         item_id: item.map(str::to_owned),
         detail: detail.into(),
     };
