@@ -1,5 +1,5 @@
 use crate::{
-    config::{Mode, Settings, MODEL_CANDIDATES},
+    config::{Settings, MODEL_CANDIDATES},
     mail,
     ollama::{sample_email, Ollama},
     types::Category,
