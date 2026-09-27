@@ -228,6 +228,50 @@ impl Engine {
             .map(LoadedPolicy::status)
             .unwrap_or_else(policy::inactive_status)
     }
+
+    /// Reload the optional machine-wide policy and apply only restrictive
+    /// changes automatically. Removing or relaxing policy never silently enables
+    /// capabilities; users must still opt in through normal settings.
+    pub fn reload_enterprise_policy(&mut self) -> Result<bool> {
+        if self.demo {
+            return Ok(false);
+        }
+        let loaded = policy::load_optional()?;
+        let old_digest = self
+            .enterprise_policy
+            .as_ref()
+            .map(|current| current.digest.as_str());
+        let new_digest = loaded.as_ref().map(|current| current.digest.as_str());
+        if old_digest == new_digest {
+            return Ok(false);
+        }
+
+        let mut settings = self.settings.clone();
+        let settings_changed = match &loaded {
+            Some(current) => current.policy.enforce(&mut settings, true)?,
+            None => false,
+        };
+        if settings_changed {
+            self.db.set_meta("settings", &settings)?;
+            self.settings = settings;
+            self.model = ModelStatus::default();
+        }
+        let detail = match &loaded {
+            Some(current) => format!(
+                "Enterprise policy reloaded; sha256={}{}",
+                current.digest,
+                if settings_changed {
+                    "; persisted settings were restricted"
+                } else {
+                    ""
+                }
+            ),
+            None => "Enterprise policy removed; existing restrictive settings were not relaxed automatically".into(),
+        };
+        self.enterprise_policy = loaded;
+        self.db.log("policy.reloaded", None, &detail)?;
+        Ok(true)
+    }
     pub fn connect(&mut self, path: &Path, send: bool) -> Result<()> {
         ensure!(!self.demo, "Demo mode never connects to a real mailbox");
         ensure!(
