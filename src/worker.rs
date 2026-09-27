@@ -294,7 +294,10 @@ fn run(
                         r
                     }
                     Command::EvaluateModel => {
-                        busy(&shared, "Running the full task-specific local model evaluation…");
+                        busy(
+                            &shared,
+                            "Running the full task-specific local model evaluation…",
+                        );
                         e.evaluate_model().map(|_| ())
                     }
                     Command::CompareModels => {
