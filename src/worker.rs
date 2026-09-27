@@ -491,7 +491,7 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                 "Capabilities endpoint takes no query parameters"
             );
             Ok(json!({
-                "api_version": 1,
+                "api_version": crate::api::API_VERSION,
                 "application_version": env!("CARGO_PKG_VERSION"),
                 "read_only": true,
                 "mail_provider": "gmail",
@@ -505,6 +505,8 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "automatic_policy_reason_codes": true,
                     "delivery_reconciliation": true,
                     "events": true,
+                    "openapi_3_1": true,
+                    "direct_liveness": true,
                     "database_integrity": true,
                     "tamper_evident_audit_chain": true,
                     "external_audit_anchor": true,
@@ -638,6 +640,29 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn openapi_contract_covers_every_public_v1_route() {
+        let spec: serde_json::Value =
+            serde_json::from_str(crate::api::OPENAPI_DOCUMENT).unwrap();
+        let paths = spec["paths"].as_object().unwrap();
+        for expected in [
+            "/v1/live",
+            "/v1/openapi.json",
+            "/v1/capabilities",
+            "/v1/health",
+            "/v1/status",
+            "/v1/items",
+            "/v1/items/{id}",
+            "/v1/events",
+            "/v1/audit/anchor",
+            "/v1/audit/contains",
+        ] {
+            assert!(paths.contains_key(expected), "OpenAPI missing {expected}");
+        }
+        assert_eq!(paths.len(), 10);
+        assert_eq!(spec["openapi"], "3.1.0");
+    }
+
+    #[test]
     fn capabilities_are_versioned_and_read_only() {
         let dir = tempfile::tempdir().unwrap();
         let engine = Engine::open(
@@ -653,7 +678,7 @@ mod tests {
         assert!(health.get("account").is_none());
 
         let value = api_query(&engine, "/v1/capabilities").unwrap();
-        assert_eq!(value["api_version"], 1);
+        assert_eq!(value["api_version"], crate::api::API_VERSION);
         assert_eq!(value["read_only"], true);
         assert_eq!(value["mail_provider"], "gmail");
         assert_eq!(
