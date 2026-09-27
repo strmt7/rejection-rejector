@@ -1,5 +1,75 @@
-use crate::config::{Mode, Settings};
+use crate::{
+    config::{Mode, Settings},
+    types::Counts,
+};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct OperationalIndicators {
+    pub sync_age_seconds: Option<i64>,
+    pub sync_fresh: bool,
+    pub queue_depth: u64,
+    pub review_depth: u64,
+    pub uncertain_deliveries: u64,
+    pub task_qualification_age_seconds: Option<i64>,
+    pub degraded: bool,
+    pub degradation_reasons: Vec<&'static str>,
+}
+
+pub fn operational_indicators(
+    settings: &Settings,
+    counts: &Counts,
+    last_poll: Option<DateTime<Utc>>,
+    database_integrity_ok: bool,
+    connected: bool,
+    now: DateTime<Utc>,
+) -> OperationalIndicators {
+    let sync_age_seconds = last_poll.map(|poll| {
+        now.signed_duration_since(poll)
+            .num_seconds()
+            .max(0)
+    });
+    let freshness_window = settings.interval_seconds().saturating_mul(2);
+    let sync_fresh = connected
+        && sync_age_seconds.is_some_and(|age| age <= freshness_window);
+
+    let task_qualification_age_seconds = settings
+        .task_qualification
+        .as_ref()
+        .map(|qualification| {
+            now.signed_duration_since(qualification.qualified_at)
+                .num_seconds()
+                .max(0)
+        });
+
+    let mut degradation_reasons = Vec::new();
+    if !database_integrity_ok {
+        degradation_reasons.push("database_integrity_failed");
+    }
+    if !connected {
+        degradation_reasons.push("gmail_disconnected");
+    } else if !sync_fresh {
+        degradation_reasons.push("mailbox_sync_stale");
+    }
+    if counts.uncertain > 0 {
+        degradation_reasons.push("uncertain_delivery_present");
+    }
+    if settings.mode == Mode::Automatic && !settings.task_qualification_current() {
+        degradation_reasons.push("task_qualification_missing_or_stale");
+    }
+
+    OperationalIndicators {
+        sync_age_seconds,
+        sync_fresh,
+        queue_depth: counts.queued,
+        review_depth: counts.review,
+        uncertain_deliveries: counts.uncertain,
+        task_qualification_age_seconds,
+        degraded: !degradation_reasons.is_empty(),
+        degradation_reasons,
+    }
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeReadiness {
@@ -95,6 +165,55 @@ mod tests {
             qualified_at: Utc::now(),
         });
         settings
+    }
+
+    #[test]
+    fn operational_indicators_report_staleness_without_invented_slos() {
+        let now = Utc::now();
+        let settings = Settings {
+            poll_hours: 1,
+            ..Settings::default()
+        };
+        let counts = Counts {
+            queued: 4,
+            review: 2,
+            uncertain: 1,
+            ..Counts::default()
+        };
+        let indicators = operational_indicators(
+            &settings,
+            &counts,
+            Some(now - chrono::Duration::hours(3)),
+            true,
+            true,
+            now,
+        );
+        assert!(!indicators.sync_fresh);
+        assert!(indicators.degraded);
+        assert!(
+            indicators
+                .degradation_reasons
+                .contains(&"mailbox_sync_stale")
+        );
+        assert!(
+            indicators
+                .degradation_reasons
+                .contains(&"uncertain_delivery_present")
+        );
+        assert_eq!(indicators.queue_depth, 4);
+        assert_eq!(indicators.review_depth, 2);
+        assert_eq!(indicators.uncertain_deliveries, 1);
+
+        let fresh = operational_indicators(
+            &settings,
+            &Counts::default(),
+            Some(now - chrono::Duration::minutes(30)),
+            true,
+            true,
+            now,
+        );
+        assert!(fresh.sync_fresh);
+        assert!(!fresh.degraded);
     }
 
     #[test]
