@@ -171,6 +171,34 @@ fn lists_and_loops_hold() {
     });
 }
 #[test]
+fn model_only_rejection_without_clear_language_is_held() {
+    held(|j, _, _| {
+        let email = j.email.as_mut().unwrap();
+        email.subject = "Application update".into();
+        email.text = "Thank you for your interest. We have completed our review and have an update regarding your application.".into();
+        let analysis = j.analysis.as_mut().unwrap();
+        analysis.verdict.category = Category::Rejection;
+        analysis.verdict.confidence = 99;
+        analysis.verdict.evidence = "We have completed our review".into();
+        analysis.email_fingerprint = email.fingerprint();
+    });
+}
+
+#[test]
+fn quoted_old_rejection_does_not_authorize_automatic_reply() {
+    held(|j, _, _| {
+        let email = j.email.as_mut().unwrap();
+        email.subject = "Interview invitation".into();
+        email.text = "We would like to invite you to an interview.\nOn Tuesday Recruiter wrote:\nWe have decided not to move forward with your application.".into();
+        let analysis = j.analysis.as_mut().unwrap();
+        analysis.verdict.category = Category::Rejection;
+        analysis.verdict.confidence = 99;
+        analysis.verdict.evidence = "We have decided not to move forward with your application.".into();
+        analysis.email_fingerprint = email.fingerprint();
+    });
+}
+
+#[test]
 fn replyable_auto_generated_rejection_can_still_pass_automatic_policy() {
     let (mut job, settings, now) = eligible();
     job.email
