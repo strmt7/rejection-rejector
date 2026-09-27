@@ -394,6 +394,17 @@ pub fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parse arbitrary RFC 5322/MIME bytes into inert bounded message text.
+///
+/// This narrow public entry point exists for deterministic tests and fuzzing. It
+/// never executes attachments, scripts, embedded messages or external content.
+pub fn parse_mime_text(bytes: &[u8]) -> Result<(String, bool)> {
+    let parsed = mailparse::parse_mail(bytes)?;
+    let (text, complete) = mime_text(&parsed, 0)?;
+    let (bounded, within) = mail::bounded_text(&text, 65_536);
+    Ok((bounded.to_owned(), complete && within))
+}
+
 fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
     ensure!(depth <= 20, "MIME nesting exceeds safe limit");
     let disposition = part.get_content_disposition();
@@ -468,6 +479,16 @@ pub fn stub(account: &str, m: MessageRef) -> Result<Stub> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_mime_parser_is_bounded_and_inert() {
+        let raw = b"Content-Type: text/html\r\n\r\n<script>alert(1)</script><p>Rejected</p>";
+        let (text, complete) = parse_mime_text(raw).unwrap();
+        assert!(complete);
+        assert!(text.contains("Rejected"));
+        assert!(!text.contains("<script>"));
+        assert!(text.len() <= 65_536);
+    }
+
     #[test]
     fn plain_mime_decodes() {
         let p = mailparse::parse_mail(
