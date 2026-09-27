@@ -32,20 +32,18 @@ jobs:
           toolchain: 1.98.1
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Install pinned security tooling
-        run: |
-          cargo install --locked cargo-audit --version 0.22.2
-          cargo install --locked cargo-deny --version 0.20.2
-          cargo install --locked cargo-cyclonedx --version 0.5.9
+      - name: Install pinned security tooling from verified releases
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2,cargo-cyclonedx@0.5.9
+          checksum: true
+          fallback: none
       - name: RustSec audit
         run: cargo audit --deny warnings
       - name: License, source and dependency policy
         run: cargo deny check advisories licenses bans sources
       - name: Generate CycloneDX 1.5 SBOM
-        env:
-          SOURCE_DATE_EPOCH: ${{ github.event.repository.updated_at != '' && github.event.repository.updated_at || '0' }}
         run: |
-          unset SOURCE_DATE_EPOCH
           cargo cyclonedx --format json --spec-version 1.5 --all-features --target all --override-filename rejection-rejector.cdx
           mkdir -p artifacts
           find . -maxdepth 2 -name 'rejection-rejector.cdx.json' -exec cp {} artifacts/rejection-rejector.cdx.json \;
