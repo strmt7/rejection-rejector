@@ -329,7 +329,7 @@ impl Gmail {
         })?;
         let response = client
             .post(format!("{ROOT}/messages/send"))
-            .bearer_auth(token)
+            .bearer_auth(token.as_str())
             .json(&serde_json::json!({"raw":raw,"threadId":thread_id}))
             .send()
             .map_err(|error| SendFailure {
