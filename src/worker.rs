@@ -354,8 +354,10 @@ fn run(
     let mut sync_retry = Instant::now();
     let mut auto_due = Instant::now();
     let mut process_due = Instant::now();
+    let mut retention_due = Instant::now() + Duration::from_secs(60);
     let mut process_failures = 0u32;
     let mut automatic_failures = 0u32;
+    let mut retention_failures = 0u32;
     while !e.stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
@@ -513,6 +515,24 @@ fn run(
         {
             snapshot.api_token = None;
             snapshot.api_token_expires = None;
+        }
+        if !e.demo && Instant::now() >= retention_due {
+            begin_operation(
+                &shared,
+                OperationKind::PurgeRetention,
+                "Applying local retention policy to completed content…",
+            );
+            let result = e.db.purge(e.settings.retention_days).map(|_| ());
+            report(&shared, OperationKind::PurgeRetention, &result);
+            if result.is_ok() {
+                retention_failures = 0;
+                retention_due = Instant::now() + Duration::from_secs(24 * 60 * 60);
+            } else {
+                retention_failures = retention_failures.saturating_add(1);
+                retention_due =
+                    Instant::now() + bounded_backoff(15 * 60, retention_failures, 60 * 60);
+            }
+            refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
             continue;
@@ -945,6 +965,22 @@ mod tests {
         for id in ["", "abc", &"g".repeat(64), &"a".repeat(65)] {
             assert!(validate_api_item_id(id).is_err());
         }
+    }
+
+    #[test]
+    fn retention_retry_backoff_stays_bounded() {
+        assert_eq!(
+            bounded_backoff(15 * 60, 1, 60 * 60),
+            Duration::from_secs(15 * 60)
+        );
+        assert_eq!(
+            bounded_backoff(15 * 60, 4, 60 * 60),
+            Duration::from_secs(60 * 60)
+        );
+        assert_eq!(
+            bounded_backoff(15 * 60, 20, 60 * 60),
+            Duration::from_secs(60 * 60)
+        );
     }
 
     #[test]
