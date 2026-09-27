@@ -138,25 +138,29 @@ pub fn inactive_status() -> PolicyStatus {
     }
 }
 
-pub fn default_policy_path() -> Option<PathBuf> {
+pub fn default_policy_path() -> Result<Option<PathBuf>> {
     if let Some(explicit) = std::env::var_os("RR_ENTERPRISE_POLICY") {
         let path = PathBuf::from(explicit);
-        return path.is_absolute().then_some(path);
+        ensure!(
+            path.is_absolute(),
+            "RR_ENTERPRISE_POLICY must be an absolute path"
+        );
+        return Ok(Some(path));
     }
     #[cfg(windows)]
     {
-        std::env::var_os("PROGRAMDATA")
+        Ok(std::env::var_os("PROGRAMDATA")
             .map(PathBuf::from)
-            .map(|root| root.join("RejectionRejector").join("policy.json"))
+            .map(|root| root.join("RejectionRejector").join("policy.json")))
     }
     #[cfg(not(windows))]
     {
-        Some(PathBuf::from("/etc/rejection-rejector/policy.json"))
+        Ok(Some(PathBuf::from("/etc/rejection-rejector/policy.json")))
     }
 }
 
 pub fn load_optional() -> Result<Option<LoadedPolicy>> {
-    let Some(path) = default_policy_path() else {
+    let Some(path) = default_policy_path()? else {
         return Ok(None);
     };
     if !path.exists() {
@@ -230,6 +234,17 @@ mod tests {
             ..Settings::default()
         };
         assert!(policy().enforce(&mut settings, false).is_err());
+    }
+
+    #[test]
+    fn relative_policy_override_is_rejected_fail_closed() {
+        let previous = std::env::var_os("RR_ENTERPRISE_POLICY");
+        unsafe { std::env::set_var("RR_ENTERPRISE_POLICY", "relative-policy.json") };
+        assert!(default_policy_path().is_err());
+        match previous {
+            Some(value) => unsafe { std::env::set_var("RR_ENTERPRISE_POLICY", value) },
+            None => unsafe { std::env::remove_var("RR_ENTERPRISE_POLICY") },
+        }
     }
 
     #[test]
