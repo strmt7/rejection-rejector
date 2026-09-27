@@ -548,7 +548,10 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
             }))
         }
         "/v1/audit/anchor" => {
-            ensure!(query.is_empty(), "Audit anchor endpoint takes no query parameters");
+            ensure!(
+                query.is_empty(),
+                "Audit anchor endpoint takes no query parameters"
+            );
             e.db.verify_audit_chain()?;
             Ok(json!({
                 "algorithm": "sha256-chain-v1",
@@ -718,7 +721,10 @@ mod tests {
         let first = api_query(&engine, "/v1/audit/anchor").unwrap();
         let head = first["head"].as_str().unwrap().to_owned();
         assert_eq!(head.len(), 64);
-        engine.db.log("test.anchor.advance", None, "advance").unwrap();
+        engine
+            .db
+            .log("test.anchor.advance", None, "advance")
+            .unwrap();
 
         let contains = api_query(&engine, &format!("/v1/audit/contains?head={head}")).unwrap();
         assert_eq!(contains["known"], true);
