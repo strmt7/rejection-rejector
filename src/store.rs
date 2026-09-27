@@ -194,6 +194,38 @@ impl Store {
         Ok(())
     }
 
+    /// Verify a backup without modifying it. The encrypted vault marker must
+    /// authenticate under this Store's current master key.
+    pub fn verify_backup_file(&self, path: &Path) -> Result<i64> {
+        ensure!(path.is_file(), "Backup database file is missing");
+        ensure!(
+            !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
+            "Backup database must not be a symlink"
+        );
+        let connection = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        check_connection_integrity(&connection)?;
+        let version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        ensure!(
+            version == self.schema_version()?,
+            "Backup schema version does not match the current database"
+        );
+        let encrypted: Vec<u8> = connection
+            .query_row(
+                "SELECT payload FROM meta WHERE name='vault_check'",
+                [],
+                |row| row.get(0),
+            )
+            .context("Backup vault marker is missing")?;
+        let marker: String = self.vault.open_value("meta/vault_check", &encrypted)?;
+        ensure!(marker == "rejection-rejector:v1", "Backup belongs to another vault");
+        Ok(version)
+    }
+
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
         let bytes: Option<Vec<u8>> = self
             .conn
