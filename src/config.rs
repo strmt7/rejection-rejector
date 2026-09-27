@@ -11,9 +11,10 @@ pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
 pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 34, 0);
 /// Curated challengers for this application's text-classification/drafting task.
 /// They are not ranked until evaluated locally on the task-specific suite.
-pub const MODEL_CANDIDATES: [(&str, &str); 5] = [
+pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
     ("Qwen3.5 9B Q8 · provisional default", "qwen3.5:9b-q8_0"),
-    ("Gemma 4 12B Q8 · newest dense challenger", "gemma4:12b-it-q8_0"),
+    ("Granite 4.2 8B Q8 · classification/JSON challenger", "granite4.2:8b-q8_0"),
+    ("Gemma 4 12B Q8 · dense writing/reasoning challenger", "gemma4:12b-it-q8_0"),
     ("Ministral 3 14B · multilingual/JSON challenger", "ministral-3:14b"),
     ("Qwen3.5 9B Q4 · lower-VRAM fallback", "qwen3.5:9b"),
     ("gpt-oss 20B · reasoning / very tight VRAM", "gpt-oss:20b"),
