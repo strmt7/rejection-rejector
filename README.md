@@ -11,14 +11,14 @@
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
 | AI | Local Ollama classification, drafting and a separate same-model audit; structured outputs and exact evidence checks |
-| Model | `qwen3.5:9b` default, 8,192 context; gpt-oss 20B/Gemma 4 alternatives; explicit download and full classification/draft/verification/residency qualification |
+| Model | `qwen3.5:9b-q8_0` provisional default; Granite 4.2 8B Q8, Gemma 4 12B Q8, Ministral 3 14B and other curated challengers can be compared locally on the full task pipeline |
 | GPU target | 16 GiB; conservative 14 GiB reported-residency budget, not physical peak certification |
 | Check interval | **1 / 2 / 4 / 8 / 24 hours** |
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
 | Sync | Durable incremental Gmail history queue; page-batched insert of missing identities only; cursor-expiry recovery |
 | Database | Embedded SQLite with authenticated encrypted payloads; Windows Credential Manager holds the key |
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
-| Automatic | Explicit authorization, cooldown, send-attempt cap, source/draft/model checks and conversation preflight |
+| Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once record per rejection message; active/uncertain threads are blocked until reconciliation |
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API |
@@ -36,13 +36,13 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed:
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.34.0 or newer so structured-output/model behavior is not accepted from an outdated runtime:
 
 ```powershell
 .\rr.exe doctor
 ```
 
-It reports local Gmail permission/configuration state, Ollama reachability, model pin/install state and current Ollama GPU-residency status without printing message bodies or credentials.
+It reports local Gmail permission/configuration state, the Ollama runtime version, model pin/install state and current GPU-residency status without printing message bodies or credentials. To compare curated models that you explicitly installed, run `rr compare-models --out model-bakeoff.json` or use **Compare installed candidates** in Local AI.
 
 Real setup: [docs/SETUP.md](docs/SETUP.md). Configure your own Gmail OAuth Desktop client and signature, install/start Ollama, download the model, then **Qualify & pin**. Start in Human review with sending disabled.
 
@@ -62,7 +62,7 @@ No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQ
 
 The app or `rr run` must remain running for scheduled checks. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
 
-Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
+Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; the LLM classification and same-model verifier cannot authorize unattended sending by themselves. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
 
 GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. No key-export/recovery, signed installer or security certification is claimed.
 

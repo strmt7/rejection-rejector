@@ -188,6 +188,81 @@ pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
     reasons
 }
 
+/// Independent affirmative signal used only for unattended sending.
+///
+/// The local LLM remains the primary classifier. Automatic mode additionally
+/// requires at least one clear rejection phrase in the *current* message, so
+/// correlated classifier/verifier mistakes cannot by themselves authorize a
+/// reply. Human Review deliberately does not require this conservative gate.
+pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
+    let lower = format!("{}\n{}", subject, current_text(text)).to_lowercase();
+    [
+        // English
+        "not moving forward",
+        "not be moving forward",
+        "not to move forward",
+        "decided not to move forward",
+        "not been selected",
+        "not selected",
+        "will not proceed",
+        "not proceed with your application",
+        "decided to pursue other candidates",
+        "decided to move forward with other candidates",
+        "application was unsuccessful",
+        "application has been unsuccessful",
+        "not progressing your application",
+        "not be taking your application forward",
+        "unable to offer you the position",
+        // German
+        "nicht weiter berücksichtigen",
+        "nicht berücksichtigen",
+        "für andere kandidaten entschieden",
+        "für einen anderen kandidaten entschieden",
+        "nicht in die engere auswahl",
+        // French
+        "ne pas donner suite",
+        "ne pouvons pas donner suite",
+        "pas été retenue",
+        "pas été retenu",
+        "n'a pas été retenu",
+        "n’a pas été retenu",
+        "candidature non retenue",
+        // Italian
+        "non dare seguito",
+        "non possiamo procedere con la sua candidatura",
+        "non possiamo procedere con la tua candidatura",
+        "abbiamo deciso di non procedere",
+        "non procederemo con la candidatura",
+        "non è stata selezionata",
+        "non è stato selezionato",
+        "abbiamo scelto altri candidati",
+        // Spanish
+        "no continuar con su candidatura",
+        "no continuaremos con su candidatura",
+        "no ha sido seleccionado",
+        "no ha sido seleccionada",
+        "hemos decidido continuar con otros candidatos",
+        // Portuguese
+        "não daremos seguimento",
+        "não podemos prosseguir com a sua candidatura",
+        "decidimos não avançar com a sua candidatura",
+        "não avançar com a sua candidatura",
+        "não foi selecionado",
+        "não foi selecionada",
+        "decidimos seguir com outros candidatos",
+        // Dutch
+        "niet verder met uw sollicitatie",
+        "niet verder met je sollicitatie",
+        "niet verder in behandeling",
+        "niet geselecteerd",
+        // Greek
+        "αποφασίσαμε να μην προχωρήσουμε",
+        "αποφασισαμε να μην προχωρησουμε",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+}
+
 /// A second, deterministic filter for automatic sends; the LLM is still the classifier.
 pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
     let lower = format!("{}\n{}", subject, current_text(text)).to_lowercase();
@@ -437,6 +512,30 @@ mod tests {
             current_text("Τρέχον μήνυμα\nΠροωθημένο μήνυμα\nΠαλιά απόρριψη"),
             "Τρέχον μήνυμα"
         );
+    }
+
+    #[test]
+    fn unattended_rejection_gate_requires_affirmative_current_language() {
+        for text in [
+            "We have decided not to move forward with your application.",
+            "Wir können Ihre Bewerbung leider nicht weiter berücksichtigen.",
+            "Nous ne pouvons pas donner suite à votre candidature.",
+            "Non possiamo procedere con la sua candidatura.",
+            "No continuaremos con su candidatura.",
+            "Não daremos seguimento à sua candidatura.",
+            "We gaan niet verder met uw sollicitatie.",
+            "Αποφασίσαμε να μην προχωρήσουμε με την υποψηφιότητά σας.",
+        ] {
+            assert!(clear_rejection_language("", text), "{text}");
+        }
+        assert!(!clear_rejection_language(
+            "Application update",
+            "Thank you for applying. We would like to invite you to an interview."
+        ));
+        assert!(!clear_rejection_language(
+            "Interview invitation",
+            "We would like to meet you.\nOn Tuesday Recruiter wrote:\nWe have decided not to move forward with your application."
+        ));
     }
 
     #[test]

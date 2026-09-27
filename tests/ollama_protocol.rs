@@ -51,6 +51,7 @@ impl Fixture {
                     continue;
                 };
                 let answer = match req.url() {
+                    "/api/version" => json!({"version":"0.34.0"}),
                     "/api/tags" => {
                         json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":7_200_000_000u64}]})
                     }
