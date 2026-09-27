@@ -181,13 +181,15 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
         actual_hash == manifest.database_sha256,
         "Backup database checksum mismatch"
     );
-    let (schema, audit_head) = store.verify_backup_file(&database)?;
+    let verification = store.verify_backup_file(&database)?;
     ensure!(
-        schema == manifest.schema_version,
+        verification.schema_version == manifest.schema_version,
         "Backup schema does not match its manifest"
     );
     if manifest.format_version >= 2 {
-        let audit_head = audit_head.context("Version 2 backup is missing an audit chain")?;
+        let audit_head = verification
+            .audit_head
+            .context("Version 2 backup is missing an audit chain")?;
         ensure!(
             manifest.audit_head == audit_head,
             "Backup audit head does not match its manifest"
