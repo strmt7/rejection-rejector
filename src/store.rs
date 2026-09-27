@@ -4,7 +4,9 @@ use crate::{
 };
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    backup::Backup, params, Connection, OptionalExtension, Transaction, TransactionBehavior,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{path::Path, time::Duration};
 
@@ -42,6 +44,20 @@ fn event(
     )?;
     Ok(())
 }
+fn check_connection_integrity(conn: &Connection) -> Result<()> {
+    let quick: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    ensure!(quick == "ok", "SQLite quick_check failed: {quick}");
+    let foreign_key_violations: i64 =
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    ensure!(
+        foreign_key_violations == 0,
+        "SQLite foreign-key check found {foreign_key_violations} violation(s)"
+    );
+    Ok(())
+}
+
 impl Store {
     pub fn open(path: &Path, vault: Vault) -> Result<Self> {
         if !path.exists() {
@@ -126,6 +142,58 @@ impl Store {
         ensure!(check == "rejection-rejector:v1", "Wrong vault");
         Ok(db)
     }
+    pub fn schema_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?)
+    }
+
+    /// Validate SQLite structure and foreign-key integrity and authenticate the
+    /// vault marker before reporting the store as healthy.
+    pub fn integrity_check(&self) -> Result<()> {
+        check_connection_integrity(&self.conn)?;
+        let marker = self
+            .meta::<String>("vault_check")?
+            .context("Database vault marker is missing")?;
+        ensure!(marker == "rejection-rejector:v1", "Wrong vault marker");
+        Ok(())
+    }
+
+    /// Create a consistent online copy of the encrypted SQLite database.
+    ///
+    /// This is a same-vault backup: application payloads remain encrypted and
+    /// the matching vault identifier / OS-protected key is still required.
+    /// Existing files are never overwritten.
+    pub fn backup_to(&self, path: &Path) -> Result<()> {
+        self.integrity_check()?;
+        ensure!(!path.exists(), "Backup destination already exists");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+            ensure!(
+                !std::fs::symlink_metadata(parent)?.file_type().is_symlink(),
+                "Backup parent directory must not be a symlink"
+            );
+        }
+        write_new_private(path, b"")?;
+        let mut destination = Connection::open(path)?;
+        {
+            let backup = Backup::new(&self.conn, &mut destination)?;
+            backup.run_to_completion(64, Duration::from_millis(10), None)?;
+        }
+        destination.execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+        )?;
+        check_connection_integrity(&destination)?;
+        let source_version = self.schema_version()?;
+        let backup_version: i64 =
+            destination.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        ensure!(
+            source_version == backup_version,
+            "Backup schema version does not match source"
+        );
+        Ok(())
+    }
+
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
         let bytes: Option<Vec<u8>> = self
             .conn
@@ -1059,6 +1127,29 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn online_backup_is_consistent_and_requires_the_same_vault() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source.sqlite3");
+        let backup = d.path().join("backup.sqlite3");
+        let vault = Vault::random();
+        let mut db = Store::open(&source, vault.clone()).unwrap();
+        assert!(db
+            .insert_stub(stub("backup-message", "backup-thread"), Utc::now())
+            .unwrap());
+        db.integrity_check().unwrap();
+        db.backup_to(&backup).unwrap();
+        assert!(backup.is_file());
+
+        let restored = Store::open(&backup, vault).unwrap();
+        restored.integrity_check().unwrap();
+        assert_eq!(restored.counts("me@example.com").unwrap().stored, 1);
+        drop(restored);
+
+        assert!(Store::open(&backup, Vault::random()).is_err());
+        assert!(db.backup_to(&backup).is_err());
+    }
+
     #[test]
     fn wrong_key_fails_closed() {
         let d = tempfile::tempdir().unwrap();
