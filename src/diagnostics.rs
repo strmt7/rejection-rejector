@@ -9,6 +9,20 @@ pub fn report(engine: &Engine) -> Result<Value> {
         .ok()
         .map(|metadata| metadata.len());
     let counts = engine.db.counts(&engine.account)?;
+    let paused = engine
+        .paused
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let stopping = engine
+        .stop
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let readiness = crate::readiness::assess(
+        &engine.settings,
+        integrity.is_ok(),
+        engine.connected(),
+        engine.send_scope(),
+        paused,
+        stopping,
+    );
 
     let local_ai = Ollama::new(&engine.settings)?;
     let runtime_version = local_ai.runtime_version().ok();
@@ -50,6 +64,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "contains_candidate_facts": false,
             "automatic_upload": false
         },
+        "readiness": readiness,
         "application": {
             "version": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
@@ -75,7 +90,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "poll_hours": engine.settings.poll_hours,
             "lookback_days": engine.settings.lookback_days,
             "last_poll": engine.last_poll()?,
-            "paused": engine.paused.load(std::sync::atomic::Ordering::SeqCst)
+            "paused": paused
         },
         "delivery_policy": {
             "mode": engine.settings.mode,
