@@ -1,0 +1,38 @@
+name: Rust fuzzing
+
+on:
+  schedule:
+    - cron: "17 2 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-fuzz-main
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Bounded fuzz regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly for libFuzzer
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: nightly-2026-09-25
+      - name: Install cargo-fuzz 0.13.2
+        run: cargo install --locked cargo-fuzz --version 0.13.2
+      - name: Fuzz mailbox and quote boundaries
+        run: cargo fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
+      - name: Fuzz MIME extraction
+        run: cargo fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
+      - name: Fuzz rejection policy language
+        run: cargo fuzz run policy_language --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
