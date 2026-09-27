@@ -271,7 +271,16 @@ impl Settings {
     }
 
     pub fn repair_legacy_automatic_state(&mut self) -> bool {
-        if self.mode == Mode::Automatic && self.model_digest.is_none() {
+        if self.mode != Mode::Automatic {
+            return false;
+        }
+        let task_current = self.task_qualification.as_ref().is_some_and(|qualification| {
+            self.model_digest.as_ref() == Some(&qualification.digest)
+                && self.model == qualification.model
+                && qualification.prompt_version == PROMPT_VERSION
+                && qualification.context_hash == settings_context_hash(self)
+        });
+        if self.model_digest.is_none() || !task_current {
             self.disarm_delivery();
             return true;
         }
@@ -347,6 +356,18 @@ pub fn data_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn task_qualification(settings: &Settings) -> TaskQualification {
+        TaskQualification {
+            model: settings.model.clone(),
+            digest: settings.model_digest.clone().unwrap(),
+            prompt_version: PROMPT_VERSION.into(),
+            context_hash: settings_context_hash(settings),
+            task_score: 100.0,
+            fixture_count: 32,
+            qualified_at: Utc::now(),
+        }
+    }
     #[test]
     fn exact_presets_only() {
         for p in POLL_HOURS {
@@ -393,7 +414,7 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn automatic_requires_a_qualified_model_pin() {
+    fn automatic_requires_model_pin_and_task_qualification() {
         let mut s = Settings {
             mode: Mode::Automatic,
             sending_enabled: true,
@@ -404,7 +425,12 @@ mod tests {
         };
         assert!(s.validate().is_err());
         s.model_digest = Some("a".repeat(64));
+        assert!(s.validate().is_err());
+        s.task_qualification = Some(task_qualification(&s));
         s.validate().unwrap();
+
+        s.signature = "Changed Applicant".into();
+        assert!(s.validate().is_err());
     }
 
     #[test]
@@ -426,21 +452,24 @@ mod tests {
     }
 
     #[test]
-    fn legacy_automatic_state_without_model_pin_repairs_fail_closed() {
-        let mut s = Settings {
-            mode: Mode::Automatic,
-            sending_enabled: true,
-            automatic_confirmed: true,
-            automatic_since: Some(Utc::now()),
-            signature: "Test Applicant".into(),
-            ..Default::default()
-        };
-        assert!(s.repair_legacy_automatic_state());
-        assert_eq!(s.mode, Mode::HumanReview);
-        assert!(!s.sending_enabled);
-        assert!(!s.automatic_confirmed);
-        assert!(s.automatic_since.is_none());
-        s.validate().unwrap();
+    fn legacy_automatic_state_without_task_qualification_repairs_fail_closed() {
+        for with_model_pin in [false, true] {
+            let mut s = Settings {
+                mode: Mode::Automatic,
+                sending_enabled: true,
+                automatic_confirmed: true,
+                automatic_since: Some(Utc::now()),
+                signature: "Test Applicant".into(),
+                model_digest: with_model_pin.then(|| "a".repeat(64)),
+                ..Default::default()
+            };
+            assert!(s.repair_legacy_automatic_state());
+            assert_eq!(s.mode, Mode::HumanReview);
+            assert!(!s.sending_enabled);
+            assert!(!s.automatic_confirmed);
+            assert!(s.automatic_since.is_none());
+            s.validate().unwrap();
+        }
     }
 
     #[test]
