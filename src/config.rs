@@ -32,6 +32,7 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
 pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v2";
+pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +98,7 @@ impl Tone {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub settings_format_version: u32,
     pub poll_hours: u8,
     pub lookback_days: u8,
     pub mode: Mode,
@@ -123,6 +125,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            settings_format_version: SETTINGS_FORMAT_VERSION,
             poll_hours: 1,
             lookback_days: 7,
             mode: Mode::HumanReview,
@@ -150,6 +153,12 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.settings_format_version == SETTINGS_FORMAT_VERSION,
+            "Unsupported settings format version {}; expected {}",
+            self.settings_format_version,
+            SETTINGS_FORMAT_VERSION
+        );
         ensure!(
             POLL_HOURS.contains(&self.poll_hours),
             "Polling must be 1, 2, 4, 8 or 24 hours"
@@ -441,6 +450,17 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn settings_format_version_defaults_and_future_versions_fail_closed() {
+        let current = Settings::default();
+        assert_eq!(current.settings_format_version, SETTINGS_FORMAT_VERSION);
+        current.validate().unwrap();
+
+        let mut future = current;
+        future.settings_format_version = SETTINGS_FORMAT_VERSION + 1;
+        assert!(future.validate().is_err());
+    }
+
     #[test]
     fn default_is_not_armed() {
         let s = Settings::default();
