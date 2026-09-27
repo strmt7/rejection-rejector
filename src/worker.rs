@@ -62,6 +62,7 @@ pub enum Command {
     CompareModels,
     IntegrityCheck,
     Backup { out: PathBuf },
+    Diagnostics { out: PathBuf },
     List {
         review: bool,
         page: u32,
@@ -316,6 +317,10 @@ fn run(
                     Command::Backup { out } => {
                         busy(&shared, "Creating and verifying encrypted same-vault backup…");
                         crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
+                    }
+                    Command::Diagnostics { out } => {
+                        busy(&shared, "Writing privacy-safe diagnostics locally…");
+                        crate::diagnostics::write_report(&e, &out)
                     }
                     Command::List { review: r, page: p } => {
                         review = r;
