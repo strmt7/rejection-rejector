@@ -1092,8 +1092,7 @@ pub fn automatic_policy(
         ),
     }
     if job.drafted_at.is_none_or(|time| {
-        now.signed_duration_since(time).num_minutes()
-            < i64::from(settings.cooldown_minutes)
+        now.signed_duration_since(time).num_minutes() < i64::from(settings.cooldown_minutes)
     }) {
         push_policy_block(
             &mut blocks,
@@ -1157,7 +1156,7 @@ pub fn automatic_policy(
     ] {
         if email.headers.contains_key(name) {
             push_policy_block(
-            &mut blocks,
+                &mut blocks,
                 AutomaticPolicyCode::AutomaticReplySuppressed,
                 format!("Automatic replies suppressed by {name}"),
             );
@@ -1166,7 +1165,7 @@ pub fn automatic_policy(
     if let Some(reply) = &email.reply_to {
         if mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok() {
             push_policy_block(
-            &mut blocks,
+                &mut blocks,
                 AutomaticPolicyCode::ReplyToMismatch,
                 "Reply-To differs from sender; human review required",
             );
@@ -1181,7 +1180,12 @@ pub fn automatic_policy(
 
 /// Compatibility helper for existing UI/tests. Integrations should prefer
 /// `automatic_policy` and its stable reason codes.
-pub fn auto_blocks(job: &Job, settings: &Settings, account: &str, now: DateTime<Utc>) -> Vec<String> {
+pub fn auto_blocks(
+    job: &Job,
+    settings: &Settings,
+    account: &str,
+    now: DateTime<Utc>,
+) -> Vec<String> {
     automatic_policy(job, settings, account, now)
         .blocks
         .into_iter()
