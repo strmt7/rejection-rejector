@@ -169,11 +169,7 @@ impl Engine {
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
-        let enterprise_policy = if demo {
-            None
-        } else {
-            policy::load_optional()?
-        };
+        let enterprise_policy = if demo { None } else { policy::load_optional()? };
         let policy_changed = match &enterprise_policy {
             Some(loaded) => loaded.policy.enforce(&mut settings, true)?,
             None => false,
