@@ -77,6 +77,15 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
             )?;
+            let database_integrity = e.db.integrity_check();
+            let database_integrity_ok = database_integrity.is_ok();
+            let database_message = database_integrity
+                .as_ref()
+                .map(|_| "SQLite and authenticated vault checks passed".to_string())
+                .unwrap_or_else(|error| error.to_string());
+            let database_bytes = std::fs::metadata(e.directory.join("state.sqlite3"))
+                .ok()
+                .map(|metadata| metadata.len());
             let local_ai = Ollama::new(&e.settings)?;
             let runtime_version = local_ai.runtime_version().ok();
             let ollama_healthy = runtime_version.is_some();
@@ -120,6 +129,12 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
+                    "database": {
+                        "integrity_ok": database_integrity_ok,
+                        "schema_version": e.db.schema_version()?,
+                        "bytes": database_bytes,
+                        "message": database_message
+                    },
                     "gmail": {
                         "connected_locally": e.connected(),
                         "send_scope_granted": e.send_scope(),
