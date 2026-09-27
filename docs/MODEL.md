@@ -1,13 +1,14 @@
 # Model selection and 16 GiB qualification
 
-Default candidate for new workspaces: **`qwen3.5:9b`** in Ollama, 8,192 context, one request/model at a time.
+Default candidate for new workspaces: **`qwen3.5:9b-q8_0`** in Ollama, 8,192 context, one request/model at a time.
 
 ## Why this default
 
-The selection is use-case-specific rather than a generic leaderboard claim. On 2026-09-26, Ollama lists Qwen3.5 9B at about **6.6 GB** with thinking support and a 256K model context. Qwen's published model-card comparison reports Qwen3.5 9B ahead of gpt-oss-20B on several measures especially relevant here, including IFEval, MultiChallenge, MMMLU, MMLU-ProX, NOVA-63 and MAXIFE. Those public benchmark results do not prove superiority on this application's mailbox task, so the app still requires local qualification and offers a synthetic task-specific evaluation.
+The selection is use-case-specific rather than a generic leaderboard claim. On 2026-09-27, Ollama lists Qwen3.5 9B Q4 at about **6.6 GB** and the official **Q8_0 build at about 11 GB**, both with thinking support and a 256K model context. The Q8 build is the quality-first default because it uses a substantially less aggressive quantization while still leaving useful room beneath the application's conservative 14 GiB residency budget on a 16 GiB GPU. Qwen's published model-card comparison reports Qwen3.5 9B ahead of gpt-oss-20B on several language/reasoning measures relevant to this task. Those public benchmarks do not prove superiority on this application's mailbox workload, so the app still requires local qualification and offers a synthetic task-specific evaluation.
 
-Two useful alternatives remain selectable in the GUI:
-- **`gpt-oss:20b`** — about **14 GB** in Ollama, 128K context. OpenAI describes it as delivering results similar to o3-mini on common benchmarks and requiring about 16 GB of memory. It is a strong reasoning candidate but leaves much less headroom on a 16 GiB GPU.
+Three useful alternatives remain selectable in the GUI:
+- **`qwen3.5:9b`** — about **6.6 GB** in Ollama. This is the lower-VRAM Q4 choice when the Q8 build cannot remain fully GPU-resident with the configured context.
+- **`gpt-oss:20b`** — about **14 GB** in Ollama, 128K context. It is a strong reasoning candidate but leaves very little headroom on a 16 GiB GPU, so it must pass the same runtime residency gate before any private inference.
 - **`gemma4:12b-it-qat`** — about **7.2 GB** in Ollama and a conservative memory choice retained for comparison/compatibility.
 
 Explicit tags are used for defaults/presets. The app pins the exact installed digest after qualification because registry tags can change.
@@ -35,7 +36,7 @@ Before Automatic, run `rr doctor` and the synthetic evaluation from the Local AI
 
 Bundled synthetic cases are regression/smoke tests, not representative mailbox accuracy. Same-model verification is correlated, and model confidence scores are not calibrated probabilities.
 
-Sources checked 2026-09-26:
+Sources checked 2026-09-27:
 - https://ollama.com/library/qwen3.5
 - https://huggingface.co/Qwen/Qwen3.5-9B
 - https://ollama.com/library/gpt-oss:20b
