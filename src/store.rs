@@ -204,12 +204,10 @@ impl Store {
         );
         let connection = Connection::open_with_flags(
             path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         check_connection_integrity(&connection)?;
-        let version: i64 =
-            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         ensure!(
             version == self.schema_version()?,
             "Backup schema version does not match the current database"
@@ -222,7 +220,10 @@ impl Store {
             )
             .context("Backup vault marker is missing")?;
         let marker: String = self.vault.open_value("meta/vault_check", &encrypted)?;
-        ensure!(marker == "rejection-rejector:v1", "Backup belongs to another vault");
+        ensure!(
+            marker == "rejection-rejector:v1",
+            "Backup belongs to another vault"
+        );
         Ok(version)
     }
 
