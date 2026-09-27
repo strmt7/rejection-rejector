@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "force_human_review": false,
+  "prohibit_sending": false,
+  "prohibit_integration_api": false,
+  "max_daily_send_limit": 5,
+  "min_cooldown_minutes": 60,
+  "min_retention_days": 365,
+  "allowed_models": [
+    "qwen3.5:9b-q8_0",
+    "granite4.2:8b-q8_0"
+  ]
+}
