@@ -1,0 +1,54 @@
+name: Rust coverage
+
+on:
+  schedule:
+    - cron: "43 2 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-coverage-main
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust 1.98.1 with llvm-tools
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov 0.9.1
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-llvm-cov@0.9.1
+          checksum: true
+          fallback: none
+      - name: Linux desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
+      - name: Generate coverage
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info
+          cargo llvm-cov report --summary-only | tee artifacts/coverage-summary.txt
+          test -s artifacts/lcov.info
+          test -s artifacts/coverage-summary.txt
+      - name: Upload coverage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rejection-rejector-coverage-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
