@@ -701,6 +701,7 @@ fn validate_api_item_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn api_query(e: &Engine, path: &str) -> Result<Value> {
     api_query_with_operation(e, path, None)
 }
