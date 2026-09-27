@@ -61,8 +61,12 @@ pub enum Command {
     EvaluateModel,
     CompareModels,
     IntegrityCheck,
-    Backup { out: PathBuf },
-    Diagnostics { out: PathBuf },
+    Backup {
+        out: PathBuf,
+    },
+    Diagnostics {
+        out: PathBuf,
+    },
     List {
         review: bool,
         page: u32,
@@ -315,7 +319,10 @@ fn run(
                         e.db.integrity_check()
                     }
                     Command::Backup { out } => {
-                        busy(&shared, "Creating and verifying encrypted same-vault backup…");
+                        busy(
+                            &shared,
+                            "Creating and verifying encrypted same-vault backup…",
+                        );
                         crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
                     }
                     Command::Diagnostics { out } => {
@@ -506,7 +513,10 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
             }))
         }
         "/v1/health" => {
-            ensure!(query.is_empty(), "Health endpoint takes no query parameters");
+            ensure!(
+                query.is_empty(),
+                "Health endpoint takes no query parameters"
+            );
             let integrity_ok = e.db.integrity_check().is_ok();
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
