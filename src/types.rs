@@ -415,7 +415,10 @@ mod operation_status_tests {
         for kind in kinds {
             let code = kind.failure_code();
             assert!(!code.is_empty());
-            assert!(code.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
+            assert!(
+                code.bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            );
         }
         assert!(OperationKind::SyncMailbox.retryable());
         assert!(!OperationKind::UpdateSettings.retryable());
