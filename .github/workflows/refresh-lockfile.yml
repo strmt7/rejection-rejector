@@ -1,0 +1,50 @@
+name: Temporary lockfile refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - "src/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-lockfile-refresh-main
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Current pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+      - name: Refresh only upgraded GUI dependency families
+        run: |
+          set -euo pipefail
+          cargo update -p eframe --precise 0.36.2
+          cargo update -p rfd --precise 0.17.2
+      - name: Verify refreshed resolution compiles
+        run: cargo check --locked --all-features
+      - name: Commit lockfile directly to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "deps: refresh lockfile for current GUI stack"
+          git push origin HEAD:main
