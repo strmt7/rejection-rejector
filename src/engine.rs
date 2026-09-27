@@ -8,6 +8,7 @@ use crate::{
     mail,
     oauth::{self, Credentials},
     ollama::{self, ModelStatus, Ollama},
+    policy::{self, LoadedPolicy, PolicyStatus},
     store::Store,
     sync,
     types::*,
@@ -136,6 +137,7 @@ pub struct Engine {
     pub demo: bool,
     pub paused: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    pub enterprise_policy: Option<LoadedPolicy>,
     gmail: Option<Gmail>,
     _lock: InstanceLock,
     _temporary: Option<tempfile::TempDir>,
@@ -167,13 +169,25 @@ impl Engine {
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
+        let enterprise_policy = if demo {
+            None
+        } else {
+            policy::load_optional()?
+        };
+        let policy_changed = enterprise_policy
+            .as_ref()
+            .is_some_and(|loaded| loaded.policy.enforce(&mut settings, true).unwrap_or(false));
         settings.validate()?;
-        if repaired {
+        if repaired || policy_changed {
             db.set_meta("settings", &settings)?;
             db.log(
                 "settings.repaired",
                 None,
-                "Legacy Automatic mode without a qualified model pin was disabled fail-closed",
+                if policy_changed {
+                    "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed"
+                } else {
+                    "Legacy Automatic mode without current qualification was disabled fail-closed"
+                },
             )?;
         }
         let creds: Option<Credentials> = db.meta("google_credentials")?;
@@ -190,6 +204,7 @@ impl Engine {
             demo,
             paused,
             stop,
+            enterprise_policy,
             gmail: creds.map(Gmail::new),
             _lock: lock,
             _temporary: temporary,
@@ -206,8 +221,22 @@ impl Engine {
     pub fn send_scope(&self) -> bool {
         self.gmail.as_ref().is_some_and(Gmail::can_send)
     }
+    pub fn enterprise_policy_status(&self) -> PolicyStatus {
+        self.enterprise_policy
+            .as_ref()
+            .map(LoadedPolicy::status)
+            .unwrap_or_else(policy::inactive_status)
+    }
     pub fn connect(&mut self, path: &Path, send: bool) -> Result<()> {
         ensure!(!self.demo, "Demo mode never connects to a real mailbox");
+        ensure!(
+            !send
+                || self
+                    .enterprise_policy
+                    .as_ref()
+                    .is_none_or(|loaded| loaded.policy.allows_send_scope()),
+            "Enterprise policy prohibits requesting Gmail send permission"
+        );
         let credentials = oauth::login(path, send, &self.stop)?;
         let mut gmail = Gmail::new(credentials.clone());
         let profile = gmail.profile()?;
@@ -250,6 +279,9 @@ impl Engine {
             !self.demo || !settings.sending_enabled,
             "Demo can never enable sending"
         );
+        if let Some(policy) = &self.enterprise_policy {
+            policy.policy.enforce(&mut settings, false)?;
+        }
         ensure!(
             !settings.api_allow_writes,
             "Version 0.1 exposes a read-only integration API"
