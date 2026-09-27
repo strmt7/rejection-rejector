@@ -5,7 +5,7 @@
 Standalone Rust library, native Windows-oriented desktop application and CLI.
 
 - Gmail Desktop OAuth with PKCE/state, explicit readonly/send scopes, incremental history synchronization, cursor-expiry recovery and page-batched insert-only deduplication.
-- Local Ollama reasoning with configurable loopback model, `qwen3.5:9b` default, structured classification/drafting/verification, digest pinning and full-pipeline GPU qualification.
+- Local Ollama reasoning with configurable loopback model, quality-first `qwen3.5:9b-q8_0` default, structured classification/drafting/verification, digest pinning and full-pipeline GPU qualification.
 - Exact polling presets **1 / 2 / 4 / 8 / 24 hours** and lookback presets **1 / 3 / 7 / 14 / 28 days**; tightening the lookback immediately clears out-of-window actionable content.
 - Human Review mode with original/reply side-by-side, edit/save/regenerate/dismiss, stale-revision protection and exact-send confirmation.
 - Explicit Automatic mode with enrollment/backlog controls, cooldown, rolling attempt caps, a multilingual affirmative current-rejection gate plus conflict guards, model/draft/context/fingerprint checks and fresh Gmail conversation preflight.
