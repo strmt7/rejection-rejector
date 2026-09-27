@@ -63,6 +63,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
                 .map(|_| "ok".to_string())
                 .unwrap_or_else(|error| error.to_string()),
             "schema_version": engine.db.schema_version()?,
+            "audit_head": engine.db.audit_head()?,
             "bytes": database_bytes,
             "counts": counts
         },
