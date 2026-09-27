@@ -785,7 +785,7 @@ fn api_query_with_operation(
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "settings_format_version": e.settings.settings_format_version,
-                "healthy": readiness.workspace_ready && !operational.degraded,
+                "healthy": readiness.workspace_ready,
                 "readiness": readiness,
                 "operational": operational,
                 "database": {
