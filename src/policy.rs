@@ -175,10 +175,16 @@ fn normalize_digest_pin(value: &str) -> Result<String> {
     Ok(normalized)
 }
 
+fn normalize_digest_pin_os(value: std::ffi::OsString) -> Result<String> {
+    let value = value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("RR_ENTERPRISE_POLICY_SHA256 must be valid Unicode"))?;
+    normalize_digest_pin(&value)
+}
+
 fn configured_digest_pin() -> Result<Option<String>> {
-    std::env::var("RR_ENTERPRISE_POLICY_SHA256")
-        .ok()
-        .map(|value| normalize_digest_pin(&value))
+    std::env::var_os("RR_ENTERPRISE_POLICY_SHA256")
+        .map(normalize_digest_pin_os)
         .transpose()
 }
 
@@ -362,6 +368,14 @@ mod tests {
         assert!(
             load_file_with_expected_digest(&path, Some(digest)).is_err()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_digest_pin_is_rejected_fail_closed() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = std::ffi::OsString::from_vec(vec![0xff, 0xfe]);
+        assert!(normalize_digest_pin_os(invalid).is_err());
     }
 
     #[test]
