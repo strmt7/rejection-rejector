@@ -48,6 +48,11 @@ enum Action {
     VerifyBackup {
         path: PathBuf,
     },
+    /// Export a privacy-safe local diagnostics JSON report. Nothing is uploaded.
+    Diagnostics {
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -235,6 +240,19 @@ fn main() -> Result<()> {
             )?;
             let manifest = recovery::verify_backup(&e.db, &path)?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        Action::Diagnostics { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            rejection_rejector::diagnostics::write_report(&e, &out)?;
+            println!(
+                "Privacy-safe diagnostics written locally to {}. Review before sharing.",
+                out.display()
+            );
         }
     }
     Ok(())
