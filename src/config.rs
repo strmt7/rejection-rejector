@@ -245,10 +245,11 @@ impl Settings {
                 self.model_digest.is_some(),
                 "Qualify and pin the local model before enabling Automatic mode"
             );
-            let qualification = self
-                .task_qualification
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Run the task-specific model evaluation before enabling Automatic mode"))?;
+            let qualification = self.task_qualification.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Run the task-specific model evaluation before enabling Automatic mode"
+                )
+            })?;
             ensure!(
                 Some(&qualification.digest) == self.model_digest.as_ref()
                     && qualification.model == self.model
@@ -274,12 +275,15 @@ impl Settings {
         if self.mode != Mode::Automatic {
             return false;
         }
-        let task_current = self.task_qualification.as_ref().is_some_and(|qualification| {
-            self.model_digest.as_ref() == Some(&qualification.digest)
-                && self.model == qualification.model
-                && qualification.prompt_version == PROMPT_VERSION
-                && qualification.context_hash == settings_context_hash(self)
-        });
+        let task_current = self
+            .task_qualification
+            .as_ref()
+            .is_some_and(|qualification| {
+                self.model_digest.as_ref() == Some(&qualification.digest)
+                    && self.model == qualification.model
+                    && qualification.prompt_version == PROMPT_VERSION
+                    && qualification.context_hash == settings_context_hash(self)
+            });
         if self.model_digest.is_none() || !task_current {
             self.disarm_delivery();
             return true;
