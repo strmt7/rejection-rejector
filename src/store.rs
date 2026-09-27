@@ -1349,6 +1349,8 @@ mod tests {
                 seq: 0,
                 at: Utc::now(),
                 kind: "legacy.test".into(),
+                domain: AuditDomain::Other,
+                severity: AuditSeverity::Info,
                 item_id: None,
                 detail: "historical encrypted event".into(),
             };
