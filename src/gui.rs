@@ -615,11 +615,32 @@ impl App {
             ui.label("Ollama loopback address");
             ui.text_edit_singleline(&mut self.settings.ollama_url);
             ui.label("Installed/downloadable local model tag");
-            ui.text_edit_singleline(&mut self.settings.model);
+            if s.enterprise_policy.allowed_models.is_empty() {
+                ui.text_edit_singleline(&mut self.settings.model);
+            } else {
+                egui::ComboBox::from_id_salt("enterprise_model_allowlist")
+                    .selected_text(&self.settings.model)
+                    .show_ui(ui, |ui| {
+                        for model in &s.enterprise_policy.allowed_models {
+                            ui.selectable_value(
+                                &mut self.settings.model,
+                                model.clone(),
+                                model,
+                            );
+                        }
+                    });
+                ui.label(
+                    RichText::new("Model selection is restricted by enterprise policy.")
+                        .small()
+                        .color(AMBER),
+                );
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Quick choices").small().color(MUTED));
                 for (label, tag) in MODEL_CANDIDATES {
-                    if ui.small_button(label).clicked() {
+                    let allowed = s.enterprise_policy.allowed_models.is_empty()
+                        || s.enterprise_policy.allowed_models.iter().any(|model| model == tag);
+                    if ui.add_enabled(allowed, egui::Button::new(label).small()).clicked() {
                         self.settings.model = tag.into();
                     }
                 }
@@ -668,6 +689,38 @@ impl App {
             "Settings",
             "Explicit permissions, predictable scheduling, and control over every outgoing reply.",
         );
+        if s.enterprise_policy.active {
+            Self::card(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    Self::badge(ui, "ENTERPRISE POLICY ACTIVE", AMBER);
+                    if let Some(digest) = &s.enterprise_policy.digest {
+                        ui.monospace(format!("sha256:{}", &digest[..digest.len().min(12)]));
+                    }
+                });
+                ui.label("Administrator policy is enforced at startup and on every settings update; locked controls cannot be bypassed through the GUI.");
+                let mut constraints = Vec::new();
+                if s.enterprise_policy.force_human_review {
+                    constraints.push("Human Review forced");
+                }
+                if s.enterprise_policy.prohibit_sending {
+                    constraints.push("sending prohibited");
+                }
+                if s.enterprise_policy.prohibit_integration_api {
+                    constraints.push("integration API prohibited");
+                }
+                if let Some(limit) = s.enterprise_policy.max_daily_send_limit {
+                    constraints.push(Box::leak(format!("max {limit} sends/24h").into_boxed_str()));
+                }
+                if let Some(minutes) = s.enterprise_policy.min_cooldown_minutes {
+                    constraints.push(Box::leak(format!("cooldown ≥ {minutes} min").into_boxed_str()));
+                }
+                if let Some(days) = s.enterprise_policy.min_retention_days {
+                    constraints.push(Box::leak(format!("retention ≥ {days} days").into_boxed_str()));
+                }
+                ui.label(constraints.join(" · "));
+            });
+            ui.add_space(12.0);
+        }
         Self::card(ui, |ui| {
             ui.heading("Gmail connection");
             ui.label(if s.connected {
@@ -676,9 +729,15 @@ impl App {
                 "No Gmail account connected".into()
             });
             ui.label("Use your own Google Cloud OAuth Desktop app JSON. See docs/SETUP.md for the consent-screen and Gmail API steps.");
-            ui.checkbox(
-                &mut self.oauth_send,
-                "Request permission to send replies (otherwise read-only)",
+            if s.enterprise_policy.prohibit_sending {
+                self.oauth_send = false;
+            }
+            ui.add_enabled(
+                !s.enterprise_policy.prohibit_sending,
+                egui::Checkbox::new(
+                    &mut self.oauth_send,
+                    "Request permission to send replies (otherwise read-only)",
+                ),
             );
             ui.horizontal(|ui| {
                 if ui
@@ -742,13 +801,32 @@ impl App {
         ui.add_space(12.0);
         Self::card(ui, |ui| {
             ui.heading("Reply mode & permissions");
+            if s.enterprise_policy.force_human_review || s.enterprise_policy.prohibit_sending {
+                self.settings.mode = Mode::HumanReview;
+            }
+            if s.enterprise_policy.prohibit_sending {
+                self.settings.sending_enabled = false;
+            }
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.settings.mode, Mode::HumanReview, "Human review");
-                ui.selectable_value(&mut self.settings.mode, Mode::Automatic, "Automatic");
+                ui.add_enabled_ui(
+                    !s.enterprise_policy.force_human_review
+                        && !s.enterprise_policy.prohibit_sending,
+                    |ui| {
+                        ui.selectable_value(
+                            &mut self.settings.mode,
+                            Mode::Automatic,
+                            "Automatic",
+                        );
+                    },
+                );
             });
-            ui.checkbox(
-                &mut self.settings.sending_enabled,
-                "Enable sending from this application",
+            ui.add_enabled(
+                !s.enterprise_policy.prohibit_sending,
+                egui::Checkbox::new(
+                    &mut self.settings.sending_enabled,
+                    "Enable sending from this application",
+                ),
             );
             if self.settings.mode == Mode::Automatic {
                 ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
@@ -786,9 +864,20 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.label("Cooldown, minutes");
-                ui.add(egui::DragValue::new(&mut self.settings.cooldown_minutes).range(1..=1440));
+                let minimum_cooldown = s.enterprise_policy.min_cooldown_minutes.unwrap_or(1);
+                self.settings.cooldown_minutes =
+                    self.settings.cooldown_minutes.max(minimum_cooldown);
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.cooldown_minutes)
+                        .range(minimum_cooldown..=1440),
+                );
                 ui.label("Maximum attempts per 24 hours");
-                ui.add(egui::DragValue::new(&mut self.settings.daily_send_limit).range(1..=100));
+                let maximum_daily = s.enterprise_policy.max_daily_send_limit.unwrap_or(100);
+                self.settings.daily_send_limit = self.settings.daily_send_limit.min(maximum_daily);
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.daily_send_limit)
+                        .range(1..=maximum_daily),
+                );
             });
             ui.label("Signature");
             ui.text_edit_singleline(&mut self.settings.signature);
@@ -815,7 +904,13 @@ impl App {
             ui.label("SQLite stores authenticated encrypted payloads. Windows Credential Manager holds the master key. State/count/time indexes are not encrypted.");
             ui.horizontal(|ui| {
                 ui.label("Keep completed content, days");
-                ui.add(egui::DragValue::new(&mut self.settings.retention_days).range(30..=3650));
+                let minimum_retention = s.enterprise_policy.min_retention_days.unwrap_or(30);
+                self.settings.retention_days =
+                    self.settings.retention_days.max(minimum_retention);
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.retention_days)
+                        .range(minimum_retention..=3650),
+                );
                 if ui
                     .add_enabled(
                         s.busy.is_empty(),
@@ -871,9 +966,15 @@ impl App {
                     .small()
                     .color(MUTED),
             );
-            ui.checkbox(
-                &mut self.settings.api_enabled,
-                "Enable read-only loopback integration API (restart required)",
+            if s.enterprise_policy.prohibit_integration_api {
+                self.settings.api_enabled = false;
+            }
+            ui.add_enabled(
+                !s.enterprise_policy.prohibit_integration_api,
+                egui::Checkbox::new(
+                    &mut self.settings.api_enabled,
+                    "Enable read-only loopback integration API (restart required)",
+                ),
             );
             ui.horizontal(|ui| {
                 ui.label("API port");
