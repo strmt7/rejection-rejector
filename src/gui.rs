@@ -564,11 +564,21 @@ impl App {
                             && !s.demo
                             && !model_config_dirty
                             && s.settings.model_digest.is_some(),
-                        egui::Button::new("Evaluate synthetic suite"),
+                        egui::Button::new("Evaluate current model"),
                     )
                     .clicked()
                 {
                     self.worker.command(Command::EvaluateModel);
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo && !model_config_dirty,
+                        egui::Button::new("Compare installed candidates"),
+                    )
+                    .on_hover_text("Runs the full recruiting-email bake-off only on curated candidate models that are already installed. Nothing is downloaded automatically.")
+                    .clicked()
+                {
+                    self.worker.command(Command::CompareModels);
                 }
             });
             if model_config_dirty {
