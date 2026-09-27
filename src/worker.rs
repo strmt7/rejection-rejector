@@ -773,11 +773,21 @@ fn api_query_with_operation(
                 paused,
                 stopping,
             );
+            let counts = e.db.counts(&e.account)?;
+            let operational = crate::readiness::operational_indicators(
+                &e.settings,
+                &counts,
+                e.last_poll()?,
+                integrity_ok,
+                e.connected(),
+                Utc::now(),
+            );
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "settings_format_version": e.settings.settings_format_version,
-                "healthy": readiness.workspace_ready,
+                "healthy": readiness.workspace_ready && !operational.degraded,
                 "readiness": readiness,
+                "operational": operational,
                 "database": {
                     "integrity_ok": integrity_ok,
                     "schema_version": e.db.schema_version()?,
@@ -799,7 +809,7 @@ fn api_query_with_operation(
                     "configured": e.settings.model,
                     "digest_pinned": e.settings.model_digest.is_some()
                 },
-                "counts": e.db.counts(&e.account)?,
+                "counts": counts,
                 "last_poll": e.last_poll()?
             }))
         }
