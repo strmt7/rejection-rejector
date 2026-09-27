@@ -105,6 +105,17 @@ impl Ollama {
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.settings.ollama_url.trim_end_matches('/'))
     }
+    /// True when an Ollama HTTP server answers on the configured loopback origin,
+    /// regardless of whether its version is new enough for this application.
+    pub fn reachable(&self) -> bool {
+        net::client(3, true)
+            .and_then(|client| {
+                let response = client.get(self.url("/api/version")).send()?;
+                ensure!(response.status().is_success(), "Ollama version endpoint returned an error");
+                Ok(())
+            })
+            .is_ok()
+    }
     pub fn healthy(&self) -> bool {
         self.runtime_version().is_ok()
     }
@@ -461,7 +472,10 @@ impl Ollama {
         Ok(())
     }
     pub fn start(&self) -> Result<()> {
-        if self.healthy() {
+        if self.reachable() {
+            // A daemon already owns the configured port. Never attempt to launch a
+            // second process just because the existing runtime is obsolete.
+            self.runtime_version()?;
             return Ok(());
         }
         let executable = ollama_executable()?;
