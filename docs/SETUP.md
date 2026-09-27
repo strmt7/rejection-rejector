@@ -73,7 +73,22 @@ Pause blocks future dispatch but cannot recall a request already sent to Gmail. 
 
 An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection returns the rejection message to Human Review instead of pretending delivery may have occurred. Completed Sent records are permanent per-message at-most-once tombstones, but they do not block a later distinct rejection in the same thread.
 
-Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not automatic physical erasure. Close the app before copying database files. A database copy without its Credential Manager key is not portable. Do not delete the OS credential or vault-id; key loss is unrecoverable in v0.1.
+Use the built-in recovery commands instead of manually copying a live SQLite database:
+
+```powershell
+.\rr.exe backup --out D:\RR-backups\backup-2026-09-27
+.\rr.exe verify-backup D:\RR-backups\backup-2026-09-27
+```
+
+Restore is intentionally offline. Close the GUI and any `rr run` worker first:
+
+```powershell
+.\rr.exe restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
+```
+
+Restore acquires the exclusive workspace lock, stages and deeply authenticates the backup, preserves the existing SQLite/WAL/SHM files under the private `recovery` directory, installs a clean SQLite image, verifies it, and rolls back automatically if final validation fails. The backup remains same-vault: another machine still needs the original OS-protected master key. The copied `vault-id` is not that key.
+
+Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not guaranteed physical SSD erasure. Do not delete the OS credential or vault-id; portable key export is not implemented.
 
 ## Troubleshooting
 
