@@ -491,10 +491,41 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
                     "review_queue": true,
                     "automatic_policy": true,
                     "delivery_reconciliation": true,
-                    "events": true
+                    "events": true,
+                    "database_integrity": true,
+                    "verified_backup_bundle": true,
+                    "task_model_bakeoff": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
+            }))
+        }
+        "/v1/health" => {
+            ensure!(query.is_empty(), "Health endpoint takes no query parameters");
+            let integrity_ok = e.db.integrity_check().is_ok();
+            Ok(json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "healthy": integrity_ok,
+                "database": {
+                    "integrity_ok": integrity_ok,
+                    "schema_version": e.db.schema_version()?
+                },
+                "gmail": {
+                    "connected": e.connected(),
+                    "send_scope": e.send_scope()
+                },
+                "worker": {
+                    "paused": e.paused.load(Ordering::SeqCst),
+                    "stopping": e.stop.load(Ordering::SeqCst)
+                },
+                "mode": e.settings.mode,
+                "sending_enabled": e.settings.sending_enabled,
+                "model": {
+                    "configured": e.settings.model,
+                    "digest_pinned": e.settings.model_digest.is_some()
+                },
+                "counts": e.db.counts(&e.account)?,
+                "last_poll": e.last_poll()?
             }))
         }
         "/v1/status" => {
@@ -554,6 +585,11 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
+        let health = api_query(&engine, "/v1/health").unwrap();
+        assert_eq!(health["healthy"], true);
+        assert_eq!(health["database"]["integrity_ok"], true);
+        assert!(health.get("account").is_none());
+
         let value = api_query(&engine, "/v1/capabilities").unwrap();
         assert_eq!(value["api_version"], 1);
         assert_eq!(value["read_only"], true);
@@ -577,6 +613,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
+        assert!(api_query(&engine, "/v1/health?extra=1").is_err());
         assert!(api_query(&engine, "/v1/status?extra=1").is_err());
         assert!(api_query(&engine, "/v1/items?page=1&extra=2").is_err());
         assert!(api_query(&engine, "/v1/events?after=0&after=1").is_err());
