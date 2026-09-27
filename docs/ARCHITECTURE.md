@@ -18,6 +18,6 @@ Known pre-dispatch cancellation or a definite provider-side rejection releases t
 
 ## Trust boundary
 
-Email is inert untrusted data, never tools/instructions. Attachments are not executed; HTML becomes text. Structured outputs and exact evidence checks reject malformed or unsupported classifications. Model/prompt/context/source/draft hashes bind a verification to its inputs. The same model performs the second pass, so its errors are correlated. Human review remains the recommended initial mode.
+Email is inert untrusted data, never tools/instructions. Attachments are not executed; HTML becomes text. Structured outputs and exact evidence checks reject malformed or unsupported classifications. Model/prompt/context/source/draft hashes bind a verification to its inputs. The same model performs the second pass, so its errors are correlated. Automatic mode therefore also requires a deterministic affirmative rejection phrase in the current de-quoted message, in addition to rejecting conflicting opportunity/prompt-injection language. Human review remains the recommended initial mode.
 
 SQLite WAL/FULL synchronization, authenticated encrypted payloads, optimistic revisions and an exclusive directory lock protect integrity. Metadata indexes are not encrypted. The DB layout is private; use the library/API as the integration contract.
