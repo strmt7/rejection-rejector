@@ -200,6 +200,8 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         // English
         "not moving forward",
         "not be moving forward",
+        "not to move forward",
+        "decided not to move forward",
         "not been selected",
         "not selected",
         "will not proceed",
