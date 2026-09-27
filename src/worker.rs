@@ -59,6 +59,7 @@ pub enum Command {
     InspectModel,
     QualifyModel,
     EvaluateModel,
+    CompareModels,
     List {
         review: bool,
         page: u32,
@@ -293,8 +294,15 @@ fn run(
                         r
                     }
                     Command::EvaluateModel => {
-                        busy(&shared, "Running the local synthetic evaluation suite…");
+                        busy(&shared, "Running the full task-specific local model evaluation…");
                         e.evaluate_model().map(|_| ())
+                    }
+                    Command::CompareModels => {
+                        busy(
+                            &shared,
+                            "Comparing installed candidate models on the recruiting-email pipeline…",
+                        );
+                        e.compare_models().map(|_| ())
                     }
                     Command::List { review: r, page: p } => {
                         review = r;
