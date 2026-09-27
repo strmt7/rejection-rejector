@@ -800,6 +800,39 @@ impl App {
                     self.worker.command(Command::Purge);
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Check database integrity"),
+                    )
+                    .clicked()
+                {
+                    self.worker.command(Command::IntegrityCheck);
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Create encrypted backup…"),
+                    )
+                    .on_hover_text("Creates a checksum-verified same-vault backup. No decrypted email content or OAuth token is written to the manifest.")
+                    .clicked()
+                {
+                    if let Some(parent) = rfd::FileDialog::new()
+                        .set_title("Choose parent folder for Rejection Rejector backup")
+                        .pick_folder()
+                    {
+                        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                        let out = parent.join(format!("rejection-rejector-backup-{stamp}"));
+                        self.worker.command(Command::Backup { out });
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("Backups preserve the encrypted database and vault identifier. Recovery on another machine still requires the original OS-protected master key.")
+                    .small()
+                    .color(MUTED),
+            );
             ui.checkbox(
                 &mut self.settings.api_enabled,
                 "Enable read-only loopback integration API (restart required)",
