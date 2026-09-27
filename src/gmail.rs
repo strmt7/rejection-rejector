@@ -131,10 +131,10 @@ impl Gmail {
         self.creds.can_send
     }
     fn access(&mut self) -> Result<String> {
-        if let Some((token, until)) = &self.token {
-            if Instant::now() < *until {
-                return Ok(token.clone());
-            }
+        if let Some((token, until)) = &self.token
+            && Instant::now() < *until
+        {
+            return Ok(token.clone());
         }
         let response = net::client(30, false)?
             .post(TOKEN_URL)
