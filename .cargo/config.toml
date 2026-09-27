@@ -1,0 +1,5 @@
+[build]
+warnings = "deny"
+
+[future-incompat-report]
+frequency = "always"
