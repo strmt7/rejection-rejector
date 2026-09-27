@@ -63,9 +63,7 @@ enum Action {
     /// Print the effective administrator enterprise-policy status.
     PolicyStatus,
     /// Validate and summarize an enterprise policy file without applying it.
-    ValidatePolicy {
-        path: PathBuf,
-    },
+    ValidatePolicy { path: PathBuf },
 }
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -284,10 +282,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&manifest)?);
         }
         Action::RestoreBackup { path, confirm } => {
-            anyhow::ensure!(
-                confirm == "RESTORE",
-                "Restore requires --confirm RESTORE"
-            );
+            anyhow::ensure!(confirm == "RESTORE", "Restore requires --confirm RESTORE");
             let report = recovery::restore_backup(&dir, &path)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
