@@ -69,10 +69,8 @@ pub fn assess(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{
-            evaluation_suite_hash, settings_context_hash, TaskQualification, PROMPT_VERSION,
-        },
+    use crate::config::{
+        PROMPT_VERSION, TaskQualification, evaluation_suite_hash, settings_context_hash,
     };
     use chrono::Utc;
 
@@ -106,9 +104,11 @@ mod tests {
         assert!(default.workspace_ready);
         assert!(!default.mailbox_sync_ready);
         assert!(!default.automatic_dispatch_ready);
-        assert!(default
-            .automatic_block_reasons
-            .contains(&"gmail_disconnected"));
+        assert!(
+            default
+                .automatic_block_reasons
+                .contains(&"gmail_disconnected")
+        );
 
         let settings = automatic_settings();
         let ready = assess(&settings, true, true, true, false, false);

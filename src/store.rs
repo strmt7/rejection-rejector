@@ -1,13 +1,13 @@
 use crate::{
     types::*,
-    vault::{write_new_private, Vault},
+    vault::{Vault, write_new_private},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{
-    backup::Backup, params, Connection, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, OptionalExtension, Transaction, TransactionBehavior, backup::Backup, params,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
@@ -373,8 +373,7 @@ impl Store {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         check_connection_integrity(&connection)?;
-        let version: i64 =
-            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_version = self.schema_version()?;
         ensure!(
             (1..=current_version).contains(&version),
@@ -383,7 +382,8 @@ impl Store {
 
         let mut metadata_records = 0u64;
         {
-            let mut statement = connection.prepare("SELECT name,payload FROM meta ORDER BY name")?;
+            let mut statement =
+                connection.prepare("SELECT name,payload FROM meta ORDER BY name")?;
             let rows = statement.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
             })?;
@@ -436,8 +436,9 @@ impl Store {
             })?;
             for row in rows {
                 let (event_id, payload) = row?;
-                let _: AuditEvent =
-                    self.vault.open_value(&format!("event/{event_id}"), &payload)?;
+                let _: AuditEvent = self
+                    .vault
+                    .open_value(&format!("event/{event_id}"), &payload)?;
                 audit_events += 1;
             }
         }
@@ -454,9 +455,8 @@ impl Store {
 
         let mut delivery_records = 0u64;
         {
-            let mut statement = connection.prepare(
-                "SELECT item_id,status,provider_id FROM deliveries ORDER BY item_id",
-            )?;
+            let mut statement = connection
+                .prepare("SELECT item_id,status,provider_id FROM deliveries ORDER BY item_id")?;
             let rows = statement.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -471,8 +471,9 @@ impl Store {
                     "Backup contains unknown delivery state"
                 );
                 if let Some(payload) = provider_id {
-                    let _: String =
-                        self.vault.open_value(&format!("delivery/{item_id}"), &payload)?;
+                    let _: String = self
+                        .vault
+                        .open_value(&format!("delivery/{item_id}"), &payload)?;
                 }
                 delivery_records += 1;
             }
@@ -1235,9 +1236,10 @@ mod tests {
             .unwrap();
         }
         let mut db = Store::open(&path, vault).unwrap();
-        assert!(db
-            .insert_stub(stub("after-migration", "thread"), Utc::now())
-            .unwrap());
+        assert!(
+            db.insert_stub(stub("after-migration", "thread"), Utc::now())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1406,11 +1408,12 @@ mod tests {
         );
         assert_eq!(db.meta::<String>("second").unwrap(), Some("two".into()));
         assert!(db.meta::<String>("old").unwrap().is_none());
-        assert!(db
-            .events(0, 100)
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "meta.test"));
+        assert!(
+            db.events(0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "meta.test")
+        );
     }
 
     #[test]
@@ -1610,9 +1613,10 @@ mod tests {
         let backup = d.path().join("backup.sqlite3");
         let vault = Vault::random();
         let mut db = Store::open(&source, vault.clone()).unwrap();
-        assert!(db
-            .insert_stub(stub("backup-message", "backup-thread"), Utc::now())
-            .unwrap());
+        assert!(
+            db.insert_stub(stub("backup-message", "backup-thread"), Utc::now())
+                .unwrap()
+        );
         db.integrity_check().unwrap();
         db.backup_to(&backup).unwrap();
         assert!(backup.is_file());

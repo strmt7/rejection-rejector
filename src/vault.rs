@@ -1,13 +1,13 @@
 //! Application-layer authenticated encryption. Indexes/counts/timestamps are not encrypted.
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 #[cfg(any(windows, target_os = "macos"))]
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit, Payload},
 };
 use rand::RngCore;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{fs, io::Write, path::Path, sync::Arc};
 use zeroize::Zeroizing;
 
@@ -31,7 +31,10 @@ impl Vault {
         let id_path = dir.join("vault-id");
         let is_new = !id_path.exists();
         if is_new {
-            ensure!(!dir.join("state.sqlite3").exists(),"Vault identifier is missing while a database exists. Restore the original key; refusing to create a replacement");
+            ensure!(
+                !dir.join("state.sqlite3").exists(),
+                "Vault identifier is missing while a database exists. Restore the original key; refusing to create a replacement"
+            );
             write_new_private(&id_path, uuid::Uuid::new_v4().to_string().as_bytes())?;
         }
         let id = fs::read_to_string(&id_path)?;

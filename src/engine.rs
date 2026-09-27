@@ -1,7 +1,7 @@
 use crate::{
     config::{
-        evaluation_suite_hash, settings_context_hash, Mode, Settings, TaskQualification,
-        PROMPT_VERSION,
+        Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
+        settings_context_hash,
     },
     evaluation,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
@@ -13,13 +13,13 @@ use crate::{
     types::*,
     vault::{InstanceLock, Vault},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -802,7 +802,7 @@ impl Engine {
             Ok(Some(email)) => email,
             Ok(None) => return Err(DispatchFailure::review("Original message no longer exists")),
             Err(error) if error.kind == FetchFailureKind::Infrastructure => {
-                return Err(DispatchFailure::retryable(error.message))
+                return Err(DispatchFailure::retryable(error.message));
             }
             Err(error) => return Err(DispatchFailure::review(error.message)),
         };
@@ -957,15 +957,43 @@ impl Engine {
     fn seed_demo(&mut self) -> Result<()> {
         self.account = "demo@example.invalid".into();
         self.settings.signature = "Alex Morgan".into();
-        for (company,subject,text) in [
-            ("Northstar Materials","Your application — Thin Film Engineer","Thank you for applying for the Thin Film Engineer position. After reviewing your experience, we have decided not to move forward with your application."),
-            ("Helix Instruments","Update on your application","We appreciate your interest in our R&D team. Your application has not been selected for the next stage."),
-            ("Aperture Systems","Research Engineer application","Thank you for your time. We have decided to pursue other candidates for this position.")
+        for (company, subject, text) in [
+            (
+                "Northstar Materials",
+                "Your application — Thin Film Engineer",
+                "Thank you for applying for the Thin Film Engineer position. After reviewing your experience, we have decided not to move forward with your application.",
+            ),
+            (
+                "Helix Instruments",
+                "Update on your application",
+                "We appreciate your interest in our R&D team. Your application has not been selected for the next stage.",
+            ),
+            (
+                "Aperture Systems",
+                "Research Engineer application",
+                "Thank you for your time. We have decided to pursue other candidates for this position.",
+            ),
         ] {
-            let email=ollama::sample_email(subject,text);let id=email.stub.id();self.db.insert_stub(email.stub.clone(),Utc::now())?;let mut job=self.db.get(&id)?;
-            job.email=Some(email);job.state=JobState::Ready;job.flags=vec!["Synthetic demonstration. No actual account or live inference.".into()];
-            job.draft=Some(Draft{body:format!("Dear {company} Recruitment Team,\n\nI challenge this decision and request a substantive explanation of the assessment. Please identify the specific advertised requirements I did not meet and explain how my relevant experience was evaluated. A restatement of the outcome would not address these questions.\n\nRegards,\nAlex Morgan"),origin:"demo".into()});job.drafted_at=Some(Utc::now());
-            self.db.save(&mut job,"demo.loaded","Synthetic fixture, not model-generated or real email")?;
+            let email = ollama::sample_email(subject, text);
+            let id = email.stub.id();
+            self.db.insert_stub(email.stub.clone(), Utc::now())?;
+            let mut job = self.db.get(&id)?;
+            job.email = Some(email);
+            job.state = JobState::Ready;
+            job.flags =
+                vec!["Synthetic demonstration. No actual account or live inference.".into()];
+            job.draft = Some(Draft {
+                body: format!(
+                    "Dear {company} Recruitment Team,\n\nI challenge this decision and request a substantive explanation of the assessment. Please identify the specific advertised requirements I did not meet and explain how my relevant experience was evaluated. A restatement of the outcome would not address these questions.\n\nRegards,\nAlex Morgan"
+                ),
+                origin: "demo".into(),
+            });
+            job.drafted_at = Some(Utc::now());
+            self.db.save(
+                &mut job,
+                "demo.loaded",
+                "Synthetic fixture, not model-generated or real email",
+            )?;
         }
         Ok(())
     }

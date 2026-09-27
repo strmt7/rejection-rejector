@@ -1,11 +1,11 @@
 use crate::worker::Command;
-use anyhow::{ensure, Result};
-use crossbeam_channel::{bounded, Sender};
+use anyhow::{Result, ensure};
+use crossbeam_channel::{Sender, bounded};
 use serde_json::json;
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };

@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -80,9 +80,15 @@ impl Tone {
     }
     pub fn instruction(self) -> &'static str {
         match self {
-            Self::Firm => "Firmly request specific feedback against the advertised requirements; do not thank them for rejecting the application.",
-            Self::Strong => "Directly challenge the decision and request a substantive, individualized explanation. Be assertive, concise and unmistakably dissatisfied, without insults, threats or unsupported accusations.",
-            Self::Reconsideration => "Request an individual reconsideration and an explanation of the criteria. Challenge the outcome professionally without pretending a reply can invalidate a hiring decision.",
+            Self::Firm => {
+                "Firmly request specific feedback against the advertised requirements; do not thank them for rejecting the application."
+            }
+            Self::Strong => {
+                "Directly challenge the decision and request a substantive, individualized explanation. Be assertive, concise and unmistakably dissatisfied, without insults, threats or unsupported accusations."
+            }
+            Self::Reconsideration => {
+                "Request an individual reconsideration and an explanation of the criteria. Challenge the outcome professionally without pretending a reply can invalidate a hiring decision."
+            }
         }
     }
 }
@@ -304,13 +310,15 @@ impl Settings {
     }
 
     pub fn task_qualification_current(&self) -> bool {
-        self.task_qualification.as_ref().is_some_and(|qualification| {
-            self.model_digest.as_ref() == Some(&qualification.digest)
-                && self.model == qualification.model
-                && qualification.prompt_version == PROMPT_VERSION
-                && qualification.context_hash == settings_context_hash(self)
-                && qualification.suite_hash == crate::evaluation::evaluation_suite_hash()
-        })
+        self.task_qualification
+            .as_ref()
+            .is_some_and(|qualification| {
+                self.model_digest.as_ref() == Some(&qualification.digest)
+                    && self.model == qualification.model
+                    && qualification.prompt_version == PROMPT_VERSION
+                    && qualification.context_hash == settings_context_hash(self)
+                    && qualification.suite_hash == crate::evaluation::evaluation_suite_hash()
+            })
     }
 }
 
@@ -416,18 +424,22 @@ mod tests {
             };
             s.validate().unwrap();
         }
-        assert!(Settings {
-            poll_hours: 3,
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
-        assert!(Settings {
-            lookback_days: 2,
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
+        assert!(
+            Settings {
+                poll_hours: 3,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                lookback_days: 2,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn default_is_not_armed() {
@@ -438,12 +450,14 @@ mod tests {
     }
     #[test]
     fn auto_requires_both_consents() {
-        assert!(Settings {
-            mode: Mode::Automatic,
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
+        assert!(
+            Settings {
+                mode: Mode::Automatic,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn automatic_requires_model_pin_and_task_qualification() {

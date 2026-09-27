@@ -1,7 +1,7 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
-    config::{Mode, Settings, Tone, LOOKBACK_DAYS, MODEL_CANDIDATES, POLL_HOURS},
-    types::{hash, Job, JobState},
+    config::{LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS, Settings, Tone},
+    types::{Job, JobState, hash},
     worker::{Command, Snapshot, Worker},
 };
 use eframe::egui::{self, Color32, RichText, Vec2};
@@ -478,7 +478,11 @@ impl App {
             || self.settings.num_ctx != s.settings.num_ctx
             || self.settings.ollama_url != s.settings.ollama_url
             || self.settings.llm_timeout_seconds != s.settings.llm_timeout_seconds;
-        Self::heading(ui,"Intelligence that stays local","One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.");
+        Self::heading(
+            ui,
+            "Intelligence that stays local",
+            "One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.",
+        );
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
             ui.label("Provisional default: qwen3.5:9b-q8_0 · validate against the task suite before Automatic mode");
@@ -993,7 +997,15 @@ impl eframe::App for App {
             // Screenshot mode is restricted to synthetic demo data.
             ctx.request_repaint();
             if self.frames.is_multiple_of(120) {
-                eprintln!("GUI_QA initialized={} fatal={} items={} selected={} requested={} elapsed={:.1}",s.initialized,s.fatal,s.items.len(),s.selected.is_some(),self.screenshot_requested,self.started.elapsed().as_secs_f32());
+                eprintln!(
+                    "GUI_QA initialized={} fatal={} items={} selected={} requested={} elapsed={:.1}",
+                    s.initialized,
+                    s.fatal,
+                    s.items.len(),
+                    s.selected.is_some(),
+                    self.screenshot_requested,
+                    self.started.elapsed().as_secs_f32()
+                );
             }
         }
         if self.screenshot.is_some() && s.initialized && s.selected.is_none() {

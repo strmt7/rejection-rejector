@@ -1,11 +1,11 @@
 //! Deterministic provider fixtures. These tests never authorize or contact Gmail.
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use rejection_rejector::{
     config::Settings,
     gmail::{Added, HistoryPage, HistoryRecord, HistoryResult, MessagePage, MessageRef, Profile},
     store::Store,
-    sync::{synchronize, Provider},
+    sync::{Provider, synchronize},
     types::{JobState, Source, Stub, SyncState},
     vault::Vault,
 };
@@ -114,15 +114,17 @@ fn partial_history_failure_retains_cursor_and_replay_deduplicates() {
     f.histories.push_back(history("one", Some("next")));
     f.histories
         .push_back(Err(anyhow!("Synthetic second-page failure")));
-    assert!(synchronize(
-        &mut f,
-        &mut db,
-        &Settings::default(),
-        ACCOUNT,
-        Utc::now(),
-        &AtomicBool::new(false)
-    )
-    .is_err());
+    assert!(
+        synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            ACCOUNT,
+            Utc::now(),
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
     assert_eq!(cursor(&db).as_deref(), Some("10"));
     assert_eq!(db.counts(ACCOUNT).unwrap().stored, 1);
     f.histories.push_back(history("one", Some("next")));
@@ -148,29 +150,33 @@ fn repeated_page_token_fails_without_checkpointing() {
     let mut f = Fake::default();
     f.histories.push_back(history("one", Some("same")));
     f.histories.push_back(history("two", Some("same")));
-    assert!(synchronize(
-        &mut f,
-        &mut db,
-        &Settings::default(),
-        ACCOUNT,
-        Utc::now(),
-        &AtomicBool::new(false)
-    )
-    .is_err());
+    assert!(
+        synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            ACCOUNT,
+            Utc::now(),
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
     assert_eq!(cursor(&db).as_deref(), Some("10"));
 }
 #[test]
 fn cancellation_keeps_previous_cursor() {
     let (_d, mut db) = setup();
-    assert!(synchronize(
-        &mut Fake::default(),
-        &mut db,
-        &Settings::default(),
-        ACCOUNT,
-        Utc::now(),
-        &AtomicBool::new(true)
-    )
-    .is_err());
+    assert!(
+        synchronize(
+            &mut Fake::default(),
+            &mut db,
+            &Settings::default(),
+            ACCOUNT,
+            Utc::now(),
+            &AtomicBool::new(true)
+        )
+        .is_err()
+    );
     assert_eq!(cursor(&db).as_deref(), Some("10"));
 }
 #[test]
@@ -180,15 +186,17 @@ fn account_switch_is_rejected_before_listing() {
         account: "another@example.com".into(),
         ..Default::default()
     };
-    assert!(synchronize(
-        &mut f,
-        &mut db,
-        &Settings::default(),
-        ACCOUNT,
-        Utc::now(),
-        &AtomicBool::new(false)
-    )
-    .is_err());
+    assert!(
+        synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            ACCOUNT,
+            Utc::now(),
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
     assert_eq!(f.list_calls, 0);
     assert_eq!(cursor(&db).as_deref(), Some("10"));
 }

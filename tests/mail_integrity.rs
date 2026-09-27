@@ -1,5 +1,5 @@
 //! Entirely synthetic MIME/identity tests; nothing is sent.
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use mailparse::MailHeaderMap;
 use rejection_rejector::{config::Settings, mail, ollama, types::*};
@@ -83,9 +83,11 @@ fn ambiguous_subject_and_auto_submitted_headers_are_blocked() {
         email
             .headers
             .insert(header.into(), vec!["first".into(), "second".into()]);
-        assert!(mail::hard_blocks(email, "candidate@example.com")
-            .iter()
-            .any(|r| r.contains("duplicate")));
+        assert!(
+            mail::hard_blocks(email, "candidate@example.com")
+                .iter()
+                .any(|r| r.contains("duplicate"))
+        );
     }
 }
 #[test]

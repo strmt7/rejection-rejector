@@ -1,7 +1,7 @@
 use crate::{
-    config::{evaluation_suite_hash, Settings, EVALUATION_CONTRACT_VERSION, MODEL_CANDIDATES},
+    config::{EVALUATION_CONTRACT_VERSION, MODEL_CANDIDATES, Settings, evaluation_suite_hash},
     mail,
-    ollama::{sample_email, Ollama},
+    ollama::{Ollama, sample_email},
     types::Category,
     vault::write_new_private,
 };

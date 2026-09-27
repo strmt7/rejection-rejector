@@ -4,7 +4,7 @@ use crate::{
     store::Store,
     types::SyncState,
 };
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use std::{
     collections::HashSet,
@@ -78,7 +78,7 @@ pub fn synchronize<P: Provider>(
                     now,
                     cancelled,
                     &profile.history_id,
-                )
+                );
             }
             HistoryResult::Page(p) => p,
         };
@@ -220,10 +220,11 @@ mod tests {
         let stop = AtomicBool::new(false);
         let s = Settings::default();
         assert!(synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).is_err());
-        assert!(db
-            .meta::<SyncState>("sync/me@example.com")
-            .unwrap()
-            .is_none());
+        assert!(
+            db.meta::<SyncState>("sync/me@example.com")
+                .unwrap()
+                .is_none()
+        );
         f.fail = false;
         assert_eq!(
             synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap(),
@@ -233,10 +234,11 @@ mod tests {
         let calls = f.calls;
         synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap();
         assert_eq!(calls, f.calls);
-        assert!(db
-            .events(0, 100)
-            .unwrap()
-            .iter()
-            .any(|event| matches!(event.kind.as_str(), "sync.reconciled" | "sync.incremental")));
+        assert!(
+            db.events(0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event.kind.as_str(), "sync.reconciled" | "sync.incremental"))
+        );
     }
 }
