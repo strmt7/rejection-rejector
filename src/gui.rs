@@ -687,16 +687,14 @@ impl App {
                         egui::Button::new("Choose OAuth JSON & connect"),
                     )
                     .clicked()
-                {
-                    if let Some(path) = rfd::FileDialog::new()
+                    && let Some(path) = rfd::FileDialog::new()
                         .add_filter("Google OAuth JSON", &["json"])
                         .pick_file()
-                    {
-                        self.worker.command(Command::Connect {
-                            path,
-                            send: self.oauth_send,
-                        });
-                    }
+                {
+                    self.worker.command(Command::Connect {
+                        path,
+                        send: self.oauth_send,
+                    });
                 }
                 if ui
                     .add_enabled(
@@ -845,15 +843,13 @@ impl App {
                     )
                     .on_hover_text("Creates a checksum-verified same-vault backup. No decrypted email content or OAuth token is written to the manifest.")
                     .clicked()
-                {
-                    if let Some(parent) = rfd::FileDialog::new()
+                    && let Some(parent) = rfd::FileDialog::new()
                         .set_title("Choose parent folder for Rejection Rejector backup")
                         .pick_folder()
-                    {
-                        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                        let out = parent.join(format!("rejection-rejector-backup-{stamp}"));
-                        self.worker.command(Command::Backup { out });
-                    }
+                {
+                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                    let out = parent.join(format!("rejection-rejector-backup-{stamp}"));
+                    self.worker.command(Command::Backup { out });
                 }
                 if ui
                     .add_enabled(
@@ -862,14 +858,12 @@ impl App {
                     )
                     .on_hover_text("Writes a redacted JSON report locally. No email content, account address, recipients, OAuth credentials, API token, signature or candidate facts are included.")
                     .clicked()
-                {
-                    if let Some(path) = rfd::FileDialog::new()
+                    && let Some(path) = rfd::FileDialog::new()
                         .set_title("Save Rejection Rejector diagnostics")
                         .set_file_name("rejection-rejector-diagnostics.json")
                         .save_file()
-                    {
-                        self.worker.command(Command::Diagnostics { out: path });
-                    }
+                {
+                    self.worker.command(Command::Diagnostics { out: path });
                 }
             });
             ui.label(
@@ -957,11 +951,11 @@ impl App {
                         if ui.button("Keep editing").clicked() {
                             self.pending_select = None;
                         }
-                        if ui.button("Discard edit").clicked() {
-                            if let Some(id) = self.pending_select.take() {
-                                self.dirty = false;
-                                self.worker.command(Command::Select(id));
-                            }
+                        if ui.button("Discard edit").clicked()
+                            && let Some(id) = self.pending_select.take()
+                        {
+                            self.dirty = false;
+                            self.worker.command(Command::Select(id));
                         }
                     });
                 });
@@ -1008,10 +1002,12 @@ impl eframe::App for App {
                 );
             }
         }
-        if self.screenshot.is_some() && s.initialized && s.selected.is_none() {
-            if let Some(j) = s.items.first() {
-                self.worker.command(Command::Select(j.id.clone()));
-            }
+        if self.screenshot.is_some()
+            && s.initialized
+            && s.selected.is_none()
+            && let Some(j) = s.items.first()
+        {
+            self.worker.command(Command::Select(j.id.clone()));
         }
         egui::Panel::bottom("status_bar")
             .frame(egui::Frame::default().fill(PANEL).inner_margin(12))
