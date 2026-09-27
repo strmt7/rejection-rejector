@@ -30,6 +30,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "digest": q.digest,
             "prompt_version": q.prompt_version,
             "context_hash": q.context_hash,
+            "suite_hash": q.suite_hash,
             "task_score": q.task_score,
             "fixture_count": q.fixture_count,
             "qualified_at": q.qualified_at
