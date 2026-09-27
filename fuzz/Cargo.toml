@@ -1,0 +1,28 @@
+[package]
+name = "rejection-rejector-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+rejection-rejector = { path = "..", default-features = false }
+
+[[bin]]
+name = "mail_boundaries"
+path = "fuzz_targets/mail_boundaries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mime_parser"
+path = "fuzz_targets/mime_parser.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
