@@ -11,7 +11,7 @@
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
 | AI | Local Ollama classification, drafting and a separate same-model audit; structured outputs and exact evidence checks |
-| Model | `qwen3.5:9b-q8_0` quality-first default, 8,192 context; Q4/gpt-oss 20B/Gemma 4 alternatives; explicit download and full classification/draft/verification/residency qualification |
+| Model | `qwen3.5:9b-q8_0` provisional default; Granite 4.2 8B Q8, Gemma 4 12B Q8, Ministral 3 14B and other curated challengers can be compared locally on the full task pipeline |
 | GPU target | 16 GiB; conservative 14 GiB reported-residency budget, not physical peak certification |
 | Check interval | **1 / 2 / 4 / 8 / 24 hours** |
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
@@ -36,13 +36,13 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed:
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.34.0 or newer so structured-output/model behavior is not accepted from an outdated runtime:
 
 ```powershell
 .\rr.exe doctor
 ```
 
-It reports local Gmail permission/configuration state, Ollama reachability, model pin/install state and current Ollama GPU-residency status without printing message bodies or credentials.
+It reports local Gmail permission/configuration state, the Ollama runtime version, model pin/install state and current GPU-residency status without printing message bodies or credentials. To compare curated models that you explicitly installed, run `rr compare-models --out model-bakeoff.json` or use **Compare installed candidates** in Local AI.
 
 Real setup: [docs/SETUP.md](docs/SETUP.md). Configure your own Gmail OAuth Desktop client and signature, install/start Ollama, download the model, then **Qualify & pin**. Start in Human review with sending disabled.
 
