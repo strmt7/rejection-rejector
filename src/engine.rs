@@ -59,6 +59,17 @@ pub struct AutomaticPolicyDecision {
     pub blocks: Vec<AutomaticPolicyBlock>,
 }
 
+fn push_policy_block(
+    blocks: &mut Vec<AutomaticPolicyBlock>,
+    code: AutomaticPolicyCode,
+    message: impl Into<String>,
+) {
+    blocks.push(AutomaticPolicyBlock {
+        code,
+        message: message.into(),
+    });
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DispatchFailureKind {
     Retryable,
@@ -963,15 +974,10 @@ pub fn automatic_policy(
     now: DateTime<Utc>,
 ) -> AutomaticPolicyDecision {
     let mut blocks = Vec::new();
-    let mut block = |code: AutomaticPolicyCode, message: impl Into<String>| {
-        blocks.push(AutomaticPolicyBlock {
-            code,
-            message: message.into(),
-        });
-    };
 
     if mail::validate_job_identity(job).is_err() {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::QueueIdentityMismatch,
             "Queue/message identity mismatch",
         );
@@ -980,14 +986,16 @@ pub fn automatic_policy(
         || !settings.sending_enabled
         || !settings.automatic_confirmed
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::AutomaticModeNotArmed,
             "Automatic mode not explicitly armed",
         );
     }
 
     let Some(email) = job.email.as_ref() else {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::OriginalEmailMissing,
             "Original email missing",
         );
@@ -1001,7 +1009,8 @@ pub fn automatic_policy(
     }
 
     let Some(analysis) = job.analysis.as_ref() else {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::LocalAnalysisMissing,
             "Local analysis missing",
         );
@@ -1022,7 +1031,8 @@ pub fn automatic_policy(
         || analysis.verdict.category != Category::Rejection
         || analysis.verdict.confidence < 95
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::NotHighConfidenceRejection,
             "Not a high-score reviewed rejection",
         );
@@ -1034,7 +1044,8 @@ pub fn automatic_policy(
             .as_ref()
             .is_some_and(Verification::passed)
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
             "Model verification or residency failed",
         );
@@ -1042,7 +1053,8 @@ pub fn automatic_policy(
     if draft.origin != "ollama-v1"
         || analysis.verified_draft_hash.as_deref() != Some(hash(&draft.body).as_str())
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::DraftVerificationStale,
             "Draft changed since verification",
         );
@@ -1053,7 +1065,8 @@ pub fn automatic_policy(
         || analysis.context_hash != ollama::context_hash(settings)
         || analysis.email_fingerprint != email.fingerprint()
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::AnalysisIdentityStale,
             "Analysis identity is stale",
         );
@@ -1064,7 +1077,8 @@ pub fn automatic_policy(
                 && Some(&qualification.digest) == settings.model_digest.as_ref()
                 && qualification.prompt_version == PROMPT_VERSION
                 && qualification.context_hash == settings_context_hash(settings) => {}
-        _ => block(
+        _ => push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::TaskQualificationStale,
             "Task-specific model qualification is missing or stale",
         ),
@@ -1073,13 +1087,15 @@ pub fn automatic_policy(
         now.signed_duration_since(time).num_minutes()
             < i64::from(settings.cooldown_minutes)
     }) {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::CooldownActive,
             "Cooldown active",
         );
     }
     if email.received_at < settings.cutoff(now) || email.received_at > now {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::OutsideAgeWindow,
             "Outside selected age window",
         );
@@ -1089,25 +1105,29 @@ pub fn automatic_policy(
             .automatic_since
             .is_none_or(|time| email.received_at < time)
     {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::PredatesAutomaticEnrollment,
             "Predates automatic-mode enrollment",
         );
     }
     if !mail::clear_rejection_language(&email.subject, &email.text) {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::MissingDeterministicRejectionEvidence,
             "No independent clear rejection phrase in the current message",
         );
     }
     if mail::auto_language_conflict(&email.subject, &email.text) {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::ConflictingEmailLanguage,
             "Conflicting or suspicious email language",
         );
     }
     if mail::automatic_draft_conflict(&draft.body, &settings.signature) {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::DraftEscalationOrLink,
             "Draft requires Human review because of escalation or link content",
         );
@@ -1115,7 +1135,8 @@ pub fn automatic_policy(
     if email.header("auto-submitted").is_some_and(|value| {
         !value.eq_ignore_ascii_case("no") && !value.eq_ignore_ascii_case("auto-generated")
     }) {
-        block(
+        push_policy_block(
+            &mut blocks,
             AutomaticPolicyCode::AutomaticReplyLoop,
             "Automatic reply-loop marker requires Human review",
         );
@@ -1127,7 +1148,8 @@ pub fn automatic_policy(
         "x-auto-response-suppress",
     ] {
         if email.headers.contains_key(name) {
-            block(
+            push_policy_block(
+            &mut blocks,
                 AutomaticPolicyCode::AutomaticReplySuppressed,
                 format!("Automatic replies suppressed by {name}"),
             );
@@ -1135,7 +1157,8 @@ pub fn automatic_policy(
     }
     if let Some(reply) = &email.reply_to {
         if mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok() {
-            block(
+            push_policy_block(
+            &mut blocks,
                 AutomaticPolicyCode::ReplyToMismatch,
                 "Reply-To differs from sender; human review required",
             );
