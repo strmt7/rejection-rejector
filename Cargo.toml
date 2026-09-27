@@ -58,9 +58,6 @@ eframe = { version = "0.36.2", optional = true, default-features = false, featur
 rfd = { version = "0.17.2", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
-[dev-dependencies]
-proptest = "1"
-
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(target_os = "macos")'.dependencies]
