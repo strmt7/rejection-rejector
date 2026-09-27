@@ -992,7 +992,7 @@ if ui.add_enabled(s.busy.is_empty()&&!self.worker.paused.load(Ordering::SeqCst),
 }
 impl eframe::App for App {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = root_ui.ctx();
+        let ctx = root_ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(250));
         let s = self.worker.view();
         self.sync_view(&s);
@@ -1059,7 +1059,7 @@ impl eframe::App for App {
             if !s.initialized{ui.spinner();ui.heading("Opening encrypted local workspace…");return;}
             if self.tab==Tab::Review{self.review(ui,&s);}else{egui::ScrollArea::vertical().id_salt("main_scroll").show(ui,|ui|match self.tab{Tab::Overview=>self.overview(ui,&s),Tab::Activity=>self.activity(ui,&s),Tab::LocalAi=>self.local_ai(ui,&s),Tab::Settings=>self.settings(ui,&s),Tab::Review=>()});}
         });
-        self.dialogs(ctx, &s);
+        self.dialogs(&ctx, &s);
         if let Some(path) = self.screenshot.clone() {
             self.frames += 1;
             if self.started.elapsed() > Duration::from_secs(2)
