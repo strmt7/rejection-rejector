@@ -21,7 +21,7 @@ Both Windows and Ubuntu run these checks. Windows additionally builds optimized 
 
 At source 720143c842d27711a833480da680fadfbb5585e2, the Linux all-feature suite passed 80 tests: 39 library, 2 desktop CLI, 15 automatic-policy, 6 HTTP-boundary, 4 mail-integrity, 6 mocked Ollama-protocol, 2 concurrent-reservation and 6 synchronization-recovery tests. The separate core-only pass repeats a subset; do not double-count it. Inspect the latest run and artifact COMMIT.txt rather than treating this historical result as proof of a later build.
 
-The tests cover default disarming and exact presets; encryption/tampering/wrong keys and instance locks; stale revisions, durable reservations and caps; concurrent reservation races; mailbox/header injection and MIME threading; duplicate OAuth codes/state; failed history pages, cursor expiry, replay and changed lookback; exact model evidence, stale digest/context and offload rejection; response-size limits, redirect/retry policy and redacted errors; editor message/revision binding and demo-only screenshot controls.
+The tests cover default disarming and exact presets; encryption/tampering/wrong keys and instance locks; stale revisions, durable reservations and caps; concurrent reservation races; mailbox/header injection and MIME threading; duplicate OAuth codes/state; failed history pages, cursor expiry, replay and changed lookback; exact model evidence, stale digest/context and offload rejection; the independent current-message rejection gate for Automatic mode, including quoted-history negatives; response-size limits, redirect/retry policy and redacted errors; editor message/revision binding and demo-only screenshot controls.
 
 ## Actual native interface checks
 
