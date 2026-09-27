@@ -1359,7 +1359,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        payload[payload.len() / 2] ^= 0x01;
+        let midpoint = payload.len() / 2;
+        payload[midpoint] ^= 0x01;
         db.conn
             .execute(
                 "UPDATE events SET payload=?1 WHERE seq=(SELECT MAX(seq) FROM events)",
