@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.0.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused and responses are no-store."
+    "version": "1.1.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID, and errors use stable machine-readable codes."
   },
   "servers": [
     {
@@ -22,6 +22,121 @@
         "scheme": "bearer",
         "description": "Random local token stored encrypted by Rejection Rejector."
       }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "request_id",
+          "error"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "examples": [
+                  "worker_busy"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "description": "Per-request correlation identifier generated locally by Rejection Rejector.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request or unavailable resource",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication, Host or Origin policy rejected the request",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "The endpoint is read-only",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "WorkerUnavailable": {
+        "description": "Worker queue busy or local worker timeout",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
     }
   },
   "security": [
@@ -35,7 +150,24 @@
         "summary": "Process/API-thread liveness",
         "responses": {
           "200": {
-            "description": "API thread is alive"
+            "description": "API thread is alive",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -45,7 +177,24 @@
         "summary": "This API contract",
         "responses": {
           "200": {
-            "description": "OpenAPI 3.1 document"
+            "description": "OpenAPI 3.1 document",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -55,7 +204,24 @@
         "summary": "Versioned capability discovery",
         "responses": {
           "200": {
-            "description": "Capabilities"
+            "description": "Capabilities",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -65,10 +231,29 @@
         "summary": "Workspace readiness and integrity",
         "responses": {
           "200": {
-            "description": "Readiness state"
+            "description": "Readiness state",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
           },
           "503": {
-            "description": "Worker unavailable"
+            "description": "Worker unavailable",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
           }
         }
       }
@@ -78,7 +263,24 @@
         "summary": "Application status",
         "responses": {
           "200": {
-            "description": "Status"
+            "description": "Status",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -100,7 +302,24 @@
         ],
         "responses": {
           "200": {
-            "description": "Job page"
+            "description": "Job page",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -121,7 +340,24 @@
         ],
         "responses": {
           "200": {
-            "description": "Job"
+            "description": "Job",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -142,7 +378,24 @@
         ],
         "responses": {
           "200": {
-            "description": "Audit events"
+            "description": "Audit events",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -152,7 +405,24 @@
         "summary": "Current tamper-evident audit-chain anchor",
         "responses": {
           "200": {
-            "description": "Audit anchor"
+            "description": "Audit anchor",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
@@ -173,7 +443,24 @@
         ],
         "responses": {
           "200": {
-            "description": "Anchor membership"
+            "description": "Anchor membership",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }
