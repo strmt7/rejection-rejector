@@ -25,6 +25,7 @@ pub struct Snapshot {
     pub busy: String,
     pub notice: String,
     pub error: String,
+    pub operation: OperationStatus,
     pub settings: Settings,
     pub settings_revision: u64,
     pub account: String,
@@ -99,6 +100,40 @@ pub enum Command {
         reply: Sender<Value>,
     },
 }
+
+impl Command {
+    fn kind(&self) -> OperationKind {
+        match self {
+            Self::Refresh => OperationKind::Refresh,
+            Self::CheckNow => OperationKind::SyncMailbox,
+            Self::Connect { .. } => OperationKind::ConnectGmail,
+            Self::Disconnect => OperationKind::DisconnectGmail,
+            Self::Settings(_) => OperationKind::UpdateSettings,
+            Self::InstallOllama => OperationKind::InstallOllama,
+            Self::StartOllama => OperationKind::StartOllama,
+            Self::PullModel => OperationKind::PullModel,
+            Self::InspectModel => OperationKind::InspectModel,
+            Self::QualifyModel => OperationKind::QualifyModel,
+            Self::EvaluateModel => OperationKind::EvaluateModel,
+            Self::CompareModels => OperationKind::CompareModels,
+            Self::IntegrityCheck => OperationKind::IntegrityCheck,
+            Self::Backup { .. } => OperationKind::Backup,
+            Self::Diagnostics { .. } => OperationKind::Diagnostics,
+            Self::List { .. } => OperationKind::ListItems,
+            Self::Select(_) => OperationKind::SelectItem,
+            Self::Edit { .. } => OperationKind::EditDraft,
+            Self::Regenerate { .. } => OperationKind::RegenerateDraft,
+            Self::Dismiss { .. } => OperationKind::DismissItem,
+            Self::Send { .. } => OperationKind::SendReply,
+            Self::Reconcile(_) => OperationKind::ReconcileDelivery,
+            Self::Purge => OperationKind::PurgeRetention,
+            Self::RevealApiToken => OperationKind::RevealApiToken,
+            Self::HideApiToken => OperationKind::HideApiToken,
+            Self::Api { .. } => OperationKind::ApiRequest,
+        }
+    }
+}
+
 pub struct Worker {
     pub tx: Sender<Command>,
     pub snapshot: Arc<Mutex<Snapshot>>,
@@ -140,10 +175,21 @@ impl Worker {
         }
     }
     pub fn command(&self, command: Command) {
+        let kind = command.kind();
         if self.tx.try_send(command).is_err()
             && let Ok(mut s) = self.snapshot.lock()
         {
-            s.error = "Command queue is busy. Wait for the current operation to finish.".into();
+            let message = "Command queue is busy. Wait for the current operation to finish.";
+            s.error = message.into();
+            s.operation = OperationStatus {
+                kind,
+                state: OperationState::Failed,
+                code: Some("worker_queue_busy".into()),
+                retryable: true,
+                message: message.into(),
+                started_at: None,
+                finished_at: Some(Utc::now()),
+            };
         }
     }
     pub fn view(&self) -> Snapshot {
@@ -159,9 +205,18 @@ impl Drop for Worker {
 
 fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
     if let Ok(mut view) = shared.lock() {
-        view.error = message;
+        view.error = message.clone();
         view.fatal = true;
         view.busy.clear();
+        view.operation = OperationStatus {
+            kind: OperationKind::Idle,
+            state: OperationState::Failed,
+            code: Some("worker_fatal".into()),
+            retryable: false,
+            message,
+            started_at: None,
+            finished_at: Some(Utc::now()),
+        };
     }
 }
 
@@ -197,22 +252,62 @@ fn refresh(
     s.review_only = review;
     Ok(())
 }
+fn begin_operation(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, text: &str) {
+    if let Ok(mut s) = shared.lock() {
+        let now = Utc::now();
+        s.busy = text.into();
+        s.operation = OperationStatus {
+            kind,
+            state: OperationState::Running,
+            code: None,
+            retryable: false,
+            message: text.into(),
+            started_at: Some(now),
+            finished_at: None,
+        };
+    }
+}
+
 fn busy(shared: &Arc<Mutex<Snapshot>>, text: &str) {
     if let Ok(mut s) = shared.lock() {
         s.busy = text.into();
+        if s.operation.state == OperationState::Running {
+            s.operation.message = text.into();
+        }
     }
 }
-fn report(shared: &Arc<Mutex<Snapshot>>, result: &Result<()>) {
+
+fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()>) {
     if let Ok(mut s) = shared.lock() {
         s.busy.clear();
+        let finished_at = Some(Utc::now());
         match result {
             Ok(()) => {
                 s.error.clear();
                 s.notice = "Operation completed.".into();
+                s.operation = OperationStatus {
+                    kind,
+                    state: OperationState::Succeeded,
+                    code: None,
+                    retryable: false,
+                    message: s.notice.clone(),
+                    started_at: s.operation.started_at,
+                    finished_at,
+                };
             }
             Err(e) => {
-                s.error = format!("{e:#}");
+                let message = format!("{e:#}");
+                s.error = message.clone();
                 s.notice.clear();
+                s.operation = OperationStatus {
+                    kind,
+                    state: OperationState::Failed,
+                    code: Some(kind.failure_code().into()),
+                    retryable: kind.retryable(),
+                    message,
+                    started_at: s.operation.started_at,
+                    finished_at,
+                };
             }
         }
     }
@@ -267,7 +362,8 @@ fn run(
                 let _ = reply.try_send(data);
             }
             Ok(command) => {
-                busy(&shared, "Working locally…");
+                let operation = command.kind();
+                begin_operation(&shared, operation, "Working locally…");
                 let mut settings_changed = false;
                 let result: Result<()> = match command {
                     Command::Refresh => Ok(()),
@@ -401,7 +497,7 @@ fn run(
                 {
                     s.settings_revision += 1;
                 }
-                report(&shared, &result);
+                report(&shared, operation, &result);
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -424,12 +520,13 @@ fn run(
                 now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
             })
         {
-            busy(
+            begin_operation(
                 &shared,
+                OperationKind::SyncMailbox,
                 "Scheduled Gmail check: fetching only missing identities…",
             );
             let result = e.synchronize().map(|_| ());
-            report(&shared, &result);
+            report(&shared, OperationKind::SyncMailbox, &result);
             sync_retry =
                 Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
             refresh(&e, &shared, selected.as_deref(), review, page)?;
@@ -438,12 +535,13 @@ fn run(
             && e.settings.model_digest.is_some()
             && e.db.next_queued(&e.account, Utc::now())?.is_some()
         {
-            busy(
+            begin_operation(
                 &shared,
+                OperationKind::AnalyzeQueuedMail,
                 "Local AI: classifying, drafting and checking one new email…",
             );
             let result = e.process_one().map(|_| ());
-            report(&shared, &result);
+            report(&shared, OperationKind::AnalyzeQueuedMail, &result);
             if result.is_ok() {
                 process_failures = 0;
                 process_due = Instant::now() + Duration::from_secs(1);
@@ -454,6 +552,11 @@ fn run(
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if Instant::now() >= auto_due {
+            begin_operation(
+                &shared,
+                OperationKind::AutomaticDispatch,
+                "Evaluating automatic dispatch policy…",
+            );
             let result = e.automatic_tick();
             match &result {
                 Ok(_) => {
@@ -466,7 +569,11 @@ fn run(
                 }
             }
             if !matches!(result, Ok(false)) {
-                report(&shared, &result.map(|_| ()));
+                report(
+                    &shared,
+                    OperationKind::AutomaticDispatch,
+                    &result.map(|_| ()),
+                );
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
         }
