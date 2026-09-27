@@ -1574,6 +1574,36 @@ mod tests {
         }
     }
     #[test]
+    fn deep_backup_verification_detects_ciphertext_corruption_inside_valid_sqlite() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source.sqlite3");
+        let backup = d.path().join("backup.sqlite3");
+        let vault = Vault::random();
+        let mut db = Store::open(&source, vault).unwrap();
+        let identity = stub("ciphertext-corruption", "thread");
+        let id = identity.id();
+        db.insert_stub(identity, Utc::now()).unwrap();
+        db.backup_to(&backup).unwrap();
+        db.verify_backup_file(&backup).unwrap();
+
+        {
+            let connection = Connection::open(&backup).unwrap();
+            connection
+                .execute(
+                    "UPDATE items SET payload=zeroblob(length(payload)) WHERE id=?1",
+                    [&id],
+                )
+                .unwrap();
+            let quick: String = connection
+                .query_row("PRAGMA quick_check", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(quick, "ok");
+        }
+
+        assert!(db.verify_backup_file(&backup).is_err());
+    }
+
+    #[test]
     fn online_backup_is_consistent_and_requires_the_same_vault() {
         let d = tempfile::tempdir().unwrap();
         let source = d.path().join("source.sqlite3");
