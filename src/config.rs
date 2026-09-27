@@ -292,11 +292,11 @@ pub fn settings_context_hash(settings: &Settings) -> String {
         settings.candidate_context.as_str(),
         settings.signature.as_str(),
         settings.tone.instruction(),
-        &settings.num_ctx.to_string(),
     ] {
         digest.update(value.as_bytes());
         digest.update([0]);
     }
+    digest.update(settings.num_ctx.to_le_bytes());
     format!("{:x}", digest.finalize())
 }
 
