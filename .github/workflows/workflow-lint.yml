@@ -1,0 +1,45 @@
+name: Workflow static analysis
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "19 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-static-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint 1.7.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          curl --fail --silent --show-error --location "$url" --output "$RUNNER_TEMP/$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/actionlint" actionlint
+          chmod +x "$RUNNER_TEMP/actionlint/actionlint"
+          "$RUNNER_TEMP/actionlint/actionlint" -version
+          shellcheck --version
+      - name: Validate all GitHub Actions workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/actionlint/actionlint" -color
