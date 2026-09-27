@@ -1278,7 +1278,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         let row: (String, String) = db
             .conn
             .query_row(
@@ -1532,7 +1532,7 @@ mod tests {
         let old = Utc::now() - chrono::Duration::days(100);
         db.insert_stub(identity, old).unwrap();
         let mut job = db.get(&id).unwrap();
-        job.state = JobState::Dismissed;
+        job.state = JobState::Ready;
         job.email = Some(crate::ollama::sample_email(
             "Private subject",
             "Private body",
@@ -1544,6 +1544,8 @@ mod tests {
         job.drafted_at = Some(old);
         job.attempts = 2;
         job.retry_at = old.timestamp();
+        db.save(&mut job, "test", "old reviewable content").unwrap();
+        job.state = JobState::Dismissed;
         db.save(&mut job, "test", "old completed content").unwrap();
         db.conn
             .execute(
