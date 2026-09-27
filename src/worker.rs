@@ -329,6 +329,7 @@ fn run(
     let mut review = true;
     let mut page = 0;
     refresh(&e, &shared, None, review, page)?;
+    let api_disabled = Arc::new(AtomicBool::new(false));
     if e.settings.api_enabled && !e.demo {
         let token: String = match e.db.meta("api_token")? {
             Some(t) => t,
@@ -338,7 +339,13 @@ fn run(
                 t
             }
         };
-        match crate::api::start(e.settings.api_port, token, sender, e.stop.clone()) {
+        match crate::api::start(
+            e.settings.api_port,
+            token,
+            sender,
+            e.stop.clone(),
+            api_disabled.clone(),
+        ) {
             Ok(()) => {
                 if let Ok(mut s) = shared.lock() {
                     s.api_listening = true;
@@ -355,9 +362,11 @@ fn run(
     let mut auto_due = Instant::now();
     let mut process_due = Instant::now();
     let mut retention_due = Instant::now() + Duration::from_secs(60);
+    let mut policy_due = Instant::now() + Duration::from_secs(30);
     let mut process_failures = 0u32;
     let mut automatic_failures = 0u32;
     let mut retention_failures = 0u32;
+    let mut policy_failures = 0u32;
     while !e.stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
@@ -516,6 +525,52 @@ fn run(
             snapshot.api_token = None;
             snapshot.api_token_expires = None;
         }
+        if !e.demo && Instant::now() >= policy_due {
+            begin_operation(
+                &shared,
+                OperationKind::EnterprisePolicyReload,
+                "Checking administrator enterprise policy…",
+            );
+            let result = e.reload_enterprise_policy();
+            match result {
+                Ok(changed) => {
+                    policy_failures = 0;
+                    policy_due = Instant::now() + Duration::from_secs(60);
+                    let completed: Result<()> = Ok(());
+                    report(
+                        &shared,
+                        OperationKind::EnterprisePolicyReload,
+                        &completed,
+                    );
+                    if changed {
+                        if e.enterprise_policy_status().prohibit_integration_api
+                            && !api_disabled.swap(true, Ordering::SeqCst)
+                            && let Ok(mut snapshot) = shared.lock()
+                        {
+                            snapshot.api_listening = false;
+                        }
+                        if let Ok(mut snapshot) = shared.lock() {
+                            snapshot.settings_revision =
+                                snapshot.settings_revision.saturating_add(1);
+                        }
+                        refresh(&e, &shared, selected.as_deref(), review, page)?;
+                    }
+                }
+                Err(error) => {
+                    policy_failures = policy_failures.saturating_add(1);
+                    policy_due =
+                        Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
+                    e.paused.store(true, Ordering::SeqCst);
+                    let failed: Result<()> = Err(error);
+                    report(
+                        &shared,
+                        OperationKind::EnterprisePolicyReload,
+                        &failed,
+                    );
+                }
+            }
+        }
+
         if !e.demo && Instant::now() >= retention_due {
             begin_operation(
                 &shared,
