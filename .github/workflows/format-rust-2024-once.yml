@@ -3,6 +3,8 @@ name: One-time Rust 2024 formatter
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/format-rust-2024-once.yml
 
 permissions:
   contents: write
@@ -13,7 +15,6 @@ concurrency:
 
 jobs:
   format:
-    if: github.event.head_commit.message == 'ci: one-time Rust 2024 formatter'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
