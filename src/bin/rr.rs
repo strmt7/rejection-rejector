@@ -174,14 +174,17 @@ fn main() -> Result<()> {
             );
         }
         Action::Evaluate { out } => {
-            let e = Engine::open(
+            let mut e = Engine::open(
                 dir,
                 false,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
             )?;
-            rejection_rejector::evaluation::run(&e.settings, &out)?;
-            println!("Task-specific evaluation written to {}", out.display());
+            e.evaluate_model_to(&out)?;
+            println!(
+                "Task-specific evaluation passed and qualification was stored: {}",
+                out.display()
+            );
         }
         Action::CompareModels { out } => {
             let e = Engine::open(
