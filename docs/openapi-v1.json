@@ -1,0 +1,182 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Rejection Rejector Local Integration API",
+    "version": "1.0.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused and responses are no-store."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}",
+      "variables": {
+        "port": {
+          "default": "8734"
+        }
+      }
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Random local token stored encrypted by Rejection Rejector."
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/live": {
+      "get": {
+        "summary": "Process/API-thread liveness",
+        "responses": {
+          "200": {
+            "description": "API thread is alive"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "summary": "This API contract",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document"
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "summary": "Versioned capability discovery",
+        "responses": {
+          "200": {
+            "description": "Capabilities"
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "summary": "Workspace readiness and integrity",
+        "responses": {
+          "200": {
+            "description": "Readiness state"
+          },
+          "503": {
+            "description": "Worker unavailable"
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "summary": "Application status",
+        "responses": {
+          "200": {
+            "description": "Status"
+          }
+        }
+      }
+    },
+    "/v1/items": {
+      "get": {
+        "summary": "Paginated retained jobs",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job page"
+          }
+        }
+      }
+    },
+    "/v1/items/{id}": {
+      "get": {
+        "summary": "One retained job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job"
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "summary": "Audit events after sequence",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit events"
+          }
+        }
+      }
+    },
+    "/v1/audit/anchor": {
+      "get": {
+        "summary": "Current tamper-evident audit-chain anchor",
+        "responses": {
+          "200": {
+            "description": "Audit anchor"
+          }
+        }
+      }
+    },
+    "/v1/audit/contains": {
+      "get": {
+        "summary": "Check whether an audit anchor is known",
+        "parameters": [
+          {
+            "name": "head",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Anchor membership"
+          }
+        }
+      }
+    }
+  }
+}
