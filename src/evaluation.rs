@@ -94,10 +94,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                     actual != Category::Rejection && case.expected == Category::Rejection,
                 );
 
-                let verification_passed = analysis
-                    .verification
-                    .as_ref()
-                    .is_some_and(|v| v.passed());
+                let verification_passed =
+                    analysis.verification.as_ref().is_some_and(|v| v.passed());
                 let draft_safe = draft.as_ref().is_some_and(|d| {
                     mail::validate_draft(&d.body).is_ok()
                         && !mail::automatic_draft_conflict(&d.body, &pinned.signature)
