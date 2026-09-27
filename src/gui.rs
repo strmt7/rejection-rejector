@@ -622,11 +622,7 @@ impl App {
                     .selected_text(&self.settings.model)
                     .show_ui(ui, |ui| {
                         for model in &s.enterprise_policy.allowed_models {
-                            ui.selectable_value(
-                                &mut self.settings.model,
-                                model.clone(),
-                                model,
-                            );
+                            ui.selectable_value(&mut self.settings.model, model.clone(), model);
                         }
                     });
                 ui.label(
@@ -639,8 +635,14 @@ impl App {
                 ui.label(RichText::new("Quick choices").small().color(MUTED));
                 for (label, tag) in MODEL_CANDIDATES {
                     let allowed = s.enterprise_policy.allowed_models.is_empty()
-                        || s.enterprise_policy.allowed_models.iter().any(|model| model == tag);
-                    if ui.add_enabled(allowed, egui::Button::new(label).small()).clicked() {
+                        || s.enterprise_policy
+                            .allowed_models
+                            .iter()
+                            .any(|model| model == tag);
+                    if ui
+                        .add_enabled(allowed, egui::Button::new(label).small())
+                        .clicked()
+                    {
                         self.settings.model = tag.into();
                     }
                 }
@@ -813,11 +815,7 @@ impl App {
                     !s.enterprise_policy.force_human_review
                         && !s.enterprise_policy.prohibit_sending,
                     |ui| {
-                        ui.selectable_value(
-                            &mut self.settings.mode,
-                            Mode::Automatic,
-                            "Automatic",
-                        );
+                        ui.selectable_value(&mut self.settings.mode, Mode::Automatic, "Automatic");
                     },
                 );
             });
@@ -905,8 +903,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("Keep completed content, days");
                 let minimum_retention = s.enterprise_policy.min_retention_days.unwrap_or(30);
-                self.settings.retention_days =
-                    self.settings.retention_days.max(minimum_retention);
+                self.settings.retention_days = self.settings.retention_days.max(minimum_retention);
                 ui.add(
                     egui::DragValue::new(&mut self.settings.retention_days)
                         .range(minimum_retention..=3650),
