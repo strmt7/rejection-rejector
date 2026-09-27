@@ -1,7 +1,10 @@
 //! Pure-policy regression tests: no network, credentials, live model or email sending.
 use chrono::{DateTime, Duration, Utc};
 use rejection_rejector::{
-    config::{settings_context_hash, Mode, Settings, TaskQualification, PROMPT_VERSION},
+    config::{
+        evaluation_suite_hash, settings_context_hash, Mode, Settings, TaskQualification,
+        PROMPT_VERSION,
+    },
     engine::{auto_blocks, automatic_policy, AutomaticPolicyCode},
     ollama,
     types::*,
@@ -23,6 +26,7 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
         digest: settings.model_digest.clone().unwrap(),
         prompt_version: PROMPT_VERSION.into(),
         context_hash: settings_context_hash(&settings),
+        suite_hash: evaluation_suite_hash(),
         task_score: 100.0,
         fixture_count: 32,
         qualified_at: now - Duration::hours(2),
