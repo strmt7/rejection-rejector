@@ -48,7 +48,7 @@ The headless CLI gained `rr doctor`, which reports only non-sensitive Gmail perm
 
 Automatic mode now requires an independent deterministic clear-rejection phrase in the current de-quoted message in addition to the local model classification, same-model verification, conflict guards and fresh Gmail preflight. This is deliberately stricter than Human Review: a correlated model/verifier false positive can no longer authorize unattended sending on its own. Regression coverage includes ambiguous model-only negatives and quoted historical rejections.
 
-The 16 GiB quality profile now recommends the official `qwen3.5:9b-q8_0` Ollama build (about 11 GB in the registry) at 8,192 context. The previous Q4 build remains a lower-VRAM quick choice, while `gpt-oss:20b` remains an optional tighter-memory reasoning candidate. All choices still require the application's end-to-end qualification, digest pin and full-GPU-residency gate; registry size is not treated as physical VRAM certification.
+The 16 GiB profile now uses `qwen3.5:9b-q8_0` as a **provisional** default rather than a hard-coded claim of universal superiority. Current challengers include the recent Granite 4.2 8B Q8 model, Gemma 4 12B Q8 and Ministral 3 14B. A new full-pipeline bake-off evaluates already-installed candidates on the repository's multilingual rejection/opportunity/ambiguous/injection fixtures and recommends only candidates with zero rejection false positives, zero unsafe non-rejection drafts, at least 90% rejection recall, at least 90% verified rejection-pipeline completion and full GPU residency. Ollama 0.34.0 is the minimum accepted runtime.
 
 ## Final acceptance rule
 
