@@ -430,8 +430,7 @@ fn refresh(
     s.storage = crate::storage::inspect(&e.directory).ok();
     s.scheduled_backup =
         crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now()).ok();
-    s.backup_isolation =
-        crate::recovery::backup_isolation_status(&e.directory, &e.settings).ok();
+    s.backup_isolation = crate::recovery::backup_isolation_status(&e.directory, &e.settings).ok();
     s.model = e.model.clone();
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
@@ -1241,8 +1240,8 @@ fn api_query_with_operation(
             let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
             let independent_audit_anchor_configured =
                 external_audit_anchor_configured || os_protected_audit_anchor_required;
-            let operational = crate::readiness::operational_indicators(
-                crate::readiness::OperationalContext {
+            let operational =
+                crate::readiness::operational_indicators(crate::readiness::OperationalContext {
                     settings: &e.settings,
                     counts: &counts,
                     last_poll: e.last_poll()?,
@@ -1252,8 +1251,7 @@ fn api_query_with_operation(
                     backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
                     connected: e.connected(),
                     now: Utc::now(),
-                },
-            );
+                });
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "settings_format_version": e.settings.settings_format_version,
