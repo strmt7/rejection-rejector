@@ -28,6 +28,10 @@ pub struct MetricsSnapshot {
     pub task_qualification_current: bool,
     pub enterprise_policy_active: bool,
     pub enterprise_policy_revision: Option<u64>,
+    pub policy_requires_independent_audit_anchor: bool,
+    pub external_audit_anchor_configured: bool,
+    pub os_protected_audit_anchor_required: bool,
+    pub independent_audit_anchor_configured: bool,
     pub operational: OperationalIndicators,
 }
 
@@ -43,11 +47,16 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         now,
     );
     let policy = engine.enterprise_policy_status();
+    let external_audit_anchor_configured =
+        std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
+    let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
+    let independent_audit_anchor_configured =
+        external_audit_anchor_configured || os_protected_audit_anchor_required;
     let database_bytes = std::fs::metadata(engine.directory.join("state.sqlite3"))
         .ok()
         .map(|metadata| metadata.len());
     Ok(MetricsSnapshot {
-        schema_version: 1,
+        schema_version: 2,
         generated_at: now,
         service_name: "rejection-rejector",
         application_version: env!("CARGO_PKG_VERSION"),
@@ -67,6 +76,10 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         task_qualification_current: engine.settings.task_qualification_current(),
         enterprise_policy_active: policy.active,
         enterprise_policy_revision: policy.revision,
+        policy_requires_independent_audit_anchor: policy.require_external_audit_anchor,
+        external_audit_anchor_configured,
+        os_protected_audit_anchor_required,
+        independent_audit_anchor_configured,
         operational,
     })
 }
@@ -89,10 +102,14 @@ mod tests {
         let metrics = collect(&engine, Utc::now()).unwrap();
         let encoded = serde_json::to_string(&metrics).unwrap();
 
-        assert_eq!(metrics.schema_version, 1);
+        assert_eq!(metrics.schema_version, 2);
         assert_eq!(metrics.service_name, "rejection-rejector");
         assert!(metrics.database_schema_version >= 1);
         assert!(metrics.stored_items >= 3);
+        assert!(!metrics.policy_requires_independent_audit_anchor);
+        assert!(!metrics.external_audit_anchor_configured);
+        assert!(!metrics.os_protected_audit_anchor_required);
+        assert!(!metrics.independent_audit_anchor_configured);
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",
