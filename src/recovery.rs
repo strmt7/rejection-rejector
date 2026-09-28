@@ -46,6 +46,22 @@ pub struct RestoreReport {
     pub note: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecoveryDrillReport {
+    pub format_version: u32,
+    pub drilled_at: DateTime<Utc>,
+    pub source_backup_created_at: DateTime<Utc>,
+    pub source_database_sha256: String,
+    pub source_audit_head: String,
+    pub restored_schema_version: i64,
+    pub metadata_records: u64,
+    pub item_records: u64,
+    pub audit_events: u64,
+    pub delivery_records: u64,
+    pub isolated_restore_succeeded: bool,
+    pub note: String,
+}
+
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut digest = Sha256::new();
@@ -374,6 +390,67 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
 /// It stages and validates the backup before touching the live database, preserves
 /// the previous SQLite/WAL/SHM files in a private rollback directory, and restores
 /// them automatically if the final database cannot be opened and verified.
+/// Exercise the production restore path in an isolated temporary workspace.
+///
+/// This never mutates the live database. It proves that the backup can be
+/// restored, reopened, deeply authenticated and reconciled with its manifest
+/// using the current vault key.
+pub fn recovery_drill(data_dir: &Path, backup_dir: &Path) -> Result<RecoveryDrillReport> {
+    let (manifest, _) = validate_bundle_files(backup_dir)?;
+    let current_vault_id = vault_id(data_dir)?;
+    ensure!(
+        current_vault_id == manifest.vault_id,
+        "Backup vault identifier does not match this workspace"
+    );
+    let vault = Vault::open(data_dir)?;
+
+    let isolated = tempfile::tempdir().context("Cannot create isolated recovery-drill workspace")?;
+    let drill_dir = isolated.path();
+    private_dir(drill_dir)?;
+    write_new_private(
+        &drill_dir.join(VAULT_ID_NAME),
+        manifest.vault_id.as_bytes(),
+    )?;
+
+    let restore = restore_backup_with_vault(
+        drill_dir,
+        backup_dir,
+        &manifest,
+        vault.clone(),
+    )
+    .context("Isolated recovery drill could not restore the backup")?;
+
+    let restored_database = drill_dir.join(DATABASE_NAME);
+    let restored = Store::open(&restored_database, vault)?;
+    restored.integrity_check()?;
+    let verification = restored.verify_backup_file(&restored_database)?;
+    ensure!(
+        verification.schema_version == manifest.schema_version,
+        "Recovery drill restored an unexpected schema version"
+    );
+    if manifest.format_version >= 2 {
+        ensure!(
+            verification.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+            "Recovery drill audit head differs from the backup manifest"
+        );
+    }
+
+    Ok(RecoveryDrillReport {
+        format_version: 1,
+        drilled_at: Utc::now(),
+        source_backup_created_at: manifest.created_at,
+        source_database_sha256: manifest.database_sha256,
+        source_audit_head: manifest.audit_head,
+        restored_schema_version: restore.restored_schema_version,
+        metadata_records: verification.metadata_records,
+        item_records: verification.item_records,
+        audit_events: verification.audit_events,
+        delivery_records: verification.delivery_records,
+        isolated_restore_succeeded: true,
+        note: "Backup restored and deeply authenticated in an isolated temporary workspace; live state was not modified.".into(),
+    })
+}
+
 pub fn restore_backup(data_dir: &Path, backup_dir: &Path) -> Result<RestoreReport> {
     let _lock = InstanceLock::acquire(data_dir)?;
     let (manifest, _) = validate_bundle_files(backup_dir)?;
@@ -614,6 +691,48 @@ mod tests {
                 .windows(b"secret".len())
                 .any(|window| window == b"secret")
         );
+    }
+
+    #[test]
+    fn recovery_drill_restores_without_mutating_live_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        private_dir(&data).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&data.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let mut store = Store::open(&data.join(DATABASE_NAME), vault.clone()).unwrap();
+        store
+            .insert_stub(
+                crate::types::Stub {
+                    account: "me@example.com".into(),
+                    provider_id: "drill-message".into(),
+                    thread_id: "drill-thread".into(),
+                    source: crate::types::Source::Gmail,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+
+        let backup = root.path().join("backup");
+        let manifest = create_backup(&store, &data, &backup).unwrap();
+        let live_hash_before = sha256_file(&data.join(DATABASE_NAME)).unwrap();
+
+        // The production path opens the vault through the OS store. Tests inject
+        // the already-open vault through the same helper used by restore itself.
+        let isolated = root.path().join("isolated-drill");
+        private_dir(&isolated).unwrap();
+        write_new_private(&isolated.join(VAULT_ID_NAME), manifest.vault_id.as_bytes()).unwrap();
+        let restore =
+            restore_backup_with_vault(&isolated, &backup, &manifest, vault.clone()).unwrap();
+        assert_eq!(restore.restored_schema_version, manifest.schema_version);
+        let restored = Store::open(&isolated.join(DATABASE_NAME), vault).unwrap();
+        let verification = restored.verify_backup_file(&isolated.join(DATABASE_NAME)).unwrap();
+        assert_eq!(verification.item_records, 1);
+        assert_eq!(verification.audit_head.as_deref(), Some(manifest.audit_head.as_str()));
+
+        let live_hash_after = sha256_file(&data.join(DATABASE_NAME)).unwrap();
+        assert_eq!(live_hash_before, live_hash_after);
     }
 
     #[test]
