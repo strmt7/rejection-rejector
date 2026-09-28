@@ -392,11 +392,53 @@ impl OperationKind {
                 | Self::AutomaticDispatch
         )
     }
+
+
+    /// Monitoring threshold, not a cancellation deadline. A worker that has not
+    /// reported progress within this operation-specific budget is considered
+    /// stalled by the direct liveness endpoint.
+    pub fn stall_budget_seconds(self) -> u64 {
+        match self {
+            Self::Idle => 10,
+            Self::Refresh
+            | Self::ListItems
+            | Self::SelectItem
+            | Self::EditDraft
+            | Self::RegenerateDraft
+            | Self::DismissItem
+            | Self::RevealApiToken
+            | Self::HideApiToken
+            | Self::RotateApiToken
+            | Self::ApiRequest => 30,
+            Self::UpdateSettings | Self::DisconnectGmail => 60,
+            Self::StartOllama | Self::InspectModel | Self::EnterprisePolicyReload => 120,
+            Self::SendReply | Self::AutomaticDispatch | Self::ReconcileDelivery => 300,
+            Self::ConnectGmail | Self::SyncMailbox | Self::Diagnostics | Self::PurgeRetention => 600,
+            Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
+            Self::InstallOllama | Self::Backup | Self::RecoveryDrill => 3_600,
+            Self::PullModel | Self::EvaluateModel => 7_200,
+            Self::CompareModels => 21_600,
+        }
+    }
 }
 
 #[cfg(test)]
 mod operation_kind_tests {
     use super::OperationKind;
+
+    #[test]
+    fn stall_budgets_are_explicit_and_sane() {
+        assert_eq!(OperationKind::Idle.stall_budget_seconds(), 10);
+        assert!(OperationKind::SendReply.stall_budget_seconds() >= 120);
+        assert!(
+            OperationKind::EvaluateModel.stall_budget_seconds()
+                > OperationKind::AnalyzeQueuedMail.stall_budget_seconds()
+        );
+        assert!(
+            OperationKind::CompareModels.stall_budget_seconds()
+                >= OperationKind::EvaluateModel.stall_budget_seconds()
+        );
+    }
 
     #[test]
     fn shutdown_sensitive_operations_are_explicit_and_narrow() {
@@ -441,6 +483,18 @@ pub struct OperationStatus {
     pub message: String,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkerLiveness {
+    pub schema_version: u32,
+    pub worker_responsive: bool,
+    pub last_progress_at: DateTime<Utc>,
+    pub progress_age_seconds: i64,
+    pub current_operation: OperationKind,
+    pub operation_started_at: Option<DateTime<Utc>>,
+    pub operation_age_seconds: Option<i64>,
+    pub stall_budget_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
