@@ -1054,6 +1054,18 @@ impl Engine {
             .reserve_send(&job, self.settings.daily_send_limit, Utc::now())
             .map_err(|error| DispatchFailure::retryable(error.to_string()))?;
 
+        if let Err(error) = self.checkpoint_audit_protection() {
+            self.db
+                .release_unsent_reservation(
+                    id,
+                    "Protected audit checkpoint failed before the Gmail network request; no email was sent",
+                )
+                .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+            return Err(DispatchFailure::retryable(format!(
+                "Protected audit checkpoint is unavailable; Gmail dispatch was blocked: {error}"
+            )));
+        }
+
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             self.db
                 .release_unsent_reservation(
@@ -1075,6 +1087,11 @@ impl Engine {
                 self.db
                     .finish_send(id, Some(provider_id))
                     .map_err(|error| DispatchFailure::handled(error.to_string()))?;
+                self.checkpoint_audit_protection().map_err(|error| {
+                    DispatchFailure::handled(format!(
+                        "Gmail accepted the reply and local state is Sent, but the required protected audit checkpoint failed: {error}. Do not resend."
+                    ))
+                })?;
                 Ok(())
             }
             Err(error) if error.kind == SendFailureKind::NotAccepted => {
@@ -1084,12 +1101,23 @@ impl Engine {
                         "Gmail definitively rejected the send request; no email was accepted",
                     )
                     .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+                self.checkpoint_audit_protection().map_err(|anchor_error| {
+                    DispatchFailure::handled(format!(
+                        "Gmail rejected the reply before acceptance, but the required protected audit checkpoint failed: {anchor_error}"
+                    ))
+                })?;
                 Err(DispatchFailure::handled(error.message))
             }
             Err(error) => {
                 self.db
                     .finish_send(id, None)
                     .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+                if let Err(anchor_error) = self.checkpoint_audit_protection() {
+                    return Err(DispatchFailure::handled(format!(
+                        "{} Delivery remains Uncertain and the required protected audit checkpoint also failed: {anchor_error}. Do not resend; reconcile Gmail Sent.",
+                        error.message
+                    )));
+                }
                 Err(DispatchFailure::handled(format!(
                     "{} Do not resend. Use Reconcile to check Gmail Sent.",
                     error.message
