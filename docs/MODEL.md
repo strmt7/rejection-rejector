@@ -23,9 +23,11 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use **
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
-The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on the repository's multilingual rejection/opportunity/ambiguous/prompt-injection fixtures. A recommendation is emitted only when a model completes every case, has **zero rejection false positives**, produces **zero drafts for non-rejections**, reaches at least **90% rejection recall** and **90% verified rejection-pipeline success**, and passes the full-GPU-residency gate.
+The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on **48** synthetic recruiting fixtures. Cases are tagged for multilingual mail, ATS automation, interviews, offers, recruiter corrections, quoted history, prompt injection, ambiguity and pending-status language. Reports include per-tag completion/correctness/false-positive/unsafe-draft counts instead of hiding risky errors inside one aggregate score.
 
-The task score weights non-rejection false-positive avoidance most heavily because accidentally replying to an interview, offer, quoted historical rejection or injected message is worse than conservatively holding a true rejection for human review.
+A recommendation is emitted only when a model completes every case, has **zero rejection false positives**, produces **zero drafts for non-rejections**, completes every critical hard-negative case, has **zero critical hard-negative rejection false positives or drafts**, reaches at least **90% rejection recall** and **90% verified rejection-pipeline success**, and passes the full-GPU-residency gate. Critical hard negatives include interviews, offers, recruiter corrections, quoted-history cases, prompt-injection cases and ambiguous mixed outcomes.
+
+The task score still weights global non-rejection false-positive avoidance most heavily, but recommendation eligibility now adds explicit hard gates for the critical-negative cohort. This prevents a superficially high average from masking a catastrophic reply to an interview, offer, corrected rejection, quoted historical decision or injected message.
 
 Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It also requires **Ollama 0.34.0 or newer**; older runtimes are rejected rather than assumed to have identical structured-output and model behavior.
 

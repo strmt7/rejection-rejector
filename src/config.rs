@@ -31,7 +31,7 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
 ];
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
-pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v2";
+pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v3";
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 
 fn default_settings_format_version() -> u32 {
@@ -351,7 +351,7 @@ pub fn evaluation_suite_hash() -> String {
     digest.update(include_bytes!("../tests/fixtures/classification.json"));
     digest.update([0]);
     digest.update(
-        b"weights:fp_avoidance=.35,recall=.20,pipeline=.20,accuracy=.15,completion=.10;eligibility:complete,fp=0,unsafe_drafts=0,recall>=.90,pipeline>=.90,gpu_resident",
+        b"weights:fp_avoidance=.35,recall=.20,pipeline=.20,accuracy=.15,completion=.10;eligibility:complete,fp=0,unsafe_drafts=0,critical_complete,critical_fp=0,critical_unsafe_drafts=0,recall>=.90,pipeline>=.90,gpu_resident",
     );
     format!("{:x}", digest.finalize())
 }
