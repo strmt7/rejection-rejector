@@ -1,4 +1,7 @@
-use crate::{store::Store, vault::write_new_private};
+use crate::{
+    store::Store,
+    vault::{vault_id, write_new_private},
+};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,9 @@ use std::{
 
 const MAX_ANCHOR_BYTES: u64 = 64 * 1024;
 pub const AUDIT_ANCHOR_ENV: &str = "RR_AUDIT_ANCHOR_FILE";
+pub const OS_AUDIT_ANCHOR_ENV: &str = "RR_OS_AUDIT_ANCHOR";
+const OS_AUDIT_ANCHOR_REQUIRED: &str = "required";
+const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -100,10 +106,13 @@ pub fn write_anchor(store: &Store, data_dir: &Path, out: &Path) -> Result<AuditA
     Ok(anchor)
 }
 
-pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
-    let bytes = read_small_regular_file(path)?;
+fn parse_anchor(bytes: &[u8]) -> Result<AuditAnchor> {
+    ensure!(
+        bytes.len() as u64 <= MAX_ANCHOR_BYTES,
+        "Audit anchor exceeds the size limit"
+    );
     let anchor: AuditAnchor =
-        serde_json::from_slice(&bytes).context("Audit-anchor JSON is invalid")?;
+        serde_json::from_slice(bytes).context("Audit-anchor JSON is invalid")?;
     ensure!(
         anchor.format_version == 1,
         "Unsupported audit-anchor format"
@@ -127,14 +136,152 @@ pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
     Ok(anchor)
 }
 
-pub fn verify_anchor(store: &Store, data_dir: &Path, path: &Path) -> Result<AuditAnchor> {
-    let anchor = read_anchor(path)?;
+pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
+    parse_anchor(&read_small_regular_file(path)?)
+}
+
+fn verify_anchor_value(
+    store: &Store,
+    data_dir: &Path,
+    anchor: &AuditAnchor,
+) -> Result<()> {
     ensure!(
         anchor.workspace_fingerprint == workspace_fingerprint(data_dir)?,
         "Audit anchor belongs to another workspace"
     );
-    store.verify_audit_point(anchor.audit_sequence, &anchor.audit_head)?;
+    store.verify_audit_point(anchor.audit_sequence, &anchor.audit_head)
+}
+
+pub fn verify_anchor(store: &Store, data_dir: &Path, path: &Path) -> Result<AuditAnchor> {
+    let anchor = read_anchor(path)?;
+    verify_anchor_value(store, data_dir, &anchor)?;
     Ok(anchor)
+}
+
+pub fn os_anchor_required() -> Result<bool> {
+    match std::env::var(OS_AUDIT_ANCHOR_ENV) {
+        Ok(value) if value == OS_AUDIT_ANCHOR_REQUIRED => Ok(true),
+        Ok(value) => anyhow::bail!(
+            "{OS_AUDIT_ANCHOR_ENV} must be exactly '{OS_AUDIT_ANCHOR_REQUIRED}' when set, not {value:?}"
+        ),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(error) => Err(anyhow::anyhow!(
+            "Could not read {OS_AUDIT_ANCHOR_ENV}: {error}"
+        )),
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
+    let id = vault_id(data_dir)?;
+    keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &id)
+        .context("Cannot access the OS credential-store audit anchor")
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn read_os_anchor(data_dir: &Path) -> Result<Option<AuditAnchor>> {
+    let entry = os_anchor_entry(data_dir)?;
+    match entry.get_password() {
+        Ok(serialized) => parse_anchor(serialized.as_bytes()).map(Some),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(anyhow::anyhow!(
+            "OS credential-store audit anchor is unavailable: {error}"
+        )),
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
+    let serialized = serde_json::to_string(anchor)?;
+    ensure!(
+        serialized.len() as u64 <= MAX_ANCHOR_BYTES,
+        "OS audit anchor exceeds the size limit"
+    );
+    os_anchor_entry(data_dir)?
+        .set_password(&serialized)
+        .context("Could not persist the OS-protected audit anchor")
+}
+
+/// Verify the OS credential-store anchor when enterprise rollback protection is
+/// explicitly required. An empty credential is allowed only for first-time
+/// bootstrap; unsupported platforms fail closed rather than claiming coverage.
+pub fn verify_os_anchor_if_required(
+    store: &Store,
+    data_dir: &Path,
+) -> Result<Option<AuditAnchor>> {
+    if !os_anchor_required()? {
+        return Ok(None);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let anchor = read_os_anchor(data_dir)?;
+        if let Some(anchor) = &anchor {
+            verify_anchor_value(store, data_dir, anchor)?;
+        }
+        Ok(anchor)
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (store, data_dir);
+        anyhow::bail!(
+            "{OS_AUDIT_ANCHOR_ENV}=required is supported only with the Windows/macOS OS credential store"
+        )
+    }
+}
+
+/// Advance the OS-protected anchor monotonically. Existing anchors are treated
+/// as trust roots: the database must prove that its current audit head extends
+/// the prior sequence/hash before the credential may be updated.
+pub fn checkpoint_os_anchor_if_required(
+    store: &Store,
+    data_dir: &Path,
+) -> Result<Option<AuditAnchor>> {
+    if !os_anchor_required()? {
+        return Ok(None);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let workspace_fingerprint = workspace_fingerprint(data_dir)?;
+        let current_anchor = match read_os_anchor(data_dir)? {
+            Some(previous) => {
+                ensure!(
+                    previous.workspace_fingerprint == workspace_fingerprint,
+                    "OS audit anchor belongs to another workspace"
+                );
+                let (audit_sequence, audit_head) =
+                    store.verify_audit_extension(previous.audit_sequence, &previous.audit_head)?;
+                if audit_sequence == previous.audit_sequence {
+                    ensure!(
+                        audit_head == previous.audit_head,
+                        "Audit head changed without advancing the trusted sequence"
+                    );
+                    return Ok(Some(previous));
+                }
+                AuditAnchor {
+                    format_version: 1,
+                    application_version: env!("CARGO_PKG_VERSION").into(),
+                    created_at: Utc::now(),
+                    workspace_fingerprint,
+                    audit_sequence,
+                    audit_head,
+                }
+            }
+            None => current(store, data_dir)?,
+        };
+        write_os_anchor(data_dir, &current_anchor)?;
+        Ok(Some(current_anchor))
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (store, data_dir);
+        anyhow::bail!(
+            "{OS_AUDIT_ANCHOR_ENV}=required is supported only with the Windows/macOS OS credential store"
+        )
+    }
 }
 
 /// Verify the externally persisted anchor configured for startup rollback
@@ -174,6 +321,13 @@ mod tests {
         write_new_private(&dir.join("vault-id"), id.as_bytes()).unwrap();
         let store = Store::open(&dir.join("state.sqlite3"), Vault::random()).unwrap();
         (store, dir)
+    }
+
+    #[test]
+    fn anchor_parser_rejects_invalid_or_oversized_records() {
+        assert!(parse_anchor(b"{}").is_err());
+        let oversized = vec![b'x'; MAX_ANCHOR_BYTES as usize + 1];
+        assert!(parse_anchor(&oversized).is_err());
     }
 
     #[test]
