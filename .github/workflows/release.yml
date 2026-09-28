@@ -170,63 +170,9 @@ jobs:
           if ($info.profile -ne 'release') { throw "Embedded build profile is not release" }
           $lockHash = (Get-FileHash Cargo.lock -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($info.cargo_lock_sha256 -ne $lockHash) { throw "Embedded Cargo.lock hash does not match packaged lockfile" }
-          if ($info.identity_sha256 -notmatch '^[0-9a-f]{64}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          cargo audit bin target/release/rejection-rejector.exe | Tee-Object -FilePath artifacts/rejection-rejector-binary-audit.txt
-          cargo audit bin target/release/rr.exe | Tee-Object -FilePath artifacts/rr-binary-audit.txt
-          if ($LASTEXITCODE -ne 0) { throw "Binary RustSec audit failed" }
-          cargo auditable --version | Set-Content artifacts/cargo-auditable-version.txt -Encoding ascii
-          cargo audit --version | Set-Content artifacts/cargo-audit-version.txt -Encoding ascii
-      - name: Generate CycloneDX SBOM
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo cyclonedx --format json --spec-version 1.5 --all-features --target all --override-filename rejection-rejector.cdx
-          mkdir -p artifacts
-          find . -maxdepth 2 -name 'rejection-rejector.cdx.json' -exec cp {} artifacts/rejection-rejector.cdx.json \;
-          test -s artifacts/rejection-rejector.cdx.json
-      - name: Assemble release evidence package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
-          Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
-          Copy-Item -Recurse docs artifacts/windows/docs
-          Copy-Item Cargo.lock artifacts/windows/
-          Copy-Item artifacts/build-info.json artifacts/windows/
-          git rev-parse HEAD | Set-Content artifacts/windows/COMMIT.txt -Encoding ascii
-          rustc --version | Set-Content artifacts/windows/toolchain.txt -Encoding ascii
-          cargo --version | Add-Content artifacts/windows/toolchain.txt -Encoding ascii
-          $root = (Resolve-Path artifacts/windows).Path
-          Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\','/')
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $relative"
-          } | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
-          Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
-          $packageHash = (Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$packageHash  rejection-rejector-windows-x64.zip" | Set-Content artifacts/SHA256.txt -Encoding ascii
-      - name: Attest build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: artifacts/rejection-rejector-windows-x64.zip
-      - name: Attest package SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: artifacts/rejection-rejector-windows-x64.zip
-          sbom-path: artifacts/rejection-rejector.cdx.json
-      - name: Upload package and evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: rejection-rejector-attested-windows-${{ github.sha }}
-          path: artifacts/
-          if-no-files-found: error
-          retention-days: 30
-) { throw "Invalid embedded build identity" }
+          if ($info.identity_sha256.Length -ne 64 -or $info.identity_sha256 -notmatch '^[0-9a-f]+$') {
+            throw "Invalid embedded build identity"
+          }
       - name: Audit the shipped executables themselves
         shell: pwsh
         run: |
@@ -254,6 +200,7 @@ jobs:
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
           Copy-Item -Recurse docs artifacts/windows/docs
           Copy-Item Cargo.lock artifacts/windows/
+          Copy-Item artifacts/build-info.json artifacts/windows/
           git rev-parse HEAD | Set-Content artifacts/windows/COMMIT.txt -Encoding ascii
           rustc --version | Set-Content artifacts/windows/toolchain.txt -Encoding ascii
           cargo --version | Add-Content artifacts/windows/toolchain.txt -Encoding ascii

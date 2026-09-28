@@ -195,8 +195,11 @@ pub fn start(
                         .expect("SHA-256 contract fingerprint is valid header content"),
                 )
                 .with_header(
-                    Header::from_bytes("X-RR-Build-Identity-SHA256", build_identity_sha256.as_bytes())
-                        .expect("SHA-256 build fingerprint is valid header content"),
+                    Header::from_bytes(
+                        "X-RR-Build-Identity-SHA256",
+                        build_identity_sha256.as_bytes(),
+                    )
+                    .expect("SHA-256 build fingerprint is valid header content"),
                 );
             let _ = request.respond(response);
         }
