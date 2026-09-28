@@ -525,13 +525,6 @@ pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
     load_file_with_controls(path, None, None)
 }
 
-fn load_file_with_expected_digest(
-    path: &Path,
-    expected_digest: Option<String>,
-) -> Result<LoadedPolicy> {
-    load_file_with_controls(path, expected_digest, None)
-}
-
 fn load_file_with_controls(
     path: &Path,
     expected_digest: Option<String>,
