@@ -149,7 +149,9 @@ fn verify_anchor_value(
         anchor.workspace_fingerprint == workspace_fingerprint(data_dir)?,
         "Audit anchor belongs to another workspace"
     );
-    store.verify_audit_point(anchor.audit_sequence, &anchor.audit_head)
+    store
+        .verify_audit_extension(anchor.audit_sequence, &anchor.audit_head)
+        .map(|_| ())
 }
 
 pub fn verify_anchor(store: &Store, data_dir: &Path, path: &Path) -> Result<AuditAnchor> {
