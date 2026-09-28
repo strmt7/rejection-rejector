@@ -459,7 +459,8 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?;
-        let stored = stored.context("Current workspace no longer contains the anchored audit sequence")?;
+        let stored =
+            stored.context("Current workspace no longer contains the anchored audit sequence")?;
         ensure!(
             stored == anchor,
             "Current workspace does not extend the anchored audit history"
