@@ -1176,6 +1176,7 @@ fn api_query_with_operation(
                     "typed_operation_status": true,
                     "typed_audit_events": true,
                     "privacy_safe_metrics": true,
+                    "openmetrics_1_0": true,
                     "privacy_minimal_runtime_journal": true,
                     "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
@@ -1416,10 +1417,11 @@ mod tests {
             "/v1/audit/anchor",
             "/v1/audit/contains",
             "/v1/metrics",
+            "/v1/metrics/openmetrics",
         ] {
             assert!(paths.contains_key(expected), "OpenAPI missing {expected}");
         }
-        assert_eq!(paths.len(), 13);
+        assert_eq!(paths.len(), 14);
         assert_eq!(spec["openapi"], "3.1.0");
     }
 
