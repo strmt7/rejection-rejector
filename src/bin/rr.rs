@@ -99,9 +99,7 @@ enum Action {
         out: PathBuf,
     },
     /// Verify that the active workspace still extends a previously exported audit anchor.
-    VerifyAuditAnchor {
-        path: PathBuf,
-    },
+    VerifyAuditAnchor { path: PathBuf },
     /// Print the effective administrator enterprise-policy status.
     PolicyStatus,
     /// Validate and summarize an enterprise policy file without applying it.
