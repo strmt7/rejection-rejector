@@ -1284,8 +1284,7 @@ impl eframe::App for App {
 }
 
 fn requires_close_confirmation(dirty: bool, operation: &OperationStatus) -> bool {
-    dirty
-        || (operation.state == OperationState::Running && operation.kind.shutdown_sensitive())
+    dirty || (operation.state == OperationState::Running && operation.kind.shutdown_sensitive())
 }
 
 /// Only the exact persisted draft is a valid GUI send candidate.
