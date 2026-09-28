@@ -26,6 +26,14 @@ pub struct BackupVerificationSummary {
     pub delivery_records: u64,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ApplicationIntegritySummary {
+    pub item_records: u64,
+    pub delivery_records: u64,
+    pub active_delivery_records: u64,
+    pub sent_delivery_records: u64,
+}
+
 pub struct Store {
     conn: Connection,
     vault: Vault,
@@ -240,6 +248,109 @@ fn check_connection_integrity(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn verify_application_invariants_connection(
+    conn: &Connection,
+    vault: &Vault,
+) -> Result<ApplicationIntegritySummary> {
+    let mut item_records = 0u64;
+    let mut delivery_records = 0u64;
+    let mut active_delivery_records = 0u64;
+    let mut sent_delivery_records = 0u64;
+
+    let mut items =
+        conn.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
+    let rows = items.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Vec<u8>>(1)?,
+            row.get::<_, u64>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (id, payload, revision, state) = row?;
+        let job = decode(vault, &id, &payload, revision, &state)?;
+        item_records += 1;
+
+        let delivery: Option<(String, String, i64, Option<Vec<u8>>)> = conn
+            .query_row(
+                "SELECT thread_key,status,attempt_at,provider_id FROM deliveries WHERE item_id=?1",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        match job.state {
+            JobState::Sending | JobState::Uncertain | JobState::Sent => {
+                let (thread_key, status, attempt_at, provider_payload) = delivery
+                    .context("Delivery-state job is missing its durable delivery record")?;
+                ensure!(
+                    thread_key == job.stub.thread_key(),
+                    "Delivery thread key does not match authenticated job identity"
+                );
+                ensure!(attempt_at > 0, "Delivery attempt timestamp is invalid");
+
+                let expected_status = match job.state {
+                    JobState::Sending => "reserved",
+                    JobState::Uncertain => "uncertain",
+                    JobState::Sent => "sent",
+                    _ => unreachable!("matched delivery states above"),
+                };
+                ensure!(
+                    status == expected_status,
+                    "Delivery record state does not match authenticated job state"
+                );
+
+                match job.state {
+                    JobState::Sent => {
+                        let provider_payload = provider_payload
+                            .context("Sent delivery is missing its encrypted provider identifier")?;
+                        let provider: String =
+                            vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
+                        ensure!(
+                            job.provider_sent_id.as_deref() == Some(provider.as_str()),
+                            "Sent provider identifier does not match authenticated job payload"
+                        );
+                        sent_delivery_records += 1;
+                    }
+                    JobState::Sending | JobState::Uncertain => {
+                        ensure!(
+                            provider_payload.is_none() && job.provider_sent_id.is_none(),
+                            "Unresolved delivery unexpectedly contains a provider identifier"
+                        );
+                        active_delivery_records += 1;
+                    }
+                    _ => unreachable!("matched delivery states above"),
+                }
+            }
+            _ => {
+                ensure!(
+                    delivery.is_none(),
+                    "Non-delivery job unexpectedly has a durable delivery record"
+                );
+                ensure!(
+                    job.provider_sent_id.is_none(),
+                    "Non-sent job unexpectedly contains a provider identifier"
+                );
+            }
+        }
+    }
+
+    delivery_records = conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| row.get(0))?;
+    ensure!(
+        delivery_records == active_delivery_records + sent_delivery_records,
+        "Delivery table contains records not represented by authenticated item state"
+    );
+
+    Ok(ApplicationIntegritySummary {
+        item_records,
+        delivery_records,
+        active_delivery_records,
+        sent_delivery_records,
+    })
+}
+
 impl Store {
     pub fn open(path: &Path, vault: Vault) -> Result<Self> {
         if !path.exists() {
@@ -390,7 +501,12 @@ impl Store {
         self.readiness_check()?;
         check_connection_integrity(&self.conn)?;
         self.verify_audit_chain()?;
+        verify_application_invariants_connection(&self.conn, &self.vault)?;
         Ok(())
+    }
+
+    pub fn application_integrity(&self) -> Result<ApplicationIntegritySummary> {
+        verify_application_invariants_connection(&self.conn, &self.vault)
     }
 
     pub fn verify_audit_chain(&self) -> Result<()> {
@@ -602,41 +718,9 @@ impl Store {
             }
         }
 
-        let orphan_deliveries: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM deliveries d LEFT JOIN items i ON i.id=d.item_id WHERE i.id IS NULL",
-            [],
-            |row| row.get(0),
-        )?;
-        ensure!(
-            orphan_deliveries == 0,
-            "Backup contains {orphan_deliveries} delivery record(s) without an item"
-        );
-
-        let mut delivery_records = 0u64;
-        {
-            let mut statement = connection
-                .prepare("SELECT item_id,status,provider_id FROM deliveries ORDER BY item_id")?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<Vec<u8>>>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (item_id, status, provider_id) = row?;
-                ensure!(
-                    matches!(status.as_str(), "reserved" | "uncertain" | "sent"),
-                    "Backup contains unknown delivery state"
-                );
-                if let Some(payload) = provider_id {
-                    let _: String = self
-                        .vault
-                        .open_value(&format!("delivery/{item_id}"), &payload)?;
-                }
-                delivery_records += 1;
-            }
-        }
+        let application_integrity =
+            verify_application_invariants_connection(&connection, &self.vault)?;
+        let delivery_records = application_integrity.delivery_records;
 
         let audit_head = if version >= 4 {
             verify_audit_chain_connection(&connection, &self.vault)?;
@@ -1949,6 +2033,39 @@ mod tests {
         assert!(pruned.drafted_at.is_none());
         assert_eq!(pruned.attempts, 0);
         assert_eq!(pruned.retry_at, 0);
+    }
+
+    #[test]
+    fn deep_integrity_rejects_semantically_impossible_delivery_state() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let candidate = ready(&mut db, "semantic", "semantic-thread");
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
+        db.integrity_check().unwrap();
+
+        db.conn
+            .execute(
+                "UPDATE deliveries SET status='sent' WHERE item_id=?1",
+                [&candidate.id],
+            )
+            .unwrap();
+        assert!(db.readiness_check().is_ok());
+        assert!(db.integrity_check().is_err());
+    }
+
+    #[test]
+    fn deep_integrity_rejects_delivery_thread_identity_mismatch() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let candidate = ready(&mut db, "semantic-thread", "real-thread");
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
+        db.conn
+            .execute(
+                "UPDATE deliveries SET thread_key='forged-thread' WHERE item_id=?1",
+                [&candidate.id],
+            )
+            .unwrap();
+        assert!(db.integrity_check().is_err());
     }
 
     #[test]
