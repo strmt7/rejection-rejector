@@ -17,6 +17,9 @@ use zeroize::Zeroizing;
 
 pub const API_VERSION: u32 = 1;
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
+pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
+pub const OPENMETRICS_CONTENT_TYPE: &str =
+    "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
 pub fn openapi_sha256() -> String {
     format!("{:x}", Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
@@ -101,7 +104,7 @@ pub fn start(
             let auth = unique_header(request.headers(), "Authorization");
             let host = unique_header(request.headers(), "Host");
             let origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
-            let (status, body) = if !authorized(auth, token.as_str())
+            let (status, body, content_type) = if !authorized(auth, token.as_str())
                 || host != Some(format!("127.0.0.1:{port}").as_str())
                 || origin
             {
@@ -112,7 +115,9 @@ pub fn start(
                         "Authentication, Host or Origin policy rejected the request",
                         false,
                         &request_id,
-                    ),
+                    )
+                    .to_string(),
+                    JSON_CONTENT_TYPE,
                 )
             } else if request.method() != &Method::Get {
                 (
@@ -122,15 +127,52 @@ pub fn start(
                         "The integration API is read-only",
                         false,
                         &request_id,
-                    ),
+                    )
+                    .to_string(),
+                    JSON_CONTENT_TYPE,
                 )
             } else if request.url().len() > 2000 || !request.url().starts_with("/v1/") {
                 (
                     404,
-                    error_body("route_not_found", "Unknown API route", false, &request_id),
+                    error_body("route_not_found", "Unknown API route", false, &request_id)
+                        .to_string(),
+                    JSON_CONTENT_TYPE,
                 )
+            } else if request.url() == "/v1/metrics/openmetrics" {
+                let (tx, rx) = bounded(1);
+                if commands
+                    .try_send(Command::OpenMetrics { reply: tx })
+                    .is_err()
+                {
+                    (
+                        503,
+                        error_body(
+                            "worker_busy",
+                            "The worker command queue is busy",
+                            true,
+                            &request_id,
+                        )
+                        .to_string(),
+                        JSON_CONTENT_TYPE,
+                    )
+                } else {
+                    match rx.recv_timeout(Duration::from_secs(3)) {
+                        Ok(text) => (200, text, OPENMETRICS_CONTENT_TYPE),
+                        Err(_) => (
+                            503,
+                            error_body(
+                                "worker_timeout",
+                                "The worker did not answer before the local API deadline",
+                                true,
+                                &request_id,
+                            )
+                            .to_string(),
+                            JSON_CONTENT_TYPE,
+                        ),
+                    }
+                }
             } else if let Some(body) = direct_get(request.url(), &pulse) {
-                (200, body)
+                (200, body.to_string(), JSON_CONTENT_TYPE)
             } else {
                 let (tx, rx) = bounded(1);
                 if commands
@@ -147,7 +189,9 @@ pub fn start(
                             "The worker command queue is busy",
                             true,
                             &request_id,
-                        ),
+                        )
+                        .to_string(),
+                        JSON_CONTENT_TYPE,
                     )
                 } else {
                     match rx.recv_timeout(Duration::from_secs(3)) {
@@ -158,9 +202,11 @@ pub fn start(
                                 "The request was invalid or the requested resource is unavailable",
                                 false,
                                 &request_id,
-                            ),
+                            )
+                            .to_string(),
+                            JSON_CONTENT_TYPE,
                         ),
-                        Ok(data) => (200, data),
+                        Ok(data) => (200, data.to_string(), JSON_CONTENT_TYPE),
                         Err(_) => (
                             503,
                             error_body(
@@ -168,16 +214,17 @@ pub fn start(
                                 "The worker did not answer before the local API deadline",
                                 true,
                                 &request_id,
-                            ),
+                            )
+                            .to_string(),
+                            JSON_CONTENT_TYPE,
                         ),
                     }
                 }
             };
-            let response = Response::from_string(body.to_string())
+            let response = Response::from_string(body)
                 .with_status_code(status)
                 .with_header(
-                    Header::from_bytes("Content-Type", "application/json; charset=utf-8")
-                        .expect("constant header"),
+                    Header::from_bytes("Content-Type", content_type).expect("constant header"),
                 )
                 .with_header(
                     Header::from_bytes("Cache-Control", "no-store").expect("constant header"),
@@ -248,6 +295,15 @@ mod tests {
                 .is_object()
         );
         assert!(direct_get("/v1/unknown", &pulse).is_none());
+    }
+
+    #[test]
+    fn metric_content_types_are_explicit_and_prometheus_compatible() {
+        assert_eq!(JSON_CONTENT_TYPE, "application/json; charset=utf-8");
+        assert_eq!(
+            OPENMETRICS_CONTENT_TYPE,
+            "application/openmetrics-text; version=1.0.0; charset=utf-8"
+        );
     }
 
     #[test]
