@@ -22,6 +22,7 @@
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, and separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes for portable disaster recovery |
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API with versioned OpenAPI, typed operation status, stable error codes and request IDs |
+| Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, SHA-256 pinning and detached Ed25519 signature verification |
 | Testing | Synthetic demo, Rust regression/integration tests, fuzzing, CodeQL, coverage evidence, model evaluation fixtures and Windows/Linux CI |
 
 ## Windows
@@ -64,7 +65,7 @@ The app or `rr run` must remain running for scheduled checks. One process and on
 
 Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; the LLM classification and same-model verifier cannot authorize unattended sending by themselves. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
 
-GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. Portable recovery is available only as a **separately stored passphrase-wrapped recovery-key envelope**; no plaintext master-key export exists. Authenticode signing and formal security certification are still not claimed.
+Enterprise policy can be independently authenticated with SHA-256 pinning, Ed25519 signatures, or both; signer fingerprints are exposed for audit without private key material. GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. Portable recovery is available only as a **separately stored passphrase-wrapped recovery-key envelope**; no plaintext master-key export exists. Authenticode signing and formal security certification are still not claimed.
 
 ## Documentation
 
