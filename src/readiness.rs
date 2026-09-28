@@ -19,16 +19,29 @@ pub struct OperationalIndicators {
     pub degradation_reasons: Vec<&'static str>,
 }
 
-pub fn operational_indicators(
-    settings: &Settings,
-    counts: &Counts,
-    last_poll: Option<DateTime<Utc>>,
-    database_integrity_ok: bool,
-    storage_write_safe: bool,
-    scheduled_backup_overdue: bool,
-    connected: bool,
-    now: DateTime<Utc>,
-) -> OperationalIndicators {
+#[derive(Clone, Copy, Debug)]
+pub struct OperationalContext<'a> {
+    pub settings: &'a Settings,
+    pub counts: &'a Counts,
+    pub last_poll: Option<DateTime<Utc>>,
+    pub database_integrity_ok: bool,
+    pub storage_write_safe: bool,
+    pub scheduled_backup_overdue: bool,
+    pub connected: bool,
+    pub now: DateTime<Utc>,
+}
+
+pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalIndicators {
+    let OperationalContext {
+        settings,
+        counts,
+        last_poll,
+        database_integrity_ok,
+        storage_write_safe,
+        scheduled_backup_overdue,
+        connected,
+        now,
+    } = context;
     let sync_age_seconds =
         last_poll.map(|poll| now.signed_duration_since(poll).num_seconds().max(0));
     let freshness_window = settings.interval_seconds().saturating_mul(2);
@@ -191,16 +204,16 @@ mod tests {
             uncertain: 1,
             ..Counts::default()
         };
-        let indicators = operational_indicators(
-            &settings,
-            &counts,
-            Some(now - chrono::Duration::hours(3)),
-            true,
-            true,
-            false,
-            true,
+        let indicators = operational_indicators(OperationalContext {
+            settings: &settings,
+            counts: &counts,
+            last_poll: Some(now - chrono::Duration::hours(3)),
+            database_integrity_ok: true,
+            storage_write_safe: true,
+            scheduled_backup_overdue: false,
+            connected: true,
             now,
-        );
+        });
         assert!(!indicators.sync_fresh);
         assert!(indicators.degraded);
         assert!(
@@ -217,16 +230,17 @@ mod tests {
         assert_eq!(indicators.review_depth, 2);
         assert_eq!(indicators.uncertain_deliveries, 1);
 
-        let fresh = operational_indicators(
-            &settings,
-            &Counts::default(),
-            Some(now - chrono::Duration::minutes(30)),
-            true,
-            true,
-            false,
-            true,
+        let fresh_counts = Counts::default();
+        let fresh = operational_indicators(OperationalContext {
+            settings: &settings,
+            counts: &fresh_counts,
+            last_poll: Some(now - chrono::Duration::minutes(30)),
+            database_integrity_ok: true,
+            storage_write_safe: true,
+            scheduled_backup_overdue: false,
+            connected: true,
             now,
-        );
+        });
         assert!(fresh.sync_fresh);
         assert!(!fresh.degraded);
     }
