@@ -5,8 +5,10 @@ const BASELINE: &str = include_str!("../docs/openapi-v1-baseline.json");
 const CURRENT: &str = include_str!("../docs/openapi-v1.json");
 
 fn ignored(path: &str, key: &str) -> bool {
-    matches!(key, "description" | "summary" | "title" | "examples" | "example")
-        || (path == "$.info" && key == "version")
+    matches!(
+        key,
+        "description" | "summary" | "title" | "examples" | "example"
+    ) || (path == "$.info" && key == "version")
 }
 
 fn set(values: &[Value]) -> BTreeSet<String> {
