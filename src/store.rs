@@ -796,8 +796,7 @@ impl Store {
         if let Some(cursor) = cursor {
             ensure!(cursor.snapshot_rowid >= 0, "Invalid item cursor snapshot");
             ensure!(
-                cursor.id.len() == 64
-                    && cursor.id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                cursor.id.len() == 64 && cursor.id.bytes().all(|byte| byte.is_ascii_hexdigit()),
                 "Invalid item cursor identifier"
             );
         }
@@ -1403,15 +1402,15 @@ mod tests {
 
         let first = db.list_cursor("me@example.com", false, None, 2).unwrap();
         assert_eq!(first.items.len(), 2);
-        let cursor = first.next_cursor.clone().expect("first page should continue");
+        let cursor = first
+            .next_cursor
+            .clone()
+            .expect("first page should continue");
         let first_ids: std::collections::BTreeSet<_> =
             first.items.iter().map(|job| job.id.clone()).collect();
 
-        db.insert_stub(
-            stub("cursor-new-arrival", "thread-new-arrival"),
-            Utc::now(),
-        )
-        .unwrap();
+        db.insert_stub(stub("cursor-new-arrival", "thread-new-arrival"), Utc::now())
+            .unwrap();
 
         let second = db
             .list_cursor("me@example.com", false, Some(&cursor), 2)
@@ -1426,12 +1425,7 @@ mod tests {
         );
 
         let third = db
-            .list_cursor(
-                "me@example.com",
-                false,
-                second.next_cursor.as_ref(),
-                2,
-            )
+            .list_cursor("me@example.com", false, second.next_cursor.as_ref(), 2)
             .unwrap();
         assert_eq!(third.items.len(), 1);
         assert!(third.next_cursor.is_none());
