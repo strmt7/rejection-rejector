@@ -289,6 +289,26 @@ impl App {
                             .unwrap_or_else(|| "Status unavailable".into()),
                     );
                     ui.end_row();
+                    ui.label("Backup failure domain");
+                    ui.label(
+                        s.backup_isolation
+                            .as_ref()
+                            .map(|status| {
+                                if !status.configured {
+                                    "Not configured".to_owned()
+                                } else if !status.destination_exists {
+                                    "Destination unavailable".to_owned()
+                                } else {
+                                    match status.distinct_failure_domain {
+                                        Some(true) => "Distinct filesystem / volume".to_owned(),
+                                        Some(false) => "SAME VOLUME — disk loss affects both".to_owned(),
+                                        None => "Could not determine on this platform".to_owned(),
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| "Status unavailable".into()),
+                    );
+                    ui.end_row();
                     ui.label("Local AI");
                     ui.label(if s.settings.model_digest.is_some() {
                         "Model pinned — rechecked when processing"
