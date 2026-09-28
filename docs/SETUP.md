@@ -86,9 +86,25 @@ Restore is intentionally offline. Close the GUI and any `rr run` worker first:
 .\rr.exe restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
 ```
 
-Restore acquires the exclusive workspace lock, stages and deeply authenticates the backup, preserves the existing SQLite/WAL/SHM files under the private `recovery` directory, installs a clean SQLite image, verifies it, and rolls back automatically if final validation fails. The backup remains same-vault: another machine still needs the original OS-protected master key. The copied `vault-id` is not that key.
+Restore acquires the exclusive workspace lock, stages and deeply authenticates the backup, preserves the existing SQLite/WAL/SHM files under the private `recovery` directory, installs a clean SQLite image, verifies it, and rolls back automatically if final validation fails. A normal backup remains same-vault: another machine still needs the original OS-protected master key. For portable disaster recovery, create a **separate encrypted recovery-key envelope** and store it away from the backup. The raw vault key is never written to disk.
 
-Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not guaranteed physical SSD erasure. Do not delete the OS credential or vault-id; portable key export is not implemented.
+Create a temporary passphrase file containing at least 20 bytes, export the wrapped key, verify the pair, then securely remove the temporary passphrase file according to your organization's policy:
+
+```powershell
+.\rr.exe export-recovery-key --out E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt
+.\rr.exe verify-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt
+```
+
+On a replacement Windows/macOS machine, copy the backup and recovery-key envelope, create/use the intended data directory, then import the key **before** restore:
+
+```powershell
+.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\strmt7\RejectionRejector" import-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt --confirm IMPORT
+.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\strmt7\RejectionRejector" restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
+```
+
+Import first authenticates the wrapped key against the backup database. It refuses to overwrite an existing OS credential. Linux continues to use the original `RR_VAULT_PASSPHRASE` plus vault ID rather than OS-key import. The recovery-key file is encrypted but still sensitive; keep it separate from the backup and protect the passphrase independently.
+
+Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not guaranteed physical SSD erasure. Do not delete the OS credential or vault-id unless you have separately validated disaster-recovery material.
 
 ## Troubleshooting
 
