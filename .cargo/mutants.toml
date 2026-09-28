@@ -1,0 +1,19 @@
+# cargo-mutants configuration for Rejection Rejector.
+# Focus mutation evidence on code that controls unattended actions, parsing,
+# readiness, enterprise policy and recovery. GUI rendering and integration
+# plumbing are covered by other dedicated checks.
+
+examine_globs = [
+  "src/config.rs",
+  "src/mail.rs",
+  "src/readiness.rs",
+  "src/policy.rs",
+  "src/recovery.rs",
+]
+
+all_features = true
+timeout_multiplier = 3.0
+minimum_test_timeout = 20.0
+jobs = 2
+error_values = ["::anyhow::anyhow!(\"mutated failure\")"]
+output = "artifacts/mutants"
