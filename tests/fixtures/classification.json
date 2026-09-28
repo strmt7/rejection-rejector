@@ -447,5 +447,236 @@
       "ambiguous",
       "pending_status"
     ]
+  },
+  {
+    "id": "en_role_filled_rejection",
+    "subject": "Application decision",
+    "text": "We have decided to move forward with other candidates and will not proceed with your application for the Senior Engineer position.",
+    "expected": "rejection",
+    "tags": [
+      "ats_automation"
+    ]
+  },
+  {
+    "id": "en_not_taking_forward",
+    "subject": "Your application",
+    "text": "After reviewing your experience, we will not be taking your application forward for this vacancy.",
+    "expected": "rejection",
+    "tags": [
+      "ats_automation"
+    ]
+  },
+  {
+    "id": "de_other_candidates_rejection",
+    "subject": "Ihre Bewerbung",
+    "text": "Wir haben uns für andere Kandidaten entschieden und können Ihre Bewerbung leider nicht weiter berücksichtigen.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "fr_non_retenue_rejection",
+    "subject": "Décision concernant votre candidature",
+    "text": "Après examen de votre dossier, votre candidature n'a pas été retenue pour ce poste.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "it_other_candidates_rejection",
+    "subject": "Esito della candidatura",
+    "text": "Dopo la valutazione abbiamo scelto altri candidati per questa posizione.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "es_other_candidates_rejection",
+    "subject": "Resultado de su candidatura",
+    "text": "Tras revisar su candidatura, hemos decidido continuar con otros candidatos para este puesto.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "pt_not_selected_rejection",
+    "subject": "Resultado da candidatura",
+    "text": "Após a análise da candidatura, informamos que não foi selecionado para esta posição.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "nl_not_selected_rejection",
+    "subject": "Uitkomst van uw sollicitatie",
+    "text": "Na beoordeling van uw sollicitatie bent u niet geselecteerd voor deze functie.",
+    "expected": "rejection",
+    "tags": [
+      "multilingual"
+    ]
+  },
+  {
+    "id": "en_assessment_invite",
+    "subject": "Next step: online assessment",
+    "text": "We would like you to complete a short online assessment as the next stage of your application.",
+    "expected": "opportunity",
+    "tags": [
+      "assessment"
+    ]
+  },
+  {
+    "id": "en_phone_screen_invite",
+    "subject": "Phone interview availability",
+    "text": "We would like to schedule an interview by phone to discuss your application and the role.",
+    "expected": "opportunity",
+    "tags": [
+      "interview"
+    ]
+  },
+  {
+    "id": "de_interview_and_assessment",
+    "subject": "Einladung zum nächsten Schritt",
+    "text": "Wir möchten Sie zu einem Vorstellungsgespräch einladen. Anschließend ist eine kurze technische Aufgabe vorgesehen.",
+    "expected": "opportunity",
+    "tags": [
+      "multilingual",
+      "interview",
+      "assessment"
+    ]
+  },
+  {
+    "id": "fr_interview_invitation_new",
+    "subject": "Prochaine étape",
+    "text": "Nous souhaitons vous inviter à un entretien pour poursuivre le processus de recrutement.",
+    "expected": "opportunity",
+    "tags": [
+      "multilingual",
+      "interview"
+    ]
+  },
+  {
+    "id": "el_interview_followup",
+    "subject": "Επόμενο στάδιο της αίτησής σας",
+    "text": "Θα θέλαμε να σας προσκαλέσουμε σε συνέντευξη για να συζητήσουμε τη θέση και την εμπειρία σας.",
+    "expected": "opportunity",
+    "tags": [
+      "multilingual",
+      "interview"
+    ]
+  },
+  {
+    "id": "nl_assessment_invite",
+    "subject": "Volgende stap in uw sollicitatie",
+    "text": "Wij nodigen u graag uit voor een technische assessment als volgende stap in de procedure.",
+    "expected": "opportunity",
+    "tags": [
+      "multilingual",
+      "assessment"
+    ]
+  },
+  {
+    "id": "missing_documents_required",
+    "subject": "Action required for your application",
+    "text": "Your application is incomplete. Please upload the requested transcript before our review can continue.",
+    "expected": "other",
+    "tags": [
+      "application_action_required"
+    ]
+  },
+  {
+    "id": "verify_candidate_portal_account",
+    "subject": "Verify your candidate account",
+    "text": "Please verify your email address to activate your candidate portal account. This is not a hiring decision.",
+    "expected": "other",
+    "tags": [
+      "application_action_required"
+    ]
+  },
+  {
+    "id": "candidate_experience_survey",
+    "subject": "Candidate experience survey",
+    "text": "Please tell us about your application experience in this optional survey. This message does not communicate an application decision.",
+    "expected": "other",
+    "tags": [
+      "survey"
+    ]
+  },
+  {
+    "id": "recruiting_process_survey",
+    "subject": "Recruiting survey reminder",
+    "text": "This is a reminder to complete our recruiting-process survey. Your application status is unchanged.",
+    "expected": "other",
+    "tags": [
+      "survey"
+    ]
+  },
+  {
+    "id": "talent_network_invitation_only",
+    "subject": "Join our talent network",
+    "text": "We are inviting you to join our talent network for future openings. This message does not contain a decision on your current application.",
+    "expected": "other",
+    "tags": [
+      "talent_pool"
+    ]
+  },
+  {
+    "id": "role_cancelled_without_candidate_decision",
+    "subject": "Recruiting process update",
+    "text": "The position has been cancelled and the requisition is now closed. No individual selection decision was made about your candidacy.",
+    "expected": "uncertain",
+    "tags": [
+      "role_closure",
+      "ambiguous"
+    ]
+  },
+  {
+    "id": "requisition_closed_application_transferred",
+    "subject": "Your application has moved to a new requisition",
+    "text": "The original requisition is closed, but your application has been transferred to a replacement requisition and remains active. We have not made a final decision.",
+    "expected": "uncertain",
+    "tags": [
+      "role_closure",
+      "talent_pool",
+      "ambiguous",
+      "pending_status"
+    ]
+  },
+  {
+    "id": "rejection_for_one_role_interview_for_another",
+    "subject": "Update on two roles",
+    "text": "We have decided not to move forward with your application for Role A. We would like to schedule an interview for Role B.",
+    "expected": "uncertain",
+    "tags": [
+      "ambiguous",
+      "interview",
+      "talent_pool"
+    ]
+  },
+  {
+    "id": "assessment_received_decision_pending",
+    "subject": "Assessment received",
+    "text": "We received your assessment. No final decision has been made and your application remains under review.",
+    "expected": "uncertain",
+    "tags": [
+      "assessment",
+      "pending_status",
+      "ambiguous"
+    ]
+  },
+  {
+    "id": "ats_status_under_correction",
+    "subject": "Portal status correction in progress",
+    "text": "The automated portal currently says not selected, but the recruiter confirms that no final decision has been made and the status is being corrected.",
+    "expected": "uncertain",
+    "tags": [
+      "ats_automation",
+      "pending_status",
+      "ambiguous"
+    ]
   }
 ]
