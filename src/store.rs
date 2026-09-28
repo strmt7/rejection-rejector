@@ -284,8 +284,7 @@ fn verify_application_invariants_connection(
         }
     }
 
-    let mut items =
-        conn.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
+    let mut items = conn.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
     let rows = items.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -331,8 +330,9 @@ fn verify_application_invariants_connection(
 
                 match job.state {
                     JobState::Sent => {
-                        let provider_payload = provider_payload
-                            .context("Sent delivery is missing its encrypted provider identifier")?;
+                        let provider_payload = provider_payload.context(
+                            "Sent delivery is missing its encrypted provider identifier",
+                        )?;
                         let provider: String =
                             vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
                         ensure!(
@@ -619,11 +619,7 @@ impl Store {
     /// This is suitable for frequent protected-anchor checkpoints: it proves
     /// that the current authenticated head extends the trusted sequence/hash
     /// without rescanning the entire historical prefix on every operation.
-    pub fn verify_audit_extension(
-        &self,
-        sequence: i64,
-        anchor: &str,
-    ) -> Result<(i64, String)> {
+    pub fn verify_audit_extension(&self, sequence: i64, anchor: &str) -> Result<(i64, String)> {
         ensure!(sequence >= 0, "Audit anchor sequence is invalid");
         ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
 
@@ -2156,8 +2152,7 @@ mod tests {
 
         db.log("test.after_anchor", None, "one").unwrap();
         db.log("test.after_anchor", None, "two").unwrap();
-        let (latest_sequence, latest_head) =
-            db.verify_audit_extension(sequence, &head).unwrap();
+        let (latest_sequence, latest_head) = db.verify_audit_extension(sequence, &head).unwrap();
         assert!(latest_sequence > sequence);
         assert_eq!(latest_head, db.audit_head().unwrap());
 

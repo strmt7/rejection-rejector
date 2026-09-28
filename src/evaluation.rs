@@ -170,12 +170,10 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         let deterministic_rejection_evidence =
             mail::clear_rejection_language(&case.subject, &case.text)
                 && !mail::auto_language_conflict(&case.subject, &case.text);
-        deterministic_rejection_evidence_hits += usize::from(
-            case.expected == Category::Rejection && deterministic_rejection_evidence,
-        );
-        deterministic_rejection_evidence_false_positives += usize::from(
-            case.expected != Category::Rejection && deterministic_rejection_evidence,
-        );
+        deterministic_rejection_evidence_hits +=
+            usize::from(case.expected == Category::Rejection && deterministic_rejection_evidence);
+        deterministic_rejection_evidence_false_positives +=
+            usize::from(case.expected != Category::Rejection && deterministic_rejection_evidence);
         for tag in &case.tags {
             let metrics = tag_metrics.entry(tag.as_str().into()).or_default();
             metrics.cases += 1;
@@ -235,8 +233,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                     metrics.rejection_false_negatives += usize::from(
                         actual != Category::Rejection && case.expected == Category::Rejection,
                     );
-                    metrics.verified_rejection_pipeline +=
-                        usize::from(rejection_pipeline_passed);
+                    metrics.verified_rejection_pipeline += usize::from(rejection_pipeline_passed);
                     metrics.unsafe_non_rejection_drafts += usize::from(non_rejection_draft);
                 }
 
@@ -282,8 +279,12 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
             metrics.rejection_true_positives + metrics.rejection_false_negatives,
         )
     });
-    let multilingual_verified_rejection_pipeline_rate = multilingual
-        .and_then(|metrics| ratio(metrics.verified_rejection_pipeline, metrics.expected_rejections));
+    let multilingual_verified_rejection_pipeline_rate = multilingual.and_then(|metrics| {
+        ratio(
+            metrics.verified_rejection_pipeline,
+            metrics.expected_rejections,
+        )
+    });
     let completion_rate = ratio(completed, cases.len()).unwrap_or(0.0);
 
     // Task-specific weighting: false-positive avoidance dominates because replying

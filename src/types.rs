@@ -393,7 +393,6 @@ impl OperationKind {
         )
     }
 
-
     /// Monitoring threshold, not a cancellation deadline. A worker that has not
     /// reported progress within this operation-specific budget is considered
     /// stalled by the direct liveness endpoint.
@@ -413,7 +412,9 @@ impl OperationKind {
             Self::UpdateSettings | Self::DisconnectGmail => 60,
             Self::StartOllama | Self::InspectModel | Self::EnterprisePolicyReload => 120,
             Self::SendReply | Self::AutomaticDispatch | Self::ReconcileDelivery => 300,
-            Self::ConnectGmail | Self::SyncMailbox | Self::Diagnostics | Self::PurgeRetention => 600,
+            Self::ConnectGmail | Self::SyncMailbox | Self::Diagnostics | Self::PurgeRetention => {
+                600
+            }
             Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
             Self::InstallOllama | Self::Backup | Self::RecoveryDrill => 3_600,
             Self::PullModel | Self::EvaluateModel => 7_200,

@@ -570,9 +570,8 @@ fn protect_audit_boundary<T>(engine: &Engine, result: Result<T>) -> Result<T> {
         Err(anchor_error) => {
             engine.paused.store(true, Ordering::SeqCst);
             match result {
-                Ok(_) => Err(anchor_error.context(
-                    "OS-protected audit checkpoint failed; worker paused fail-closed",
-                )),
+                Ok(_) => Err(anchor_error
+                    .context("OS-protected audit checkpoint failed; worker paused fail-closed")),
                 Err(operation_error) => Err(anyhow::anyhow!(
                     "Operation failed: {operation_error:#}; OS-protected audit checkpoint also failed: {anchor_error:#}. Worker paused fail-closed"
                 )),
@@ -850,7 +849,12 @@ fn run(
                     policy_due = Instant::now() + Duration::from_secs(60);
                     if changed {
                         let completed: Result<()> = Ok(());
-                        report(&shared, &pulse, OperationKind::EnterprisePolicyReload, &completed);
+                        report(
+                            &shared,
+                            &pulse,
+                            OperationKind::EnterprisePolicyReload,
+                            &completed,
+                        );
                         record_current_operation(&journal, &shared);
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
@@ -878,7 +882,12 @@ fn run(
                     policy_due = Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
-                    report(&shared, &pulse, OperationKind::EnterprisePolicyReload, &failed);
+                    report(
+                        &shared,
+                        &pulse,
+                        OperationKind::EnterprisePolicyReload,
+                        &failed,
+                    );
                     record_current_operation(&journal, &shared);
                 }
             }
@@ -1635,8 +1644,7 @@ mod tests {
         );
         assert!(!stalled.worker_responsive);
         assert!(
-            stalled.progress_age_seconds
-                > OperationKind::SendReply.stall_budget_seconds() as i64
+            stalled.progress_age_seconds > OperationKind::SendReply.stall_budget_seconds() as i64
         );
 
         pulse.finish();
