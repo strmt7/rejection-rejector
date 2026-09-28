@@ -140,11 +140,7 @@ pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
     parse_anchor(&read_small_regular_file(path)?)
 }
 
-fn verify_anchor_value(
-    store: &Store,
-    data_dir: &Path,
-    anchor: &AuditAnchor,
-) -> Result<()> {
+fn verify_anchor_value(store: &Store, data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
     ensure!(
         anchor.workspace_fingerprint == workspace_fingerprint(data_dir)?,
         "Audit anchor belongs to another workspace"
@@ -207,10 +203,7 @@ fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
 /// Verify the OS credential-store anchor when enterprise rollback protection is
 /// explicitly required. An empty credential is allowed only for first-time
 /// bootstrap; unsupported platforms fail closed rather than claiming coverage.
-pub fn verify_os_anchor_if_required(
-    store: &Store,
-    data_dir: &Path,
-) -> Result<Option<AuditAnchor>> {
+pub fn verify_os_anchor_if_required(store: &Store, data_dir: &Path) -> Result<Option<AuditAnchor>> {
     if !os_anchor_required()? {
         return Ok(None);
     }
