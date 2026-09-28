@@ -3,6 +3,7 @@
   "force_human_review": false,
   "prohibit_sending": false,
   "prohibit_integration_api": false,
+  "prohibit_recovery_key_export": false,
   "max_daily_send_limit": 5,
   "min_cooldown_minutes": 60,
   "min_retention_days": 365,
