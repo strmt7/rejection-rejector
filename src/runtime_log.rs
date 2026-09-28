@@ -89,7 +89,10 @@ impl RuntimeJournal {
 
     fn open_with_limits(data_dir: &Path, max_bytes: u64, max_archives: usize) -> Result<Self> {
         ensure!(max_bytes >= 256, "Runtime log size limit is too small");
-        ensure!((1..=16).contains(&max_archives), "Runtime log archive limit is invalid");
+        ensure!(
+            (1..=16).contains(&max_archives),
+            "Runtime log archive limit is invalid"
+        );
         let directory = data_dir.join("logs");
         private_dir(&directory)?;
         ensure!(
@@ -301,7 +304,10 @@ mod tests {
         assert!(status.current_bytes > 0);
         assert!(status.archive_count <= 2);
         assert!(status.archive_bytes > 0);
-        assert_eq!(status.total_bytes, status.current_bytes + status.archive_bytes);
+        assert_eq!(
+            status.total_bytes,
+            status.current_bytes + status.archive_bytes
+        );
         assert!(root.path().join("logs/runtime.1.jsonl").is_file());
         assert!(!root.path().join("logs/runtime.3.jsonl").exists());
     }
