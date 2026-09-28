@@ -453,4 +453,3 @@ mod tests {
         assert_eq!(passphrase.as_slice(), b"correct horse battery staple");
     }
 }
-
