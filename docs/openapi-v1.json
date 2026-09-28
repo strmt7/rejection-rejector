@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.12.0",
+    "version": "1.13.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket."
   },
   "servers": [
@@ -256,6 +256,9 @@
           },
           "scheduled_backup": {
             "$ref": "#/components/schemas/ScheduledBackupStatus"
+          },
+          "backup_isolation": {
+            "$ref": "#/components/schemas/BackupIsolationStatus"
           }
         }
       },
@@ -403,7 +406,8 @@
           "os_protected_audit_anchor_required",
           "independent_audit_anchor_configured",
           "operational",
-          "scheduled_backup"
+          "scheduled_backup",
+          "backup_isolation"
         ],
         "properties": {
           "schema_version": {
@@ -506,13 +510,17 @@
           },
           "operational": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "description": "Privacy-safe derived operational state including sync freshness, queue depth, backup freshness/failure-domain isolation and stable degradation reason codes."
           },
           "storage": {
             "$ref": "#/components/schemas/StorageHealth"
           },
           "scheduled_backup": {
             "$ref": "#/components/schemas/ScheduledBackupStatus"
+          },
+          "backup_isolation": {
+            "$ref": "#/components/schemas/BackupIsolationStatus"
           }
         }
       },
@@ -784,6 +792,50 @@
           },
           "overdue": {
             "type": "boolean"
+          }
+        }
+      },
+      "BackupIsolationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "configured",
+          "destination_exists",
+          "distinct_failure_domain",
+          "measurement"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "destination_exists": {
+            "type": "boolean"
+          },
+          "distinct_failure_domain": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True when scheduled backups are measured on a distinct filesystem/volume, false when they share the live-state failure domain, null when unavailable/not configured."
+          },
+          "measurement": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "destination_missing",
+              "filesystem_device_id",
+              "windows_volume_prefix",
+              "unsupported_platform"
+            ]
           }
         }
       }
