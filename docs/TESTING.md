@@ -41,7 +41,7 @@ The tests cover default disarming and exact presets; encryption/tampering/wrong 
 
 The safety-critical mutation workflow targets configuration, mail-policy, readiness, enterprise-policy and recovery code. A workflow run now succeeds only when cargo-mutants reports that all viable tested mutants were caught; surviving mutants **or mutation timeouts fail the job**. Because the release workflow requires recent successful mutation evidence, an inconclusive or survivor-bearing run can no longer satisfy the release gate.
 
-Coverage runs on relevant `main` changes as well as its schedule/manual trigger. The first purpose of the push trigger is to establish an observed baseline on the real suite. A numeric coverage floor is intentionally not invented in advance; the next quality round should ratchet from measured evidence and record the chosen floor with its source run.
+Coverage runs on relevant `main` changes as well as its schedule/manual trigger. The measured baseline from commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` was **61.48% line coverage** and **65.13% function coverage** (59.92% regions) on the pinned Ubuntu/Rust/cargo-llvm-cov workflow. The gate therefore ratchets at **61% lines** and **65% functions**: deliberately just below the measured values, so future changes cannot silently degrade below the observed baseline. Raise the floor only from new measured evidence; do not lower it to make a failing change pass.
 
 ## Actual native interface checks
 

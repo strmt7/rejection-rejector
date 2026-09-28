@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info
-          cargo llvm-cov report --summary-only | tee artifacts/coverage-summary.txt
+          cargo llvm-cov report --summary-only --fail-under-lines 61 --fail-under-functions 65 | tee artifacts/coverage-summary.txt
           test -s artifacts/lcov.info
           test -s artifacts/coverage-summary.txt
       - name: Upload coverage evidence

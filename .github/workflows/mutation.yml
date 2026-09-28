@@ -1,6 +1,16 @@
 name: Mutation testing
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src/config.rs"
+      - "src/mail.rs"
+      - "src/readiness.rs"
+      - "src/policy.rs"
+      - "src/recovery.rs"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutation.yml"
   schedule:
     - cron: "11 2 * * 5"
   workflow_dispatch:
