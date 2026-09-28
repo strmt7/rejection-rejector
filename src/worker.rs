@@ -897,7 +897,10 @@ fn api_query_with_operation(
                 query.is_empty(),
                 "Metrics endpoint takes no query parameters"
             );
-            Ok(serde_json::to_value(crate::metrics::collect(e, Utc::now())?)?)
+            Ok(serde_json::to_value(crate::metrics::collect(
+                e,
+                Utc::now(),
+            )?)?)
         }
         "/v1/status" => {
             ensure!(
@@ -910,7 +913,9 @@ fn api_query_with_operation(
         }
         "/v1/item-feed" => {
             ensure!(
-                query.keys().all(|key| matches!(key.as_str(), "cursor" | "limit")),
+                query
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "cursor" | "limit")),
                 "Item-feed endpoint accepts only cursor and limit"
             );
             let limit = query
@@ -923,9 +928,8 @@ fn api_query_with_operation(
                 .get("cursor")
                 .map(|value| decode_item_cursor(value))
                 .transpose()?;
-            let page = e
-                .db
-                .list_cursor(&e.account, false, cursor.as_ref(), limit)?;
+            let page =
+                e.db.list_cursor(&e.account, false, cursor.as_ref(), limit)?;
             let next_cursor = page
                 .next_cursor
                 .as_ref()
