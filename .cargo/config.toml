@@ -3,3 +3,8 @@ warnings = "deny"
 
 [future-incompat-report]
 frequency = "always"
+
+[target.'cfg(target_env = "msvc")']
+rustflags = [
+  "-C", "link-arg=/Brepro",
+]
