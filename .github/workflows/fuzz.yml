@@ -39,12 +39,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: nightly-2026-09-26
-      - name: Install pinned cargo-fuzz
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        with:
-          tool: cargo-fuzz@0.13.2
-          checksum: true
-          fallback: none
+      - name: Install latest verified cargo-fuzz release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-fuzz --version 0.13.2
+          cargo fuzz --version
       - name: Fuzz mailbox and quote boundaries
         run: cargo fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048
       - name: Fuzz MIME extraction

@@ -45,6 +45,10 @@ Test counts evolve as controls are added. Treat the exact current GitHub Actions
 
 The tests cover default disarming and exact presets; encryption/tampering/wrong keys and instance locks; stale revisions, durable reservations and caps; concurrent reservation races; mailbox/header injection and MIME threading; duplicate OAuth codes/state; failed history pages, cursor expiry, replay and changed lookback; exact model evidence, stale digest/context and offload rejection; the independent current-message rejection gate for Automatic mode, including quoted-history negatives; response-size limits, redirect/retry policy and redacted errors; editor message/revision binding and demo-only screenshot controls.
 
+## Fuzzing toolchain
+
+The bounded libFuzzer workflow currently uses cargo-fuzz **0.13.2**, verified as the latest upstream release on 2026-09-28. It is installed with `cargo install --locked` rather than a convenience installer because the current install-action manifest does not recognize cargo-fuzz 0.13.2. The workflow still pins the nightly Rust toolchain and bounded fuzz-time/resource limits; changing installation mechanism does not weaken the fuzz gate.
+
 ## Coverage and mutation quality gates
 
 The safety-critical mutation workflow targets configuration, mail-policy, readiness, enterprise-policy and recovery code. Its current cargo-mutants 27.x configuration keeps concurrency on the CLI (`--jobs 2`) rather than the config file, so tool-schema drift fails visibly instead of being silently ignored. A workflow run now succeeds only when cargo-mutants reports that all viable tested mutants were caught; surviving mutants **or mutation timeouts fail the job**. Because the release workflow requires recent successful mutation evidence, an inconclusive or survivor-bearing run can no longer satisfy the release gate.
