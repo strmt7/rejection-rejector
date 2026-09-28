@@ -1487,8 +1487,10 @@ mod tests {
         assert_eq!(db.schema_version().unwrap(), 4);
         db.verify_audit_chain().unwrap();
         let events = db.events(0, 10).unwrap();
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, "legacy.test");
+        assert_eq!(events[1].kind, "database.migrated");
+        assert_eq!(events[1].domain, AuditDomain::Storage);
     }
 
     #[test]
