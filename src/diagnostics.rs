@@ -89,6 +89,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         "runtime_log": crate::runtime_log::status(&engine.directory).ok(),
         "application": {
             "version": env!("CARGO_PKG_VERSION"),
+            "build": crate::build_info::current(),
             "settings_format_version": engine.settings.settings_format_version,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,

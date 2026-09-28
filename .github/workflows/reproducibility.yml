@@ -1,0 +1,105 @@
+name: Windows reproducibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "build.rs"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/config.toml"
+      - ".github/workflows/reproducibility.yml"
+  schedule:
+    - cron: "7 3 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-reproducibility-main
+  cancel-in-progress: true
+
+jobs:
+  reproducible:
+    name: Byte-for-byte Windows release rebuild
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_WARNINGS: deny
+      CARGO_INCREMENTAL: 0
+      RR_BUILD_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Install cargo-auditable
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-auditable@0.7.6
+          checksum: true
+          fallback: none
+      - name: Build twice from isolated target directories
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'rr-repro-a'
+          cargo auditable build --locked --release --bins
+          if ($LASTEXITCODE -ne 0) { throw "First release build failed" }
+          $aDesktop = Join-Path $env:CARGO_TARGET_DIR 'release/rejection-rejector.exe'
+          $aCli = Join-Path $env:CARGO_TARGET_DIR 'release/rr.exe'
+          & $aCli build-info | Set-Content artifacts/build-info-a.json -Encoding utf8
+
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'rr-repro-b'
+          cargo auditable build --locked --release --bins
+          if ($LASTEXITCODE -ne 0) { throw "Second release build failed" }
+          $bDesktop = Join-Path $env:CARGO_TARGET_DIR 'release/rejection-rejector.exe'
+          $bCli = Join-Path $env:CARGO_TARGET_DIR 'release/rr.exe'
+          & $bCli build-info | Set-Content artifacts/build-info-b.json -Encoding utf8
+
+          $pairs = @(
+            @{ Name = 'rejection-rejector.exe'; A = $aDesktop; B = $bDesktop },
+            @{ Name = 'rr.exe'; A = $aCli; B = $bCli }
+          )
+          $lines = @()
+          foreach ($pair in $pairs) {
+            $hashA = (Get-FileHash $pair.A -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hashB = (Get-FileHash $pair.B -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines += "$($pair.Name) $hashA $hashB"
+            if ($hashA -ne $hashB) {
+              $lines | Set-Content artifacts/reproducibility-hashes.txt -Encoding ascii
+              throw "$($pair.Name) is not byte-for-byte reproducible"
+            }
+          }
+          $lines | Set-Content artifacts/reproducibility-hashes.txt -Encoding ascii
+
+          $infoA = Get-Content artifacts/build-info-a.json -Raw | ConvertFrom-Json
+          $infoB = Get-Content artifacts/build-info-b.json -Raw | ConvertFrom-Json
+          if ($infoA.identity_sha256 -ne $infoB.identity_sha256) { throw "Build identity differs between clean builds" }
+          if ($infoA.source_commit -ne $env:GITHUB_SHA -or -not $infoA.source_commit_verified) { throw "First build has invalid source identity" }
+          if ($infoB.source_commit -ne $env:GITHUB_SHA -or -not $infoB.source_commit_verified) { throw "Second build has invalid source identity" }
+      - name: Record exact evidence identity
+        shell: pwsh
+        run: |
+          git rev-parse HEAD | Set-Content artifacts/COMMIT.txt -Encoding ascii
+          rustc --version | Set-Content artifacts/toolchain.txt -Encoding ascii
+          cargo auditable --version | Add-Content artifacts/toolchain.txt -Encoding ascii
+          (Get-FileHash Cargo.lock -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content artifacts/cargo-lock.sha256 -Encoding ascii
+          git diff --exit-code HEAD
+      - name: Upload reproducibility evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-reproducibility-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
