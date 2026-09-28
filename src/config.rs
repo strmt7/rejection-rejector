@@ -629,8 +629,10 @@ mod tests {
     }
     #[test]
     fn scheduled_backup_settings_are_explicit_and_bounded() {
-        let mut settings = Settings::default();
-        settings.scheduled_backup_enabled = true;
+        let mut settings = Settings {
+            scheduled_backup_enabled: true,
+            ..Settings::default()
+        };
         assert!(settings.validate().is_err());
 
         let absolute = std::env::temp_dir().join("rr-scheduled-backups");
