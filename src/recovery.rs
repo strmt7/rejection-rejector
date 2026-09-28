@@ -260,7 +260,14 @@ pub fn export_recovery_key(
         !destination.exists(),
         "Recovery-key destination already exists"
     );
+    let live_database = data_dir.join(DATABASE_NAME);
+    ensure!(
+        live_database.is_file(),
+        "Recovery-key export requires an existing workspace database"
+    );
     let vault = Vault::open(data_dir)?;
+    verify_vault_marker(&live_database, &vault)
+        .context("Current workspace does not authenticate under the active vault key")?;
     let id = vault_id(data_dir)?;
     let envelope = vault.recovery_envelope(&id, passphrase)?;
     if let Some(parent) = destination.parent()
