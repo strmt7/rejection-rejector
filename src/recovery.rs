@@ -396,13 +396,21 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
 /// restored, reopened, deeply authenticated and reconciled with its manifest
 /// using the current vault key.
 pub fn recovery_drill(data_dir: &Path, backup_dir: &Path) -> Result<RecoveryDrillReport> {
+    let vault = Vault::open(data_dir)?;
+    recovery_drill_with_vault(data_dir, backup_dir, vault)
+}
+
+fn recovery_drill_with_vault(
+    data_dir: &Path,
+    backup_dir: &Path,
+    vault: Vault,
+) -> Result<RecoveryDrillReport> {
     let (manifest, _) = validate_bundle_files(backup_dir)?;
     let current_vault_id = vault_id(data_dir)?;
     ensure!(
         current_vault_id == manifest.vault_id,
         "Backup vault identifier does not match this workspace"
     );
-    let vault = Vault::open(data_dir)?;
 
     let isolated = tempfile::tempdir().context("Cannot create isolated recovery-drill workspace")?;
     let drill_dir = isolated.path();
@@ -718,18 +726,12 @@ mod tests {
         let manifest = create_backup(&store, &data, &backup).unwrap();
         let live_hash_before = sha256_file(&data.join(DATABASE_NAME)).unwrap();
 
-        // The production path opens the vault through the OS store. Tests inject
-        // the already-open vault through the same helper used by restore itself.
-        let isolated = root.path().join("isolated-drill");
-        private_dir(&isolated).unwrap();
-        write_new_private(&isolated.join(VAULT_ID_NAME), manifest.vault_id.as_bytes()).unwrap();
-        let restore =
-            restore_backup_with_vault(&isolated, &backup, &manifest, vault.clone()).unwrap();
-        assert_eq!(restore.restored_schema_version, manifest.schema_version);
-        let restored = Store::open(&isolated.join(DATABASE_NAME), vault).unwrap();
-        let verification = restored.verify_backup_file(&isolated.join(DATABASE_NAME)).unwrap();
-        assert_eq!(verification.item_records, 1);
-        assert_eq!(verification.audit_head.as_deref(), Some(manifest.audit_head.as_str()));
+        let report =
+            recovery_drill_with_vault(&data, &backup, vault).unwrap();
+        assert!(report.isolated_restore_succeeded);
+        assert_eq!(report.restored_schema_version, manifest.schema_version);
+        assert_eq!(report.item_records, 1);
+        assert_eq!(report.source_audit_head, manifest.audit_head);
 
         let live_hash_after = sha256_file(&data.join(DATABASE_NAME)).unwrap();
         assert_eq!(live_hash_before, live_hash_after);
