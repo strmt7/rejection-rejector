@@ -38,7 +38,7 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.34.0 or newer so structured-output/model behavior is not accepted from an outdated runtime:
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.34.4 or newer so the current single-pass structured-output behavior for thinking models is part of the supported runtime contract:
 
 ```powershell
 .\rr.exe doctor
