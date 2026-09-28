@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.13.0",
+    "version": "1.14.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket."
   },
   "servers": [
@@ -177,7 +177,8 @@
             "description": "Locally generated UUID correlating one worker operation lifecycle across status and runtime journal records."
           },
           "kind": {
-            "type": "string"
+            "type": "string",
+            "description": "Stable snake_case worker operation identifier. Clients must tolerate future additive values. Current values include profile_model and compact_database."
           },
           "state": {
             "type": "string",
