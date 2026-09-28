@@ -30,6 +30,8 @@ enum Action {
     Demo,
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
     Doctor,
+    /// Print privacy-safe operational metrics for local monitoring.
+    Metrics,
     /// Evaluate the configured local model on the full synthetic recruiting pipeline.
     Evaluate {
         #[arg(long)]
@@ -167,6 +169,16 @@ fn main() -> Result<()> {
                     anyhow::bail!("{}", s.error);
                 }
             }
+        }
+        Action::Metrics => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
+            println!("{}", serde_json::to_string_pretty(&metrics)?);
         }
         Action::Doctor => {
             let e = Engine::open(
