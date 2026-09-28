@@ -5,7 +5,7 @@ use crate::{
     mail, net,
     types::*,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Error, Result, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
@@ -95,6 +95,14 @@ fn model_name_matches(configured: &str, actual: &str) -> bool {
             .unwrap_or(configured)
             .contains(':')
             && actual == format!("{configured}:latest"))
+}
+
+fn retryable_local_transport_error(error: &Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|request| request.is_timeout() || request.is_connect())
+    })
 }
 
 impl Ollama {
@@ -219,7 +227,12 @@ impl Ollama {
         Ok(ModelStatus{installed:true,digest:m.digest,size:m.size,size_vram:m.size_vram,context:m.context_length,gpu_resident:resident,
             message:if resident{"Ollama reports full GPU residency within 14 GiB; not whole-device peak certification"}else{"GPU check failed: close other models, check GPU support/context, then qualify again"}.into()})
     }
-    fn chat<T: DeserializeOwned>(&self, system: &str, payload: Value, schema: Value) -> Result<T> {
+    fn chat_once<T: DeserializeOwned>(
+        &self,
+        system: &str,
+        payload: &Value,
+        schema: &Value,
+    ) -> Result<T> {
         let data = payload.to_string();
         // Conservative byte-based budget plus template allowance; never silently truncate a request.
         let predict = 1536u32;
@@ -227,10 +240,30 @@ impl Ollama {
             system.len() + data.len() + predict as usize + 512 <= self.settings.num_ctx as usize,
             "Input exceeds safe context budget. Shorten candidate context/reply or select 16384 context and requalify the GPU"
         );
-        let result:Chat=net::json(net::client(self.settings.llm_timeout_seconds,true)?.post(self.url("/api/chat"))
-            .json(&json!({"model":self.settings.model,"stream":false,"think":true,"keep_alive":"5m","format":schema,
-                "messages":[{"role":"system","content":system},{"role":"user","content":data}],
-                "options":{"num_ctx":self.settings.num_ctx,"num_predict":predict,"temperature":0.15,"seed":42}})).send().context("Local Ollama inference failed")?,2*1024*1024)?;
+        let result: Chat = net::json(
+            net::client(self.settings.llm_timeout_seconds, true)?
+                .post(self.url("/api/chat"))
+                .json(&json!({
+                    "model": self.settings.model,
+                    "stream": false,
+                    "think": true,
+                    "keep_alive": "5m",
+                    "format": schema,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": data}
+                    ],
+                    "options": {
+                        "num_ctx": self.settings.num_ctx,
+                        "num_predict": predict,
+                        "temperature": 0.15,
+                        "seed": 42
+                    }
+                }))
+                .send()
+                .context("Local Ollama inference failed")?,
+            2 * 1024 * 1024,
+        )?;
         ensure!(
             result.done && result.done_reason == "stop",
             "Model response was incomplete; no action is authorized"
@@ -243,6 +276,41 @@ impl Ollama {
         );
         serde_json::from_str(&result.message.content)
             .context("Model returned invalid structured output")
+    }
+
+    fn unload_for_transport_recovery(&self) -> Result<()> {
+        let _: Value = net::json(
+            net::client(30, true)?
+                .post(self.url("/api/generate"))
+                .json(&json!({
+                    "model": self.settings.model,
+                    "stream": false,
+                    "keep_alive": 0
+                }))
+                .send()
+                .context("Could not unload the local Ollama model after a transport failure")?,
+            256 * 1024,
+        )?;
+        Ok(())
+    }
+
+    fn chat<T: DeserializeOwned>(&self, system: &str, payload: Value, schema: Value) -> Result<T> {
+        match self.chat_once(system, &payload, &schema) {
+            Ok(value) => Ok(value),
+            Err(first_error) if retryable_local_transport_error(&first_error) => {
+                self.unload_for_transport_recovery().with_context(|| {
+                    format!(
+                        "Local Ollama transport failed and runner recovery could not unload the model: {first_error}"
+                    )
+                })?;
+                self.chat_once(system, &payload, &schema).with_context(|| {
+                    format!(
+                        "Local Ollama inference failed after one runner-recovery attempt; first failure: {first_error}"
+                    )
+                })
+            }
+            Err(error) => Err(error),
+        }
     }
     pub fn qualify(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
@@ -625,6 +693,23 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transport_recovery_is_narrowly_limited_to_timeout_or_connect_errors() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let error = net::client(1, true)
+            .unwrap()
+            .get(format!("http://{address}/never-responds"))
+            .send()
+            .unwrap_err();
+        let error = Error::new(error);
+        assert!(retryable_local_transport_error(&error));
+        assert!(!retryable_local_transport_error(&anyhow::anyhow!(
+            "structured output was invalid"
+        )));
+        drop(listener);
+    }
+
     #[test]
     fn runtime_version_parser_orders_stable_releases() {
         assert_eq!(parse_version("0.34.0"), Some((0, 34, 0)));
