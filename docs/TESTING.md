@@ -47,7 +47,7 @@ The tests cover default disarming and exact presets; encryption/tampering/wrong 
 
 ## Fuzzing toolchain
 
-The bounded libFuzzer workflow currently uses cargo-fuzz **0.13.2**, verified as the latest upstream release on 2026-09-28. It is installed with `cargo install --locked` rather than a convenience installer because the current install-action manifest does not recognize cargo-fuzz 0.13.2. The workflow still pins the nightly Rust toolchain and bounded fuzz-time/resource limits; changing installation mechanism does not weaken the fuzz gate.
+The bounded libFuzzer workflow currently uses cargo-fuzz **0.13.2**, verified as the latest upstream release on 2026-09-28. It is installed with `cargo install --locked` rather than a convenience installer because the current install-action manifest does not recognize cargo-fuzz 0.13.2. Every fuzz invocation explicitly selects `+nightly-2026-09-26`; this is required because the repository-level `rust-toolchain.toml` deliberately pins stable Rust for normal builds and would otherwise override an ambient nightly default. Each target tees its raw output to an uploaded log while `pipefail` preserves the real fuzzer exit status.
 
 ## Coverage and mutation quality gates
 

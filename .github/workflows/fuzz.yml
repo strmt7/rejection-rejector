@@ -46,17 +46,30 @@ jobs:
           cargo install --locked cargo-fuzz --version 0.13.2
           cargo fuzz --version
       - name: Fuzz mailbox and quote boundaries
-        run: cargo fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/fuzz-logs
+          cargo +nightly-2026-09-26 fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048 2>&1 | tee artifacts/fuzz-logs/mail-boundaries.log
       - name: Fuzz MIME extraction
-        run: cargo fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=90 -max_len=262144 -timeout=10 -rss_limit_mb=2048
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/fuzz-logs
+          cargo +nightly-2026-09-26 fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=90 -max_len=262144 -timeout=10 -rss_limit_mb=2048 2>&1 | tee artifacts/fuzz-logs/mime-parser.log
       - name: Fuzz rejection policy language
-        run: cargo fuzz run policy_language --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/fuzz-logs
+          cargo +nightly-2026-09-26 fuzz run policy_language --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048 2>&1 | tee artifacts/fuzz-logs/policy-language.log
       - name: Upload crash and corpus evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rejection-rejector-fuzz-${{ github.sha }}
           path: |
+            artifacts/fuzz-logs/
             fuzz/artifacts/
             fuzz/corpus/
           if-no-files-found: ignore
