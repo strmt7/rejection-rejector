@@ -51,6 +51,8 @@ enum Action {
     },
     /// Verify a backup directory against the active vault without modifying it.
     VerifyBackup { path: PathBuf },
+    /// Restore and deeply verify a backup in an isolated temporary workspace.
+    RecoveryDrill { path: PathBuf },
     /// Restore a verified same-vault backup. The GUI/worker must be closed.
     RestoreBackup {
         path: PathBuf,
@@ -355,6 +357,28 @@ fn main() -> Result<()> {
             )?;
             let manifest = recovery::verify_backup(&e.db, &path)?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
+        }
+        Action::RecoveryDrill { path } => {
+            let mut e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let report = recovery::recovery_drill(&e.directory, &path)?;
+            e.db.log(
+                "backup.drill_passed",
+                None,
+                &format!(
+                    "Isolated recovery drill passed: schema={} metadata={} items={} audit_events={} deliveries={}",
+                    report.restored_schema_version,
+                    report.metadata_records,
+                    report.item_records,
+                    report.audit_events,
+                    report.delivery_records
+                ),
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Action::RestoreBackup { path, confirm } => {
             anyhow::ensure!(confirm == "RESTORE", "Restore requires --confirm RESTORE");
