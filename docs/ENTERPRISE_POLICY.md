@@ -80,8 +80,11 @@ Policy can only make the user configuration more restrictive. It never grants ca
 6. For high-assurance environments, choose one or both independent authentication controls:
    - provision the exact digest as `RR_ENTERPRISE_POLICY_SHA256`; and/or
    - sign the **exact policy bytes** with your organization-held Ed25519 private key, deploy the detached JSON signature as `policy.json.sig`, and provision the corresponding raw 32-byte public key as standard base64 in `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY`. If the signature lives elsewhere, set `RR_ENTERPRISE_POLICY_SIGNATURE` to its absolute path.
-7. Restart Rejection Rejector.
-8. Verify the effective policy:
+7. If `require_external_audit_anchor` is enabled, provision one independent rollback anchor mechanism before restart:
+   - set `RR_AUDIT_ANCHOR_FILE` to an absolute anchor JSON path maintained outside the workspace; or
+   - on Windows/macOS set `RR_OS_AUDIT_ANCHOR=required` to use the OS credential store as a monotonic checkpoint. The first successful protected startup bootstraps the OS anchor; later starts require the workspace to extend it.
+8. Restart Rejection Rejector.
+9. Verify the effective policy:
    ```powershell
    rr.exe policy-status
    ```
