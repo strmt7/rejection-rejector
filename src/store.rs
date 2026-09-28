@@ -780,6 +780,107 @@ impl Store {
         })
         .collect()
     }
+    /// Snapshot-consistent cursor feed for integrations.
+    ///
+    /// The first page captures the current maximum SQLite rowid for the account.
+    /// Continuations remain bounded by that high-water mark, so concurrently
+    /// inserted mail cannot shift or appear inside an in-progress traversal.
+    pub fn list_cursor(
+        &self,
+        account: &str,
+        review_only: bool,
+        cursor: Option<&ItemCursor>,
+        limit: u32,
+    ) -> Result<ItemCursorPage> {
+        let limit = limit.clamp(1, 100);
+        if let Some(cursor) = cursor {
+            ensure!(cursor.snapshot_rowid >= 0, "Invalid item cursor snapshot");
+            ensure!(
+                cursor.id.len() == 64
+                    && cursor.id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "Invalid item cursor identifier"
+            );
+        }
+        let account_key = hash(account);
+        let snapshot_rowid = match cursor {
+            Some(cursor) => cursor.snapshot_rowid,
+            None => self.conn.query_row(
+                "SELECT COALESCE(MAX(rowid),0) FROM items WHERE account_key=?1",
+                [&account_key],
+                |row| row.get(0),
+            )?,
+        };
+        if snapshot_rowid == 0 {
+            return Ok(ItemCursorPage {
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        }
+
+        let cursor_at = cursor.map(|value| value.sort_at);
+        let cursor_id = cursor.map(|value| value.id.as_str());
+        let mut statement = self.conn.prepare(
+            "SELECT rowid,id,payload,revision,state,COALESCE(received_at,created_at)
+             FROM items
+             WHERE account_key=?1
+               AND rowid<=?2
+               AND (?3=0 OR state IN ('ready','attention'))
+               AND (
+                    ?4 IS NULL
+                    OR COALESCE(received_at,created_at)<?4
+                    OR (COALESCE(received_at,created_at)=?4 AND id>?5)
+               )
+             ORDER BY COALESCE(received_at,created_at) DESC,id ASC
+             LIMIT ?6",
+        )?;
+        let rows = statement.query_map(
+            params![
+                account_key,
+                snapshot_rowid,
+                review_only,
+                cursor_at,
+                cursor_id,
+                u64::from(limit) + 1
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, u64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
+        let mut raw = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let has_more = raw.len() > limit as usize;
+        if has_more {
+            raw.truncate(limit as usize);
+        }
+
+        let next_cursor = if has_more {
+            raw.last().map(|(_, id, _, _, _, sort_at)| ItemCursor {
+                snapshot_rowid,
+                sort_at: *sort_at,
+                id: id.clone(),
+            })
+        } else {
+            None
+        };
+        let items = raw
+            .into_iter()
+            .map(|(rowid, id, payload, revision, state, _)| {
+                ensure!(
+                    rowid <= snapshot_rowid,
+                    "Cursor feed escaped its snapshot high-water mark"
+                );
+                decode(&self.vault, &id, &payload, revision, &state)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ItemCursorPage { items, next_cursor })
+    }
+
     pub fn next_queued(&self, account: &str, now: DateTime<Utc>) -> Result<Option<Job>> {
         let id: Option<String> = self.conn.query_row("SELECT id FROM items WHERE account_key=?1 AND state='queued' AND retry_at<=?2 ORDER BY created_at,id LIMIT 1", params![hash(account),now.timestamp()], |r| r.get(0)).optional()?;
         id.map(|id| self.get(&id)).transpose()
@@ -1285,6 +1386,69 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert!(!names.iter().any(|name| name == "received_at"));
+    }
+
+    #[test]
+    fn cursor_feed_is_snapshot_consistent_across_concurrent_inserts() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let base = Utc::now() - chrono::Duration::minutes(10);
+        for index in 0..5 {
+            db.insert_stub(
+                stub(&format!("cursor-{index}"), &format!("thread-{index}")),
+                base + chrono::Duration::seconds(index),
+            )
+            .unwrap();
+        }
+
+        let first = db.list_cursor("me@example.com", false, None, 2).unwrap();
+        assert_eq!(first.items.len(), 2);
+        let cursor = first.next_cursor.clone().expect("first page should continue");
+        let first_ids: std::collections::BTreeSet<_> =
+            first.items.iter().map(|job| job.id.clone()).collect();
+
+        db.insert_stub(
+            stub("cursor-new-arrival", "thread-new-arrival"),
+            Utc::now(),
+        )
+        .unwrap();
+
+        let second = db
+            .list_cursor("me@example.com", false, Some(&cursor), 2)
+            .unwrap();
+        assert_eq!(second.items.len(), 2);
+        assert!(second.items.iter().all(|job| !first_ids.contains(&job.id)));
+        assert!(
+            second
+                .items
+                .iter()
+                .all(|job| job.stub.provider_id != "cursor-new-arrival")
+        );
+
+        let third = db
+            .list_cursor(
+                "me@example.com",
+                false,
+                second.next_cursor.as_ref(),
+                2,
+            )
+            .unwrap();
+        assert_eq!(third.items.len(), 1);
+        assert!(third.next_cursor.is_none());
+        assert!(
+            third
+                .items
+                .iter()
+                .all(|job| job.stub.provider_id != "cursor-new-arrival")
+        );
+
+        let fresh = db.list_cursor("me@example.com", false, None, 10).unwrap();
+        assert!(
+            fresh
+                .items
+                .iter()
+                .any(|job| job.stub.provider_id == "cursor-new-arrival")
+        );
     }
 
     #[test]
