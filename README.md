@@ -21,9 +21,9 @@
 | Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, and separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes for portable disaster recovery |
-| Integration | Reusable Rust library plus optional authenticated read-only loopback API with versioned OpenAPI, typed operation status, stable error codes and request IDs |
+| Integration | Reusable Rust library plus authenticated read-only loopback API with versioned OpenAPI, exact contract SHA-256 fingerprint, typed operation status, stable error codes and request IDs |
 | Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, SHA-256 pinning and detached Ed25519 signature verification |
-| Testing | Synthetic demo, Rust regression/integration tests, fuzzing, CodeQL, coverage evidence, model evaluation fixtures and Windows/Linux CI |
+| Testing | Windows/Linux CI plus scheduled nextest/rustdoc/recovery drills, fuzzing, mutation testing, CodeQL, coverage evidence and task-specific model fixtures |
 | Operations | Privacy-minimal typed JSONL runtime journal with bounded local rotation; stable operation/event codes only, separate from encrypted semantic audit records |
 
 ## Windows
