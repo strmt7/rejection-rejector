@@ -783,8 +783,9 @@ impl Store {
     /// Snapshot-consistent cursor feed for integrations.
     ///
     /// The first page captures the current maximum SQLite rowid for the account.
-    /// Continuations remain bounded by that high-water mark, so concurrently
-    /// inserted mail cannot shift or appear inside an in-progress traversal.
+    /// Traversal is ordered only by immutable rowid and every continuation is
+    /// bounded by that high-water mark. New inserts and later job hydration/state
+    /// changes therefore cannot shift an in-progress feed.
     pub fn list_cursor(
         &self,
         account: &str,
@@ -794,10 +795,11 @@ impl Store {
     ) -> Result<ItemCursorPage> {
         let limit = limit.clamp(1, 100);
         if let Some(cursor) = cursor {
-            ensure!(cursor.snapshot_rowid >= 0, "Invalid item cursor snapshot");
             ensure!(
-                cursor.id.len() == 64 && cursor.id.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                "Invalid item cursor identifier"
+                cursor.snapshot_rowid >= 0
+                    && cursor.last_rowid > 0
+                    && cursor.last_rowid <= cursor.snapshot_rowid,
+                "Invalid item cursor"
             );
         }
         let account_key = hash(account);
@@ -816,29 +818,23 @@ impl Store {
             });
         }
 
-        let cursor_at = cursor.map(|value| value.sort_at);
-        let cursor_id = cursor.map(|value| value.id.as_str());
+        let before_rowid = cursor.map(|value| value.last_rowid);
         let mut statement = self.conn.prepare(
-            "SELECT rowid,id,payload,revision,state,COALESCE(received_at,created_at)
+            "SELECT rowid,id,payload,revision,state
              FROM items
              WHERE account_key=?1
                AND rowid<=?2
                AND (?3=0 OR state IN ('ready','attention'))
-               AND (
-                    ?4 IS NULL
-                    OR COALESCE(received_at,created_at)<?4
-                    OR (COALESCE(received_at,created_at)=?4 AND id>?5)
-               )
-             ORDER BY COALESCE(received_at,created_at) DESC,id ASC
-             LIMIT ?6",
+               AND (?4 IS NULL OR rowid<?4)
+             ORDER BY rowid DESC
+             LIMIT ?5",
         )?;
         let rows = statement.query_map(
             params![
                 account_key,
                 snapshot_rowid,
                 review_only,
-                cursor_at,
-                cursor_id,
+                before_rowid,
                 u64::from(limit) + 1
             ],
             |row| {
@@ -848,7 +844,6 @@ impl Store {
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, u64>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
                 ))
             },
         )?;
@@ -859,17 +854,16 @@ impl Store {
         }
 
         let next_cursor = if has_more {
-            raw.last().map(|(_, id, _, _, _, sort_at)| ItemCursor {
+            raw.last().map(|(rowid, _, _, _, _)| ItemCursor {
                 snapshot_rowid,
-                sort_at: *sort_at,
-                id: id.clone(),
+                last_rowid: *rowid,
             })
         } else {
             None
         };
         let items = raw
             .into_iter()
-            .map(|(rowid, id, payload, revision, state, _)| {
+            .map(|(rowid, id, payload, revision, state)| {
                 ensure!(
                     rowid <= snapshot_rowid,
                     "Cursor feed escaped its snapshot high-water mark"
@@ -1410,6 +1404,18 @@ mod tests {
             first.items.iter().map(|job| job.id.clone()).collect();
 
         db.insert_stub(stub("cursor-new-arrival", "thread-new-arrival"), Utc::now())
+            .unwrap();
+
+        // Mutate an existing unseen row's received_at/state between requests.
+        // Immutable-rowid ordering must keep traversal stable despite the update.
+        let target_id = stub("cursor-1", "thread-1").id();
+        let mut target = db.get(&target_id).unwrap();
+        let mut hydrated = crate::ollama::sample_email("Hydrated", "Rejected");
+        hydrated.stub = target.stub.clone();
+        hydrated.received_at = Utc::now() + chrono::Duration::days(30);
+        target.email = Some(hydrated);
+        target.state = JobState::Ready;
+        db.save(&mut target, "test", "hydrate during cursor traversal")
             .unwrap();
 
         let second = db
