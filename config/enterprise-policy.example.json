@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "force_human_review": false,
   "prohibit_sending": false,
   "prohibit_integration_api": false,
@@ -10,5 +10,7 @@
   "allowed_models": [
     "qwen3.5:9b-q8_0",
     "granite4.2:8b-q8_0"
-  ]
+  ],
+  "policy_id": "example-org-production",
+  "revision": 1
 }
