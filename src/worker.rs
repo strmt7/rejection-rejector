@@ -1323,14 +1323,43 @@ mod tests {
 
     #[test]
     fn item_feed_cursor_codec_is_bounded_and_round_trips() {
-        let cursor = ItemCursor {
-            snapshot_rowid: 42,
-            last_rowid: 21,
-        };
-        let encoded = encode_item_cursor(&cursor).unwrap();
-        assert_eq!(decode_item_cursor(&encoded).unwrap(), cursor);
+        for snapshot_rowid in 1..=128 {
+            for last_rowid in 1..=snapshot_rowid {
+                let cursor = ItemCursor {
+                    snapshot_rowid,
+                    last_rowid,
+                };
+                let encoded = encode_item_cursor(&cursor).unwrap();
+                assert!(encoded.len() <= 1024);
+                assert_eq!(decode_item_cursor(&encoded).unwrap(), cursor);
+            }
+        }
+
+        for cursor in [
+            ItemCursor {
+                snapshot_rowid: 0,
+                last_rowid: 1,
+            },
+            ItemCursor {
+                snapshot_rowid: 5,
+                last_rowid: 0,
+            },
+            ItemCursor {
+                snapshot_rowid: 5,
+                last_rowid: 6,
+            },
+            ItemCursor {
+                snapshot_rowid: -1,
+                last_rowid: 1,
+            },
+        ] {
+            let encoded = encode_item_cursor(&cursor).unwrap();
+            assert!(decode_item_cursor(&encoded).is_err(), "{cursor:?}");
+        }
+
         assert!(decode_item_cursor("").is_err());
         assert!(decode_item_cursor("%%%").is_err());
+        assert!(decode_item_cursor("YQ==").is_err());
         assert!(decode_item_cursor(&"a".repeat(1025)).is_err());
     }
 
