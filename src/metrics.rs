@@ -105,7 +105,13 @@ fn metric_bool(value: bool) -> u8 {
     u8::from(value)
 }
 
-fn push_gauge(out: &mut String, name: &str, help: &str, unit: Option<&str>, value: impl std::fmt::Display) {
+fn push_gauge(
+    out: &mut String,
+    name: &str,
+    help: &str,
+    unit: Option<&str>,
+    value: impl std::fmt::Display,
+) {
     out.push_str("# HELP ");
     out.push_str(name);
     out.push(' ');
