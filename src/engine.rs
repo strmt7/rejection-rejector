@@ -219,7 +219,8 @@ impl Engine {
             } else if policy_changed {
                 "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed".into()
             } else {
-                "Legacy Automatic mode without current qualification was disabled fail-closed".into()
+                "Legacy Automatic mode without current qualification was disabled fail-closed"
+                    .into()
             };
             db.change_meta(
                 &upserts,
@@ -322,12 +323,8 @@ impl Engine {
             ));
         }
         if !upserts.is_empty() {
-            self.db.change_meta(
-                &upserts,
-                &[],
-                "policy.reloaded",
-                &detail,
-            )?;
+            self.db
+                .change_meta(&upserts, &[], "policy.reloaded", &detail)?;
         } else {
             self.db.log("policy.reloaded", None, &detail)?;
         }
