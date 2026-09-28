@@ -95,10 +95,284 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     })
 }
 
+
+fn metric_bool(value: bool) -> u8 {
+    u8::from(value)
+}
+
+fn push_gauge(out: &mut String, name: &str, help: &str, unit: Option<&str>, value: impl std::fmt::Display) {
+    out.push_str("# HELP ");
+    out.push_str(name);
+    out.push(' ');
+    out.push_str(help);
+    out.push('\n');
+    out.push_str("# TYPE ");
+    out.push_str(name);
+    out.push_str(" gauge\n");
+    if let Some(unit) = unit {
+        out.push_str("# UNIT ");
+        out.push_str(name);
+        out.push(' ');
+        out.push_str(unit);
+        out.push('\n');
+    }
+    out.push_str(name);
+    out.push(' ');
+    out.push_str(&value.to_string());
+    out.push('\n');
+}
+
+/// Render a privacy-safe OpenMetrics 1.0 snapshot.
+///
+/// Metric names and semantics are deliberately stable and label-free so mailbox,
+/// employer, account and candidate data can never become high-cardinality labels.
+pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
+    let mut out = String::with_capacity(4096);
+    push_gauge(
+        &mut out,
+        "rejection_rejector_up",
+        "Whether the local Rejection Rejector process produced this metrics snapshot.",
+        None,
+        1,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_snapshot_unixtime_seconds",
+        "UTC Unix timestamp when this metrics snapshot was generated.",
+        Some("seconds"),
+        snapshot.generated_at.timestamp(),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_database_schema_version",
+        "Current encrypted workspace database schema version.",
+        None,
+        snapshot.database_schema_version,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_database_bytes",
+        "Current SQLite database file size when available.",
+        Some("bytes"),
+        snapshot.database_bytes.unwrap_or(0),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_workspace_database_bytes",
+        "Combined SQLite database, WAL and shared-memory file size.",
+        Some("bytes"),
+        snapshot.storage.workspace_database_bytes,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_available_bytes",
+        "Available bytes on the workspace filesystem.",
+        Some("bytes"),
+        snapshot.storage.available_bytes,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_total_bytes",
+        "Total bytes on the workspace filesystem.",
+        Some("bytes"),
+        snapshot.storage.total_bytes,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_runtime_required_bytes",
+        "Conservative minimum free-space guardrail for durable runtime writes.",
+        Some("bytes"),
+        snapshot.storage.runtime_required_bytes,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_backup_required_bytes",
+        "Conservative minimum free-space guardrail for verified backup creation.",
+        Some("bytes"),
+        snapshot.storage.backup_required_bytes,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_runtime_write_safe",
+        "Whether the workspace currently satisfies the runtime free-space guardrail.",
+        None,
+        metric_bool(snapshot.storage.runtime_write_safe),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_storage_backup_safe",
+        "Whether the workspace currently satisfies the backup free-space guardrail.",
+        None,
+        metric_bool(snapshot.storage.backup_safe),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_scheduled_backup_enabled",
+        "Whether verified scheduled backups are enabled.",
+        None,
+        metric_bool(snapshot.scheduled_backup.enabled),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_scheduled_backup_overdue",
+        "Whether the configured scheduled backup is overdue.",
+        None,
+        metric_bool(snapshot.scheduled_backup.overdue),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_scheduled_backup_age_seconds",
+        "Age in seconds of the last successful scheduled backup, or -1 when unavailable.",
+        Some("seconds"),
+        snapshot.scheduled_backup.age_seconds.unwrap_or(-1),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_audit_sequence",
+        "Latest local semantic audit sequence number.",
+        None,
+        snapshot.audit_sequence,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_audit_head_present",
+        "Whether the authenticated semantic audit chain has a readable head.",
+        None,
+        metric_bool(snapshot.audit_head_present),
+    );
+    for (name, help, value) in [
+        (
+            "rejection_rejector_items_stored",
+            "Number of persisted message identities in the local workspace.",
+            snapshot.stored_items,
+        ),
+        (
+            "rejection_rejector_items_queued",
+            "Number of messages waiting for local analysis.",
+            snapshot.queued_items,
+        ),
+        (
+            "rejection_rejector_items_review",
+            "Number of messages currently requiring or allowing human review.",
+            snapshot.review_items,
+        ),
+        (
+            "rejection_rejector_items_sent",
+            "Number of rejection replies recorded as sent.",
+            snapshot.sent_items,
+        ),
+        (
+            "rejection_rejector_deliveries_uncertain",
+            "Number of delivery attempts whose provider outcome remains uncertain.",
+            snapshot.uncertain_deliveries,
+        ),
+        (
+            "rejection_rejector_send_attempts_24h",
+            "Rolling count of send attempts reserved during the last 24 hours.",
+            snapshot.send_attempts_24h,
+        ),
+    ] {
+        push_gauge(&mut out, name, help, None, value);
+    }
+    for (name, help, value) in [
+        (
+            "rejection_rejector_gmail_connected",
+            "Whether a Gmail account is connected locally.",
+            snapshot.gmail_connected,
+        ),
+        (
+            "rejection_rejector_gmail_send_scope",
+            "Whether Gmail send permission is available.",
+            snapshot.gmail_send_scope,
+        ),
+        (
+            "rejection_rejector_model_digest_pinned",
+            "Whether the configured local model digest is pinned.",
+            snapshot.model_digest_pinned,
+        ),
+        (
+            "rejection_rejector_task_qualification_current",
+            "Whether task-specific model qualification matches the current configuration.",
+            snapshot.task_qualification_current,
+        ),
+        (
+            "rejection_rejector_enterprise_policy_active",
+            "Whether administrator enterprise policy is active.",
+            snapshot.enterprise_policy_active,
+        ),
+        (
+            "rejection_rejector_independent_audit_anchor_configured",
+            "Whether an independent audit anchor is configured when required.",
+            snapshot.independent_audit_anchor_configured,
+        ),
+        (
+            "rejection_rejector_sync_fresh",
+            "Whether mailbox synchronization is within the local freshness guardrail.",
+            snapshot.operational.sync_fresh,
+        ),
+        (
+            "rejection_rejector_operational_degraded",
+            "Whether one or more privacy-safe operational degradation reasons are active.",
+            snapshot.operational.degraded,
+        ),
+    ] {
+        push_gauge(&mut out, name, help, None, metric_bool(value));
+    }
+    push_gauge(
+        &mut out,
+        "rejection_rejector_sync_age_seconds",
+        "Age in seconds of the most recent successful mailbox synchronization, or -1 when unavailable.",
+        Some("seconds"),
+        snapshot.operational.sync_age_seconds.unwrap_or(-1),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_task_qualification_age_seconds",
+        "Age in seconds of current task-specific model qualification, or -1 when unavailable.",
+        Some("seconds"),
+        snapshot
+            .operational
+            .task_qualification_age_seconds
+            .unwrap_or(-1),
+    );
+    out.push_str("# EOF\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, atomic::AtomicBool};
+
+    #[test]
+    fn openmetrics_exposition_is_stable_private_and_spec_terminated() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let snapshot = collect(&engine, Utc::now()).unwrap();
+        let text = render_openmetrics(&snapshot);
+        assert!(text.ends_with("# EOF\n"));
+        assert!(!text.contains('\r'));
+        assert!(text.contains("# TYPE rejection_rejector_up gauge\n"));
+        assert!(text.contains("# UNIT rejection_rejector_storage_available_bytes bytes\n"));
+        assert!(text.contains("rejection_rejector_storage_runtime_write_safe "));
+        assert!(text.contains("rejection_rejector_operational_degraded "));
+        for forbidden in [
+            "demo@example.invalid",
+            "Northstar Materials",
+            "Alex Morgan",
+            "refresh_token",
+            "candidate_context",
+            "api_token",
+        ] {
+            assert!(!text.contains(forbidden), "OpenMetrics leaked {forbidden}");
+        }
+    }
 
     #[test]
     fn metrics_are_privacy_safe_and_stable() {
