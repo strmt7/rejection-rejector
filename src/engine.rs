@@ -503,6 +503,18 @@ impl Engine {
         )?;
         Ok(())
     }
+    pub fn compact_database(&mut self) -> Result<crate::store::DatabaseCompactionReport> {
+        ensure!(!self.demo, "Synthetic demo mode does not compact a real workspace");
+        let storage = crate::storage::inspect(&self.directory)?;
+        ensure!(
+            storage.backup_safe,
+            "Database compaction requires the same conservative free-space headroom as backup creation"
+        );
+        let report = self.db.compact()?;
+        self.checkpoint_audit_protection()?;
+        Ok(report)
+    }
+
     pub fn inspect_model_status(&mut self) -> Result<()> {
         let mut unpinned = self.settings.clone();
         unpinned.model_digest = None;
