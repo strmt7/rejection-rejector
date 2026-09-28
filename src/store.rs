@@ -1,6 +1,6 @@
 use crate::{
     types::*,
-    vault::{Vault, write_new_private},
+    vault::{Vault, private_dir, write_new_private},
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
@@ -9,7 +9,7 @@ use rusqlite::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::{path::Path, time::Duration};
+use std::{path::{Path, PathBuf}, time::Duration};
 
 pub const DATABASE_SCHEMA_VERSION: i64 = 4;
 
@@ -176,6 +176,53 @@ fn verify_audit_chain_connection(conn: &Connection, vault: &Vault) -> Result<()>
     );
     Ok(())
 }
+fn create_pre_migration_backup(
+    source_path: &Path,
+    source: &Connection,
+    from_version: i64,
+) -> Result<PathBuf> {
+    ensure!(
+        from_version > 0 && from_version < DATABASE_SCHEMA_VERSION,
+        "Pre-migration backup requested for an invalid schema version"
+    );
+    let parent = source_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let recovery_dir = parent.join("recovery").join("migrations");
+    private_dir(&recovery_dir)?;
+    let destination = recovery_dir.join(format!(
+        "pre-schema-v{from_version}-to-v{}-{}-{}.sqlite3",
+        DATABASE_SCHEMA_VERSION,
+        Utc::now().format("%Y%m%d-%H%M%S"),
+        uuid::Uuid::new_v4()
+    ));
+    write_new_private(&destination, b"")?;
+    let backup_result = (|| -> Result<()> {
+        let mut target = Connection::open(&destination)?;
+        {
+            let backup = Backup::new(source, &mut target)?;
+            backup.run_to_completion(64, Duration::from_millis(10), None)?;
+        }
+        target.execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+        )?;
+        check_connection_integrity(&target)?;
+        let backed_up_version: i64 =
+            target.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        ensure!(
+            backed_up_version == from_version,
+            "Pre-migration backup schema does not match the source"
+        );
+        Ok(())
+    })();
+    if let Err(error) = backup_result {
+        let _ = std::fs::remove_file(&destination);
+        return Err(error.context("Could not create verified pre-migration recovery image"));
+    }
+    Ok(destination)
+}
+
 fn check_connection_integrity(conn: &Connection) -> Result<()> {
     let quick: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     ensure!(quick == "ok", "SQLite quick_check failed: {quick}");
@@ -226,6 +273,11 @@ impl Store {
             let check: String = vault.open_value("meta/vault_check", &bytes)?;
             ensure!(check == "rejection-rejector:v1", "Wrong vault");
         }
+        let pre_migration_backup = if version > 0 && version < DATABASE_SCHEMA_VERSION {
+            Some(create_pre_migration_backup(path, &conn, version)?)
+        } else {
+            None
+        };
         if version == 0 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
@@ -280,12 +332,25 @@ impl Store {
         if current_version == 3 {
             migrate_audit_chain(&conn, &vault)?;
         }
-        let db = Self { conn, vault };
+        let mut db = Self { conn, vault };
         let check = db
             .meta::<String>("vault_check")?
             .context("Database vault marker is missing after initialization")?;
         ensure!(check == "rejection-rejector:v1", "Wrong vault");
         db.verify_audit_chain()?;
+        if let Some(backup) = pre_migration_backup {
+            let name = backup
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("pre-migration.sqlite3");
+            db.log(
+                "database.migrated",
+                None,
+                &format!(
+                    "Schema migrated from v{version} to v{DATABASE_SCHEMA_VERSION}; verified pre-migration image retained as {name}"
+                ),
+            )?;
+        }
         Ok(db)
     }
     pub fn schema_version(&self) -> Result<i64> {
@@ -1267,6 +1332,58 @@ mod tests {
             db.insert_stub(stub("after-migration", "thread"), Utc::now())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn legacy_schema_migration_preserves_verified_pre_migration_image() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("state.sqlite3");
+        let vault = Vault::random();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
+                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
+                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
+                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
+                 CREATE TABLE deliveries(thread_key TEXT PRIMARY KEY,item_id TEXT UNIQUE NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
+                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
+                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL);
+                 PRAGMA user_version=2;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+                [vault
+                    .seal("meta/vault_check", &"rejection-rejector:v1")
+                    .unwrap()],
+            )
+            .unwrap();
+        }
+
+        let db = Store::open(&path, vault).unwrap();
+        assert_eq!(db.schema_version().unwrap(), DATABASE_SCHEMA_VERSION);
+
+        let migration_dir = d.path().join("recovery").join("migrations");
+        let backups = std::fs::read_dir(&migration_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let backup = Connection::open_with_flags(
+            &backups[0],
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let backed_up_version: i64 = backup
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(backed_up_version, 2);
+        assert!(db
+            .events(0, 100)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "database.migrated"));
     }
 
     #[test]
