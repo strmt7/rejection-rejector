@@ -431,3 +431,26 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_passphrase_file_must_be_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("recovery-passphrase");
+        std::fs::write(&path, b"correct horse battery staple\n").unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(recovery_passphrase(&path).is_err());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let passphrase = recovery_passphrase(&path).unwrap();
+        assert_eq!(passphrase.as_slice(), b"correct horse battery staple");
+    }
+}
+
