@@ -1,5 +1,7 @@
 # Security
 
+For the full trust-boundary, data-flow and testable-invariant model, see [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
 Sending is disabled by default. Google send scope, app sending permission and Automatic consent are separate. Demo cannot send.
 
 Payloads use XChaCha20-Poly1305 with fresh random nonces and identity-bound associated data. Windows Credential Manager/macOS Keychain hold the master key; Linux uses an explicit strong Argon2-derived passphrase. No plaintext fallback exists. SQLite state/count/time/hash indexes remain clear: this is not SQLCipher/full-file encryption. Windows relies on private profile ACLs; do not use shared directories. Same-user malware, privileged attackers, process memory, clipboard, OS paging and a compromised runtime are outside this protection.
