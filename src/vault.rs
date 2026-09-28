@@ -445,7 +445,9 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         write_new_private(&root.path().join("vault-id"), id.as_bytes()).unwrap();
 
-        let error = Vault::open(root.path()).unwrap_err();
+        let error = Vault::open(root.path())
+            .err()
+            .expect("existing vault ID without credential must fail closed");
         assert!(
             error
                 .to_string()
