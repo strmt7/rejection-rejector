@@ -1,0 +1,89 @@
+name: Mutation testing
+
+on:
+  schedule:
+    - cron: "11 2 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing-main
+  cancel-in-progress: true
+
+jobs:
+  safety-critical:
+    name: Safety-critical mutation evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Install pinned cargo-mutants
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-mutants@27.1.0
+          checksum: true
+          fallback: none
+      - name: Linux desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
+      - name: Run safety-critical mutation suite
+        id: mutants
+        shell: bash
+        run: |
+          set +e
+          cargo mutants             --all-features             --timeout-multiplier 3             --minimum-test-timeout 20             --jobs 2             --output artifacts/mutants
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          case "$status" in
+            0)
+              echo "All viable tested mutants were caught."
+              ;;
+            2)
+              echo "::warning::Mutation testing found surviving mutants. Review the uploaded evidence and strengthen tests before promoting mutation coverage to a hard release gate."
+              ;;
+            3)
+              echo "::warning::Mutation testing hit one or more timeouts. Review whether the timeout represents a meaningful infinite-loop mutation or needs targeted exclusion."
+              ;;
+            1|4|5|6|70)
+              echo "::error::Mutation infrastructure/baseline failed with exit code $status"
+              exit "$status"
+              ;;
+            *)
+              echo "::error::Unexpected cargo-mutants exit code $status"
+              exit "$status"
+              ;;
+          esac
+      - name: Summarize mutation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f artifacts/mutants/outcomes.json ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("artifacts/mutants/outcomes.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          summary = data.get("summary", data)
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+          fi
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-mutants-${{ github.sha }}
+          path: artifacts/mutants/
+          if-no-files-found: error
+          retention-days: 30
