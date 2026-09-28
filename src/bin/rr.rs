@@ -343,6 +343,12 @@ fn main() -> Result<()> {
             out,
             passphrase_file,
         } => {
+            if let Some(loaded) = policy::load_optional()? {
+                ensure!(
+                    loaded.policy.allows_recovery_key_export(),
+                    "Enterprise policy prohibits portable recovery-key export"
+                );
+            }
             let passphrase = recovery_passphrase(&passphrase_file)?;
             let envelope = recovery::export_recovery_key(&dir, &passphrase, &out)?;
             println!(
