@@ -14,25 +14,40 @@ concurrency:
 
 jobs:
   fuzz:
-    name: Bounded fuzz regression
+    name: Bounded libFuzzer regression
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: "1"
     steps:
-      - name: Checkout
+      - name: Checkout exact main source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Pinned nightly for libFuzzer
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          toolchain: nightly-2026-09-25
-      - name: Install cargo-fuzz 0.13.2
-        run: cargo install --locked cargo-fuzz --version 0.13.2
+          toolchain: nightly-2026-09-26
+      - name: Install pinned cargo-fuzz
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-fuzz@0.13.2
+          checksum: true
+          fallback: none
       - name: Fuzz mailbox and quote boundaries
-        run: cargo fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
+        run: cargo fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048
       - name: Fuzz MIME extraction
-        run: cargo fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
+        run: cargo fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=90 -max_len=262144 -timeout=10 -rss_limit_mb=2048
       - name: Fuzz rejection policy language
-        run: cargo fuzz run policy_language --fuzz-dir fuzz -- -max_total_time=60 -timeout=10 -rss_limit_mb=4096
+        run: cargo fuzz run policy_language --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048
+      - name: Upload crash and corpus evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-fuzz-${{ github.sha }}
+          path: |
+            fuzz/artifacts/
+            fuzz/corpus/
+          if-no-files-found: ignore
+          retention-days: 30
