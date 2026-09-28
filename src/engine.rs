@@ -627,6 +627,42 @@ impl Engine {
         }
     }
 
+    pub fn profile_model_runtime(&mut self) -> Result<PathBuf> {
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not run the configured model"
+        );
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        let path = self
+            .directory
+            .join(format!("model-runtime-profile-{stamp}.json"));
+        self.profile_model_runtime_to(&path)?;
+        Ok(path)
+    }
+
+    pub fn profile_model_runtime_to(&mut self, path: &Path) -> Result<()> {
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not run the configured model"
+        );
+        let profile = Ollama::new(&self.settings)?.profile_synthetic_runtime()?;
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::vault::write_new_private(path, &serde_json::to_vec_pretty(&profile)?)?;
+        self.db.log(
+            "model.runtime_profiled",
+            None,
+            &format!(
+                "Synthetic cold/warm/near-context local runtime profile saved as {}",
+                path.display()
+            ),
+        )?;
+        Ok(())
+    }
+
     pub fn compare_models(&mut self) -> Result<PathBuf> {
         ensure!(
             !self.demo,
