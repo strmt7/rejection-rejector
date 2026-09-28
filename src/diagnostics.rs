@@ -12,6 +12,8 @@ pub fn report(engine: &Engine) -> Result<Value> {
     let storage = crate::storage::inspect(&engine.directory)?;
     let scheduled_backup =
         crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, chrono::Utc::now())?;
+    let backup_isolation =
+        crate::recovery::backup_isolation_status(&engine.directory, &engine.settings)?;
     let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
     let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
     let readiness = crate::readiness::assess(
@@ -31,6 +33,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             database_integrity_ok: integrity.is_ok(),
             storage_write_safe: storage.runtime_write_safe,
             scheduled_backup_overdue: scheduled_backup.overdue,
+            backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
             connected: engine.connected(),
             now: chrono::Utc::now(),
         },
@@ -97,6 +100,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         "runtime_log": crate::runtime_log::status(&engine.directory).ok(),
         "storage": storage,
         "scheduled_backup": scheduled_backup,
+        "backup_isolation": backup_isolation,
         "application": {
             "version": env!("CARGO_PKG_VERSION"),
             "build": crate::build_info::current(),
@@ -231,6 +235,7 @@ mod tests {
         assert_eq!(report["report_version"], 3);
         assert_eq!(report["storage"]["schema_version"], 1);
         assert_eq!(report["scheduled_backup"]["schema_version"], 1);
+        assert_eq!(report["backup_isolation"]["schema_version"], 1);
         assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(
             report["audit_protection"]["policy_requires_independent_anchor"],
