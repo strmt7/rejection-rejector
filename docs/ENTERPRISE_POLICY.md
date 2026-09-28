@@ -56,6 +56,7 @@ Policy v1 is still supported, but the revision-floor mechanism does not apply to
 - `prohibit_sending`: disables application sending and prevents requesting Gmail send scope.
 - `prohibit_integration_api`: disables the local integration API.
 - `prohibit_recovery_key_export`: prevents creation of portable recovery-key envelopes while still allowing ordinary backup/restore operations.
+- `require_external_audit_anchor`: requires rollback evidence outside the SQLite workspace. Satisfy it with a valid absolute `RR_AUDIT_ANCHOR_FILE`, or on Windows/macOS with `RR_OS_AUDIT_ANCHOR=required`, which stores a monotonic anchor in the OS credential store. The OS mode is checked before startup mutations and checkpointed after operation boundaries.
 - `max_daily_send_limit`: upper bound for send attempts per rolling 24 hours.
 - `min_cooldown_minutes`: lower bound between detection and unattended dispatch.
 - `min_retention_days`: lower bound for completed-content retention.
