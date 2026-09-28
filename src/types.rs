@@ -303,6 +303,7 @@ pub enum OperationKind {
     CompareModels,
     IntegrityCheck,
     Backup,
+    RecoveryDrill,
     Diagnostics,
     ListItems,
     SelectItem,
@@ -338,6 +339,7 @@ impl OperationKind {
             Self::CompareModels => "model_comparison_failed",
             Self::IntegrityCheck => "database_integrity_failed",
             Self::Backup => "backup_failed",
+            Self::RecoveryDrill => "recovery_drill_failed",
             Self::Diagnostics => "diagnostics_export_failed",
             Self::ListItems => "item_listing_failed",
             Self::SelectItem => "item_selection_failed",
@@ -370,6 +372,7 @@ impl OperationKind {
                 | Self::EvaluateModel
                 | Self::CompareModels
                 | Self::Backup
+                | Self::RecoveryDrill
                 | Self::Diagnostics
                 | Self::SendReply
                 | Self::ReconcileDelivery
