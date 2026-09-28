@@ -1004,11 +1004,11 @@ fn api_query_with_operation(
                 query.is_empty(),
                 "Audit anchor endpoint takes no query parameters"
             );
-            e.db.verify_audit_chain()?;
+            let anchor = crate::audit_anchor::current(&e.db, &e.directory)?;
             Ok(json!({
                 "algorithm": "sha256-chain-v1",
-                "head": e.db.audit_head()?,
-                "verified": true
+                "verified": true,
+                "anchor": anchor
             }))
         }
         "/v1/audit/contains" => {
