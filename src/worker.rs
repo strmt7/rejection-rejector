@@ -734,10 +734,8 @@ fn run(
 
         if !e.demo && Instant::now() >= retention_due {
             if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::PurgeRetention,
-                    OperationState::Running,
-                );
+                let _ = journal
+                    .record_operation(OperationKind::PurgeRetention, OperationState::Running);
             }
             begin_operation(
                 &shared,
@@ -772,10 +770,8 @@ fn run(
             })
         {
             if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::SyncMailbox,
-                    OperationState::Running,
-                );
+                let _ =
+                    journal.record_operation(OperationKind::SyncMailbox, OperationState::Running);
             }
             begin_operation(
                 &shared,
@@ -799,10 +795,8 @@ fn run(
             && e.db.next_queued(&e.account, Utc::now())?.is_some()
         {
             if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::AnalyzeQueuedMail,
-                    OperationState::Running,
-                );
+                let _ = journal
+                    .record_operation(OperationKind::AnalyzeQueuedMail, OperationState::Running);
             }
             begin_operation(
                 &shared,
@@ -828,10 +822,8 @@ fn run(
         }
         if Instant::now() >= auto_due {
             if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::AutomaticDispatch,
-                    OperationState::Running,
-                );
+                let _ = journal
+                    .record_operation(OperationKind::AutomaticDispatch, OperationState::Running);
             }
             begin_operation(
                 &shared,
