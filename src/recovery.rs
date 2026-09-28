@@ -59,6 +59,14 @@ pub struct ScheduledBackupStatus {
     pub age_seconds: Option<i64>,
     pub overdue: bool,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupIsolationStatus {
+    pub schema_version: u32,
+    pub configured: bool,
+    pub destination_exists: bool,
+    pub distinct_failure_domain: Option<bool>,
+    pub measurement: &'static str,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecoveryDrillReport {
@@ -280,6 +288,87 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
             Err(error)
         }
     }
+}
+
+fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(Some(
+            fs::metadata(workspace)?.dev() == fs::metadata(backup)?.dev(),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        fn volume_prefix(path: &Path) -> Result<Option<String>> {
+            let canonical = fs::canonicalize(path)?;
+            Ok(canonical.components().find_map(|component| match component {
+                Component::Prefix(prefix) => Some(
+                    prefix
+                        .as_os_str()
+                        .to_string_lossy()
+                        .to_ascii_lowercase(),
+                ),
+                _ => None,
+            }))
+        }
+        let workspace_prefix = volume_prefix(workspace)?;
+        let backup_prefix = volume_prefix(backup)?;
+        return Ok(match (workspace_prefix, backup_prefix) {
+            (Some(workspace), Some(backup)) => Some(workspace == backup),
+            _ => None,
+        });
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (workspace, backup);
+        Ok(None)
+    }
+}
+
+pub fn backup_isolation_status(
+    data_dir: &Path,
+    settings: &Settings,
+) -> Result<BackupIsolationStatus> {
+    if !settings.scheduled_backup_enabled || settings.scheduled_backup_directory.is_empty() {
+        return Ok(BackupIsolationStatus {
+            schema_version: 1,
+            configured: false,
+            destination_exists: false,
+            distinct_failure_domain: None,
+            measurement: "disabled",
+        });
+    }
+    let destination = PathBuf::from(&settings.scheduled_backup_directory);
+    if !destination.exists() {
+        return Ok(BackupIsolationStatus {
+            schema_version: 1,
+            configured: true,
+            destination_exists: false,
+            distinct_failure_domain: None,
+            measurement: "destination_missing",
+        });
+    }
+    ensure!(
+        destination.is_dir()
+            && !fs::symlink_metadata(&destination)?.file_type().is_symlink(),
+        "Scheduled backup destination must be a real directory"
+    );
+    let same = backup_same_filesystem(data_dir, &destination)?;
+    Ok(BackupIsolationStatus {
+        schema_version: 1,
+        configured: true,
+        destination_exists: true,
+        distinct_failure_domain: same.map(|value| !value),
+        measurement: if cfg!(unix) {
+            "filesystem_device_id"
+        } else if cfg!(windows) {
+            "windows_volume_prefix"
+        } else {
+            "unsupported_platform"
+        },
+    })
 }
 
 pub fn scheduled_backup_status(
@@ -764,6 +853,26 @@ mod tests {
         vault::Vault,
     };
     use std::io::Write;
+
+    #[test]
+    fn backup_isolation_detects_same_failure_domain_for_local_fixture() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let backups = root.path().join("backups");
+        private_dir(&data).unwrap();
+        fs::create_dir_all(&backups).unwrap();
+        let settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: backups.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let status = backup_isolation_status(&data, &settings).unwrap();
+        assert!(status.configured);
+        assert!(status.destination_exists);
+        if cfg!(any(unix, windows)) {
+            assert_eq!(status.distinct_failure_domain, Some(false));
+        }
+    }
 
     #[test]
     fn scheduled_backup_retention_only_removes_verified_same_vault_backups() {
