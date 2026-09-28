@@ -669,6 +669,7 @@ fn run(
                     Command::Connect { path, send } => {
                         busy(
                             &shared,
+                            &pulse,
                             "Complete Google sign-in in your browser. This expires after five minutes.",
                         );
                         let r = e.connect(&path, send);
@@ -688,6 +689,7 @@ fn run(
                     Command::InstallOllama => {
                         busy(
                             &shared,
+                            &pulse,
                             "Running the Ollama installer. Approve its Windows prompts.",
                         );
                         ollama::install()
@@ -705,6 +707,7 @@ fn run(
                     Command::QualifyModel => {
                         busy(
                             &shared,
+                            &pulse,
                             "Running a local model smoke test and checking GPU residency…",
                         );
                         let r = e.qualify();
@@ -714,6 +717,7 @@ fn run(
                     Command::EvaluateModel => {
                         busy(
                             &shared,
+                            &pulse,
                             "Running the full task-specific local model evaluation…",
                         );
                         e.evaluate_model().map(|_| ())
@@ -721,6 +725,7 @@ fn run(
                     Command::CompareModels => {
                         busy(
                             &shared,
+                            &pulse,
                             "Comparing installed candidate models on the recruiting-email pipeline…",
                         );
                         e.compare_models().map(|_| ())
@@ -732,6 +737,7 @@ fn run(
                     Command::Backup { out } => {
                         busy(
                             &shared,
+                            &pulse,
                             "Creating and verifying encrypted same-vault backup…",
                         );
                         crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
@@ -739,6 +745,7 @@ fn run(
                     Command::RecoveryDrill { backup } => {
                         busy(
                             &shared,
+                            &pulse,
                             "Restoring backup in an isolated temporary workspace and deeply verifying it…",
                         );
                         let report = crate::recovery::recovery_drill(&e.directory, &backup)?;
@@ -778,6 +785,7 @@ fn run(
                     } => {
                         busy(
                             &shared,
+                            &pulse,
                             "Rechecking the conversation and sending your confirmed reply…",
                         );
                         e.send(&id, revision, &body_hash, false)
@@ -829,6 +837,7 @@ fn run(
         if !e.demo && Instant::now() >= policy_due {
             begin_operation(
                 &shared,
+                &pulse,
                 OperationKind::EnterprisePolicyReload,
                 "Checking administrator enterprise policy…",
             );
@@ -878,6 +887,7 @@ fn run(
         if !e.demo && Instant::now() >= retention_due {
             begin_operation(
                 &shared,
+                &pulse,
                 OperationKind::PurgeRetention,
                 "Applying local retention policy to completed content…",
             );
@@ -907,6 +917,7 @@ fn run(
         {
             begin_operation(
                 &shared,
+                &pulse,
                 OperationKind::SyncMailbox,
                 "Scheduled Gmail check: fetching only missing identities…",
             );
@@ -925,6 +936,7 @@ fn run(
         {
             begin_operation(
                 &shared,
+                &pulse,
                 OperationKind::AnalyzeQueuedMail,
                 "Local AI: classifying, drafting and checking one new email…",
             );
@@ -945,6 +957,7 @@ fn run(
         if Instant::now() >= auto_due {
             begin_operation(
                 &shared,
+                &pulse,
                 OperationKind::AutomaticDispatch,
                 "Evaluating automatic dispatch policy…",
             );
@@ -973,6 +986,7 @@ fn run(
             } else {
                 report(
                     &shared,
+                    &pulse,
                     OperationKind::AutomaticDispatch,
                     &result.map(|_| ()),
                 );
