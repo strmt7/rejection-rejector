@@ -2,6 +2,7 @@ use crate::worker::Command;
 use anyhow::{Result, ensure};
 use crossbeam_channel::{Sender, bounded};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     sync::{
         Arc,
@@ -15,6 +16,10 @@ use zeroize::Zeroizing;
 
 pub const API_VERSION: u32 = 1;
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
+
+pub fn openapi_sha256() -> String {
+    format!("{:x}", Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
+}
 
 fn error_body(code: &str, message: &str, retryable: bool, request_id: &str) -> serde_json::Value {
     json!({
@@ -33,6 +38,7 @@ fn direct_get(path: &str) -> Option<serde_json::Value> {
         "/v1/live" => Some(json!({
             "live": true,
             "api_version": API_VERSION,
+            "api_contract_sha256": openapi_sha256(),
             "application_version": env!("CARGO_PKG_VERSION")
         })),
         "/v1/openapi.json" => serde_json::from_str(OPENAPI_DOCUMENT).ok(),
@@ -71,6 +77,7 @@ pub fn start(
 ) -> Result<()> {
     ensure!(token.len() >= 40, "API token lacks required entropy");
     let token = Zeroizing::new(token);
+    let contract_sha256 = openapi_sha256();
     let server = Server::http(format!("127.0.0.1:{port}"))
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
@@ -172,6 +179,13 @@ pub fn start(
                 .with_header(
                     Header::from_bytes("X-Request-ID", request_id.as_bytes())
                         .expect("UUID request ID is valid header content"),
+                )
+                .with_header(
+                    Header::from_bytes(
+                        "X-RR-API-Contract-SHA256",
+                        contract_sha256.as_bytes(),
+                    )
+                    .expect("SHA-256 contract fingerprint is valid header content"),
                 );
             let _ = request.respond(response);
         }
@@ -197,6 +211,12 @@ mod tests {
         let live = direct_get("/v1/live").unwrap();
         assert_eq!(live["live"], true);
         assert_eq!(live["api_version"], API_VERSION);
+        assert_eq!(
+            live["api_contract_sha256"].as_str().unwrap().len(),
+            64
+        );
+        assert_eq!(openapi_sha256().len(), 64);
+        assert!(openapi_sha256().bytes().all(|byte| byte.is_ascii_hexdigit()));
 
         let spec = direct_get("/v1/openapi.json").unwrap();
         assert_eq!(spec["openapi"], "3.1.0");
