@@ -26,6 +26,38 @@ pub struct ModelStatus {
     pub gpu_resident: bool,
     pub message: String,
 }
+#[derive(Clone, Debug, Serialize)]
+pub struct PipelineProfile {
+    pub elapsed_millis: u64,
+    pub category: Category,
+    pub draft_generated: bool,
+    pub verification_passed: bool,
+    pub input_complete: bool,
+    pub gpu_resident: bool,
+    pub size_vram: u64,
+    pub reported_context: u32,
+    pub flags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ModelRuntimeProfile {
+    pub schema_version: u32,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub application_version: &'static str,
+    pub build_identity_sha256: String,
+    pub ollama_runtime_version: String,
+    pub model: String,
+    pub digest: String,
+    pub prompt_version: &'static str,
+    pub evaluation_suite_hash: String,
+    pub requested_context: u32,
+    pub model_size_bytes: u64,
+    pub cold_pipeline: PipelineProfile,
+    pub warm_repeat_pipeline: PipelineProfile,
+    pub near_context_pipeline: PipelineProfile,
+    pub task_qualification_current: bool,
+    pub limitations: Vec<&'static str>,
+}
 #[derive(Deserialize)]
 struct Tag {
     name: String,
@@ -312,6 +344,89 @@ impl Ollama {
             Err(error) => Err(error),
         }
     }
+    fn profile_pipeline(&self, email: &Email) -> Result<PipelineProfile> {
+        let started = std::time::Instant::now();
+        let (analysis, draft, flags) = self.analyze(email)?;
+        let elapsed_millis =
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let status = self.residency(&analysis.model_digest)?;
+        Ok(PipelineProfile {
+            elapsed_millis,
+            category: analysis.verdict.category,
+            draft_generated: draft.is_some(),
+            verification_passed: analysis
+                .verification
+                .as_ref()
+                .is_some_and(Verification::passed),
+            input_complete: analysis.input_complete,
+            gpu_resident: status.gpu_resident && analysis.gpu_resident,
+            size_vram: status.size_vram,
+            reported_context: status.context,
+            flags,
+        })
+    }
+
+    /// Measure the exact configured runtime on synthetic recruiting data.
+    ///
+    /// This is an operator diagnostic, not a performance SLO or hardware
+    /// certification. It deliberately includes a cold load, an immediate repeat
+    /// (which exercises prefix/cache behavior), and a near-context synthetic
+    /// rejection without exposing mailbox content.
+    pub fn profile_synthetic_runtime(&self) -> Result<ModelRuntimeProfile> {
+        let ollama_runtime_version = self.runtime_version()?;
+        let info = self.inspect()?;
+
+        let mut pinned = self.settings.clone();
+        pinned.disarm_delivery();
+        pinned.model_digest = Some(info.digest.clone());
+        pinned.task_qualification = None;
+        let candidate = Self::new(&pinned)?;
+
+        candidate.unload_for_transport_recovery()?;
+        let baseline = sample_email(
+            "Your application",
+            "Thank you for applying for the engineer position. We have decided not to move forward with your application.",
+        );
+        let cold_pipeline = candidate.profile_pipeline(&baseline)?;
+        let warm_repeat_pipeline = candidate.profile_pipeline(&baseline)?;
+
+        let target_bytes = if pinned.num_ctx <= 8192 { 3_000 } else { 8_500 };
+        let sentence =
+            "Synthetic neutral application context for local runtime profiling only. ";
+        let mut filler = sentence.repeat(target_bytes.div_ceil(sentence.len()));
+        filler.truncate(target_bytes);
+        let stress = sample_email(
+            "Your application status",
+            &format!(
+                "We have decided not to move forward with your application. {filler}"
+            ),
+        );
+        let near_context_pipeline = candidate.profile_pipeline(&stress)?;
+
+        Ok(ModelRuntimeProfile {
+            schema_version: 1,
+            generated_at: chrono::Utc::now(),
+            application_version: env!("CARGO_PKG_VERSION"),
+            build_identity_sha256: crate::build_info::identity_sha256(),
+            ollama_runtime_version,
+            model: pinned.model.clone(),
+            digest: info.digest,
+            prompt_version: PROMPT_VERSION,
+            evaluation_suite_hash: crate::config::evaluation_suite_hash(),
+            requested_context: pinned.num_ctx,
+            model_size_bytes: info.size,
+            cold_pipeline,
+            warm_repeat_pipeline,
+            near_context_pipeline,
+            task_qualification_current: self.settings.task_qualification_current(),
+            limitations: vec![
+                "Ollama-reported model residency is not whole-device peak VRAM measurement.",
+                "Latency depends on hardware, driver, backend, cache state and competing workloads.",
+                "Synthetic prompts are regression probes and do not represent production mailbox latency.",
+            ],
+        })
+    }
+
     pub fn qualify(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
         let mut pinned = self.settings.clone();
