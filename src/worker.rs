@@ -777,6 +777,7 @@ fn api_query_with_operation(
                     "task_model_bakeoff": true,
                     "typed_operation_status": true,
                     "typed_audit_events": true,
+                    "privacy_safe_metrics": true,
                     "enterprise_policy": true,
                     "enterprise_policy_digest_pin": true
                 },
@@ -864,6 +865,13 @@ fn api_query_with_operation(
                 "head": head,
                 "known": e.db.contains_audit_anchor(head)?
             }))
+        }
+        "/v1/metrics" => {
+            ensure!(
+                query.is_empty(),
+                "Metrics endpoint takes no query parameters"
+            );
+            Ok(serde_json::to_value(crate::metrics::collect(e, Utc::now())?)?)
         }
         "/v1/status" => {
             ensure!(
@@ -1017,6 +1025,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
+        assert!(api_query(&engine, "/v1/metrics?extra=1").is_err());
         assert!(api_query(&engine, "/v1/health?extra=1").is_err());
         assert!(api_query(&engine, "/v1/status?extra=1").is_err());
         assert!(api_query(&engine, "/v1/items?page=1&extra=2").is_err());
