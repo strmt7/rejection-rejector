@@ -26,8 +26,14 @@ fn regular_file_bytes(path: &Path) -> Result<u64> {
         return Ok(0);
     }
     let metadata = fs::symlink_metadata(path)?;
-    ensure!(!metadata.file_type().is_symlink(), "Workspace database files must not be symlinks");
-    ensure!(metadata.is_file(), "Workspace database path is not a regular file");
+    ensure!(
+        !metadata.file_type().is_symlink(),
+        "Workspace database files must not be symlinks"
+    );
+    ensure!(
+        metadata.is_file(),
+        "Workspace database path is not a regular file"
+    );
     Ok(metadata.len())
 }
 
@@ -35,11 +41,8 @@ pub fn required_headroom(database_bytes: u64, wal_bytes: u64, shm_bytes: u64) ->
     let workspace = database_bytes
         .saturating_add(wal_bytes)
         .saturating_add(shm_bytes);
-    let runtime = MIN_RUNTIME_HEADROOM_BYTES.max(
-        workspace
-            .saturating_div(4)
-            .saturating_add(64 * 1024 * 1024),
-    );
+    let runtime = MIN_RUNTIME_HEADROOM_BYTES
+        .max(workspace.saturating_div(4).saturating_add(64 * 1024 * 1024));
     let backup = MIN_BACKUP_HEADROOM_BYTES.max(
         database_bytes
             .saturating_mul(2)
@@ -102,9 +105,14 @@ pub fn ensure_backup_destination_headroom(
     destination_parent: &Path,
     required_bytes: u64,
 ) -> Result<()> {
-    ensure!(destination_parent.is_dir(), "Backup parent directory is missing");
     ensure!(
-        !fs::symlink_metadata(destination_parent)?.file_type().is_symlink(),
+        destination_parent.is_dir(),
+        "Backup parent directory is missing"
+    );
+    ensure!(
+        !fs::symlink_metadata(destination_parent)?
+            .file_type()
+            .is_symlink(),
         "Backup parent directory must not be a symlink"
     );
     let available = fs2::available_space(destination_parent)?;

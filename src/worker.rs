@@ -926,8 +926,7 @@ fn run(
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if !e.demo && Instant::now() >= scheduled_backup_due {
-            let status =
-                crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
+            let status = crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
             if status.overdue {
                 begin_operation(
                     &shared,
@@ -954,11 +953,7 @@ fn run(
                 } else {
                     scheduled_backup_failures = scheduled_backup_failures.saturating_add(1);
                     scheduled_backup_due = Instant::now()
-                        + bounded_backoff(
-                            15 * 60,
-                            scheduled_backup_failures,
-                            2 * 60 * 60,
-                        );
+                        + bounded_backoff(15 * 60, scheduled_backup_failures, 2 * 60 * 60);
                 }
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             } else {

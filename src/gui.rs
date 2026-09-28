@@ -1082,8 +1082,7 @@ impl App {
                         RichText::new(match status.last_success_at {
                             Some(at) => format!(
                                 "Last verified scheduled backup: {}{}",
-                                at.with_timezone(&chrono::Local)
-                                    .format("%d %b %Y · %H:%M"),
+                                at.with_timezone(&chrono::Local).format("%d %b %Y · %H:%M"),
                                 if status.overdue { " · OVERDUE" } else { "" }
                             ),
                             None => "No scheduled backup completed yet".into(),

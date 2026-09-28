@@ -290,8 +290,8 @@ pub fn scheduled_backup_status(
     let last_success_at: Option<DateTime<Utc>> = store.meta(LAST_SCHEDULED_BACKUP_META)?;
     let age_seconds = last_success_at.map(|at| now.signed_duration_since(at).num_seconds().max(0));
     let due_after = i64::from(settings.scheduled_backup_interval_hours) * 60 * 60;
-    let overdue = settings.scheduled_backup_enabled
-        && age_seconds.is_none_or(|age| age >= due_after);
+    let overdue =
+        settings.scheduled_backup_enabled && age_seconds.is_none_or(|age| age >= due_after);
     Ok(ScheduledBackupStatus {
         schema_version: 1,
         enabled: settings.scheduled_backup_enabled,
@@ -308,7 +308,10 @@ pub fn prune_verified_scheduled_backups(
     parent: &Path,
     keep: usize,
 ) -> Result<usize> {
-    ensure!((2..=30).contains(&keep), "Scheduled backup retention is invalid");
+    ensure!(
+        (2..=30).contains(&keep),
+        "Scheduled backup retention is invalid"
+    );
     if !parent.exists() {
         return Ok(0);
     }
@@ -342,12 +345,7 @@ pub fn prune_verified_scheduled_backups(
             candidates.push((manifest.created_at, path));
         }
     }
-    candidates.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| right.1.cmp(&left.1))
-    });
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
     let mut removed = 0usize;
     for (_, path) in candidates.into_iter().skip(keep) {
         fs::remove_dir_all(&path)?;
@@ -385,12 +383,8 @@ pub fn create_scheduled_backup(
         None,
         "Scheduled encrypted backup created and verified",
     )?;
-    if prune_verified_scheduled_backups(
-        store,
-        &root,
-        usize::from(settings.scheduled_backup_keep),
-    )
-    .is_err()
+    if prune_verified_scheduled_backups(store, &root, usize::from(settings.scheduled_backup_keep))
+        .is_err()
     {
         store.log(
             "backup.retention_warning",
