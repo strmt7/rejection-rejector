@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.11.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, and privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text."
+    "version": "1.12.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket."
   },
   "servers": [
     {
@@ -883,6 +883,16 @@
             }
           }
         }
+      },
+      "RateLimited": {
+        "description": "Local loopback request burst exceeded the fixed token-bucket guard.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
       }
     }
   },
@@ -926,6 +936,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -959,6 +972,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -991,6 +1007,9 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
@@ -1031,6 +1050,9 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "description": "Worker unavailable",
@@ -1083,6 +1105,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1128,6 +1153,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1171,6 +1199,9 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
@@ -1216,6 +1247,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1255,6 +1289,9 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
@@ -1300,6 +1337,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1340,6 +1380,9 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
@@ -1429,6 +1472,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1480,6 +1526,9 @@
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
           }
@@ -1526,6 +1575,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
