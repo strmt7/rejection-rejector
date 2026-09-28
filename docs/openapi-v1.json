@@ -573,7 +573,8 @@
           "worker",
           "api_version",
           "api_contract_sha256",
-          "application_version"
+          "application_version",
+          "build"
         ],
         "properties": {
           "live": {
@@ -601,6 +602,56 @@
           },
           "application_version": {
             "type": "string"
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          }
+        }
+      },
+      "BuildInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "application_version",
+          "source_commit",
+          "source_commit_verified",
+          "rustc_version",
+          "target",
+          "profile",
+          "cargo_lock_sha256",
+          "identity_sha256"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "application_version": {
+            "type": "string"
+          },
+          "source_commit": {
+            "type": "string"
+          },
+          "source_commit_verified": {
+            "type": "boolean"
+          },
+          "rustc_version": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "cargo_lock_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "identity_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
           }
         }
       }
@@ -619,6 +670,13 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         }
+      },
+      "BuildIdentityFingerprint": {
+        "description": "SHA-256 identity of deterministic build inputs embedded in the running binary.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "responses": {
@@ -627,6 +685,9 @@
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
           }
         },
         "content": {
@@ -642,6 +703,9 @@
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
           }
         },
         "content": {
@@ -657,6 +721,9 @@
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
           }
         },
         "content": {
@@ -672,6 +739,9 @@
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
           }
         },
         "content": {
@@ -702,6 +772,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -739,6 +812,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -769,6 +845,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -799,6 +878,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -826,6 +908,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           }
@@ -844,6 +929,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -893,6 +981,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -934,6 +1025,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -975,6 +1069,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -1005,6 +1102,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -1053,6 +1153,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             }
           },
@@ -1084,6 +1187,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -1145,6 +1251,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {
@@ -1217,6 +1326,9 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
               }
             },
             "content": {

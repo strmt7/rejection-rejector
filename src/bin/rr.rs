@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use rejection_rejector::{
-    audit_anchor, config, engine::Engine, ollama::Ollama, policy, recovery, worker::Worker,
+    audit_anchor, build_info, config, engine::Engine, ollama::Ollama, policy, recovery,
+    worker::Worker,
 };
 use std::{
     path::PathBuf,
@@ -24,6 +25,8 @@ struct Args {
 enum Action {
     /// Run the scheduler using settings previously configured in the desktop application.
     Run,
+    /// Print deterministic binary/source/dependency build identity without opening a workspace.
+    BuildInfo,
     /// Print local settings and aggregate status, without message bodies or credentials.
     Status,
     /// Print a synthetic offline status; never connects to Gmail.
@@ -141,8 +144,13 @@ fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if matches!(&args.command, Action::BuildInfo) {
+        println!("{}", serde_json::to_string_pretty(&build_info::current())?);
+        return Ok(());
+    }
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
+        Action::BuildInfo => unreachable!("BuildInfo is handled before workspace resolution"),
         Action::ValidatePolicy { path } => {
             let absolute = std::fs::canonicalize(&path)?;
             let loaded = policy::load_file(&absolute)?;
@@ -256,6 +264,7 @@ fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
+                    "build": build_info::current(),
                     "configuration_readiness": readiness,
                     "enterprise_policy": e.enterprise_policy_status(),
                     "database": {
@@ -298,7 +307,7 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()})
+                    &serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":build_info::current(),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()})
                 )?
             );
         }

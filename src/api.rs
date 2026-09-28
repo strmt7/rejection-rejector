@@ -45,7 +45,8 @@ fn direct_get(path: &str, pulse: &WorkerPulse) -> Option<serde_json::Value> {
                 "worker": worker,
                 "api_version": API_VERSION,
                 "api_contract_sha256": openapi_sha256(),
-                "application_version": env!("CARGO_PKG_VERSION")
+                "application_version": env!("CARGO_PKG_VERSION"),
+                "build": crate::build_info::current()
             }))
         }
         "/v1/openapi.json" => serde_json::from_str(OPENAPI_DOCUMENT).ok(),
@@ -86,6 +87,7 @@ pub fn start(
     ensure!(token.len() >= 40, "API token lacks required entropy");
     let token = Zeroizing::new(token);
     let contract_sha256 = openapi_sha256();
+    let build_identity_sha256 = crate::build_info::identity_sha256();
     let server = Server::http(format!("127.0.0.1:{port}"))
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
@@ -191,6 +193,10 @@ pub fn start(
                 .with_header(
                     Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256.as_bytes())
                         .expect("SHA-256 contract fingerprint is valid header content"),
+                )
+                .with_header(
+                    Header::from_bytes("X-RR-Build-Identity-SHA256", build_identity_sha256.as_bytes())
+                        .expect("SHA-256 build fingerprint is valid header content"),
                 );
             let _ = request.respond(response);
         }
@@ -221,6 +227,7 @@ mod tests {
         assert_eq!(live["worker"]["schema_version"], 1);
         assert_eq!(live["api_version"], API_VERSION);
         assert_eq!(live["api_contract_sha256"].as_str().unwrap().len(), 64);
+        assert_eq!(live["build"]["identity_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(openapi_sha256().len(), 64);
         assert!(
             openapi_sha256()

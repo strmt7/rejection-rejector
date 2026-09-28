@@ -1089,6 +1089,7 @@ fn api_query_with_operation(
                 "api_version": crate::api::API_VERSION,
                 "api_contract_sha256": crate::api::openapi_sha256(),
                 "application_version": env!("CARGO_PKG_VERSION"),
+                "build": crate::build_info::current(),
                 "settings_format_version": crate::config::SETTINGS_FORMAT_VERSION,
                 "read_only": true,
                 "mail_provider": "gmail",
