@@ -9,7 +9,6 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use serde_json::{Value, json};
-use zeroize::Zeroizing;
 use std::{
     path::PathBuf,
     sync::{
@@ -18,6 +17,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use zeroize::Zeroizing;
 
 #[derive(Clone, Default)]
 pub struct Snapshot {
@@ -545,9 +545,7 @@ fn run(
                         }
                         Ok(())
                     }
-                    Command::RotateApiToken => {
-                        rotate_api_token(&mut e, &shared, &api_disabled)
-                    }
+                    Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
                     Command::Api { .. } => Err(anyhow::anyhow!(
                         "Internal API command reached the wrong dispatcher"
                     )),
