@@ -230,7 +230,10 @@ fn main() -> Result<()> {
             )?;
             let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
             if openmetrics {
-                print!("{}", rejection_rejector::metrics::render_openmetrics(&metrics));
+                print!(
+                    "{}",
+                    rejection_rejector::metrics::render_openmetrics(&metrics)
+                );
             } else {
                 println!("{}", serde_json::to_string_pretty(&metrics)?);
             }
@@ -388,10 +391,7 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
             )?;
             e.profile_model_runtime_to(&out)?;
-            println!(
-                "Local model runtime profile written to {}",
-                out.display()
-            );
+            println!("Local model runtime profile written to {}", out.display());
         }
         Action::CompareModels { out } => {
             let e = Engine::open(
