@@ -28,7 +28,9 @@ pub struct BackupVerificationSummary {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ApplicationIntegritySummary {
+    pub metadata_records: u64,
     pub item_records: u64,
+    pub audit_event_records: u64,
     pub delivery_records: u64,
     pub active_delivery_records: u64,
     pub sent_delivery_records: u64,
@@ -252,10 +254,35 @@ fn verify_application_invariants_connection(
     conn: &Connection,
     vault: &Vault,
 ) -> Result<ApplicationIntegritySummary> {
+    let mut metadata_records = 0u64;
     let mut item_records = 0u64;
-    let mut delivery_records = 0u64;
+    let mut audit_event_records = 0u64;
     let mut active_delivery_records = 0u64;
     let mut sent_delivery_records = 0u64;
+
+    {
+        let mut metadata = conn.prepare("SELECT name,payload FROM meta ORDER BY name")?;
+        let rows = metadata.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (name, payload) = row?;
+            let _: serde_json::Value = vault.open_value(&format!("meta/{name}"), &payload)?;
+            metadata_records += 1;
+        }
+    }
+
+    {
+        let mut events = conn.prepare("SELECT event_id,payload FROM events ORDER BY seq")?;
+        let rows = events.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (event_id, payload) = row?;
+            let _: AuditEvent = vault.open_value(&format!("event/{event_id}"), &payload)?;
+            audit_event_records += 1;
+        }
+    }
 
     let mut items =
         conn.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
@@ -337,14 +364,17 @@ fn verify_application_invariants_connection(
         }
     }
 
-    delivery_records = conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| row.get(0))?;
+    let delivery_records: u64 =
+        conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| row.get(0))?;
     ensure!(
         delivery_records == active_delivery_records + sent_delivery_records,
         "Delivery table contains records not represented by authenticated item state"
     );
 
     Ok(ApplicationIntegritySummary {
+        metadata_records,
         item_records,
+        audit_event_records,
         delivery_records,
         active_delivery_records,
         sent_delivery_records,
@@ -720,6 +750,12 @@ impl Store {
 
         let application_integrity =
             verify_application_invariants_connection(&connection, &self.vault)?;
+        ensure!(
+            application_integrity.metadata_records == metadata_records
+                && application_integrity.item_records == item_records
+                && application_integrity.audit_event_records == audit_events,
+            "Backup deep-integrity record counts are inconsistent"
+        );
         let delivery_records = application_integrity.delivery_records;
 
         let audit_head = if version >= 4 {
