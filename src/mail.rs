@@ -401,8 +401,8 @@ pub fn raw_reply(
     let wrapped = body
         .as_bytes()
         .chunks(76)
-        .map(|c| std::str::from_utf8(c).expect("base64 is ASCII"))
-        .collect::<Vec<_>>()
+        .map(std::str::from_utf8)
+        .collect::<std::result::Result<Vec<_>, _>>()?
         .join("\r\n");
     validate_job_identity(job)?;
     let raw = format!(
