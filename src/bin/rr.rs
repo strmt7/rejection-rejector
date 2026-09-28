@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
     audit_anchor, build_info, config, engine::Engine, ollama::Ollama, policy, recovery,
     worker::Worker,
@@ -21,6 +21,25 @@ struct Args {
     #[command(subcommand)]
     command: Action,
 }
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ReadinessRequirement {
+    Workspace,
+    Mailbox,
+    Analysis,
+    Automatic,
+}
+
+impl ReadinessRequirement {
+    fn satisfied(self, readiness: &rejection_rejector::readiness::RuntimeReadiness) -> bool {
+        match self {
+            Self::Workspace => readiness.workspace_ready,
+            Self::Mailbox => readiness.mailbox_sync_ready,
+            Self::Analysis => readiness.analysis_ready,
+            Self::Automatic => readiness.automatic_dispatch_ready,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Action {
     /// Run the scheduler using settings previously configured in the desktop application.
@@ -32,7 +51,11 @@ enum Action {
     /// Print a synthetic offline status; never connects to Gmail.
     Demo,
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
-    Doctor,
+    Doctor {
+        /// Return a non-zero exit code unless this readiness level is satisfied.
+        #[arg(long, value_enum)]
+        require: Option<ReadinessRequirement>,
+    },
     /// Print privacy-safe operational metrics for local monitoring.
     Metrics {
         /// Emit OpenMetrics 1.0 text instead of JSON.
@@ -210,7 +233,7 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&metrics)?);
             }
         }
-        Action::Doctor => {
+        Action::Doctor { require } => {
             let e = Engine::open(
                 dir,
                 false,
@@ -317,6 +340,12 @@ fn main() -> Result<()> {
                     "note": "gpu_resident_now is a point-in-time Ollama check; Qualify & pin performs the full classification/draft/verification pipeline."
                 }))?
             );
+            if let Some(requirement) = require {
+                ensure!(
+                    requirement.satisfied(&readiness),
+                    "Requested readiness level {requirement:?} is not satisfied"
+                );
+            }
         }
         Action::Status | Action::Demo => {
             let demo = matches!(args.command, Action::Demo);
