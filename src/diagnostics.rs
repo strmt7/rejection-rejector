@@ -57,6 +57,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "prompt_version": q.prompt_version,
             "context_hash": q.context_hash,
             "suite_hash": q.suite_hash,
+            "ollama_runtime_version": q.ollama_runtime_version,
             "task_score": q.task_score,
             "fixture_count": q.fixture_count,
             "qualified_at": q.qualified_at
