@@ -48,22 +48,35 @@ jobs:
           fallback: none
       - name: Build twice from isolated target directories
         shell: pwsh
+        env:
+          SOURCE_DATE_EPOCH: '0'
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts | Out-Null
 
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'rr-repro-a'
-          cargo auditable build --locked --release --bins
-          if ($LASTEXITCODE -ne 0) { throw "First release build failed" }
-          $aDesktop = Join-Path $env:CARGO_TARGET_DIR 'release/rejection-rejector.exe'
-          $aCli = Join-Path $env:CARGO_TARGET_DIR 'release/rr.exe'
+          $workspace = (Resolve-Path .).Path
+          $targetA = Join-Path $env:RUNNER_TEMP 'rr-repro-a'
+          $targetB = Join-Path $env:RUNNER_TEMP 'rr-repro-b'
+          $canonicalSource = 'C:\rr-source'
+          $canonicalTarget = 'C:\rr-target'
+
+          function Invoke-ReproBuild([string] $target, [string] $label) {
+            $env:CARGO_TARGET_DIR = $target
+            # RUSTFLAGS takes precedence over Cargo target rustflags, so include
+            # both MSVC deterministic-link mode and path normalization here.
+            $env:RUSTFLAGS = "-C link-arg=/Brepro --remap-path-prefix=$workspace=$canonicalSource --remap-path-prefix=$target=$canonicalTarget"
+            cargo auditable build --locked --release --bins
+            if ($LASTEXITCODE -ne 0) { throw "$label release build failed" }
+          }
+
+          Invoke-ReproBuild $targetA 'First'
+          $aDesktop = Join-Path $targetA 'release/rejection-rejector.exe'
+          $aCli = Join-Path $targetA 'release/rr.exe'
           & $aCli build-info | Set-Content artifacts/build-info-a.json -Encoding utf8
 
-          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'rr-repro-b'
-          cargo auditable build --locked --release --bins
-          if ($LASTEXITCODE -ne 0) { throw "Second release build failed" }
-          $bDesktop = Join-Path $env:CARGO_TARGET_DIR 'release/rejection-rejector.exe'
-          $bCli = Join-Path $env:CARGO_TARGET_DIR 'release/rr.exe'
+          Invoke-ReproBuild $targetB 'Second'
+          $bDesktop = Join-Path $targetB 'release/rejection-rejector.exe'
+          $bCli = Join-Path $targetB 'release/rr.exe'
           & $bCli build-info | Set-Content artifacts/build-info-b.json -Encoding utf8
 
           $pairs = @(
@@ -71,13 +84,13 @@ jobs:
             @{ Name = 'rr.exe'; A = $aCli; B = $bCli }
           )
           $lines = @()
+          $mismatches = @()
           foreach ($pair in $pairs) {
             $hashA = (Get-FileHash $pair.A -Algorithm SHA256).Hash.ToLowerInvariant()
             $hashB = (Get-FileHash $pair.B -Algorithm SHA256).Hash.ToLowerInvariant()
             $lines += "$($pair.Name) $hashA $hashB"
             if ($hashA -ne $hashB) {
-              $lines | Set-Content artifacts/reproducibility-hashes.txt -Encoding ascii
-              throw "$($pair.Name) is not byte-for-byte reproducible"
+              $mismatches += $pair
             }
           }
           $lines | Set-Content artifacts/reproducibility-hashes.txt -Encoding ascii
@@ -87,6 +100,35 @@ jobs:
           if ($infoA.identity_sha256 -ne $infoB.identity_sha256) { throw "Build identity differs between clean builds" }
           if ($infoA.source_commit -ne $env:GITHUB_SHA -or -not $infoA.source_commit_verified) { throw "First build has invalid source identity" }
           if ($infoB.source_commit -ne $env:GITHUB_SHA -or -not $infoB.source_commit_verified) { throw "Second build has invalid source identity" }
+
+          if ($mismatches.Count -gt 0) {
+            New-Item -ItemType Directory -Force artifacts/repro-a,artifacts/repro-b | Out-Null
+            foreach ($pair in $mismatches) {
+              Copy-Item -LiteralPath $pair.A -Destination (Join-Path 'artifacts/repro-a' $pair.Name)
+              Copy-Item -LiteralPath $pair.B -Destination (Join-Path 'artifacts/repro-b' $pair.Name)
+
+              $bytesA = [IO.File]::ReadAllBytes($pair.A)
+              $bytesB = [IO.File]::ReadAllBytes($pair.B)
+              $limit = [Math]::Min($bytesA.Length, $bytesB.Length)
+              $diffs = [System.Collections.Generic.List[string]]::new()
+              for ($i = 0; $i -lt $limit -and $diffs.Count -lt 128; $i++) {
+                if ($bytesA[$i] -ne $bytesB[$i]) {
+                  $diffs.Add(("0x{0:x8} {1:x2} {2:x2}" -f $i,$bytesA[$i],$bytesB[$i]))
+                }
+              }
+              if ($bytesA.Length -ne $bytesB.Length) {
+                $diffs.Add("length $($bytesA.Length) $($bytesB.Length)")
+              }
+              $diffs | Set-Content "artifacts/$($pair.Name)-first-differences.txt" -Encoding ascii
+
+              $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+              if ($dumpbin) {
+                & $dumpbin.Source /headers $pair.A 2>&1 | Set-Content "artifacts/$($pair.Name)-a-headers.txt" -Encoding utf8
+                & $dumpbin.Source /headers $pair.B 2>&1 | Set-Content "artifacts/$($pair.Name)-b-headers.txt" -Encoding utf8
+              }
+            }
+            throw "$($mismatches.Count) release binary/binaries are not byte-for-byte reproducible; diagnostic artifacts were captured"
+          }
       - name: Record exact evidence identity
         shell: pwsh
         run: |
