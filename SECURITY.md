@@ -10,6 +10,8 @@ Untrusted email receives no tool access. MIME/header/evidence checks and same-mo
 
 Enterprise policy files are bounded, non-symlinked, schema-strict and fail closed. Managed deployments can require an exact SHA-256 policy pin, an Ed25519 detached signature, or both; the trusted digest/public key must be provisioned independently from the policy/signature files. Policy v2 also records an encrypted revision floor to reject rollback and same-revision byte drift.
 
+The local runtime journal is deliberately **not** a general-purpose application log: it records only typed operation/event enums, stable failure codes, retryability and timestamps. It has bounded rotation in the private data directory and has no fields for message text, subjects, addresses, OAuth data, API tokens, signatures, candidate facts or arbitrary exception strings. The encrypted semantic audit journal remains the authoritative action history.
+
 The API is read-only, loopback/token restricted and rejects browser Origin. Its token grants private data access. Portable recovery never exports the raw master key: it uses an Argon2id-derived wrapping key plus XChaCha20-Poly1305, binds the envelope to the vault UUID, validates the recovered key against the backup before credential-store installation, and refuses automatic overwrite of an existing OS credential. Recovery envelopes remain sensitive and must be stored separately from backups with the passphrase protected independently. No signed Windows installer, formal security audit, malware scanning, exactly-once delivery or enterprise compliance certification is claimed.
 
 Never post real emails, OAuth files, tokens or decrypted databases in issues. Revoke exposed credentials and disable sending before investigating.

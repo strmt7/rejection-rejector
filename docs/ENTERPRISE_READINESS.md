@@ -19,6 +19,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Portable disaster recovery can export the 256-bit vault key only as an Argon2id-derived, XChaCha20-Poly1305-wrapped recovery envelope bound to the vault UUID. Import authenticates the envelope against the backup before OS credential-store installation and never overwrites an existing credential automatically.
 - Optional machine-wide enterprise policy can force Human Review, prohibit sending/API exposure, constrain local models and enforce retention/cooldown/send caps. Policy v2 has local revision rollback protection; deployments can independently authenticate exact policy bytes with a SHA-256 pin, an Ed25519 detached signature, or both. Invalid or unauthenticated managed policy fails closed.
 - The integration API exposes versioned OpenAPI 3.1, canonical readiness, typed worker-operation state, stable policy reason codes, request IDs and stable error envelopes. CI asserts every public route is represented by the contract, including metrics, snapshot cursor feeds and per-item Automatic-policy explanations.
+- Operational troubleshooting uses a privacy-minimal typed JSONL runtime journal with bounded local rotation. It stores operation/event enums and stable codes only; arbitrary errors and mailbox/profile/credential fields are structurally absent from the record schema.
 
 ## Enterprise gaps still open
 

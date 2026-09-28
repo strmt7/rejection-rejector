@@ -3,6 +3,7 @@ use crate::{
     engine::{Engine, automatic_policy},
     oauth,
     ollama::{self, ModelStatus, Ollama},
+    runtime_log::{RuntimeEvent, RuntimeJournal},
     types::*,
 };
 use anyhow::{Context, Result, ensure};
@@ -151,18 +152,34 @@ impl Worker {
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let journal = if demo {
+            None
+        } else {
+            RuntimeJournal::open(&dir).ok()
+        };
+        if let Some(journal) = &journal {
+            let _ = journal.record_event(RuntimeEvent::ProcessStarted);
+        }
         let (s, p, c, sender) = (snapshot.clone(), paused.clone(), stop.clone(), tx.clone());
         std::thread::spawn(move || {
             let panic_pause = p.clone();
             let panic_stop = c.clone();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Engine::open(dir, demo, p, c.clone())
-                    .and_then(|engine| run(engine, rx, s.clone(), sender))
+                    .and_then(|engine| run(engine, rx, s.clone(), sender, journal.clone()))
             }));
             match outcome {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => set_worker_fatal(&s, format!("{error:#}")),
+                Ok(Err(error)) => {
+                    if let Some(journal) = &journal {
+                        let _ = journal.record_event(RuntimeEvent::WorkerStartupFailed);
+                    }
+                    set_worker_fatal(&s, format!("{error:#}"));
+                }
                 Err(_) => {
+                    if let Some(journal) = &journal {
+                        let _ = journal.record_event(RuntimeEvent::WorkerPanicked);
+                    }
                     panic_pause.store(true, Ordering::SeqCst);
                     panic_stop.store(true, Ordering::SeqCst);
                     set_worker_fatal(
@@ -365,6 +382,7 @@ fn run(
     rx: Receiver<Command>,
     shared: Arc<Mutex<Snapshot>>,
     sender: Sender<Command>,
+    journal: Option<RuntimeJournal>,
 ) -> Result<()> {
     let mut selected: Option<String> = None;
     let mut review = true;
@@ -388,11 +406,17 @@ fn run(
             api_disabled.clone(),
         ) {
             Ok(()) => {
+                if let Some(journal) = &journal {
+                    let _ = journal.record_event(RuntimeEvent::ApiListenerStarted);
+                }
                 if let Ok(mut s) = shared.lock() {
                     s.api_listening = true;
                 }
             }
             Err(error) => {
+                if let Some(journal) = &journal {
+                    let _ = journal.record_event(RuntimeEvent::ApiListenerFailed);
+                }
                 if let Ok(mut s) = shared.lock() {
                     s.error = format!("Integration API did not start: {error}");
                 }
@@ -421,6 +445,9 @@ fn run(
             }
             Ok(command) => {
                 let operation = command.kind();
+                if let Some(journal) = &journal {
+                    let _ = journal.record_operation(operation, OperationState::Running);
+                }
                 begin_operation(&shared, operation, "Working locally…");
                 let mut settings_changed = false;
                 let result: Result<()> = match command {
@@ -555,6 +582,14 @@ fn run(
                     s.settings_revision += 1;
                 }
                 report(&shared, operation, &result);
+                if let Some(journal) = &journal {
+                    let state = if result.is_ok() {
+                        OperationState::Succeeded
+                    } else {
+                        OperationState::Failed
+                    };
+                    let _ = journal.record_operation(operation, state);
+                }
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -569,6 +604,12 @@ fn run(
             snapshot.api_token_expires = None;
         }
         if !e.demo && Instant::now() >= policy_due {
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(
+                    OperationKind::EnterprisePolicyReload,
+                    OperationState::Running,
+                );
+            }
             begin_operation(
                 &shared,
                 OperationKind::EnterprisePolicyReload,
@@ -582,6 +623,12 @@ fn run(
                     if changed {
                         let completed: Result<()> = Ok(());
                         report(&shared, OperationKind::EnterprisePolicyReload, &completed);
+                        if let Some(journal) = &journal {
+                            let _ = journal.record_operation(
+                                OperationKind::EnterprisePolicyReload,
+                                OperationState::Succeeded,
+                            );
+                        }
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
                             && let Ok(mut snapshot) = shared.lock()
@@ -599,6 +646,12 @@ fn run(
                             OperationKind::EnterprisePolicyReload,
                             "Enterprise policy unchanged",
                         );
+                        if let Some(journal) = &journal {
+                            let _ = journal.record_operation(
+                                OperationKind::EnterprisePolicyReload,
+                                OperationState::Succeeded,
+                            );
+                        }
                     }
                 }
                 Err(error) => {
@@ -607,11 +660,23 @@ fn run(
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
                     report(&shared, OperationKind::EnterprisePolicyReload, &failed);
+                    if let Some(journal) = &journal {
+                        let _ = journal.record_operation(
+                            OperationKind::EnterprisePolicyReload,
+                            OperationState::Failed,
+                        );
+                    }
                 }
             }
         }
 
         if !e.demo && Instant::now() >= retention_due {
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(
+                    OperationKind::PurgeRetention,
+                    OperationState::Running,
+                );
+            }
             begin_operation(
                 &shared,
                 OperationKind::PurgeRetention,
@@ -619,6 +684,14 @@ fn run(
             );
             let result = e.db.purge(e.settings.retention_days).map(|_| ());
             report(&shared, OperationKind::PurgeRetention, &result);
+            if let Some(journal) = &journal {
+                let state = if result.is_ok() {
+                    OperationState::Succeeded
+                } else {
+                    OperationState::Failed
+                };
+                let _ = journal.record_operation(OperationKind::PurgeRetention, state);
+            }
             if result.is_ok() {
                 retention_failures = 0;
                 retention_due = Instant::now() + Duration::from_secs(24 * 60 * 60);
@@ -638,6 +711,12 @@ fn run(
                 now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
             })
         {
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(
+                    OperationKind::SyncMailbox,
+                    OperationState::Running,
+                );
+            }
             begin_operation(
                 &shared,
                 OperationKind::SyncMailbox,
@@ -645,6 +724,14 @@ fn run(
             );
             let result = e.synchronize().map(|_| ());
             report(&shared, OperationKind::SyncMailbox, &result);
+            if let Some(journal) = &journal {
+                let state = if result.is_ok() {
+                    OperationState::Succeeded
+                } else {
+                    OperationState::Failed
+                };
+                let _ = journal.record_operation(OperationKind::SyncMailbox, state);
+            }
             sync_retry =
                 Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
             refresh(&e, &shared, selected.as_deref(), review, page)?;
@@ -653,6 +740,12 @@ fn run(
             && e.settings.model_digest.is_some()
             && e.db.next_queued(&e.account, Utc::now())?.is_some()
         {
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(
+                    OperationKind::AnalyzeQueuedMail,
+                    OperationState::Running,
+                );
+            }
             begin_operation(
                 &shared,
                 OperationKind::AnalyzeQueuedMail,
@@ -660,6 +753,14 @@ fn run(
             );
             let result = e.process_one().map(|_| ());
             report(&shared, OperationKind::AnalyzeQueuedMail, &result);
+            if let Some(journal) = &journal {
+                let state = if result.is_ok() {
+                    OperationState::Succeeded
+                } else {
+                    OperationState::Failed
+                };
+                let _ = journal.record_operation(OperationKind::AnalyzeQueuedMail, state);
+            }
             if result.is_ok() {
                 process_failures = 0;
                 process_due = Instant::now() + Duration::from_secs(1);
@@ -670,6 +771,12 @@ fn run(
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if Instant::now() >= auto_due {
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(
+                    OperationKind::AutomaticDispatch,
+                    OperationState::Running,
+                );
+            }
             begin_operation(
                 &shared,
                 OperationKind::AutomaticDispatch,
@@ -693,17 +800,34 @@ fn run(
                     OperationKind::AutomaticDispatch,
                     "No eligible automatic reply",
                 );
+                if let Some(journal) = &journal {
+                    let _ = journal.record_operation(
+                        OperationKind::AutomaticDispatch,
+                        OperationState::Succeeded,
+                    );
+                }
             } else {
                 report(
                     &shared,
                     OperationKind::AutomaticDispatch,
                     &result.map(|_| ()),
                 );
+                if let Some(journal) = &journal {
+                    let state = if refresh_after_tick {
+                        OperationState::Succeeded
+                    } else {
+                        OperationState::Failed
+                    };
+                    let _ = journal.record_operation(OperationKind::AutomaticDispatch, state);
+                }
             }
             if refresh_after_tick {
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
         }
+    }
+    if let Some(journal) = &journal {
+        let _ = journal.record_event(RuntimeEvent::ProcessStopped);
     }
     Ok(())
 }

@@ -192,10 +192,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                         .expect("tag was initialized before evaluation");
                     metrics.completed += 1;
                     metrics.correct += usize::from(matched);
-                    metrics.rejection_false_positives +=
-                        usize::from(rejection_false_positive);
-                    metrics.unsafe_non_rejection_drafts +=
-                        usize::from(non_rejection_draft);
+                    metrics.rejection_false_positives += usize::from(rejection_false_positive);
+                    metrics.unsafe_non_rejection_drafts += usize::from(non_rejection_draft);
                 }
 
                 rows.push(serde_json::json!({
@@ -437,7 +435,10 @@ mod tests {
             CaseTag::AtsAutomation,
         ] {
             assert!(
-                rows.iter().filter(|row| row.tags.contains(&required)).count() >= 2,
+                rows.iter()
+                    .filter(|row| row.tags.contains(&required))
+                    .count()
+                    >= 2,
                 "Synthetic corpus needs repeated coverage for {required:?}"
             );
         }

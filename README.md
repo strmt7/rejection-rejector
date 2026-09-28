@@ -24,6 +24,7 @@
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API with versioned OpenAPI, typed operation status, stable error codes and request IDs |
 | Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, SHA-256 pinning and detached Ed25519 signature verification |
 | Testing | Synthetic demo, Rust regression/integration tests, fuzzing, CodeQL, coverage evidence, model evaluation fixtures and Windows/Linux CI |
+| Operations | Privacy-minimal typed JSONL runtime journal with bounded local rotation; stable operation/event codes only, separate from encrypted semantic audit records |
 
 ## Windows
 
