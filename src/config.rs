@@ -425,7 +425,7 @@ mod tests {
             prompt_version: PROMPT_VERSION.into(),
             context_hash: settings_context_hash(settings),
             suite_hash: evaluation_suite_hash(),
-            ollama_runtime_version: "0.34.0".into(),
+            ollama_runtime_version: "0.34.4".into(),
             task_score: 100.0,
             fixture_count: 32,
             qualified_at: Utc::now(),
