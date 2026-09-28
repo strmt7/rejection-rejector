@@ -205,6 +205,11 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
         !fs::symlink_metadata(parent)?.file_type().is_symlink(),
         "Backup parent directory must not be a symlink"
     );
+    let workspace_storage = crate::storage::inspect(data_dir)?;
+    crate::storage::ensure_backup_destination_headroom(
+        parent,
+        workspace_storage.backup_required_bytes,
+    )?;
 
     let name = destination
         .file_name()

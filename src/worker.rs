@@ -37,6 +37,7 @@ pub struct Snapshot {
     pub send_scope: bool,
     pub demo: bool,
     pub counts: Counts,
+    pub storage: Option<crate::storage::StorageHealth>,
     pub model: ModelStatus,
     pub last_poll: Option<DateTime<Utc>>,
     pub next_poll: Option<DateTime<Utc>>,
@@ -417,6 +418,7 @@ fn refresh(
     s.enterprise_policy = e.enterprise_policy_status();
     s.settings = e.settings.clone();
     s.counts = counts;
+    s.storage = crate::storage::inspect(&e.directory).ok();
     s.model = e.model.clone();
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
@@ -1106,6 +1108,7 @@ fn api_query_with_operation(
                     "openapi_3_1": true,
                     "direct_liveness": true,
                     "database_integrity": true,
+                    "storage_pressure_guard": true,
                     "tamper_evident_audit_chain": true,
                     "external_audit_anchor": true,
                     "os_protected_audit_anchor": true,
@@ -1131,11 +1134,13 @@ fn api_query_with_operation(
                 "Health endpoint takes no query parameters"
             );
             let integrity_ok = e.db.integrity_check().is_ok();
+            let storage = crate::storage::inspect(&e.directory)?;
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
             let readiness = crate::readiness::assess(
                 &e.settings,
                 integrity_ok,
+                storage.runtime_write_safe,
                 e.connected(),
                 e.send_scope(),
                 paused,
@@ -1153,6 +1158,7 @@ fn api_query_with_operation(
                 &counts,
                 e.last_poll()?,
                 integrity_ok,
+                storage.runtime_write_safe,
                 e.connected(),
                 Utc::now(),
             );
@@ -1162,6 +1168,7 @@ fn api_query_with_operation(
                 "healthy": readiness.workspace_ready,
                 "readiness": readiness,
                 "operational": operational,
+                "storage": storage,
                 "database": {
                     "integrity_ok": integrity_ok,
                     "schema_version": e.db.schema_version()?,

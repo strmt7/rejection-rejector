@@ -1052,6 +1052,17 @@ impl Engine {
             DispatchFailureKind::Retryable,
             "Paused before dispatch; nothing sent",
         )?;
+        let storage = crate::storage::ensure_runtime_write_headroom(&self.directory)
+            .map_err(|error| {
+                DispatchFailure::retryable(format!(
+                    "Durable send state cannot be recorded safely because storage headroom is low: {error}"
+                ))
+            })?;
+        dispatch_require(
+            storage.runtime_write_safe,
+            DispatchFailureKind::Retryable,
+            "Storage headroom is too low for durable send state",
+        )?;
         self.db
             .reserve_send(&job, self.settings.daily_send_limit, Utc::now())
             .map_err(|error| DispatchFailure::retryable(error.to_string()))?;

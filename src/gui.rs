@@ -251,6 +251,19 @@ impl App {
                             .unwrap_or_else(|| "After connecting Gmail".into()),
                     );
                     ui.end_row();
+                    ui.label("Storage safety");
+                    if let Some(storage) = &s.storage {
+                        let available_gib = storage.available_bytes as f64 / 1073741824.0;
+                        let status = if storage.runtime_write_safe {
+                            format!("{available_gib:.1} GiB available · durable writes safe")
+                        } else {
+                            format!("{available_gib:.1} GiB available · LOW HEADROOM")
+                        };
+                        ui.label(status);
+                    } else {
+                        ui.label("Storage health unavailable");
+                    }
+                    ui.end_row();
                     ui.label("Local AI");
                     ui.label(if s.settings.model_digest.is_some() {
                         "Model pinned — rechecked when processing"

@@ -213,9 +213,11 @@ fn main() -> Result<()> {
             let database_bytes = std::fs::metadata(e.directory.join("state.sqlite3"))
                 .ok()
                 .map(|metadata| metadata.len());
+            let storage = rejection_rejector::storage::inspect(&e.directory)?;
             let readiness = rejection_rejector::readiness::assess(
                 &e.settings,
                 database_integrity_ok,
+                storage.runtime_write_safe,
                 e.connected(),
                 e.send_scope(),
                 false,
@@ -267,6 +269,7 @@ fn main() -> Result<()> {
                     "build": build_info::current(),
                     "configuration_readiness": readiness,
                     "enterprise_policy": e.enterprise_policy_status(),
+                    "storage": storage,
                     "database": {
                         "integrity_ok": database_integrity_ok,
                         "schema_version": e.db.schema_version()?,

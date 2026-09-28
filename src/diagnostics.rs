@@ -9,11 +9,13 @@ pub fn report(engine: &Engine) -> Result<Value> {
         .ok()
         .map(|metadata| metadata.len());
     let counts = engine.db.counts(&engine.account)?;
+    let storage = crate::storage::inspect(&engine.directory)?;
     let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
     let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
     let readiness = crate::readiness::assess(
         &engine.settings,
         integrity.is_ok(),
+        storage.runtime_write_safe,
         engine.connected(),
         engine.send_scope(),
         paused,
@@ -24,6 +26,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         &counts,
         engine.last_poll()?,
         integrity.is_ok(),
+        storage.runtime_write_safe,
         engine.connected(),
         chrono::Utc::now(),
     );
@@ -72,7 +75,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         external_audit_anchor_configured || os_protected_audit_anchor_required;
 
     Ok(json!({
-        "report_version": 2,
+        "report_version": 3,
         "generated_at": chrono::Utc::now(),
         "privacy": {
             "contains_account_address": false,
@@ -87,6 +90,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         "readiness": readiness,
         "operational": operational,
         "runtime_log": crate::runtime_log::status(&engine.directory).ok(),
+        "storage": storage,
         "application": {
             "version": env!("CARGO_PKG_VERSION"),
             "build": crate::build_info::current(),
@@ -218,7 +222,8 @@ mod tests {
         assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
         assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
-        assert_eq!(report["report_version"], 2);
+        assert_eq!(report["report_version"], 3);
+        assert_eq!(report["storage"]["schema_version"], 1);
         assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(
             report["audit_protection"]["policy_requires_independent_anchor"],
