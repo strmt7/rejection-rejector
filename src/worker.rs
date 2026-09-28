@@ -1274,7 +1274,17 @@ mod tests {
 
         let first = api_query(&engine, "/v1/audit/anchor").unwrap();
         let head = first["head"].as_str().unwrap().to_owned();
+        let sequence = first["sequence"].as_i64().unwrap();
+        let workspace_fingerprint = first["workspace_fingerprint"].as_str().unwrap();
         assert_eq!(head.len(), 64);
+        assert!(sequence >= 0);
+        assert_eq!(workspace_fingerprint.len(), 64);
+        assert_eq!(first["anchor"]["audit_head"], head);
+        assert_eq!(first["anchor"]["audit_sequence"], sequence);
+        assert_eq!(
+            first["anchor"]["workspace_fingerprint"],
+            workspace_fingerprint
+        );
         engine
             .db
             .log("test.anchor.advance", None, "advance")
