@@ -274,23 +274,47 @@ pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
         "would like to offer",
         "job offer",
         "offer of employment",
+        "no final decision",
+        "have not made a decision",
+        "not made a decision",
+        "remains under review",
+        "still under review",
+        "not selected for an interview yet",
+        "not been selected for an interview yet",
+        "position has been put on hold",
+        "hiring process is paused",
         "zum vorstellungsgespräch",
         "einladung zum vorstellungsgespräch",
         "wir möchten sie zu einem vorstellungsgespräch",
         "stellenangebot",
+        "noch keine entscheidung",
+        "weiterhin geprüft",
+        "weiterhin geprueft",
         "proposer un entretien",
         "vous inviter à un entretien",
         "invitation à un entretien",
         "offre d'emploi",
         "offre d’emploi",
+        "aucune décision finale",
+        "aucune decision finale",
+        "toujours à l'étude",
+        "toujours a l'etude",
         "invitarla a un colloquio",
         "invitarvi a un colloquio",
         "invito a un colloquio",
         "offerta di lavoro",
         "invitarte a una entrevista",
         "oferta de trabajo",
+        "no se ha tomado una decisión final",
+        "no se ha tomado una decision final",
+        "sigue en revisión",
+        "sigue en revision",
         "convite para entrevista",
         "oferta de emprego",
+        "ainda não foi tomada uma decisão final",
+        "ainda nao foi tomada uma decisao final",
+        "continua em análise",
+        "continua em analise",
         "ignore previous instructions",
         "ignore all instructions",
         "disregard previous instructions",
@@ -544,6 +568,19 @@ mod tests {
             "Interview invitation",
             "We would like to meet you.\nOn Tuesday Recruiter wrote:\nWe have decided not to move forward with your application."
         ));
+    }
+
+    #[test]
+    fn nonfinal_recruiting_language_blocks_unattended_rejection_evidence() {
+        for text in [
+            "You have not been selected for an interview yet. No final decision has been made and your application remains under review.",
+            "Wir haben noch keine Entscheidung getroffen; Ihre Bewerbung wird weiterhin geprüft.",
+            "Aucune décision finale n'a été prise; votre candidature est toujours à l'étude.",
+            "No se ha tomado una decisión final; su candidatura sigue en revisión.",
+            "Ainda não foi tomada uma decisão final; a candidatura continua em análise.",
+        ] {
+            assert!(auto_language_conflict("", text), "{text}");
+        }
     }
 
     #[test]
