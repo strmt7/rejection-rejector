@@ -164,6 +164,7 @@ pub enum Command {
     ProfileModel,
     CompareModels,
     IntegrityCheck,
+    CompactDatabase,
     Backup {
         out: PathBuf,
     },
@@ -227,6 +228,7 @@ impl Command {
             Self::ProfileModel => OperationKind::ProfileModel,
             Self::CompareModels => OperationKind::CompareModels,
             Self::IntegrityCheck => OperationKind::IntegrityCheck,
+            Self::CompactDatabase => OperationKind::CompactDatabase,
             Self::Backup { .. } => OperationKind::Backup,
             Self::RecoveryDrill { .. } => OperationKind::RecoveryDrill,
             Self::Diagnostics { .. } => OperationKind::Diagnostics,
@@ -762,6 +764,14 @@ fn run(
                     Command::IntegrityCheck => {
                         busy(&shared, &pulse, "Checking encrypted database integrity…");
                         e.db.integrity_check()
+                    }
+                    Command::CompactDatabase => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Checkpointing, compacting and verifying encrypted SQLite state…",
+                        );
+                        e.compact_database().map(|_| ())
                     }
                     Command::Backup { out } => {
                         busy(
