@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID, and errors use stable machine-readable codes."
   },
   "servers": [
@@ -447,6 +447,56 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "summary": "Privacy-safe operational metrics snapshot",
+        "description": "Aggregate local operational metrics only. No mailbox address, message content, recipients, OAuth credentials, API token, signature, or candidate facts are included.",
+        "responses": {
+          "200": {
+            "description": "Metrics snapshot",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "schema_version",
+                    "generated_at",
+                    "service_name",
+                    "application_version",
+                    "database_schema_version",
+                    "stored_items",
+                    "queued_items",
+                    "review_items",
+                    "sent_items",
+                    "uncertain_deliveries",
+                    "send_attempts_24h",
+                    "operational"
+                  ]
+                }
               }
             }
           },
