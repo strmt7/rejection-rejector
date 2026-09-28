@@ -22,7 +22,7 @@
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, and separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes for portable disaster recovery |
 | Integration | Reusable Rust library plus authenticated read-only loopback API with versioned OpenAPI, exact contract SHA-256 fingerprint, typed operation status, stable error codes and request IDs |
-| Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, SHA-256 pinning and detached Ed25519 signature verification |
+| Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, independently protected audit-anchor enforcement, SHA-256 pinning and detached Ed25519 signature verification |
 | Testing | Windows/Linux CI plus scheduled nextest/rustdoc/recovery drills, fuzzing, mutation testing, CodeQL, coverage evidence and task-specific model fixtures |
 | Operations | Privacy-minimal typed JSONL runtime journal with bounded local rotation; stable operation/event codes only, separate from encrypted semantic audit records |
 
