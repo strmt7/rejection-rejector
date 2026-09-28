@@ -79,6 +79,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         },
         "readiness": readiness,
         "operational": operational,
+        "runtime_log": crate::runtime_log::status(&engine.directory).ok(),
         "application": {
             "version": env!("CARGO_PKG_VERSION"),
             "settings_format_version": engine.settings.settings_format_version,
@@ -205,6 +206,7 @@ mod tests {
         assert_eq!(report["privacy"]["automatic_upload"], false);
         assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
+        assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
         assert!(report["operational"]["queue_depth"].is_number());
         assert!(report["operational"]["degradation_reasons"].is_array());
         assert!(report["recent_audit"]["domains"].is_object());

@@ -16,6 +16,7 @@ pub mod ollama;
 pub mod policy;
 pub mod readiness;
 pub mod recovery;
+pub mod runtime_log;
 pub mod store;
 pub mod sync;
 pub mod types;
