@@ -24,14 +24,16 @@ pub fn report(engine: &Engine) -> Result<Value> {
         stopping,
     );
     let operational = crate::readiness::operational_indicators(
-        &engine.settings,
-        &counts,
-        engine.last_poll()?,
-        integrity.is_ok(),
-        storage.runtime_write_safe,
-        scheduled_backup.overdue,
-        engine.connected(),
-        chrono::Utc::now(),
+        crate::readiness::OperationalContext {
+            settings: &engine.settings,
+            counts: &counts,
+            last_poll: engine.last_poll()?,
+            database_integrity_ok: integrity.is_ok(),
+            storage_write_safe: storage.runtime_write_safe,
+            scheduled_backup_overdue: scheduled_backup.overdue,
+            connected: engine.connected(),
+            now: chrono::Utc::now(),
+        },
     );
 
     let local_ai = Ollama::new(&engine.settings)?;
