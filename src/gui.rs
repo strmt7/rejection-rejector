@@ -966,6 +966,19 @@ impl App {
                 if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Run recovery drill…"),
+                    )
+                    .on_hover_text("Restores the selected backup into an isolated temporary workspace, reopens it and deeply authenticates every encrypted record. Live state is not modified.")
+                    .clicked()
+                    && let Some(backup) = rfd::FileDialog::new()
+                        .set_title("Choose a Rejection Rejector backup directory")
+                        .pick_folder()
+                {
+                    self.worker.command(Command::RecoveryDrill { backup });
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
                         egui::Button::new("Export diagnostics…"),
                     )
                     .on_hover_text("Writes a redacted JSON report locally. No email content, account address, recipients, OAuth credentials, API token, signature or candidate facts are included.")
@@ -979,7 +992,7 @@ impl App {
                 }
             });
             ui.label(
-                RichText::new("Backups preserve the encrypted database and vault identifier. Recovery on another machine still requires the original OS-protected master key.")
+                RichText::new("Backups preserve the encrypted database and audit chain. Run a recovery drill regularly. Off-machine recovery requires a separately stored wrapped recovery-key envelope and its passphrase; no plaintext master-key export exists.")
                     .small()
                     .color(MUTED),
             );
