@@ -738,8 +738,12 @@ fn decode_item_cursor(value: &str) -> Result<ItemCursor> {
     ensure!(bytes.len() <= 768, "Item-feed cursor exceeds size limit");
     let cursor: ItemCursor =
         serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("Invalid item-feed cursor"))?;
-    ensure!(cursor.snapshot_rowid >= 0, "Invalid item-feed snapshot");
-    validate_api_item_id(&cursor.id)?;
+    ensure!(
+        cursor.snapshot_rowid >= 0
+            && cursor.last_rowid > 0
+            && cursor.last_rowid <= cursor.snapshot_rowid,
+        "Invalid item-feed cursor"
+    );
     Ok(cursor)
 }
 
@@ -1151,8 +1155,7 @@ mod tests {
     fn item_feed_cursor_codec_is_bounded_and_round_trips() {
         let cursor = ItemCursor {
             snapshot_rowid: 42,
-            sort_at: 1_700_000_000,
-            id: "a".repeat(64),
+            last_rowid: 21,
         };
         let encoded = encode_item_cursor(&cursor).unwrap();
         assert_eq!(decode_item_cursor(&encoded).unwrap(), cursor);
