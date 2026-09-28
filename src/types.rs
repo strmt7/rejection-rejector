@@ -262,6 +262,20 @@ pub struct SyncState {
     pub last_full: Option<DateTime<Utc>>,
     pub lookback_days: u8,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ItemCursor {
+    pub snapshot_rowid: i64,
+    pub sort_at: i64,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ItemCursorPage {
+    pub items: Vec<Job>,
+    pub next_cursor: Option<ItemCursor>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Counts {
     pub stored: u64,
