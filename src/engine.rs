@@ -188,15 +188,25 @@ impl Engine {
             Vault::open(&directory)?
         };
         let mut db = Store::open(&directory.join("state.sqlite3"), vault)?;
+        let enterprise_policy = if demo { None } else { policy::load_optional()? };
         // Verify independently persisted rollback evidence before any runtime
-        // recovery event mutates the workspace audit journal.
+        // recovery event mutates the workspace audit journal. Managed policy may
+        // make the external anchor mandatory.
         if !demo {
-            audit_anchor::verify_configured_anchor(&db, &directory)?;
+            let external_anchor = audit_anchor::verify_configured_anchor(&db, &directory)?;
+            if enterprise_policy
+                .as_ref()
+                .is_some_and(|loaded| loaded.policy.require_external_audit_anchor)
+            {
+                ensure!(
+                    external_anchor.is_some(),
+                    "Enterprise policy requires RR_AUDIT_ANCHOR_FILE with a valid independently stored audit anchor"
+                );
+            }
         }
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
-        let enterprise_policy = if demo { None } else { policy::load_optional()? };
         let (revision_floor, revision_floor_changed) =
             staged_policy_revision_floor(&db, enterprise_policy.as_ref())?;
         let policy_changed = match &enterprise_policy {
@@ -289,6 +299,16 @@ impl Engine {
             return Ok(false);
         }
         let loaded = policy::load_optional()?;
+        let external_anchor = audit_anchor::verify_configured_anchor(&self.db, &self.directory)?;
+        if loaded
+            .as_ref()
+            .is_some_and(|current| current.policy.require_external_audit_anchor)
+        {
+            ensure!(
+                external_anchor.is_some(),
+                "Enterprise policy requires RR_AUDIT_ANCHOR_FILE with a valid independently stored audit anchor"
+            );
+        }
         let old_digest = self
             .enterprise_policy
             .as_ref()
