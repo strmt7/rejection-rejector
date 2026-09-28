@@ -3,7 +3,11 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::{Path, PathBuf}};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 const MAX_ANCHOR_BYTES: u64 = 64 * 1024;
 pub const AUDIT_ANCHOR_ENV: &str = "RR_AUDIT_ANCHOR_FILE";
@@ -100,7 +104,10 @@ pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
     let bytes = read_small_regular_file(path)?;
     let anchor: AuditAnchor =
         serde_json::from_slice(&bytes).context("Audit-anchor JSON is invalid")?;
-    ensure!(anchor.format_version == 1, "Unsupported audit-anchor format");
+    ensure!(
+        anchor.format_version == 1,
+        "Unsupported audit-anchor format"
+    );
     ensure!(
         anchor.audit_sequence >= 0,
         "Audit-anchor sequence must be non-negative"
@@ -114,8 +121,7 @@ pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
         "Audit-anchor journal hash is invalid"
     );
     ensure!(
-        !anchor.application_version.trim().is_empty()
-            && anchor.application_version.len() <= 128,
+        !anchor.application_version.trim().is_empty() && anchor.application_version.len() <= 128,
         "Audit-anchor application version is invalid"
     );
     Ok(anchor)
@@ -144,7 +150,12 @@ pub fn verify_configured_anchor(store: &Store, data_dir: &Path) -> Result<Option
         "{AUDIT_ANCHOR_ENV} must be an absolute path"
     );
     verify_anchor(store, data_dir, &path)
-        .with_context(|| format!("Configured external audit anchor failed: {}", path.display()))
+        .with_context(|| {
+            format!(
+                "Configured external audit anchor failed: {}",
+                path.display()
+            )
+        })
         .map(Some)
 }
 
