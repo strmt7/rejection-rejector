@@ -700,7 +700,8 @@ fn run(
                 "Checking administrator enterprise policy…",
             );
             record_current_operation(&journal, &shared);
-            let result = protect_audit_boundary(&e, e.reload_enterprise_policy());
+            let operation_result = e.reload_enterprise_policy();
+            let result = protect_audit_boundary(&e, operation_result);
             match result {
                 Ok(changed) => {
                     policy_failures = 0;
@@ -747,8 +748,8 @@ fn run(
                 "Applying local retention policy to completed content…",
             );
             record_current_operation(&journal, &shared);
-            let result =
-                protect_audit_boundary(&e, e.db.purge(e.settings.retention_days).map(|_| ()));
+            let operation_result = e.db.purge(e.settings.retention_days).map(|_| ());
+            let result = protect_audit_boundary(&e, operation_result);
             report(&shared, OperationKind::PurgeRetention, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
@@ -776,7 +777,8 @@ fn run(
                 "Scheduled Gmail check: fetching only missing identities…",
             );
             record_current_operation(&journal, &shared);
-            let result = protect_audit_boundary(&e, e.synchronize().map(|_| ()));
+            let operation_result = e.synchronize().map(|_| ());
+            let result = protect_audit_boundary(&e, operation_result);
             report(&shared, OperationKind::SyncMailbox, &result);
             record_current_operation(&journal, &shared);
             sync_retry =
@@ -793,7 +795,8 @@ fn run(
                 "Local AI: classifying, drafting and checking one new email…",
             );
             record_current_operation(&journal, &shared);
-            let result = protect_audit_boundary(&e, e.process_one().map(|_| ()));
+            let operation_result = e.process_one().map(|_| ());
+            let result = protect_audit_boundary(&e, operation_result);
             report(&shared, OperationKind::AnalyzeQueuedMail, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
@@ -812,7 +815,8 @@ fn run(
                 "Evaluating automatic dispatch policy…",
             );
             record_current_operation(&journal, &shared);
-            let result = protect_audit_boundary(&e, e.automatic_tick());
+            let operation_result = e.automatic_tick();
+            let result = protect_audit_boundary(&e, operation_result);
             match &result {
                 Ok(_) => {
                     automatic_failures = 0;
