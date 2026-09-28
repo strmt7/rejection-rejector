@@ -218,7 +218,7 @@ impl PolicyRevisionFloor {
             return Ok(false);
         };
         ensure!(
-            self.policies.len() <= 32 || self.policies.contains_key(policy_id),
+            self.policies.len() < 32 || self.policies.contains_key(policy_id),
             "Enterprise policy revision floor has too many policy identities"
         );
         match self.policies.get(policy_id) {
@@ -557,6 +557,31 @@ mod tests {
         .unwrap();
         let newer = load_file(&path).unwrap();
         assert!(floor.observe(&newer).unwrap());
+    }
+
+    #[test]
+    fn policy_revision_floor_caps_distinct_namespaces() {
+        let root = tempfile::tempdir().unwrap();
+        let mut floor = PolicyRevisionFloor::default();
+        for index in 0..32 {
+            let path = root.path().join(format!("policy-{index}.json"));
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"version":2,"policy_id":"tenant-{index}","revision":1}}"#
+                ),
+            )
+            .unwrap();
+            let loaded = load_file(&path).unwrap();
+            assert!(floor.observe(&loaded).unwrap());
+        }
+        let overflow = root.path().join("overflow.json");
+        std::fs::write(
+            &overflow,
+            r#"{"version":2,"policy_id":"tenant-overflow","revision":1}"#,
+        )
+        .unwrap();
+        assert!(floor.observe(&load_file(&overflow).unwrap()).is_err());
     }
 
     #[test]
