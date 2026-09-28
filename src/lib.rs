@@ -9,6 +9,7 @@ pub mod gmail;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod mail;
+pub mod metrics;
 pub mod net;
 pub mod oauth;
 pub mod ollama;
