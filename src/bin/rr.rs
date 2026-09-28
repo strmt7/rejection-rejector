@@ -214,6 +214,11 @@ fn main() -> Result<()> {
                 .ok()
                 .map(|metadata| metadata.len());
             let storage = rejection_rejector::storage::inspect(&e.directory)?;
+            let scheduled_backup = rejection_rejector::recovery::scheduled_backup_status(
+                &e.db,
+                &e.settings,
+                chrono::Utc::now(),
+            )?;
             let readiness = rejection_rejector::readiness::assess(
                 &e.settings,
                 database_integrity_ok,
@@ -270,6 +275,7 @@ fn main() -> Result<()> {
                     "configuration_readiness": readiness,
                     "enterprise_policy": e.enterprise_policy_status(),
                     "storage": storage,
+                    "scheduled_backup": scheduled_backup,
                     "database": {
                         "integrity_ok": database_integrity_ok,
                         "schema_version": e.db.schema_version()?,

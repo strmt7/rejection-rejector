@@ -38,6 +38,7 @@ pub struct Snapshot {
     pub demo: bool,
     pub counts: Counts,
     pub storage: Option<crate::storage::StorageHealth>,
+    pub scheduled_backup: Option<crate::recovery::ScheduledBackupStatus>,
     pub model: ModelStatus,
     pub last_poll: Option<DateTime<Utc>>,
     pub next_poll: Option<DateTime<Utc>>,
@@ -419,6 +420,8 @@ fn refresh(
     s.settings = e.settings.clone();
     s.counts = counts;
     s.storage = crate::storage::inspect(&e.directory).ok();
+    s.scheduled_backup =
+        crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now()).ok();
     s.model = e.model.clone();
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
@@ -639,10 +642,12 @@ fn run(
     let mut auto_due = Instant::now();
     let mut process_due = Instant::now();
     let mut retention_due = Instant::now() + Duration::from_secs(60);
+    let mut scheduled_backup_due = Instant::now() + Duration::from_secs(60);
     let mut policy_due = Instant::now() + Duration::from_secs(30);
     let mut process_failures = 0u32;
     let mut automatic_failures = 0u32;
     let mut retention_failures = 0u32;
+    let mut scheduled_backup_failures = 0u32;
     let mut policy_failures = 0u32;
     while !e.stop.load(Ordering::SeqCst) {
         pulse.idle_tick();
@@ -817,8 +822,11 @@ fn run(
                     )),
                 };
                 let result = protect_audit_boundary(&e, operation_result);
-                if settings_changed && let Ok(mut s) = shared.lock() {
-                    s.settings_revision += 1;
+                if settings_changed {
+                    scheduled_backup_due = Instant::now();
+                    if let Ok(mut s) = shared.lock() {
+                        s.settings_revision += 1;
+                    }
                 }
                 report(&shared, &pulse, operation, &result);
                 record_current_operation(&journal, &shared);
@@ -917,6 +925,50 @@ fn run(
             }
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
+        if !e.demo && Instant::now() >= scheduled_backup_due {
+            let status =
+                crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
+            if status.overdue {
+                begin_operation(
+                    &shared,
+                    &pulse,
+                    OperationKind::Backup,
+                    "Creating scheduled encrypted backup…",
+                );
+                record_current_operation(&journal, &shared);
+                let settings = e.settings.clone();
+                let directory = e.directory.clone();
+                let operation_result = crate::recovery::create_scheduled_backup(
+                    &mut e.db,
+                    &directory,
+                    &settings,
+                    Utc::now(),
+                )
+                .map(|_| ());
+                let result = protect_audit_boundary(&e, operation_result);
+                report(&shared, &pulse, OperationKind::Backup, &result);
+                record_current_operation(&journal, &shared);
+                if result.is_ok() {
+                    scheduled_backup_failures = 0;
+                    scheduled_backup_due = Instant::now() + Duration::from_secs(60 * 60);
+                } else {
+                    scheduled_backup_failures = scheduled_backup_failures.saturating_add(1);
+                    scheduled_backup_due = Instant::now()
+                        + bounded_backoff(
+                            15 * 60,
+                            scheduled_backup_failures,
+                            2 * 60 * 60,
+                        );
+                }
+                refresh(&e, &shared, selected.as_deref(), review, page)?;
+            } else {
+                scheduled_backup_failures = 0;
+                scheduled_backup_due = Instant::now() + Duration::from_secs(60 * 60);
+            }
+        } else if !e.settings.scheduled_backup_enabled {
+            scheduled_backup_due = Instant::now() + Duration::from_secs(60);
+        }
+
         if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
             continue;
         }
@@ -1113,6 +1165,7 @@ fn api_query_with_operation(
                     "external_audit_anchor": true,
                     "os_protected_audit_anchor": true,
                     "verified_backup_bundle": true,
+                    "scheduled_verified_backups": true,
                     "portable_recovery_key_envelope": true,
                     "task_model_bakeoff": true,
                     "typed_operation_status": true,
@@ -1135,6 +1188,8 @@ fn api_query_with_operation(
             );
             let integrity_ok = e.db.integrity_check().is_ok();
             let storage = crate::storage::inspect(&e.directory)?;
+            let scheduled_backup =
+                crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
             let readiness = crate::readiness::assess(
@@ -1159,6 +1214,7 @@ fn api_query_with_operation(
                 e.last_poll()?,
                 integrity_ok,
                 storage.runtime_write_safe,
+                scheduled_backup.overdue,
                 e.connected(),
                 Utc::now(),
             );
@@ -1169,6 +1225,7 @@ fn api_query_with_operation(
                 "readiness": readiness,
                 "operational": operational,
                 "storage": storage,
+                "scheduled_backup": scheduled_backup,
                 "database": {
                     "integrity_ok": integrity_ok,
                     "schema_version": e.db.schema_version()?,

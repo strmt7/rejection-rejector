@@ -14,6 +14,7 @@ pub struct OperationalIndicators {
     pub uncertain_deliveries: u64,
     pub task_qualification_age_seconds: Option<i64>,
     pub storage_write_safe: bool,
+    pub scheduled_backup_overdue: bool,
     pub degraded: bool,
     pub degradation_reasons: Vec<&'static str>,
 }
@@ -24,6 +25,7 @@ pub fn operational_indicators(
     last_poll: Option<DateTime<Utc>>,
     database_integrity_ok: bool,
     storage_write_safe: bool,
+    scheduled_backup_overdue: bool,
     connected: bool,
     now: DateTime<Utc>,
 ) -> OperationalIndicators {
@@ -46,6 +48,9 @@ pub fn operational_indicators(
     if !storage_write_safe {
         degradation_reasons.push("storage_headroom_low");
     }
+    if scheduled_backup_overdue {
+        degradation_reasons.push("scheduled_backup_overdue");
+    }
     if !connected {
         degradation_reasons.push("gmail_disconnected");
     } else if !sync_fresh {
@@ -66,6 +71,7 @@ pub fn operational_indicators(
         uncertain_deliveries: counts.uncertain,
         task_qualification_age_seconds,
         storage_write_safe,
+        scheduled_backup_overdue,
         degraded: !degradation_reasons.is_empty(),
         degradation_reasons,
     }
@@ -191,6 +197,7 @@ mod tests {
             Some(now - chrono::Duration::hours(3)),
             true,
             true,
+            false,
             true,
             now,
         );
@@ -216,6 +223,7 @@ mod tests {
             Some(now - chrono::Duration::minutes(30)),
             true,
             true,
+            false,
             true,
             now,
         );
@@ -252,6 +260,22 @@ mod tests {
             storage_low
                 .automatic_block_reasons
                 .contains(&"storage_headroom_low")
+        );
+
+        let backup_overdue = operational_indicators(
+            &Settings::default(),
+            &Counts::default(),
+            Some(now),
+            true,
+            true,
+            true,
+            true,
+            now,
+        );
+        assert!(
+            backup_overdue
+                .degradation_reasons
+                .contains(&"scheduled_backup_overdue")
         );
     }
 }

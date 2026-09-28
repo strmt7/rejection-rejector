@@ -264,6 +264,31 @@ impl App {
                         ui.label("Storage health unavailable");
                     }
                     ui.end_row();
+                    ui.label("Scheduled backup");
+                    ui.label(
+                        s.scheduled_backup
+                            .as_ref()
+                            .map(|status| {
+                                if !status.enabled {
+                                    "Disabled".to_owned()
+                                } else if status.overdue {
+                                    "OVERDUE — check backup configuration".to_owned()
+                                } else {
+                                    status
+                                        .last_success_at
+                                        .map(|at| {
+                                            format!(
+                                                "Verified {}",
+                                                at.with_timezone(&chrono::Local)
+                                                    .format("%d %b · %H:%M")
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "Pending first backup".into())
+                                }
+                            })
+                            .unwrap_or_else(|| "Status unavailable".into()),
+                    );
+                    ui.end_row();
                     ui.label("Local AI");
                     ui.label(if s.settings.model_digest.is_some() {
                         "Model pinned — rechecked when processing"
@@ -1009,6 +1034,67 @@ impl App {
                     .small()
                     .color(MUTED),
             );
+            ui.separator();
+            ui.checkbox(
+                &mut self.settings.scheduled_backup_enabled,
+                "Create verified encrypted backups automatically",
+            );
+            if self.settings.scheduled_backup_enabled {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Backup folder");
+                    if ui.button("Choose folder…").clicked()
+                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                    {
+                        self.settings.scheduled_backup_directory =
+                            path.to_string_lossy().into_owned();
+                    }
+                    ui.monospace(if self.settings.scheduled_backup_directory.is_empty() {
+                        "Not selected"
+                    } else {
+                        &self.settings.scheduled_backup_directory
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Backup every");
+                    egui::ComboBox::from_id_salt("scheduled_backup_interval")
+                        .selected_text(format!(
+                            "{} hour(s)",
+                            self.settings.scheduled_backup_interval_hours
+                        ))
+                        .show_ui(ui, |ui| {
+                            for hours in crate::config::BACKUP_INTERVAL_HOURS {
+                                ui.selectable_value(
+                                    &mut self.settings.scheduled_backup_interval_hours,
+                                    hours,
+                                    format!("{hours} hour(s)"),
+                                );
+                            }
+                        });
+                    ui.label("Keep");
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.scheduled_backup_keep)
+                            .range(2..=30),
+                    );
+                    ui.label("verified backups");
+                });
+                if let Some(status) = &s.scheduled_backup {
+                    ui.label(
+                        RichText::new(match status.last_success_at {
+                            Some(at) => format!(
+                                "Last verified scheduled backup: {}{}",
+                                at.with_timezone(&chrono::Local)
+                                    .format("%d %b %Y · %H:%M"),
+                                if status.overdue { " · OVERDUE" } else { "" }
+                            ),
+                            None => "No scheduled backup completed yet".into(),
+                        })
+                        .small()
+                        .color(if status.overdue { AMBER } else { MUTED }),
+                    );
+                }
+            }
+            ui.label(RichText::new("Scheduled retention deletes only older directories that first verify as same-vault Rejection Rejector backups; unrelated folders are never pruned.").small().color(MUTED));
+            ui.separator();
             if s.enterprise_policy.prohibit_integration_api {
                 self.settings.api_enabled = false;
             }
