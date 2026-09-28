@@ -1264,6 +1264,12 @@ mod tests {
     #[test]
     fn audit_anchor_api_supports_external_rollback_detection() {
         let dir = tempfile::tempdir().unwrap();
+        crate::vault::private_dir(dir.path()).unwrap();
+        crate::vault::write_new_private(
+            &dir.path().join("vault-id"),
+            uuid::Uuid::new_v4().to_string().as_bytes(),
+        )
+        .unwrap();
         let mut engine = Engine::open(
             dir.path().into(),
             true,
