@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.5.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID, and errors use stable machine-readable codes."
+    "version": "1.6.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, and errors use stable machine-readable codes."
   },
   "servers": [
     {
@@ -158,6 +158,13 @@
           "type": "string",
           "format": "uuid"
         }
+      },
+      "ContractFingerprint": {
+        "description": "SHA-256 of the exact OpenAPI document bytes served by /v1/openapi.json. Semantic compatibility remains governed by api_version/v1.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "responses": {
@@ -238,6 +245,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -265,6 +275,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -292,6 +305,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -319,6 +335,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -336,6 +355,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           }
@@ -351,6 +373,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -390,6 +415,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -428,6 +456,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -466,6 +497,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -493,6 +527,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -531,6 +568,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             }
           },
@@ -559,6 +599,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             },
             "content": {
@@ -632,6 +675,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             },
             "content": {
@@ -701,6 +747,9 @@
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
               }
             },
             "content": {
