@@ -12,7 +12,10 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -29,6 +32,9 @@ pub struct ModelStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct PipelineProfile {
     pub elapsed_millis: u64,
+    pub request_count: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
     pub category: Category,
     pub draft_generated: bool,
     pub verification_passed: bool,
@@ -101,6 +107,15 @@ struct Generate {
     done: bool,
     #[serde(default)]
     prompt_eval_count: u32,
+    #[serde(default)]
+    eval_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct InferenceCounters {
+    requests: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +132,7 @@ struct Progress {
 
 pub struct Ollama {
     settings: Settings,
+    counters: Arc<Mutex<InferenceCounters>>,
 }
 
 fn model_name_matches(configured: &str, actual: &str) -> bool {
@@ -142,10 +158,25 @@ impl Ollama {
         settings.validate()?;
         Ok(Self {
             settings: settings.clone(),
+            counters: Arc::new(Mutex::new(InferenceCounters::default())),
         })
     }
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.settings.ollama_url.trim_end_matches('/'))
+    }
+    fn counter_snapshot(&self) -> InferenceCounters {
+        self.counters.lock().map(|value| *value).unwrap_or_default()
+    }
+    fn record_usage(&self, prompt_tokens: u32, completion_tokens: u32) {
+        if let Ok(mut counters) = self.counters.lock() {
+            counters.requests = counters.requests.saturating_add(1);
+            counters.prompt_tokens = counters
+                .prompt_tokens
+                .saturating_add(u64::from(prompt_tokens));
+            counters.completion_tokens = counters
+                .completion_tokens
+                .saturating_add(u64::from(completion_tokens));
+        }
     }
     /// True when an Ollama HTTP server answers on the configured loopback origin,
     /// regardless of whether its version is new enough for this application.
@@ -296,6 +327,7 @@ impl Ollama {
                 .context("Local Ollama inference failed")?,
             2 * 1024 * 1024,
         )?;
+        self.record_usage(result.prompt_eval_count, result.eval_count);
         ensure!(
             result.done && result.done_reason == "stop",
             "Model response was incomplete; no action is authorized"
@@ -326,6 +358,25 @@ impl Ollama {
         Ok(())
     }
 
+    fn unload_and_wait(&self) -> Result<()> {
+        self.unload_for_transport_recovery()?;
+        for _ in 0..50 {
+            let ps: Ps = net::json(
+                net::client(10, true)?.get(self.url("/api/ps")).send()?,
+                2 * 1024 * 1024,
+            )?;
+            if !ps
+                .models
+                .iter()
+                .any(|model| model_name_matches(&self.settings.model, &model.name))
+            {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        anyhow::bail!("Ollama did not unload the selected model before the cold-profile deadline")
+    }
+
     fn chat<T: DeserializeOwned>(&self, system: &str, payload: Value, schema: Value) -> Result<T> {
         match self.chat_once(system, &payload, &schema) {
             Ok(value) => Ok(value),
@@ -345,13 +396,20 @@ impl Ollama {
         }
     }
     fn profile_pipeline(&self, email: &Email) -> Result<PipelineProfile> {
+        let before = self.counter_snapshot();
         let started = std::time::Instant::now();
         let (analysis, draft, flags) = self.analyze(email)?;
         let elapsed_millis =
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let after = self.counter_snapshot();
         let status = self.residency(&analysis.model_digest)?;
         Ok(PipelineProfile {
             elapsed_millis,
+            request_count: after.requests.saturating_sub(before.requests),
+            prompt_tokens: after.prompt_tokens.saturating_sub(before.prompt_tokens),
+            completion_tokens: after
+                .completion_tokens
+                .saturating_sub(before.completion_tokens),
             category: analysis.verdict.category,
             draft_generated: draft.is_some(),
             verification_passed: analysis
@@ -382,7 +440,7 @@ impl Ollama {
         pinned.task_qualification = None;
         let candidate = Self::new(&pinned)?;
 
-        candidate.unload_for_transport_recovery()?;
+        candidate.unload_and_wait()?;
         let baseline = sample_email(
             "Your application",
             "Thank you for applying for the engineer position. We have decided not to move forward with your application.",
@@ -483,6 +541,7 @@ impl Ollama {
                 .context("Local Ollama warm-up failed")?,
             256 * 1024,
         )?;
+        self.record_usage(warm.prompt_eval_count, warm.eval_count);
         ensure!(
             warm.done && warm.prompt_eval_count > 0,
             "Local model warm-up was incomplete"
