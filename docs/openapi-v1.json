@@ -265,6 +265,82 @@
             ]
           }
         }
+      },
+      "AuditAnchor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format_version",
+          "application_version",
+          "created_at",
+          "workspace_fingerprint",
+          "audit_sequence",
+          "audit_head"
+        ],
+        "properties": {
+          "format_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "application_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "audit_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "audit_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "AuditAnchorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "algorithm",
+          "head",
+          "sequence",
+          "workspace_fingerprint",
+          "verified",
+          "anchor"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "const": "sha256-chain-v1"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workspace_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "verified": {
+            "type": "boolean",
+            "const": true
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/AuditAnchor"
+          }
+        }
       }
     },
     "headers": {
@@ -653,13 +729,20 @@
         "summary": "Current tamper-evident audit-chain anchor",
         "responses": {
           "200": {
-            "description": "Audit anchor",
+            "description": "Current verified tamper-evident audit anchor. Existing top-level head remains for v1 compatibility; sequence/workspace fields and the versioned nested anchor are additive.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditAnchorResponse"
+                }
               }
             }
           },
