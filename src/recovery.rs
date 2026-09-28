@@ -562,12 +562,7 @@ mod tests {
         private_dir(&data).unwrap();
         let destination = root.path().join("recovery-key.json");
         assert!(
-            export_recovery_key(
-                &data,
-                b"correct horse battery staple",
-                &destination,
-            )
-            .is_err()
+            export_recovery_key(&data, b"correct horse battery staple", &destination,).is_err()
         );
         assert!(!destination.exists());
         assert!(!data.join(VAULT_ID_NAME).exists());
