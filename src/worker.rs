@@ -39,6 +39,7 @@ pub struct Snapshot {
     pub counts: Counts,
     pub storage: Option<crate::storage::StorageHealth>,
     pub scheduled_backup: Option<crate::recovery::ScheduledBackupStatus>,
+    pub backup_isolation: Option<crate::recovery::BackupIsolationStatus>,
     pub model: ModelStatus,
     pub last_poll: Option<DateTime<Utc>>,
     pub next_poll: Option<DateTime<Utc>>,
@@ -427,6 +428,8 @@ fn refresh(
     s.storage = crate::storage::inspect(&e.directory).ok();
     s.scheduled_backup =
         crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now()).ok();
+    s.backup_isolation =
+        crate::recovery::backup_isolation_status(&e.directory, &e.settings).ok();
     s.model = e.model.clone();
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
@@ -1206,6 +1209,8 @@ fn api_query_with_operation(
             let storage = crate::storage::inspect(&e.directory)?;
             let scheduled_backup =
                 crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
+            let backup_isolation =
+                crate::recovery::backup_isolation_status(&e.directory, &e.settings)?;
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
             let readiness = crate::readiness::assess(
@@ -1232,6 +1237,7 @@ fn api_query_with_operation(
                     database_integrity_ok: integrity_ok,
                     storage_write_safe: storage.runtime_write_safe,
                     scheduled_backup_overdue: scheduled_backup.overdue,
+                    backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
                     connected: e.connected(),
                     now: Utc::now(),
                 },
@@ -1244,6 +1250,7 @@ fn api_query_with_operation(
                 "operational": operational,
                 "storage": storage,
                 "scheduled_backup": scheduled_backup,
+                "backup_isolation": backup_isolation,
                 "database": {
                     "integrity_ok": integrity_ok,
                     "schema_version": e.db.schema_version()?,
