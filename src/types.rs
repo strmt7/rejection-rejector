@@ -303,6 +303,7 @@ pub enum OperationKind {
     ProfileModel,
     CompareModels,
     IntegrityCheck,
+    CompactDatabase,
     Backup,
     RecoveryDrill,
     Diagnostics,
@@ -340,6 +341,7 @@ impl OperationKind {
             Self::ProfileModel => "model_runtime_profile_failed",
             Self::CompareModels => "model_comparison_failed",
             Self::IntegrityCheck => "database_integrity_failed",
+            Self::CompactDatabase => "database_compaction_failed",
             Self::Backup => "backup_failed",
             Self::RecoveryDrill => "recovery_drill_failed",
             Self::Diagnostics => "diagnostics_export_failed",
@@ -384,6 +386,7 @@ impl OperationKind {
                 | Self::EvaluateModel
                 | Self::ProfileModel
                 | Self::CompareModels
+                | Self::CompactDatabase
                 | Self::Backup
                 | Self::RecoveryDrill
                 | Self::Diagnostics
@@ -419,7 +422,7 @@ impl OperationKind {
                 600
             }
             Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
-            Self::InstallOllama | Self::Backup | Self::RecoveryDrill => 3_600,
+            Self::InstallOllama | Self::CompactDatabase | Self::Backup | Self::RecoveryDrill => 3_600,
             Self::PullModel | Self::EvaluateModel | Self::ProfileModel => 7_200,
             Self::CompareModels => 21_600,
         }
