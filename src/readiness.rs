@@ -262,6 +262,7 @@ mod tests {
                 .contains(&"storage_headroom_low")
         );
 
+        let now = Utc::now();
         let backup_overdue = operational_indicators(
             &Settings::default(),
             &Counts::default(),

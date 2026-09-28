@@ -802,7 +802,7 @@ mod tests {
         }
         let valid_count = fs::read_dir(&backups)
             .unwrap()
-            .filter_map(Result::ok)
+            .filter_map(|entry| entry.ok())
             .filter(|entry| {
                 entry.file_type().is_ok_and(|kind| kind.is_dir())
                     && entry
