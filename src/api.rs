@@ -298,6 +298,65 @@ mod tests {
     }
 
     #[test]
+    fn openmetrics_route_uses_real_authenticated_wire_contract() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let token = "T".repeat(48);
+        let (commands, receiver) = bounded(4);
+        let stop = Arc::new(AtomicBool::new(false));
+        let disabled = Arc::new(AtomicBool::new(false));
+        let responder = std::thread::spawn(move || {
+            let command = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            match command {
+                Command::OpenMetrics { reply } => {
+                    reply
+                        .send(
+                            "# TYPE rejection_rejector_up gauge\nrejection_rejector_up 1\n# EOF\n"
+                                .into(),
+                        )
+                        .unwrap();
+                }
+                _ => panic!("unexpected command for OpenMetrics test"),
+            }
+        });
+
+        start(
+            port,
+            token.clone(),
+            commands,
+            stop.clone(),
+            disabled,
+            WorkerPulse::new(),
+        )
+        .unwrap();
+
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/metrics/openmetrics"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            OPENMETRICS_CONTENT_TYPE
+        );
+        let body = response.text().unwrap();
+        assert!(body.ends_with("# EOF\n"));
+        assert!(body.contains("rejection_rejector_up 1\n"));
+
+        stop.store(true, Ordering::SeqCst);
+        responder.join().unwrap();
+    }
+
+    #[test]
     fn metric_content_types_are_explicit_and_prometheus_compatible() {
         assert_eq!(JSON_CONTENT_TYPE, "application/json; charset=utf-8");
         assert_eq!(
