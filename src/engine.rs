@@ -534,12 +534,19 @@ impl Engine {
                 .pointer("/summary/fixture_count")
                 .and_then(serde_json::Value::as_u64)
                 .context("Evaluation report is missing fixture count")?;
+            let ollama_runtime_version = report
+                .get("ollama_runtime_version")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("Evaluation report is missing Ollama runtime version")?
+                .to_owned();
             let qualification = TaskQualification {
                 model: self.settings.model.clone(),
                 digest: digest.clone(),
                 prompt_version: PROMPT_VERSION.into(),
                 context_hash: settings_context_hash(&self.settings),
                 suite_hash: evaluation_suite_hash(),
+                ollama_runtime_version,
                 task_score,
                 fixture_count: u32::try_from(fixture_count)
                     .context("Evaluation fixture count is outside supported range")?,
@@ -901,13 +908,28 @@ impl Engine {
                 DispatchFailureKind::ReviewRequired,
                 "Automatic send conditions were not satisfied",
             )?;
-            let status = Ollama::new(&self.settings)
-                .and_then(|ollama| ollama.inspect())
-                .map_err(|error| {
-                    DispatchFailure::retryable(format!(
-                        "Local model pre-send check is temporarily unavailable: {error}"
-                    ))
-                })?;
+            let local_ai = Ollama::new(&self.settings)
+                .map_err(|error| DispatchFailure::review(error.to_string()))?;
+            let runtime_version = local_ai.runtime_version().map_err(|error| {
+                DispatchFailure::retryable(format!(
+                    "Local model runtime pre-send check is temporarily unavailable: {error}"
+                ))
+            })?;
+            let qualification = self
+                .settings
+                .task_qualification
+                .as_ref()
+                .ok_or_else(|| DispatchFailure::review("Task qualification is missing"))?;
+            dispatch_require(
+                runtime_version == qualification.ollama_runtime_version,
+                DispatchFailureKind::ReviewRequired,
+                "Ollama runtime changed since task qualification; re-evaluate before Automatic sending",
+            )?;
+            let status = local_ai.inspect().map_err(|error| {
+                DispatchFailure::retryable(format!(
+                    "Local model pre-send check is temporarily unavailable: {error}"
+                ))
+            })?;
             let analyzed_digest = &job
                 .analysis
                 .as_ref()
