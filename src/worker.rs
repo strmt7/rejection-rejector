@@ -6,6 +6,7 @@ use crate::{
     types::*,
 };
 use anyhow::{Context, Result, ensure};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use serde_json::{Value, json};
@@ -718,6 +719,30 @@ fn unique_query(url: &url::Url) -> Result<std::collections::BTreeMap<String, Str
     Ok(query)
 }
 
+fn encode_item_cursor(cursor: &ItemCursor) -> Result<String> {
+    Ok(URL_SAFE_NO_PAD.encode(serde_json::to_vec(cursor)?))
+}
+
+fn decode_item_cursor(value: &str) -> Result<ItemCursor> {
+    ensure!(
+        !value.is_empty()
+            && value.len() <= 1024
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "Invalid item-feed cursor encoding"
+    );
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| anyhow::anyhow!("Invalid item-feed cursor encoding"))?;
+    ensure!(bytes.len() <= 768, "Item-feed cursor exceeds size limit");
+    let cursor: ItemCursor =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("Invalid item-feed cursor"))?;
+    ensure!(cursor.snapshot_rowid >= 0, "Invalid item-feed snapshot");
+    validate_api_item_id(&cursor.id)?;
+    Ok(cursor)
+}
+
 fn validate_api_item_id(id: &str) -> Result<()> {
     ensure!(
         id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -778,6 +803,7 @@ fn api_query_with_operation(
                     "typed_operation_status": true,
                     "typed_audit_events": true,
                     "privacy_safe_metrics": true,
+                    "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
                     "enterprise_policy_digest_pin": true
                 },
@@ -881,6 +907,35 @@ fn api_query_with_operation(
             Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"settings_format_version":e.settings.settings_format_version,"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
             )
+        }
+        "/v1/item-feed" => {
+            ensure!(
+                query.keys().all(|key| matches!(key.as_str(), "cursor" | "limit")),
+                "Item-feed endpoint accepts only cursor and limit"
+            );
+            let limit = query
+                .get("limit")
+                .map(|value| value.parse::<u32>())
+                .transpose()?
+                .unwrap_or(25);
+            ensure!((1..=100).contains(&limit), "Item-feed limit must be 1..100");
+            let cursor = query
+                .get("cursor")
+                .map(|value| decode_item_cursor(value))
+                .transpose()?;
+            let page = e
+                .db
+                .list_cursor(&e.account, false, cursor.as_ref(), limit)?;
+            let next_cursor = page
+                .next_cursor
+                .as_ref()
+                .map(encode_item_cursor)
+                .transpose()?;
+            Ok(json!({
+                "schema_version": 1,
+                "items": page.items,
+                "next_cursor": next_cursor
+            }))
         }
         "/v1/items" => {
             ensure!(
@@ -1026,6 +1081,8 @@ mod tests {
         )
         .unwrap();
         assert!(api_query(&engine, "/v1/metrics?extra=1").is_err());
+        assert!(api_query(&engine, "/v1/item-feed?extra=1").is_err());
+        assert!(api_query(&engine, "/v1/item-feed?limit=0").is_err());
         assert!(api_query(&engine, "/v1/health?extra=1").is_err());
         assert!(api_query(&engine, "/v1/status?extra=1").is_err());
         assert!(api_query(&engine, "/v1/items?page=1&extra=2").is_err());
@@ -1084,6 +1141,20 @@ mod tests {
             head
         );
         assert!(api_query(&engine, "/v1/audit/contains?head=not-a-hash").is_err());
+    }
+
+    #[test]
+    fn item_feed_cursor_codec_is_bounded_and_round_trips() {
+        let cursor = ItemCursor {
+            snapshot_rowid: 42,
+            sort_at: 1_700_000_000,
+            id: "a".repeat(64),
+        };
+        let encoded = encode_item_cursor(&cursor).unwrap();
+        assert_eq!(decode_item_cursor(&encoded).unwrap(), cursor);
+        assert!(decode_item_cursor("").is_err());
+        assert!(decode_item_cursor("%%%").is_err());
+        assert!(decode_item_cursor(&"a".repeat(1025)).is_err());
     }
 
     #[test]
