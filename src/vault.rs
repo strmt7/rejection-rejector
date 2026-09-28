@@ -109,7 +109,8 @@ impl Vault {
             let entry = keyring::Entry::new("rejection-rejector.v1", id.trim())?;
             match entry.get_password() {
                 Ok(encoded) => {
-                    let bytes = Zeroizing::new(STANDARD.decode(encoded)?);
+                    let encoded = Zeroizing::new(encoded);
+                    let bytes = Zeroizing::new(STANDARD.decode(encoded.as_bytes())?);
                     ensure!(bytes.len() == 32, "Invalid OS credential-store key");
                     let mut key = Zeroizing::new([0u8; 32]);
                     key.copy_from_slice(&bytes);
@@ -118,7 +119,8 @@ impl Vault {
                 Err(keyring::Error::NoEntry) if is_new || !dir.join("state.sqlite3").exists() => {
                     let mut key = Zeroizing::new([0u8; 32]);
                     rand::rngs::OsRng.fill_bytes(key.as_mut());
-                    entry.set_password(&STANDARD.encode(key.as_ref())).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
+                    let encoded = Zeroizing::new(STANDARD.encode(key.as_ref()));
+                    entry.set_password(encoded.as_str()).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
                     Ok(Self::from_zeroizing_key(key))
                 }
                 Err(e) => Err(anyhow::anyhow!(
@@ -280,8 +282,9 @@ impl Vault {
                 ));
             }
         }
+        let encoded = Zeroizing::new(STANDARD.encode(self.key.as_ref().as_ref()));
         entry
-            .set_password(&STANDARD.encode(self.key.as_ref().as_ref()))
+            .set_password(encoded.as_str())
             .context("Cannot install the recovered vault key in the OS credential store")?;
         Ok(())
     }
