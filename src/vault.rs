@@ -2,11 +2,11 @@
 use anyhow::{Context, Result, ensure};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use chrono::{DateTime, Utc};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{fs, io::Write, path::Path, sync::Arc};
@@ -67,8 +67,7 @@ fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2
 }
 
 pub fn vault_id(dir: &Path) -> Result<String> {
-    let id = fs::read_to_string(dir.join("vault-id"))
-        .context("Vault identifier is missing")?;
+    let id = fs::read_to_string(dir.join("vault-id")).context("Vault identifier is missing")?;
     let id = id.trim().to_owned();
     validate_vault_id(&id)?;
     Ok(id)
@@ -166,13 +165,9 @@ impl Vault {
         rand::rngs::OsRng.fill_bytes(&mut nonce);
 
         let mut wrapping_key = Zeroizing::new([0u8; 32]);
-        recovery_argon2(
-            RECOVERY_MEMORY_KIB,
-            RECOVERY_TIME_COST,
-            RECOVERY_LANES,
-        )?
-        .hash_password_into(passphrase, &salt, wrapping_key.as_mut())
-        .map_err(|_| anyhow::anyhow!("Recovery key derivation failed"))?;
+        recovery_argon2(RECOVERY_MEMORY_KIB, RECOVERY_TIME_COST, RECOVERY_LANES)?
+            .hash_password_into(passphrase, &salt, wrapping_key.as_mut())
+            .map_err(|_| anyhow::anyhow!("Recovery key derivation failed"))?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
             .map_err(|_| anyhow::anyhow!("Invalid recovery wrapping key"))?;
@@ -237,13 +232,9 @@ impl Vault {
         ensure!(wrapped.len() == 48, "Invalid wrapped recovery key length");
 
         let mut wrapping_key = Zeroizing::new([0u8; 32]);
-        recovery_argon2(
-            envelope.memory_kib,
-            envelope.time_cost,
-            envelope.lanes,
-        )?
-        .hash_password_into(passphrase, &salt, wrapping_key.as_mut())
-        .map_err(|_| anyhow::anyhow!("Recovery key derivation failed"))?;
+        recovery_argon2(envelope.memory_kib, envelope.time_cost, envelope.lanes)?
+            .hash_password_into(passphrase, &salt, wrapping_key.as_mut())
+            .map_err(|_| anyhow::anyhow!("Recovery key derivation failed"))?;
         let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
             .map_err(|_| anyhow::anyhow!("Invalid recovery wrapping key"))?;
         let plain = Zeroizing::new(
