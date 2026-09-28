@@ -1,6 +1,6 @@
 use crate::{
     engine::Engine,
-    readiness::{OperationalIndicators, operational_indicators},
+    readiness::{OperationalContext, OperationalIndicators, operational_indicators},
     recovery::ScheduledBackupStatus,
     storage::StorageHealth,
 };
@@ -45,16 +45,16 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let storage = crate::storage::inspect(&engine.directory)?;
     let scheduled_backup =
         crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, now)?;
-    let operational = operational_indicators(
-        &engine.settings,
-        &counts,
-        engine.last_poll()?,
-        integrity_ok,
-        storage.runtime_write_safe,
-        scheduled_backup.overdue,
-        engine.connected(),
+    let operational = operational_indicators(OperationalContext {
+        settings: &engine.settings,
+        counts: &counts,
+        last_poll: engine.last_poll()?,
+        database_integrity_ok: integrity_ok,
+        storage_write_safe: storage.runtime_write_safe,
+        scheduled_backup_overdue: scheduled_backup.overdue,
+        connected: engine.connected(),
         now,
-    );
+    });
     let policy = engine.enterprise_policy_status();
     let external_audit_anchor_configured =
         std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
