@@ -434,6 +434,23 @@ fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> Opera
     }
 }
 
+fn protect_audit_boundary<T>(engine: &Engine, result: Result<T>) -> Result<T> {
+    match engine.checkpoint_audit_protection() {
+        Ok(()) => result,
+        Err(anchor_error) => {
+            engine.paused.store(true, Ordering::SeqCst);
+            match result {
+                Ok(_) => Err(anchor_error.context(
+                    "OS-protected audit checkpoint failed; worker paused fail-closed",
+                )),
+                Err(operation_error) => Err(anyhow::anyhow!(
+                    "Operation failed: {operation_error:#}; OS-protected audit checkpoint also failed: {anchor_error:#}. Worker paused fail-closed"
+                )),
+            }
+        }
+    }
+}
+
 fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
     let shift = failures.saturating_sub(1).min(6);
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
@@ -510,7 +527,7 @@ fn run(
                 begin_operation(&shared, operation, "Working locally…");
                 record_current_operation(&journal, &shared);
                 let mut settings_changed = false;
-                let result: Result<()> = match command {
+                let operation_result: Result<()> = match command {
                     Command::Refresh => Ok(()),
                     Command::CheckNow => {
                         busy(&shared, "Checking Gmail for missing messages…");
@@ -657,6 +674,7 @@ fn run(
                         "Internal API command reached the wrong dispatcher"
                     )),
                 };
+                let result = protect_audit_boundary(&e, operation_result);
                 if settings_changed && let Ok(mut s) = shared.lock() {
                     s.settings_revision += 1;
                 }
@@ -682,7 +700,7 @@ fn run(
                 "Checking administrator enterprise policy…",
             );
             record_current_operation(&journal, &shared);
-            let result = e.reload_enterprise_policy();
+            let result = protect_audit_boundary(&e, e.reload_enterprise_policy());
             match result {
                 Ok(changed) => {
                     policy_failures = 0;
@@ -729,7 +747,8 @@ fn run(
                 "Applying local retention policy to completed content…",
             );
             record_current_operation(&journal, &shared);
-            let result = e.db.purge(e.settings.retention_days).map(|_| ());
+            let result =
+                protect_audit_boundary(&e, e.db.purge(e.settings.retention_days).map(|_| ()));
             report(&shared, OperationKind::PurgeRetention, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
@@ -757,7 +776,7 @@ fn run(
                 "Scheduled Gmail check: fetching only missing identities…",
             );
             record_current_operation(&journal, &shared);
-            let result = e.synchronize().map(|_| ());
+            let result = protect_audit_boundary(&e, e.synchronize().map(|_| ()));
             report(&shared, OperationKind::SyncMailbox, &result);
             record_current_operation(&journal, &shared);
             sync_retry =
@@ -774,7 +793,7 @@ fn run(
                 "Local AI: classifying, drafting and checking one new email…",
             );
             record_current_operation(&journal, &shared);
-            let result = e.process_one().map(|_| ());
+            let result = protect_audit_boundary(&e, e.process_one().map(|_| ()));
             report(&shared, OperationKind::AnalyzeQueuedMail, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
@@ -793,7 +812,7 @@ fn run(
                 "Evaluating automatic dispatch policy…",
             );
             record_current_operation(&journal, &shared);
-            let result = e.automatic_tick();
+            let result = protect_audit_boundary(&e, e.automatic_tick());
             match &result {
                 Ok(_) => {
                     automatic_failures = 0;
