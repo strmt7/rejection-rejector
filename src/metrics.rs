@@ -232,7 +232,7 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
         snapshot
             .backup_isolation
             .distinct_failure_domain
-            .map(|value| i8::from(value))
+            .map(|value| if value { 1_i8 } else { 0_i8 })
             .unwrap_or(-1),
     );
     push_gauge(
