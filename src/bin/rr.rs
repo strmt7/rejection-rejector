@@ -105,10 +105,12 @@ fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
         metadata.len() <= 4096,
         "Recovery passphrase file exceeds the 4 KiB safety limit"
     );
-    let mut bytes = Zeroizing::new(
-        std::fs::read(path).context("Cannot read recovery passphrase file")?,
-    );
-    while bytes.last().is_some_and(|byte| matches!(byte, b'\r' | b'\n')) {
+    let mut bytes =
+        Zeroizing::new(std::fs::read(path).context("Cannot read recovery passphrase file")?);
+    while bytes
+        .last()
+        .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
+    {
         bytes.pop();
     }
     ensure!(
@@ -367,11 +369,8 @@ fn main() -> Result<()> {
             passphrase_file,
         } => {
             let passphrase = recovery_passphrase(&passphrase_file)?;
-            let envelope = recovery::verify_recovery_key_for_backup(
-                &backup,
-                &recovery_key,
-                &passphrase,
-            )?;
+            let envelope =
+                recovery::verify_recovery_key_for_backup(&backup, &recovery_key, &passphrase)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
