@@ -9,7 +9,10 @@ use rusqlite::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::{path::{Path, PathBuf}, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 pub const DATABASE_SCHEMA_VERSION: i64 = 4;
 
@@ -1370,20 +1373,19 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .collect::<Vec<_>>();
         assert_eq!(backups.len(), 1);
-        let backup = Connection::open_with_flags(
-            &backups[0],
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
+        let backup =
+            Connection::open_with_flags(&backups[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
         let backed_up_version: i64 = backup
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(backed_up_version, 2);
-        assert!(db
-            .events(0, 100)
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "database.migrated"));
+        assert!(
+            db.events(0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "database.migrated")
+        );
     }
 
     #[test]
