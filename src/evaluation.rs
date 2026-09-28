@@ -21,6 +21,11 @@ enum CaseTag {
     PromptInjection,
     Ambiguous,
     PendingStatus,
+    Assessment,
+    TalentPool,
+    RoleClosure,
+    ApplicationActionRequired,
+    Survey,
 }
 
 impl CaseTag {
@@ -35,6 +40,11 @@ impl CaseTag {
             Self::PromptInjection => "prompt_injection",
             Self::Ambiguous => "ambiguous",
             Self::PendingStatus => "pending_status",
+            Self::Assessment => "assessment",
+            Self::TalentPool => "talent_pool",
+            Self::RoleClosure => "role_closure",
+            Self::ApplicationActionRequired => "application_action_required",
+            Self::Survey => "survey",
         }
     }
 
@@ -47,6 +57,10 @@ impl CaseTag {
                 | Self::QuotedHistory
                 | Self::PromptInjection
                 | Self::Ambiguous
+                | Self::Assessment
+                | Self::TalentPool
+                | Self::RoleClosure
+                | Self::ApplicationActionRequired
         )
     }
 }
@@ -66,7 +80,11 @@ struct TagSummary {
     cases: usize,
     completed: usize,
     correct: usize,
+    expected_rejections: usize,
+    rejection_true_positives: usize,
     rejection_false_positives: usize,
+    rejection_false_negatives: usize,
+    verified_rejection_pipeline: usize,
     unsafe_non_rejection_drafts: usize,
 }
 
@@ -90,6 +108,11 @@ struct Summary {
     critical_negative_completed: usize,
     critical_negative_rejection_false_positives: usize,
     critical_negative_unsafe_drafts: usize,
+    deterministic_rejection_evidence_hits: usize,
+    deterministic_rejection_evidence_false_positives: usize,
+    deterministic_rejection_evidence_recall: Option<f64>,
+    multilingual_rejection_recall: Option<f64>,
+    multilingual_verified_rejection_pipeline_rate: Option<f64>,
     mean_seconds: Option<f64>,
     task_score: f64,
     recommendation_eligible: bool,
@@ -133,6 +156,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let mut critical_negative_completed = 0usize;
     let mut critical_negative_rejection_false_positives = 0usize;
     let mut critical_negative_unsafe_drafts = 0usize;
+    let mut deterministic_rejection_evidence_hits = 0usize;
+    let mut deterministic_rejection_evidence_false_positives = 0usize;
     let mut tag_metrics = BTreeMap::<String, TagSummary>::new();
     let mut completed = 0usize;
     let mut total_seconds = 0.0f64;
@@ -142,8 +167,18 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         let critical_negative = case.expected != Category::Rejection
             && case.tags.iter().copied().any(CaseTag::critical_negative);
         critical_negative_cases += usize::from(critical_negative);
+        let deterministic_rejection_evidence =
+            mail::clear_rejection_language(&case.subject, &case.text);
+        deterministic_rejection_evidence_hits += usize::from(
+            case.expected == Category::Rejection && deterministic_rejection_evidence,
+        );
+        deterministic_rejection_evidence_false_positives += usize::from(
+            case.expected != Category::Rejection && deterministic_rejection_evidence,
+        );
         for tag in &case.tags {
-            tag_metrics.entry(tag.as_str().into()).or_default().cases += 1;
+            let metrics = tag_metrics.entry(tag.as_str().into()).or_default();
+            metrics.cases += 1;
+            metrics.expected_rejections += usize::from(case.expected == Category::Rejection);
         }
         let start = std::time::Instant::now();
         match llm.analyze(&sample_email(&case.subject, &case.text)) {
@@ -192,7 +227,15 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                     })?;
                     metrics.completed += 1;
                     metrics.correct += usize::from(matched);
+                    metrics.rejection_true_positives += usize::from(
+                        actual == Category::Rejection && case.expected == Category::Rejection,
+                    );
                     metrics.rejection_false_positives += usize::from(rejection_false_positive);
+                    metrics.rejection_false_negatives += usize::from(
+                        actual != Category::Rejection && case.expected == Category::Rejection,
+                    );
+                    metrics.verified_rejection_pipeline +=
+                        usize::from(rejection_pipeline_passed);
                     metrics.unsafe_non_rejection_drafts += usize::from(non_rejection_draft);
                 }
 
@@ -200,6 +243,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                     "id": case.id,
                     "tags": case.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
                     "critical_negative": critical_negative,
+                    "deterministic_rejection_evidence": deterministic_rejection_evidence,
                     "expected": case.expected,
                     "actual": actual,
                     "match": matched,
@@ -228,6 +272,17 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let recall = ratio(rejection_tp, rejection_tp + rejection_fn);
     let fp_avoidance = ratio(non_rejections.saturating_sub(rejection_fp), non_rejections);
     let pipeline_rate = ratio(verified_pipeline, expected_rejections);
+    let deterministic_rejection_evidence_recall =
+        ratio(deterministic_rejection_evidence_hits, expected_rejections);
+    let multilingual = tag_metrics.get(CaseTag::Multilingual.as_str());
+    let multilingual_rejection_recall = multilingual.and_then(|metrics| {
+        ratio(
+            metrics.rejection_true_positives,
+            metrics.rejection_true_positives + metrics.rejection_false_negatives,
+        )
+    });
+    let multilingual_verified_rejection_pipeline_rate = multilingual
+        .and_then(|metrics| ratio(metrics.verified_rejection_pipeline, metrics.expected_rejections));
     let completion_rate = ratio(completed, cases.len()).unwrap_or(0.0);
 
     // Task-specific weighting: false-positive avoidance dominates because replying
@@ -245,8 +300,12 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         && critical_negative_completed == critical_negative_cases
         && critical_negative_rejection_false_positives == 0
         && critical_negative_unsafe_drafts == 0
+        && deterministic_rejection_evidence_false_positives == 0
+        && deterministic_rejection_evidence_recall.unwrap_or(0.0) >= 0.90
         && recall.unwrap_or(0.0) >= 0.90
         && pipeline_rate.unwrap_or(0.0) >= 0.90
+        && multilingual_rejection_recall.unwrap_or(0.0) >= 0.85
+        && multilingual_verified_rejection_pipeline_rate.unwrap_or(0.0) >= 0.85
         && qualified.gpu_resident;
 
     let summary = Summary {
@@ -268,6 +327,11 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         critical_negative_completed,
         critical_negative_rejection_false_positives,
         critical_negative_unsafe_drafts,
+        deterministic_rejection_evidence_hits,
+        deterministic_rejection_evidence_false_positives,
+        deterministic_rejection_evidence_recall,
+        multilingual_rejection_recall,
+        multilingual_verified_rejection_pipeline_rate,
         mean_seconds: (completed != 0).then(|| total_seconds / completed as f64),
         task_score,
         recommendation_eligible,
@@ -371,7 +435,11 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
             "critical_negative_rejection_false_positives": 0,
             "critical_negative_unsafe_drafts": 0,
             "all_critical_negative_cases_complete": true,
+            "deterministic_rejection_evidence_false_positives": 0,
+            "minimum_deterministic_rejection_evidence_recall": 0.90,
             "minimum_rejection_recall": 0.90,
+            "minimum_multilingual_rejection_recall": 0.85,
+            "minimum_multilingual_verified_rejection_pipeline_rate": 0.85,
             "minimum_verified_rejection_pipeline_rate": 0.90,
             "full_gpu_residency_required": true
         },
