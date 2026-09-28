@@ -78,6 +78,7 @@ Enterprise policy can be independently authenticated with SHA-256 pinning, Ed255
 - [Enterprise readiness](docs/ENTERPRISE_READINESS.md)
 - [Tests and acceptance checks](docs/TESTING.md)
 - [Security](SECURITY.md)
+- [Threat model and data-flow invariants](docs/THREAT_MODEL.md)
 - [Original implementation plan](docs/PLAN.md)
 
 CI runs actual builds/tests. A Linux native screenshot is not Windows visual acceptance. Live Gmail authorization/delivery and physical 16 GiB GPU verification require the owner's environment. Application code is MIT; Ollama and model weights retain their own licenses.
