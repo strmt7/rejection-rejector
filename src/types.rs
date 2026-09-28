@@ -266,8 +266,7 @@ pub struct SyncState {
 #[serde(deny_unknown_fields)]
 pub struct ItemCursor {
     pub snapshot_rowid: i64,
-    pub sort_at: i64,
-    pub id: String,
+    pub last_rowid: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
