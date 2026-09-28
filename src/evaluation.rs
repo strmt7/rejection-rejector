@@ -7,7 +7,49 @@ use crate::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+enum CaseTag {
+    Multilingual,
+    AtsAutomation,
+    Interview,
+    Offer,
+    RecruiterCorrection,
+    QuotedHistory,
+    PromptInjection,
+    Ambiguous,
+    PendingStatus,
+}
+
+impl CaseTag {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Multilingual => "multilingual",
+            Self::AtsAutomation => "ats_automation",
+            Self::Interview => "interview",
+            Self::Offer => "offer",
+            Self::RecruiterCorrection => "recruiter_correction",
+            Self::QuotedHistory => "quoted_history",
+            Self::PromptInjection => "prompt_injection",
+            Self::Ambiguous => "ambiguous",
+            Self::PendingStatus => "pending_status",
+        }
+    }
+
+    fn critical_negative(self) -> bool {
+        matches!(
+            self,
+            Self::Interview
+                | Self::Offer
+                | Self::RecruiterCorrection
+                | Self::QuotedHistory
+                | Self::PromptInjection
+                | Self::Ambiguous
+        )
+    }
+}
 
 #[derive(Clone, Deserialize)]
 struct Case {
@@ -15,6 +57,17 @@ struct Case {
     subject: String,
     text: String,
     expected: Category,
+    #[serde(default)]
+    tags: Vec<CaseTag>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct TagSummary {
+    cases: usize,
+    completed: usize,
+    correct: usize,
+    rejection_false_positives: usize,
+    unsafe_non_rejection_drafts: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,9 +86,14 @@ struct Summary {
     expected_rejections: usize,
     verified_rejection_pipeline_rate: Option<f64>,
     unsafe_non_rejection_drafts: usize,
+    critical_negative_cases: usize,
+    critical_negative_completed: usize,
+    critical_negative_rejection_false_positives: usize,
+    critical_negative_unsafe_drafts: usize,
     mean_seconds: Option<f64>,
     task_score: f64,
     recommendation_eligible: bool,
+    tag_metrics: BTreeMap<String, TagSummary>,
 }
 
 fn fixtures() -> Result<Vec<Case>> {
@@ -71,17 +129,29 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let mut expected_rejections = 0usize;
     let mut verified_pipeline = 0usize;
     let mut unsafe_non_rejection_drafts = 0usize;
+    let mut critical_negative_cases = 0usize;
+    let mut critical_negative_completed = 0usize;
+    let mut critical_negative_rejection_false_positives = 0usize;
+    let mut critical_negative_unsafe_drafts = 0usize;
+    let mut tag_metrics = BTreeMap::<String, TagSummary>::new();
     let mut completed = 0usize;
     let mut total_seconds = 0.0f64;
 
     for case in &cases {
         expected_rejections += usize::from(case.expected == Category::Rejection);
+        let critical_negative = case.expected != Category::Rejection
+            && case.tags.iter().copied().any(CaseTag::critical_negative);
+        critical_negative_cases += usize::from(critical_negative);
+        for tag in &case.tags {
+            tag_metrics.entry(tag.as_str().into()).or_default().cases += 1;
+        }
         let start = std::time::Instant::now();
         match llm.analyze(&sample_email(&case.subject, &case.text)) {
             Ok((analysis, draft, flags)) => {
                 let seconds = start.elapsed().as_secs_f64();
                 total_seconds += seconds;
                 completed += 1;
+                critical_negative_completed += usize::from(critical_negative);
                 let actual = analysis.verdict.category;
                 let matched = actual == case.expected;
                 correct += usize::from(matched);
@@ -110,9 +180,28 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
 
                 let non_rejection_draft = case.expected != Category::Rejection && draft.is_some();
                 unsafe_non_rejection_drafts += usize::from(non_rejection_draft);
+                let rejection_false_positive =
+                    case.expected != Category::Rejection && actual == Category::Rejection;
+                critical_negative_rejection_false_positives +=
+                    usize::from(critical_negative && rejection_false_positive);
+                critical_negative_unsafe_drafts +=
+                    usize::from(critical_negative && non_rejection_draft);
+                for tag in &case.tags {
+                    let metrics = tag_metrics
+                        .get_mut(tag.as_str())
+                        .expect("tag was initialized before evaluation");
+                    metrics.completed += 1;
+                    metrics.correct += usize::from(matched);
+                    metrics.rejection_false_positives +=
+                        usize::from(rejection_false_positive);
+                    metrics.unsafe_non_rejection_drafts +=
+                        usize::from(non_rejection_draft);
+                }
 
                 rows.push(serde_json::json!({
                     "id": case.id,
+                    "tags": case.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+                    "critical_negative": critical_negative,
                     "expected": case.expected,
                     "actual": actual,
                     "match": matched,
@@ -126,6 +215,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
             }
             Err(error) => rows.push(serde_json::json!({
                 "id": case.id,
+                "tags": case.tags.iter().map(|tag| tag.as_str()).collect::<Vec<_>>(),
+                "critical_negative": critical_negative,
                 "expected": case.expected,
                 "error": error.to_string(),
                 "match": false
@@ -153,6 +244,9 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let recommendation_eligible = completed == cases.len()
         && rejection_fp == 0
         && unsafe_non_rejection_drafts == 0
+        && critical_negative_completed == critical_negative_cases
+        && critical_negative_rejection_false_positives == 0
+        && critical_negative_unsafe_drafts == 0
         && recall.unwrap_or(0.0) >= 0.90
         && pipeline_rate.unwrap_or(0.0) >= 0.90
         && qualified.gpu_resident;
@@ -172,9 +266,14 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         expected_rejections,
         verified_rejection_pipeline_rate: pipeline_rate,
         unsafe_non_rejection_drafts,
+        critical_negative_cases,
+        critical_negative_completed,
+        critical_negative_rejection_false_positives,
+        critical_negative_unsafe_drafts,
         mean_seconds: (completed != 0).then(|| total_seconds / completed as f64),
         task_score,
         recommendation_eligible,
+        tag_metrics,
     };
 
     Ok(serde_json::json!({
@@ -271,6 +370,9 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
             "all_cases_complete": true,
             "rejection_false_positives": 0,
             "unsafe_non_rejection_drafts": 0,
+            "critical_negative_rejection_false_positives": 0,
+            "critical_negative_unsafe_drafts": 0,
+            "all_critical_negative_cases_complete": true,
             "minimum_rejection_recall": 0.90,
             "minimum_verified_rejection_pipeline_rate": 0.90,
             "full_gpu_residency_required": true
@@ -312,7 +414,7 @@ mod tests {
         let rows = fixtures().unwrap();
         let unique: std::collections::HashSet<_> = rows.iter().map(|c| &c.id).collect();
         assert_eq!(rows.len(), unique.len());
-        assert!(rows.len() >= 30);
+        assert!(rows.len() >= 48);
         for category in [
             Category::Rejection,
             Category::Opportunity,
@@ -324,6 +426,31 @@ mod tests {
                 "Synthetic corpus needs at least five cases for {category:?}"
             );
         }
+        for required in [
+            CaseTag::Interview,
+            CaseTag::Offer,
+            CaseTag::RecruiterCorrection,
+            CaseTag::QuotedHistory,
+            CaseTag::PromptInjection,
+            CaseTag::Ambiguous,
+            CaseTag::Multilingual,
+            CaseTag::AtsAutomation,
+        ] {
+            assert!(
+                rows.iter().filter(|row| row.tags.contains(&required)).count() >= 2,
+                "Synthetic corpus needs repeated coverage for {required:?}"
+            );
+        }
+        assert!(
+            rows.iter()
+                .filter(|row| {
+                    row.expected != Category::Rejection
+                        && row.tags.iter().copied().any(CaseTag::critical_negative)
+                })
+                .count()
+                >= 15,
+            "Critical hard-negative corpus is too small"
+        );
     }
 
     #[test]
