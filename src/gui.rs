@@ -1022,6 +1022,16 @@ impl App {
                 if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Compact database"),
+                    )
+                    .on_hover_text("Requires conservative free-space headroom, checkpoints WAL, VACUUMs encrypted SQLite pages, optimizes planner statistics, and verifies integrity again. This is not SSD-secure erasure.")
+                    .clicked()
+                {
+                    self.worker.command(Command::CompactDatabase);
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
                         egui::Button::new("Create encrypted backup…"),
                     )
                     .on_hover_text("Creates a checksum-verified same-vault backup. No decrypted email content or OAuth token is written to the manifest.")
