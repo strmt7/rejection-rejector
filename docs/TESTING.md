@@ -19,6 +19,10 @@ cargo run --locked --no-default-features --bin rr -- demo
 
 Both Windows and Ubuntu run these checks. Windows additionally builds optimized GUI/CLI executables and packages them with documentation, COMMIT.txt, toolchain evidence, Cargo.lock and per-file SHA-256 sums. A separate SHA256.txt covers the complete Windows ZIP. Checksums detect file changes; these are unsigned builds, not publisher-identity attestations.
 
+## Release evidence freshness and lineage
+
+The manual attested-package workflow does not accept an arbitrary recent green run. For fuzzing, coverage, mutation testing and enterprise deep verification it selects the **latest** run on `main`, requires that run itself to be completed successfully and within its age window, and verifies through GitHub's compare API that the evidence commit is an ancestor of the exact release commit. A newer failed, cancelled or still-running deep-quality job blocks packaging rather than allowing an older success to mask it.
+
 ## Scheduled enterprise deep verification
 
 A separate scheduled/manual workflow deliberately complements rather than replaces the fast cross-platform CI. It uses pinned `cargo-nextest 0.9.146` to execute the full all-feature test suite with fail-fast disabled, compiles all targets under the release profile (where integer overflow checks remain enabled), builds rustdoc with warnings denied, runs doctests, and exercises the real recovery CLI against an isolated synthetic encrypted workspace:

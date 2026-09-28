@@ -42,6 +42,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 A release candidate should not be described as enterprise-ready until, at minimum:
 
 - main CI and supply-chain workflows are green on the exact release commit;
+- for fuzzing, coverage, mutation and deep verification, the **latest** main-branch run is successful, recent, and its commit is an ancestor of the exact release commit; a newer failed/cancelled/in-progress run cannot be masked by older green evidence;
 - the SBOM and SHA-256 evidence correspond to that commit;
 - backup/restore has a tested recovery path;
 - one controlled Gmail end-to-end acceptance run has been completed;
