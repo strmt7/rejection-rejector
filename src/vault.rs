@@ -115,13 +115,16 @@ impl Vault {
                     key.copy_from_slice(&bytes);
                     Ok(Self::from_zeroizing_key(key))
                 }
-                Err(keyring::Error::NoEntry) if is_new || !dir.join("state.sqlite3").exists() => {
+                Err(keyring::Error::NoEntry) if is_new => {
                     let mut key = Zeroizing::new([0u8; 32]);
                     rand::rngs::OsRng.fill_bytes(key.as_mut());
                     let encoded = Zeroizing::new(STANDARD.encode(key.as_ref()));
                     entry.set_password(encoded.as_str()).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
                     Ok(Self::from_zeroizing_key(key))
                 }
+                Err(keyring::Error::NoEntry) => Err(anyhow::anyhow!(
+                    "Existing vault identifier has no OS credential. Refusing to generate a replacement key; import verified recovery material or restore the original credential"
+                )),
                 Err(e) => Err(anyhow::anyhow!(
                     "OS credential store unavailable or original key missing: {e}"
                 )),
@@ -432,6 +435,23 @@ mod tests {
         let mut expensive = envelope;
         expensive.memory_kib = 1024 * 1024;
         assert!(Vault::from_recovery_envelope(&expensive, passphrase).is_err());
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn existing_vault_id_without_credential_never_mints_a_replacement_key() {
+        let root = tempfile::tempdir().unwrap();
+        private_dir(root.path()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&root.path().join("vault-id"), id.as_bytes()).unwrap();
+
+        let error = Vault::open(root.path()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Refusing to generate a replacement key")
+        );
+        assert!(!root.path().join("state.sqlite3").exists());
     }
 
     #[test]
