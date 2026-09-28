@@ -1613,6 +1613,40 @@ mod tests {
     }
 
     #[test]
+    fn worker_pulse_distinguishes_idle_health_from_stalled_operation() {
+        let pulse = WorkerPulse::new();
+        let now = Utc::now();
+        let idle = pulse.snapshot(now);
+        assert!(idle.worker_responsive);
+        assert_eq!(idle.current_operation, OperationKind::Idle);
+        assert_eq!(idle.stall_budget_seconds, 10);
+
+        pulse.begin(OperationKind::SendReply);
+        let running = pulse.snapshot(Utc::now());
+        assert!(running.worker_responsive);
+        assert_eq!(running.current_operation, OperationKind::SendReply);
+        assert!(running.operation_started_at.is_some());
+
+        let stalled = pulse.snapshot(
+            Utc::now()
+                + chrono::Duration::seconds(
+                    OperationKind::SendReply.stall_budget_seconds() as i64 + 1,
+                ),
+        );
+        assert!(!stalled.worker_responsive);
+        assert!(
+            stalled.progress_age_seconds
+                > OperationKind::SendReply.stall_budget_seconds() as i64
+        );
+
+        pulse.finish();
+        let recovered = pulse.snapshot(Utc::now());
+        assert!(recovered.worker_responsive);
+        assert_eq!(recovered.current_operation, OperationKind::Idle);
+        assert!(recovered.operation_started_at.is_none());
+    }
+
+    #[test]
     fn retry_backoff_is_bounded_and_resets_by_caller() {
         assert_eq!(bounded_backoff(30, 1, 300), Duration::from_secs(30));
         assert_eq!(bounded_backoff(30, 2, 300), Duration::from_secs(60));
