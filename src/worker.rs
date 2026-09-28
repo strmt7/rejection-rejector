@@ -203,6 +203,9 @@ pub enum Command {
         path: String,
         reply: Sender<Value>,
     },
+    OpenMetrics {
+        reply: Sender<String>,
+    },
 }
 
 impl Command {
@@ -235,7 +238,7 @@ impl Command {
             Self::RevealApiToken => OperationKind::RevealApiToken,
             Self::HideApiToken => OperationKind::HideApiToken,
             Self::RotateApiToken => OperationKind::RotateApiToken,
-            Self::Api { .. } => OperationKind::ApiRequest,
+            Self::Api { .. } | Self::OpenMetrics { .. } => OperationKind::ApiRequest,
         }
     }
 }
@@ -661,6 +664,13 @@ fn run(
                     .unwrap_or_else(|_| json!({"error":"Invalid request or unavailable resource"}));
                 let _ = reply.try_send(data);
             }
+            Ok(Command::OpenMetrics { reply }) => {
+                let data = crate::metrics::collect(&e, Utc::now())
+                    .map(|snapshot| crate::metrics::render_openmetrics(&snapshot));
+                if let Ok(text) = data {
+                    let _ = reply.try_send(text);
+                }
+            }
             Ok(command) => {
                 let operation = command.kind();
                 begin_operation(&shared, &pulse, operation, "Working locally…");
@@ -817,7 +827,7 @@ fn run(
                         Ok(())
                     }
                     Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
-                    Command::Api { .. } => Err(anyhow::anyhow!(
+                    Command::Api { .. } | Command::OpenMetrics { .. } => Err(anyhow::anyhow!(
                         "Internal API command reached the wrong dispatcher"
                     )),
                 };
