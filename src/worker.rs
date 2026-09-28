@@ -1190,6 +1190,8 @@ fn api_query_with_operation(
                     "typed_audit_events": true,
                     "privacy_safe_metrics": true,
                     "openmetrics_1_0": true,
+                    "api_rate_limit_burst": crate::api::API_RATE_LIMIT_BURST,
+                    "api_rate_limit_per_second": crate::api::API_RATE_LIMIT_PER_SECOND,
                     "privacy_minimal_runtime_journal": true,
                     "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
