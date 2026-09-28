@@ -255,6 +255,8 @@ fn main() -> Result<()> {
                 &e.settings,
                 chrono::Utc::now(),
             )?;
+            let backup_isolation =
+                rejection_rejector::recovery::backup_isolation_status(&e.directory, &e.settings)?;
             let readiness = rejection_rejector::readiness::assess(
                 &e.settings,
                 database_integrity_ok,
@@ -312,6 +314,7 @@ fn main() -> Result<()> {
                     "enterprise_policy": e.enterprise_policy_status(),
                     "storage": storage,
                     "scheduled_backup": scheduled_backup,
+                    "backup_isolation": backup_isolation,
                     "database": {
                         "integrity_ok": database_integrity_ok,
                         "schema_version": e.db.schema_version()?,
