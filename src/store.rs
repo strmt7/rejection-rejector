@@ -472,6 +472,7 @@ impl Store {
     /// trusted component stores previously observed heads.
     pub fn contains_audit_anchor(&self, anchor: &str) -> Result<bool> {
         ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
+        self.verify_audit_chain()?;
         if anchor == AUDIT_GENESIS {
             return Ok(true);
         }
