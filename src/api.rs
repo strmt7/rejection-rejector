@@ -9,7 +9,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use subtle::ConstantTimeEq;
 use tiny_http::{Header, Method, Response, Server};
@@ -20,6 +20,35 @@ pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
 pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 pub const OPENMETRICS_CONTENT_TYPE: &str =
     "application/openmetrics-text; version=1.0.0; charset=utf-8";
+pub const API_RATE_LIMIT_BURST: u32 = 30;
+pub const API_RATE_LIMIT_PER_SECOND: f64 = 2.0;
+
+#[derive(Clone, Debug)]
+struct RateLimiter {
+    tokens: f64,
+    last: Instant,
+}
+
+impl RateLimiter {
+    fn new(now: Instant) -> Self {
+        Self {
+            tokens: f64::from(API_RATE_LIMIT_BURST),
+            last: now,
+        }
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = (self.tokens + elapsed * API_RATE_LIMIT_PER_SECOND)
+            .min(f64::from(API_RATE_LIMIT_BURST));
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
 
 pub fn openapi_sha256() -> String {
     format!("{:x}", Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
@@ -94,6 +123,7 @@ pub fn start(
     let server = Server::http(format!("127.0.0.1:{port}"))
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
+        let mut rate_limiter = RateLimiter::new(Instant::now());
         while !stop.load(Ordering::SeqCst) && !disabled.load(Ordering::SeqCst) {
             let request = match server.recv_timeout(Duration::from_millis(250)) {
                 Ok(Some(r)) => r,
@@ -104,7 +134,19 @@ pub fn start(
             let auth = unique_header(request.headers(), "Authorization");
             let host = unique_header(request.headers(), "Host");
             let origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
-            let (status, body, content_type) = if !authorized(auth, token.as_str())
+            let (status, body, content_type) = if !rate_limiter.allow(Instant::now()) {
+                (
+                    429,
+                    error_body(
+                        "rate_limited",
+                        "The local integration API request rate exceeded its bounded burst",
+                        true,
+                        &request_id,
+                    )
+                    .to_string(),
+                    JSON_CONTENT_TYPE,
+                )
+            } else if !authorized(auth, token.as_str())
                 || host != Some(format!("127.0.0.1:{port}").as_str())
                 || origin
             {
@@ -256,6 +298,20 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rate_limiter_bounds_bursts_and_refills_deterministically() {
+        let start = Instant::now();
+        let mut limiter = RateLimiter::new(start);
+        for _ in 0..API_RATE_LIMIT_BURST {
+            assert!(limiter.allow(start));
+        }
+        assert!(!limiter.allow(start));
+        assert!(!limiter.allow(start + Duration::from_millis(499)));
+        assert!(limiter.allow(start + Duration::from_millis(500)));
+        assert!(!limiter.allow(start + Duration::from_millis(500)));
+        assert!(limiter.allow(start + Duration::from_secs(1)));
+    }
+
     #[test]
     fn duplicate_sensitive_headers_are_not_unique() {
         let headers = vec![
