@@ -1,5 +1,6 @@
 use crate::config::{Settings, validate_model_name};
 use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,6 +14,10 @@ const MAX_POLICY_BYTES: u64 = 64 * 1024;
 #[serde(default, deny_unknown_fields)]
 pub struct EnterprisePolicy {
     pub version: u32,
+    pub policy_id: Option<String>,
+    pub revision: Option<u64>,
+    pub not_before: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub force_human_review: bool,
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
@@ -26,6 +31,11 @@ pub struct EnterprisePolicy {
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PolicyStatus {
     pub active: bool,
+    pub version: Option<u32>,
+    pub policy_id: Option<String>,
+    pub revision: Option<u64>,
+    pub not_before: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub digest: Option<String>,
     pub digest_pin_enforced: bool,
     pub digest_pin_matches: bool,
@@ -42,7 +52,46 @@ pub struct PolicyStatus {
 
 impl EnterprisePolicy {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.version == 1, "Unsupported enterprise policy version");
+        ensure!(
+            matches!(self.version, 1 | 2),
+            "Unsupported enterprise policy version"
+        );
+        match self.version {
+            1 => ensure!(
+                self.policy_id.is_none()
+                    && self.revision.is_none()
+                    && self.not_before.is_none()
+                    && self.expires_at.is_none(),
+                "Policy v1 cannot contain v2 lifecycle fields"
+            ),
+            2 => {
+                let policy_id = self
+                    .policy_id
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .context("Policy v2 requires policy_id")?;
+                ensure!(
+                    policy_id.len() <= 128
+                        && policy_id.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || b"._:-".contains(&byte)
+                        }),
+                    "Policy v2 policy_id contains unsupported characters"
+                );
+                ensure!(
+                    self.revision.is_some_and(|revision| revision >= 1),
+                    "Policy v2 requires revision >= 1"
+                );
+                if let (Some(not_before), Some(expires_at)) =
+                    (self.not_before, self.expires_at)
+                {
+                    ensure!(
+                        not_before < expires_at,
+                        "Policy v2 not_before must be before expires_at"
+                    );
+                }
+            }
+            _ => unreachable!("version was validated above"),
+        }
         if let Some(limit) = self.max_daily_send_limit {
             ensure!(
                 (1..=100).contains(&limit),
@@ -74,6 +123,25 @@ impl EnterprisePolicy {
             );
         }
         Ok(())
+    }
+
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
+        self.validate()?;
+        if self.version >= 2 {
+            if let Some(not_before) = self.not_before {
+                ensure!(now >= not_before, "Enterprise policy is not active yet");
+            }
+            if let Some(expires_at) = self.expires_at {
+                ensure!(now < expires_at, "Enterprise policy has expired");
+            }
+        }
+        Ok(())
+    }
+
+    pub fn revision_identity(&self) -> Option<(&str, u64)> {
+        (self.version >= 2)
+            .then(|| Some((self.policy_id.as_deref()?, self.revision?)))
+            .flatten()
     }
 
     /// Apply non-bypassable policy to mutable user settings.
@@ -133,10 +201,64 @@ pub struct LoadedPolicy {
     pub expected_digest: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PolicyRevisionFloor {
+    pub policies: std::collections::BTreeMap<String, PolicyRevisionRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRevisionRecord {
+    pub revision: u64,
+    pub digest: String,
+}
+
+impl PolicyRevisionFloor {
+    pub fn observe(&mut self, loaded: &LoadedPolicy) -> Result<bool> {
+        let Some((policy_id, revision)) = loaded.policy.revision_identity() else {
+            return Ok(false);
+        };
+        ensure!(
+            self.policies.len() <= 32 || self.policies.contains_key(policy_id),
+            "Enterprise policy revision floor has too many policy identities"
+        );
+        match self.policies.get(policy_id) {
+            Some(existing) if revision < existing.revision => {
+                anyhow::bail!(
+                    "Enterprise policy rollback rejected for {policy_id}: revision {revision} is below previously accepted revision {}",
+                    existing.revision
+                );
+            }
+            Some(existing) if revision == existing.revision && loaded.digest != existing.digest => {
+                anyhow::bail!(
+                    "Enterprise policy content changed without increasing revision for {policy_id}"
+                );
+            }
+            Some(existing) if revision == existing.revision => Ok(false),
+            _ => {
+                self.policies.insert(
+                    policy_id.to_owned(),
+                    PolicyRevisionRecord {
+                        revision,
+                        digest: loaded.digest.clone(),
+                    },
+                );
+                Ok(true)
+            }
+        }
+    }
+}
+
 impl LoadedPolicy {
     pub fn status(&self) -> PolicyStatus {
         PolicyStatus {
             active: true,
+            version: Some(self.policy.version),
+            policy_id: self.policy.policy_id.clone(),
+            revision: self.policy.revision,
+            not_before: self.policy.not_before,
+            expires_at: self.policy.expires_at,
             digest: Some(self.digest.clone()),
             digest_pin_enforced: self.expected_digest.is_some(),
             digest_pin_matches: self
@@ -159,6 +281,11 @@ impl LoadedPolicy {
 pub fn inactive_status() -> PolicyStatus {
     PolicyStatus {
         active: false,
+        version: None,
+        policy_id: None,
+        revision: None,
+        not_before: None,
+        expires_at: None,
         digest: None,
         digest_pin_enforced: false,
         digest_pin_matches: false,
@@ -270,7 +397,7 @@ fn load_file_with_expected_digest(
     );
     let policy: EnterprisePolicy =
         serde_json::from_slice(&bytes).context("Enterprise policy is invalid JSON")?;
-    policy.validate()?;
+    policy.validate_at(Utc::now())?;
     let digest = format!("{:x}", Sha256::digest(&bytes));
     if let Some(expected) = &expected_digest {
         ensure!(
@@ -293,6 +420,10 @@ mod tests {
     fn policy() -> EnterprisePolicy {
         EnterprisePolicy {
             version: 1,
+            policy_id: None,
+            revision: None,
+            not_before: None,
+            expires_at: None,
             force_human_review: true,
             prohibit_sending: true,
             prohibit_integration_api: true,
@@ -390,6 +521,78 @@ mod tests {
         for invalid in ["", "abc", &"g".repeat(64), &"a".repeat(63), &"a".repeat(65)] {
             assert!(normalize_digest_pin(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn v2_policy_lifecycle_and_rollback_floor_are_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.json");
+        let body = br#"{"version":2,"policy_id":"corp-prod","revision":7,"prohibit_sending":true}"#;
+        std::fs::write(&path, body).unwrap();
+        let loaded = load_file(&path).unwrap();
+        assert_eq!(loaded.policy.revision_identity(), Some(("corp-prod", 7)));
+
+        let mut floor = PolicyRevisionFloor::default();
+        assert!(floor.observe(&loaded).unwrap());
+        assert!(!floor.observe(&loaded).unwrap());
+
+        std::fs::write(
+            &path,
+            br#"{"version":2,"policy_id":"corp-prod","revision":6,"prohibit_sending":true}"#,
+        )
+        .unwrap();
+        let older = load_file(&path).unwrap();
+        assert!(floor.observe(&older).is_err());
+
+        std::fs::write(
+            &path,
+            br#"{"version":2,"policy_id":"corp-prod","revision":7,"prohibit_sending":false}"#,
+        )
+        .unwrap();
+        let changed_same_revision = load_file(&path).unwrap();
+        assert!(floor.observe(&changed_same_revision).is_err());
+
+        std::fs::write(
+            &path,
+            br#"{"version":2,"policy_id":"corp-prod","revision":8,"prohibit_sending":false}"#,
+        )
+        .unwrap();
+        let newer = load_file(&path).unwrap();
+        assert!(floor.observe(&newer).unwrap());
+    }
+
+    #[test]
+    fn v2_policy_validity_window_is_enforced() {
+        let now = Utc::now();
+        let future = EnterprisePolicy {
+            version: 2,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            not_before: Some(now + chrono::Duration::minutes(1)),
+            expires_at: None,
+            ..EnterprisePolicy::default()
+        };
+        assert!(future.validate_at(now).is_err());
+
+        let expired = EnterprisePolicy {
+            version: 2,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            not_before: None,
+            expires_at: Some(now - chrono::Duration::seconds(1)),
+            ..EnterprisePolicy::default()
+        };
+        assert!(expired.validate_at(now).is_err());
+
+        let active = EnterprisePolicy {
+            version: 2,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            not_before: Some(now - chrono::Duration::minutes(1)),
+            expires_at: Some(now + chrono::Duration::minutes(1)),
+            ..EnterprisePolicy::default()
+        };
+        active.validate_at(now).unwrap();
     }
 
     #[test]
