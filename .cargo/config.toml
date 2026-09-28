@@ -7,4 +7,5 @@ frequency = "always"
 [target.'cfg(target_env = "msvc")']
 rustflags = [
   "-C", "link-arg=/Brepro",
+  "-C", "link-arg=/PDBALTPATH:%_PDB%",
 ]
