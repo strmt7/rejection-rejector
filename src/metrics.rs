@@ -74,10 +74,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::AtomicBool,
-    };
+    use std::sync::{Arc, atomic::AtomicBool};
 
     #[test]
     fn metrics_are_privacy_safe_and_stable() {
