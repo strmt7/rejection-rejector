@@ -61,6 +61,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let mut pinned = unpinned;
     pinned.model_digest = Some(qualified.digest.clone());
     let llm = Ollama::new(&pinned)?;
+    let ollama_runtime_version = llm.runtime_version()?;
 
     let mut rows = Vec::new();
     let mut correct = 0usize;
@@ -180,6 +181,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         "timestamp": chrono::Utc::now(),
         "suite": EVALUATION_CONTRACT_VERSION,
         "suite_hash": evaluation_suite_hash(),
+        "ollama_runtime_version": ollama_runtime_version,
         "model": pinned.model,
         "digest": qualified.digest,
         "context": pinned.num_ctx,
