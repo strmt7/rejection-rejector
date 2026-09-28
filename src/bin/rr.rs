@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use rejection_rejector::{
-    config, engine::Engine, ollama::Ollama, policy, recovery, worker::Worker,
+    audit_anchor, config, engine::Engine, ollama::Ollama, policy, recovery, worker::Worker,
 };
 use std::{
     path::PathBuf,
@@ -92,6 +92,15 @@ enum Action {
     Diagnostics {
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Export the current tamper-evident audit point for independent storage.
+    AuditAnchor {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Verify that the active workspace still extends a previously exported audit anchor.
+    VerifyAuditAnchor {
+        path: PathBuf,
     },
     /// Print the effective administrator enterprise-policy status.
     PolicyStatus,
@@ -462,6 +471,34 @@ fn main() -> Result<()> {
             println!(
                 "Privacy-safe diagnostics written locally to {}. Review before sharing.",
                 out.display()
+            );
+        }
+        Action::AuditAnchor { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let anchor = audit_anchor::write_anchor(&e.db, &e.directory, &out)?;
+            println!("{}", serde_json::to_string_pretty(&anchor)?);
+        }
+        Action::VerifyAuditAnchor { path } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let anchor = audit_anchor::verify_anchor(&e.db, &e.directory, &path)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "verified": true,
+                    "anchor": anchor,
+                    "current_audit_head": e.db.audit_head()?,
+                    "current_audit_sequence": e.db.latest_event_seq()?
+                }))?
             );
         }
     }
