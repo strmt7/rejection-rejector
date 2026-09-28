@@ -160,6 +160,7 @@ pub enum Command {
     InspectModel,
     QualifyModel,
     EvaluateModel,
+    ProfileModel,
     CompareModels,
     IntegrityCheck,
     Backup {
@@ -222,6 +223,7 @@ impl Command {
             Self::InspectModel => OperationKind::InspectModel,
             Self::QualifyModel => OperationKind::QualifyModel,
             Self::EvaluateModel => OperationKind::EvaluateModel,
+            Self::ProfileModel => OperationKind::ProfileModel,
             Self::CompareModels => OperationKind::CompareModels,
             Self::IntegrityCheck => OperationKind::IntegrityCheck,
             Self::Backup { .. } => OperationKind::Backup,
@@ -737,6 +739,14 @@ fn run(
                             "Running the full task-specific local model evaluation…",
                         );
                         e.evaluate_model().map(|_| ())
+                    }
+                    Command::ProfileModel => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Profiling cold, warm-repeat and near-context local model behavior…",
+                        );
+                        e.profile_model_runtime().map(|_| ())
                     }
                     Command::CompareModels => {
                         busy(
