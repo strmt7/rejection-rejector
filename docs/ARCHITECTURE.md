@@ -1,6 +1,6 @@
 # Architecture
 
-Native egui desktop / rr CLI → bounded command channel → single Rust worker → encrypted SQLite, Gmail REST and loopback Ollama. Optional read-only API calls the same worker. No browser wrapper or server database is required. Network/model/database work does not run on the UI thread; atomic Pause/Stop flags gate dispatch.
+Native egui desktop / rr CLI → bounded command channel → single Rust worker → encrypted SQLite, Gmail REST and loopback Ollama. Optional read-only API calls the same worker. No browser wrapper or server database is required. Network/model/database work does not run on the UI thread; atomic Pause/Stop flags gate dispatch. The worker retains its thread handle for bounded graceful shutdown; shutdown-sensitive external-write/artifact operations are surfaced in typed operation state so the GUI can prevent accidental close without ever waiting indefinitely.
 
 ## Incremental sync
 
@@ -21,3 +21,5 @@ Known pre-dispatch cancellation or a definite provider-side rejection releases t
 Email is inert untrusted data, never tools/instructions. Attachments are not executed; HTML becomes text. Structured outputs and exact evidence checks reject malformed or unsupported classifications. Model/prompt/context/source/draft hashes bind a verification to its inputs. The same model performs the second pass, so its errors are correlated. Automatic mode therefore also requires a deterministic affirmative rejection phrase in the current de-quoted message, in addition to rejecting conflicting opportunity/prompt-injection language. Human review remains the recommended initial mode.
 
 SQLite WAL/FULL synchronization, authenticated encrypted payloads, optimistic revisions and an exclusive directory lock protect integrity. Metadata indexes are not encrypted. The DB layout is private; use the library/API as the integration contract.
+
+Backups bind checksums to the authenticated audit-chain head. A non-destructive recovery drill restores a selected backup through the production restore path into an isolated temporary workspace, reopens it under the current vault and deeply verifies encrypted metadata/items/events/deliveries before reporting success. The integration API publishes the SHA-256 fingerprint of its exact OpenAPI bytes so downstream tools can detect contract drift without reading SQLite internals.
