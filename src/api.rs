@@ -1,5 +1,6 @@
-use crate::worker::Command;
+use crate::worker::{Command, WorkerPulse};
 use anyhow::{Result, ensure};
+use chrono::Utc;
 use crossbeam_channel::{Sender, bounded};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -33,14 +34,20 @@ fn error_body(code: &str, message: &str, retryable: bool, request_id: &str) -> s
     })
 }
 
-fn direct_get(path: &str) -> Option<serde_json::Value> {
+fn direct_get(path: &str, pulse: &WorkerPulse) -> Option<serde_json::Value> {
     match path {
-        "/v1/live" => Some(json!({
-            "live": true,
-            "api_version": API_VERSION,
-            "api_contract_sha256": openapi_sha256(),
-            "application_version": env!("CARGO_PKG_VERSION")
-        })),
+        "/v1/live" => {
+            let worker = pulse.snapshot(Utc::now());
+            Some(json!({
+                "live": true,
+                "api_thread_live": true,
+                "worker_responsive": worker.worker_responsive,
+                "worker": worker,
+                "api_version": API_VERSION,
+                "api_contract_sha256": openapi_sha256(),
+                "application_version": env!("CARGO_PKG_VERSION")
+            }))
+        }
         "/v1/openapi.json" => serde_json::from_str(OPENAPI_DOCUMENT).ok(),
         _ => None,
     }
@@ -74,6 +81,7 @@ pub fn start(
     commands: Sender<Command>,
     stop: Arc<AtomicBool>,
     disabled: Arc<AtomicBool>,
+    pulse: WorkerPulse,
 ) -> Result<()> {
     ensure!(token.len() >= 40, "API token lacks required entropy");
     let token = Zeroizing::new(token);
@@ -119,7 +127,7 @@ pub fn start(
                     404,
                     error_body("route_not_found", "Unknown API route", false, &request_id),
                 )
-            } else if let Some(body) = direct_get(request.url()) {
+            } else if let Some(body) = direct_get(request.url(), &pulse) {
                 (200, body)
             } else {
                 let (tx, rx) = bounded(1);
@@ -205,8 +213,12 @@ mod tests {
 
     #[test]
     fn direct_liveness_and_openapi_routes_are_self_contained() {
-        let live = direct_get("/v1/live").unwrap();
+        let pulse = WorkerPulse::new();
+        let live = direct_get("/v1/live", &pulse).unwrap();
         assert_eq!(live["live"], true);
+        assert_eq!(live["api_thread_live"], true);
+        assert_eq!(live["worker_responsive"], true);
+        assert_eq!(live["worker"]["schema_version"], 1);
         assert_eq!(live["api_version"], API_VERSION);
         assert_eq!(live["api_contract_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(openapi_sha256().len(), 64);
@@ -216,7 +228,7 @@ mod tests {
                 .all(|byte| byte.is_ascii_hexdigit())
         );
 
-        let spec = direct_get("/v1/openapi.json").unwrap();
+        let spec = direct_get("/v1/openapi.json", &pulse).unwrap();
         assert_eq!(spec["openapi"], "3.1.0");
         assert!(spec["paths"]["/v1/health"].is_object());
         assert!(spec["paths"]["/v1/audit/anchor"].is_object());
@@ -225,7 +237,7 @@ mod tests {
             spec["components"]["schemas"]["OperationStatus"]["properties"]["operation_id"]
                 .is_object()
         );
-        assert!(direct_get("/v1/unknown").is_none());
+        assert!(direct_get("/v1/unknown", &pulse).is_none());
     }
 
     #[test]
