@@ -1,8 +1,6 @@
 use crate::{
     store::Store,
-    vault::{
-        InstanceLock, RecoveryKeyEnvelope, Vault, private_dir, vault_id, write_new_private,
-    },
+    vault::{InstanceLock, RecoveryKeyEnvelope, Vault, private_dir, vault_id, write_new_private},
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
@@ -122,8 +120,7 @@ fn verify_vault_marker(database: &Path, vault: &Vault) -> Result<()> {
     );
     let connection = rusqlite::Connection::open_with_flags(
         database,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let encrypted: Vec<u8> = connection
         .query_row(
@@ -259,7 +256,10 @@ pub fn export_recovery_key(
     passphrase: &[u8],
     destination: &Path,
 ) -> Result<RecoveryKeyEnvelope> {
-    ensure!(!destination.exists(), "Recovery-key destination already exists");
+    ensure!(
+        !destination.exists(),
+        "Recovery-key destination already exists"
+    );
     let vault = Vault::open(data_dir)?;
     let id = vault_id(data_dir)?;
     let envelope = vault.recovery_envelope(&id, passphrase)?;
@@ -304,8 +304,7 @@ pub fn import_recovery_key_for_backup(
     recovery_key_file: &Path,
     passphrase: &[u8],
 ) -> Result<RecoveryKeyEnvelope> {
-    let envelope =
-        verify_recovery_key_for_backup(backup_dir, recovery_key_file, passphrase)?;
+    let envelope = verify_recovery_key_for_backup(backup_dir, recovery_key_file, passphrase)?;
     private_dir(data_dir)?;
 
     let id_path = data_dir.join(VAULT_ID_NAME);
@@ -327,9 +326,9 @@ pub fn import_recovery_key_for_backup(
         if created_vault_id {
             let _ = fs::remove_file(&id_path);
         }
-        return Err(error.context(
-            "Existing workspace does not authenticate under the recovered vault key",
-        ));
+        return Err(
+            error.context("Existing workspace does not authenticate under the recovered vault key")
+        );
     }
 
     if let Err(error) = recovered.install_os_key_if_missing(data_dir) {
@@ -573,8 +572,7 @@ mod tests {
         )
         .unwrap();
 
-        let verified =
-            verify_recovery_key_for_backup(&backup, &recovery_file, passphrase).unwrap();
+        let verified = verify_recovery_key_for_backup(&backup, &recovery_file, passphrase).unwrap();
         assert_eq!(verified.vault_id, vault_id_value);
         assert!(
             verify_recovery_key_for_backup(
@@ -586,8 +584,16 @@ mod tests {
         );
 
         let serialized = fs::read(&recovery_file).unwrap();
-        assert!(!serialized.windows(passphrase.len()).any(|window| window == passphrase));
-        assert!(!serialized.windows(b"secret".len()).any(|window| window == b"secret"));
+        assert!(
+            !serialized
+                .windows(passphrase.len())
+                .any(|window| window == passphrase)
+        );
+        assert!(
+            !serialized
+                .windows(b"secret".len())
+                .any(|window| window == b"secret")
+        );
     }
 
     #[test]
