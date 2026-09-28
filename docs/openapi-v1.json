@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.7.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
+    "version": "1.8.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
   },
   "servers": [
     {
@@ -501,6 +501,108 @@
             "additionalProperties": true
           }
         }
+      },
+      "WorkerLiveness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "worker_responsive",
+          "last_progress_at",
+          "progress_age_seconds",
+          "current_operation",
+          "operation_started_at",
+          "operation_age_seconds",
+          "stall_budget_seconds"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "worker_responsive": {
+            "type": "boolean"
+          },
+          "last_progress_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "progress_age_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "current_operation": {
+            "type": "string"
+          },
+          "operation_started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation_age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_budget_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Operation-specific monitoring threshold. This is not a forced-cancellation deadline."
+          }
+        }
+      },
+      "LiveResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "live",
+          "api_thread_live",
+          "worker_responsive",
+          "worker",
+          "api_version",
+          "api_contract_sha256",
+          "application_version"
+        ],
+        "properties": {
+          "live": {
+            "type": "boolean",
+            "const": true,
+            "description": "Backward-compatible API/process-thread liveness indicator."
+          },
+          "api_thread_live": {
+            "type": "boolean",
+            "const": true
+          },
+          "worker_responsive": {
+            "type": "boolean"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerLiveness"
+          },
+          "api_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "api_contract_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "application_version": {
+            "type": "string"
+          }
+        }
       }
     },
     "headers": {
@@ -590,16 +692,23 @@
   "paths": {
     "/v1/live": {
       "get": {
-        "summary": "Process/API-thread liveness",
+        "summary": "Process/API-thread liveness plus state-worker responsiveness",
         "responses": {
           "200": {
-            "description": "API thread is alive",
+            "description": "API thread is alive; body separately reports whether the state-owning worker is within its operation-specific progress budget.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponse"
+                }
               }
             }
           },
