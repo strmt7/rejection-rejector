@@ -376,6 +376,11 @@ fn validate_signature_path(path: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Result<()> {
+    validate_signature_distinct(policy_path, &signature_path)?;
+    Ok(())
+}
+
 fn configured_signature_requirement(policy_path: &Path) -> Result<Option<SignatureRequirement>> {
     let key = std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY");
     let signature_override = std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE");
@@ -386,9 +391,9 @@ fn configured_signature_requirement(policy_path: &Path) -> Result<Option<Signatu
         );
         return Ok(None);
     };
-    let key = key
-        .into_string()
-        .map_err(|_| anyhow::anyhow!("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY must be valid Unicode"))?;
+    let key = key.into_string().map_err(|_| {
+        anyhow::anyhow!("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY must be valid Unicode")
+    })?;
     let public_key = normalize_public_key(&key)?;
     let signer_key_sha256 = format!("{:x}", Sha256::digest(&public_key));
     let signature_path = signature_override
@@ -396,6 +401,10 @@ fn configured_signature_requirement(policy_path: &Path) -> Result<Option<Signatu
         .map(validate_signature_path)
         .transpose()?
         .unwrap_or_else(|| signature_path_for_policy(policy_path));
+    ensure!(
+        signature_path != policy_path,
+        "Enterprise policy signature file must be distinct from the policy file"
+    );
     Ok(Some(SignatureRequirement {
         public_key,
         signer_key_sha256,
@@ -403,10 +412,19 @@ fn configured_signature_requirement(policy_path: &Path) -> Result<Option<Signatu
     }))
 }
 
-fn verify_detached_signature(requirement: &SignatureRequirement, policy_bytes: &[u8]) -> Result<()> {
+fn verify_detached_signature(
+    requirement: &SignatureRequirement,
+    policy_bytes: &[u8],
+) -> Result<()> {
     let path = &requirement.signature_path;
-    ensure!(path.is_absolute(), "Enterprise policy signature path must be absolute");
-    ensure!(path.is_file(), "Enterprise policy signature file is missing");
+    ensure!(
+        path.is_absolute(),
+        "Enterprise policy signature path must be absolute"
+    );
+    ensure!(
+        path.is_file(),
+        "Enterprise policy signature file is missing"
+    );
     ensure!(
         !fs::symlink_metadata(path)?.file_type().is_symlink(),
         "Enterprise policy signature file must not be a symlink"
@@ -421,9 +439,12 @@ fn verify_detached_signature(requirement: &SignatureRequirement, policy_bytes: &
         bytes.len() as u64 <= MAX_POLICY_SIGNATURE_BYTES,
         "Enterprise policy signature file exceeds 4 KiB"
     );
-    let envelope: DetachedPolicySignature =
-        serde_json::from_slice(&bytes).context("Enterprise policy signature file is invalid JSON")?;
-    ensure!(envelope.version == 1, "Unsupported enterprise policy signature version");
+    let envelope: DetachedPolicySignature = serde_json::from_slice(&bytes)
+        .context("Enterprise policy signature file is invalid JSON")?;
+    ensure!(
+        envelope.version == 1,
+        "Unsupported enterprise policy signature version"
+    );
     ensure!(
         envelope.algorithm.eq_ignore_ascii_case("ed25519"),
         "Unsupported enterprise policy signature algorithm"
@@ -469,9 +490,9 @@ pub fn default_policy_path() -> Result<Option<PathBuf>> {
 
 pub fn load_optional() -> Result<Option<LoadedPolicy>> {
     let expected_digest = configured_digest_pin()?;
-    let signature_configured =
-        std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY").is_some()
-            || std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE").is_some();
+    let signature_configured = std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY")
+        .is_some()
+        || std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE").is_some();
     let Some(path) = default_policy_path()? else {
         ensure!(
             expected_digest.is_none() && !signature_configured,
@@ -788,8 +809,7 @@ mod tests {
             signature_path: signature_path.clone(),
         };
 
-        let loaded =
-            load_file_with_controls(&path, None, Some(requirement.clone())).unwrap();
+        let loaded = load_file_with_controls(&path, None, Some(requirement.clone())).unwrap();
         let status = loaded.status();
         assert!(status.signature_enforced);
         assert!(status.signature_verified);
@@ -815,15 +835,52 @@ mod tests {
     }
 
     #[test]
+    fn detached_signature_envelope_rejects_wrong_algorithm_version_and_oversize() {
+        use base64::engine::general_purpose::STANDARD;
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.json");
+        let signature_path = root.path().join("policy.json.sig");
+        let body = br#"{"version":2,"policy_id":"corp","revision":1}"#;
+        std::fs::write(&path, body).unwrap();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[3u8; 32]).unwrap();
+        let public_key = key_pair.public_key().as_ref().to_vec();
+        let requirement = SignatureRequirement {
+            signer_key_sha256: format!("{:x}", Sha256::digest(&public_key)),
+            public_key,
+            signature_path: signature_path.clone(),
+        };
+
+        for envelope in [
+            serde_json::json!({"version":2,"algorithm":"ed25519","signature":STANDARD.encode(key_pair.sign(body).as_ref())}),
+            serde_json::json!({"version":1,"algorithm":"rsa","signature":STANDARD.encode(key_pair.sign(body).as_ref())}),
+        ] {
+            std::fs::write(&signature_path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+            assert!(load_file_with_controls(&path, None, Some(requirement.clone())).is_err());
+        }
+
+        std::fs::write(&signature_path, vec![b'A'; (MAX_POLICY_SIGNATURE_BYTES + 1) as usize])
+            .unwrap();
+        assert!(load_file_with_controls(&path, None, Some(requirement)).is_err());
+    }
+
+    #[test]
     fn enterprise_policy_public_key_and_signature_paths_are_strict() {
         use base64::engine::general_purpose::STANDARD;
 
         assert!(normalize_public_key("not-base64").is_err());
         assert!(normalize_public_key(&STANDARD.encode([0u8; 31])).is_err());
-        assert_eq!(normalize_public_key(&STANDARD.encode([9u8; 32])).unwrap().len(), 32);
+        assert_eq!(
+            normalize_public_key(&STANDARD.encode([9u8; 32]))
+                .unwrap()
+                .len(),
+            32
+        );
         assert!(validate_signature_path(PathBuf::from("policy.sig")).is_err());
 
         let absolute = std::env::temp_dir().join("policy.json");
+        assert!(validate_signature_distinct(&absolute, &absolute).is_err());
         assert_eq!(
             signature_path_for_policy(&absolute),
             PathBuf::from(format!("{}.sig", absolute.display()))
