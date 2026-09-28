@@ -1,7 +1,7 @@
 use crate::{
     engine::Engine,
     readiness::{OperationalContext, OperationalIndicators, operational_indicators},
-    recovery::ScheduledBackupStatus,
+    recovery::{BackupIsolationStatus, ScheduledBackupStatus},
     storage::StorageHealth,
 };
 use anyhow::Result;
@@ -18,6 +18,7 @@ pub struct MetricsSnapshot {
     pub database_bytes: Option<u64>,
     pub storage: StorageHealth,
     pub scheduled_backup: ScheduledBackupStatus,
+    pub backup_isolation: BackupIsolationStatus,
     pub audit_sequence: i64,
     pub audit_head_present: bool,
     pub stored_items: u64,
@@ -45,6 +46,8 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let storage = crate::storage::inspect(&engine.directory)?;
     let scheduled_backup =
         crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, now)?;
+    let backup_isolation =
+        crate::recovery::backup_isolation_status(&engine.directory, &engine.settings)?;
     let operational = operational_indicators(OperationalContext {
         settings: &engine.settings,
         counts: &counts,
@@ -52,6 +55,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         database_integrity_ok: integrity_ok,
         storage_write_safe: storage.runtime_write_safe,
         scheduled_backup_overdue: scheduled_backup.overdue,
+        backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
         connected: engine.connected(),
         now,
     });
@@ -73,6 +77,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         database_bytes,
         storage,
         scheduled_backup,
+        backup_isolation,
         audit_sequence: engine.db.latest_event_seq()?,
         audit_head_present: engine.db.audit_head().is_ok(),
         stored_items: counts.stored,
@@ -218,6 +223,17 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
         "Whether the configured scheduled backup is overdue.",
         None,
         metric_bool(snapshot.scheduled_backup.overdue),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_backup_distinct_failure_domain",
+        "Whether the scheduled backup destination is on a distinct filesystem or volume; -1 means unknown/not configured.",
+        None,
+        snapshot
+            .backup_isolation
+            .distinct_failure_domain
+            .map(|value| i8::from(value))
+            .unwrap_or(-1),
     );
     push_gauge(
         &mut out,
@@ -393,6 +409,8 @@ mod tests {
         assert_eq!(metrics.storage.schema_version, 1);
         assert_eq!(metrics.scheduled_backup.schema_version, 1);
         assert!(!metrics.scheduled_backup.enabled);
+        assert_eq!(metrics.backup_isolation.schema_version, 1);
+        assert!(!metrics.backup_isolation.configured);
         assert!(metrics.storage.total_bytes >= metrics.storage.available_bytes);
         assert!(metrics.stored_items >= 3);
         assert!(!metrics.policy_requires_independent_audit_anchor);
