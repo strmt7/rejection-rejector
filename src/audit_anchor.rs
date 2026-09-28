@@ -1,7 +1,6 @@
-use crate::{
-    store::Store,
-    vault::{vault_id, write_new_private},
-};
+use crate::{store::Store, vault::write_new_private};
+#[cfg(any(windows, target_os = "macos"))]
+use crate::vault::vault_id;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,6 +15,7 @@ const MAX_ANCHOR_BYTES: u64 = 64 * 1024;
 pub const AUDIT_ANCHOR_ENV: &str = "RR_AUDIT_ANCHOR_FILE";
 pub const OS_AUDIT_ANCHOR_ENV: &str = "RR_OS_AUDIT_ANCHOR";
 const OS_AUDIT_ANCHOR_REQUIRED: &str = "required";
+#[cfg(any(windows, target_os = "macos"))]
 const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
