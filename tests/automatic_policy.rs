@@ -27,6 +27,7 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
         prompt_version: PROMPT_VERSION.into(),
         context_hash: settings_context_hash(&settings),
         suite_hash: evaluation_suite_hash(),
+        ollama_runtime_version: "0.34.0".into(),
         task_score: 100.0,
         fixture_count: 32,
         qualified_at: now - Duration::hours(2),
