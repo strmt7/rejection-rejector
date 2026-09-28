@@ -95,23 +95,35 @@ jobs:
             @{ Name = 'Mutation testing'; MaxAgeDays = 8 },
             @{ Name = 'Enterprise deep verification'; MaxAgeDays = 8 }
           )
-          $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&status=success&per_page=100" | ConvertFrom-Json
+          $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&per_page=100" | ConvertFrom-Json
           $now = [DateTimeOffset]::UtcNow
           foreach ($requirement in $requirements) {
-            $run = @($payload.workflow_runs | Where-Object {
+            $runs = @($payload.workflow_runs | Where-Object {
               $_.name -eq $requirement.Name -and
-              $_.head_branch -eq 'main' -and
-              $_.conclusion -eq 'success'
-            } | Sort-Object run_number -Descending | Select-Object -First 1)
-            if ($run.Count -eq 0) {
-              throw "Release gate failed: no successful '$($requirement.Name)' evidence exists on main"
+              $_.head_branch -eq 'main'
+            } | Sort-Object run_number -Descending)
+            if ($runs.Count -eq 0) {
+              throw "Release gate failed: no '$($requirement.Name)' evidence exists on main"
             }
-            $completed = [DateTimeOffset]::Parse($run[0].updated_at)
+            $run = $runs[0]
+            if ($run.status -ne 'completed') {
+              throw "Release gate failed: latest '$($requirement.Name)' run #$($run.run_number) is '$($run.status)'; wait for it to complete and retrigger packaging"
+            }
+            if ($run.conclusion -ne 'success') {
+              throw "Release gate failed: latest '$($requirement.Name)' run #$($run.run_number) concluded '$($run.conclusion)'"
+            }
+            $completed = [DateTimeOffset]::Parse($run.updated_at)
             $age = $now - $completed
             if ($age.TotalDays -gt $requirement.MaxAgeDays) {
-              throw "Release gate failed: '$($requirement.Name)' evidence is $([Math]::Round($age.TotalDays, 2)) days old; maximum is $($requirement.MaxAgeDays)"
+              throw "Release gate failed: latest '$($requirement.Name)' evidence is $([Math]::Round($age.TotalDays, 2)) days old; maximum is $($requirement.MaxAgeDays)"
             }
-            Write-Host "$($requirement.Name): run #$($run[0].run_number), $([Math]::Round($age.TotalHours, 1)) hours old"
+            $encodedBase = [Uri]::EscapeDataString($run.head_sha)
+            $encodedHead = [Uri]::EscapeDataString($env:GITHUB_SHA)
+            $comparison = gh api "repos/$env:GITHUB_REPOSITORY/compare/$encodedBase...$encodedHead" | ConvertFrom-Json
+            if ($comparison.status -notin @('ahead', 'identical')) {
+              throw "Release gate failed: '$($requirement.Name)' evidence commit $($run.head_sha) is not an ancestor of release commit $env:GITHUB_SHA (compare status '$($comparison.status)')"
+            }
+            Write-Host "$($requirement.Name): latest run #$($run.run_number), $([Math]::Round($age.TotalHours, 1)) hours old, commit $($run.head_sha) is in release history"
           }
 
       - name: Confirm main has not moved during release gate
