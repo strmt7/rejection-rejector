@@ -247,6 +247,9 @@
                 ]
               }
             }
+          },
+          "audit_protection": {
+            "$ref": "#/components/schemas/AuditProtectionStatus"
           }
         }
       },
@@ -339,6 +342,163 @@
           },
           "anchor": {
             "$ref": "#/components/schemas/AuditAnchor"
+          }
+        }
+      },
+      "AuditProtectionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policy_requires_independent_anchor",
+          "external_file_anchor_configured",
+          "os_protected_anchor_required",
+          "independent_anchor_configured"
+        ],
+        "properties": {
+          "policy_requires_independent_anchor": {
+            "type": "boolean"
+          },
+          "external_file_anchor_configured": {
+            "type": "boolean"
+          },
+          "os_protected_anchor_required": {
+            "type": "boolean"
+          },
+          "independent_anchor_configured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MetricsSnapshot": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema_version",
+          "generated_at",
+          "service_name",
+          "application_version",
+          "database_schema_version",
+          "audit_sequence",
+          "audit_head_present",
+          "stored_items",
+          "queued_items",
+          "review_items",
+          "sent_items",
+          "uncertain_deliveries",
+          "send_attempts_24h",
+          "gmail_connected",
+          "gmail_send_scope",
+          "model_digest_pinned",
+          "task_qualification_current",
+          "enterprise_policy_active",
+          "policy_requires_independent_audit_anchor",
+          "external_audit_anchor_configured",
+          "os_protected_audit_anchor_required",
+          "independent_audit_anchor_configured",
+          "operational"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "service_name": {
+            "type": "string",
+            "const": "rejection-rejector"
+          },
+          "application_version": {
+            "type": "string"
+          },
+          "database_schema_version": {
+            "type": "integer"
+          },
+          "database_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "audit_head_present": {
+            "type": "boolean"
+          },
+          "stored_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "queued_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "review_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sent_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uncertain_deliveries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "send_attempts_24h": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gmail_connected": {
+            "type": "boolean"
+          },
+          "gmail_send_scope": {
+            "type": "boolean"
+          },
+          "model_digest_pinned": {
+            "type": "boolean"
+          },
+          "task_qualification_current": {
+            "type": "boolean"
+          },
+          "enterprise_policy_active": {
+            "type": "boolean"
+          },
+          "enterprise_policy_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_requires_independent_audit_anchor": {
+            "type": "boolean"
+          },
+          "external_audit_anchor_configured": {
+            "type": "boolean"
+          },
+          "os_protected_audit_anchor_required": {
+            "type": "boolean"
+          },
+          "independent_audit_anchor_configured": {
+            "type": "boolean"
+          },
+          "operational": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       }
@@ -820,22 +980,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "schema_version",
-                    "generated_at",
-                    "service_name",
-                    "application_version",
-                    "database_schema_version",
-                    "stored_items",
-                    "queued_items",
-                    "review_items",
-                    "sent_items",
-                    "uncertain_deliveries",
-                    "send_attempts_24h",
-                    "operational"
-                  ]
+                  "$ref": "#/components/schemas/MetricsSnapshot"
                 }
               }
             }
