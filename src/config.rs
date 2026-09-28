@@ -31,7 +31,7 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
 ];
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
-pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v3";
+pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v4";
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 
 fn default_settings_format_version() -> u32 {
