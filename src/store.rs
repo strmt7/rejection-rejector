@@ -35,6 +35,17 @@ pub struct ApplicationIntegritySummary {
     pub active_delivery_records: u64,
     pub sent_delivery_records: u64,
 }
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct DatabaseCompactionReport {
+    pub schema_version: u32,
+    pub before_page_count: u64,
+    pub before_freelist_count: u64,
+    pub after_page_count: u64,
+    pub after_freelist_count: u64,
+    pub page_size_bytes: u64,
+}
+
+
 
 pub struct Store {
     conn: Connection,
@@ -397,7 +408,7 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF;")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=67108864;")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         ensure!(
             version <= DATABASE_SCHEMA_VERSION,
@@ -1406,6 +1417,62 @@ impl Store {
         }
         Ok(ids.len())
     }
+    fn page_stats(&self) -> Result<(u64, u64, u64)> {
+        let page_count: u64 = self
+            .conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))?;
+        let freelist_count: u64 = self
+            .conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        let page_size: u64 = self
+            .conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        Ok((page_count, freelist_count, page_size))
+    }
+
+    /// Reclaim free SQLite pages under the exclusive workspace writer.
+    ///
+    /// This is storage maintenance, not secure erasure. Application payloads
+    /// remain encrypted, and SSD/controller remapping remains outside SQLite's
+    /// guarantees.
+    pub fn compact(&mut self) -> Result<DatabaseCompactionReport> {
+        self.readiness_check()?;
+        let (before_page_count, before_freelist_count, page_size_bytes) =
+            self.page_stats()?;
+        self.conn.execute_batch(
+            "PRAGMA wal_checkpoint(TRUNCATE);
+             VACUUM;
+             PRAGMA optimize;",
+        )?;
+        let (after_page_count, after_freelist_count, after_page_size) =
+            self.page_stats()?;
+        ensure!(
+            page_size_bytes == after_page_size,
+            "SQLite page size changed unexpectedly during compaction"
+        );
+        let report = DatabaseCompactionReport {
+            schema_version: 1,
+            before_page_count,
+            before_freelist_count,
+            after_page_count,
+            after_freelist_count,
+            page_size_bytes,
+        };
+        self.log(
+            "database.compacted",
+            None,
+            &format!(
+                "SQLite compaction completed: pages {}->{}, freelist {}->{}",
+                before_page_count,
+                after_page_count,
+                before_freelist_count,
+                after_freelist_count
+            ),
+        )?;
+        self.readiness_check()?;
+        Ok(report)
+    }
+
     pub fn log(&mut self, kind: &str, item: Option<&str>, detail: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
         event(&tx, &self.vault, kind, item, detail, Utc::now())?;
@@ -2290,6 +2357,21 @@ mod tests {
 
         assert!(Store::open(&backup, Vault::random()).is_err());
         assert!(db.backup_to(&backup).is_err());
+    }
+
+    #[test]
+    fn compaction_reclaims_free_pages_and_preserves_integrity() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.set_meta("large-temporary-value", &"x".repeat(2_000_000))
+            .unwrap();
+        db.delete_meta("large-temporary-value").unwrap();
+        let (_, free_before, _) = db.page_stats().unwrap();
+        assert!(free_before > 0);
+        let report = db.compact().unwrap();
+        assert!(report.after_page_count <= report.before_page_count);
+        assert!(report.after_freelist_count <= report.before_freelist_count);
+        db.readiness_check().unwrap();
     }
 
     #[test]
