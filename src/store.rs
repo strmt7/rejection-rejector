@@ -1437,15 +1437,13 @@ impl Store {
     /// guarantees.
     pub fn compact(&mut self) -> Result<DatabaseCompactionReport> {
         self.readiness_check()?;
-        let (before_page_count, before_freelist_count, page_size_bytes) =
-            self.page_stats()?;
+        let (before_page_count, before_freelist_count, page_size_bytes) = self.page_stats()?;
         self.conn.execute_batch(
             "PRAGMA wal_checkpoint(TRUNCATE);
              VACUUM;
              PRAGMA optimize;",
         )?;
-        let (after_page_count, after_freelist_count, after_page_size) =
-            self.page_stats()?;
+        let (after_page_count, after_freelist_count, after_page_size) = self.page_stats()?;
         ensure!(
             page_size_bytes == after_page_size,
             "SQLite page size changed unexpectedly during compaction"
@@ -1463,10 +1461,7 @@ impl Store {
             None,
             &format!(
                 "SQLite compaction completed: pages {}->{}, freelist {}->{}",
-                before_page_count,
-                after_page_count,
-                before_freelist_count,
-                after_freelist_count
+                before_page_count, after_page_count, before_freelist_count, after_freelist_count
             ),
         )?;
         self.readiness_check()?;
