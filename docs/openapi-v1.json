@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.10.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
+    "version": "1.11.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, and privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text."
   },
   "servers": [
     {
@@ -1482,6 +1482,53 @@
           },
           "503": {
             "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/metrics/openmetrics": {
+      "get": {
+        "summary": "Privacy-safe OpenMetrics 1.0 exposition",
+        "description": "Authenticated loopback-only OpenMetrics snapshot. Contains no account, employer, candidate, recipient, message-body or credential labels. Defaults to stable OpenMetrics 1.0 text while OpenMetrics 2.0 remains experimental.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenMetrics 1.0 text exposition",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "X-RR-API-Contract-SHA256": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/openmetrics-text; version=1.0.0; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
