@@ -23,7 +23,7 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use **
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
-The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on **48** synthetic recruiting fixtures. Cases are tagged for multilingual mail, ATS automation, interviews, offers, recruiter corrections, quoted history, prompt injection, ambiguity and pending-status language. Reports include per-tag completion/correctness/false-positive/unsafe-draft counts instead of hiding risky errors inside one aggregate score.
+The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on **72** stratified synthetic recruiting fixtures. Cases are tagged for multilingual mail, ATS automation, interviews, offers, assessments, recruiter corrections, quoted history, prompt injection, ambiguity, pending-status wording, talent pools, role closure, application-action requests and surveys. Reports include per-tag completion/correctness/false-positive/unsafe-draft counts instead of hiding risky errors inside one aggregate score.
 
 A recommendation is emitted only when a model completes every case, has **zero rejection false positives**, produces **zero drafts for non-rejections**, completes every critical hard-negative case, has **zero critical hard-negative rejection false positives or drafts**, reaches at least **90% rejection recall** and **90% verified rejection-pipeline success**, and passes the full-GPU-residency gate. Critical hard negatives include interviews, offers, recruiter corrections, quoted-history cases, prompt-injection cases and ambiguous mixed outcomes.
 
