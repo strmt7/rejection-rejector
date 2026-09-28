@@ -481,7 +481,7 @@ mod tests {
         let rows = fixtures().unwrap();
         let unique: std::collections::HashSet<_> = rows.iter().map(|c| &c.id).collect();
         assert_eq!(rows.len(), unique.len());
-        assert!(rows.len() >= 48);
+        assert!(rows.len() >= 72);
         for category in [
             Category::Rejection,
             Category::Opportunity,
