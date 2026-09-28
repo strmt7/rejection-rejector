@@ -4,9 +4,7 @@ const UNVERIFIED_COMMIT: &str = "unverified-local-build";
 
 fn reject_controls(name: &str, value: &str, max_len: usize) {
     assert!(
-        !value.is_empty()
-            && value.len() <= max_len
-            && !value.chars().any(char::is_control),
+        !value.is_empty() && value.len() <= max_len && !value.chars().any(char::is_control),
         "{name} contains invalid build metadata"
     );
 }
