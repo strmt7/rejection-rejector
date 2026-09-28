@@ -49,6 +49,100 @@ pub struct Snapshot {
     pub api_token_expires: Option<Instant>,
     pub api_listening: bool,
 }
+
+#[derive(Clone)]
+pub struct WorkerPulse {
+    inner: Arc<Mutex<WorkerPulseState>>,
+}
+
+#[derive(Clone, Debug)]
+struct WorkerPulseState {
+    last_progress_at: DateTime<Utc>,
+    current_operation: OperationKind,
+    operation_started_at: Option<DateTime<Utc>>,
+}
+
+impl WorkerPulse {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(WorkerPulseState {
+                last_progress_at: Utc::now(),
+                current_operation: OperationKind::Idle,
+                operation_started_at: None,
+            })),
+        }
+    }
+
+    fn begin(&self, kind: OperationKind) {
+        if let Ok(mut state) = self.inner.lock() {
+            let now = Utc::now();
+            state.last_progress_at = now;
+            state.current_operation = kind;
+            state.operation_started_at = Some(now);
+        }
+    }
+
+    fn progress(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.last_progress_at = Utc::now();
+        }
+    }
+
+    fn finish(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.last_progress_at = Utc::now();
+            state.current_operation = OperationKind::Idle;
+            state.operation_started_at = None;
+        }
+    }
+
+    fn idle_tick(&self) {
+        if let Ok(mut state) = self.inner.lock()
+            && state.current_operation == OperationKind::Idle
+        {
+            state.last_progress_at = Utc::now();
+        }
+    }
+
+    pub fn snapshot(&self, now: DateTime<Utc>) -> WorkerLiveness {
+        let Ok(state) = self.inner.lock() else {
+            return WorkerLiveness {
+                schema_version: 1,
+                worker_responsive: false,
+                last_progress_at: now,
+                progress_age_seconds: 0,
+                current_operation: OperationKind::Idle,
+                operation_started_at: None,
+                operation_age_seconds: None,
+                stall_budget_seconds: 0,
+            };
+        };
+        let progress_age_seconds = now
+            .signed_duration_since(state.last_progress_at)
+            .num_seconds()
+            .max(0);
+        let operation_age_seconds = state
+            .operation_started_at
+            .map(|started| now.signed_duration_since(started).num_seconds().max(0));
+        let stall_budget_seconds = state.current_operation.stall_budget_seconds();
+        WorkerLiveness {
+            schema_version: 1,
+            worker_responsive: progress_age_seconds <= stall_budget_seconds as i64,
+            last_progress_at: state.last_progress_at,
+            progress_age_seconds,
+            current_operation: state.current_operation,
+            operation_started_at: state.operation_started_at,
+            operation_age_seconds,
+            stall_budget_seconds,
+        }
+    }
+}
+
+impl Default for WorkerPulse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub enum Command {
     Refresh,
     CheckNow,
@@ -149,6 +243,7 @@ pub struct Worker {
     pub snapshot: Arc<Mutex<Snapshot>>,
     pub paused: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    pub pulse: WorkerPulse,
     join: Option<std::thread::JoinHandle<()>>,
 }
 impl Worker {
@@ -157,6 +252,7 @@ impl Worker {
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let pulse = WorkerPulse::new();
         let journal = if demo {
             None
         } else {
@@ -165,13 +261,27 @@ impl Worker {
         if let Some(journal) = &journal {
             let _ = journal.record_event(RuntimeEvent::ProcessStarted);
         }
-        let (s, p, c, sender) = (snapshot.clone(), paused.clone(), stop.clone(), tx.clone());
+        let (s, p, c, sender, worker_pulse) = (
+            snapshot.clone(),
+            paused.clone(),
+            stop.clone(),
+            tx.clone(),
+            pulse.clone(),
+        );
         let join = std::thread::spawn(move || {
             let panic_pause = p.clone();
             let panic_stop = c.clone();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Engine::open(dir, demo, p, c.clone())
-                    .and_then(|engine| run(engine, rx, s.clone(), sender, journal.clone()))
+                Engine::open(dir, demo, p, c.clone()).and_then(|engine| {
+                    run(
+                        engine,
+                        rx,
+                        s.clone(),
+                        sender,
+                        journal.clone(),
+                        worker_pulse.clone(),
+                    )
+                })
             }));
             match outcome {
                 Ok(Ok(())) => {}
@@ -199,6 +309,7 @@ impl Worker {
             snapshot,
             paused,
             stop,
+            pulse,
             join: Some(join),
         }
     }
@@ -316,7 +427,13 @@ fn refresh(
     s.review_only = review;
     Ok(())
 }
-fn begin_operation(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, text: &str) {
+fn begin_operation(
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    kind: OperationKind,
+    text: &str,
+) {
+    pulse.begin(kind);
     if let Ok(mut s) = shared.lock() {
         let now = Utc::now();
         s.busy = text.into();
@@ -342,7 +459,8 @@ fn record_current_operation(journal: &Option<RuntimeJournal>, shared: &Arc<Mutex
     }
 }
 
-fn busy(shared: &Arc<Mutex<Snapshot>>, text: &str) {
+fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
+    pulse.progress();
     if let Ok(mut s) = shared.lock() {
         s.busy = text.into();
         if s.operation.state == OperationState::Running {
@@ -351,7 +469,13 @@ fn busy(shared: &Arc<Mutex<Snapshot>>, text: &str) {
     }
 }
 
-fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()>) {
+fn report(
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    kind: OperationKind,
+    result: &Result<()>,
+) {
+    pulse.finish();
     if let Ok(mut s) = shared.lock() {
         s.busy.clear();
         let finished_at = Some(Utc::now());
@@ -388,7 +512,13 @@ fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()
         }
     }
 }
-fn report_silent_success(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, message: &str) {
+fn report_silent_success(
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    kind: OperationKind,
+    message: &str,
+) {
+    pulse.finish();
     if let Ok(mut s) = shared.lock() {
         s.busy.clear();
         s.error.clear();
@@ -462,6 +592,7 @@ fn run(
     shared: Arc<Mutex<Snapshot>>,
     sender: Sender<Command>,
     journal: Option<RuntimeJournal>,
+    pulse: WorkerPulse,
 ) -> Result<()> {
     let mut selected: Option<String> = None;
     let mut review = true;
@@ -483,6 +614,7 @@ fn run(
             sender,
             e.stop.clone(),
             api_disabled.clone(),
+            pulse.clone(),
         ) {
             Ok(()) => {
                 if let Some(journal) = &journal {
@@ -512,6 +644,7 @@ fn run(
     let mut retention_failures = 0u32;
     let mut policy_failures = 0u32;
     while !e.stop.load(Ordering::SeqCst) {
+        pulse.idle_tick();
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(Command::Api { path, reply }) => {
                 let operation = shared
@@ -524,13 +657,13 @@ fn run(
             }
             Ok(command) => {
                 let operation = command.kind();
-                begin_operation(&shared, operation, "Working locally…");
+                begin_operation(&shared, &pulse, operation, "Working locally…");
                 record_current_operation(&journal, &shared);
                 let mut settings_changed = false;
                 let operation_result: Result<()> = match command {
                     Command::Refresh => Ok(()),
                     Command::CheckNow => {
-                        busy(&shared, "Checking Gmail for missing messages…");
+                        busy(&shared, &pulse, "Checking Gmail for missing messages…");
                         e.synchronize().map(|_| ())
                     }
                     Command::Connect { path, send } => {
@@ -561,12 +694,12 @@ fn run(
                     }
                     Command::StartOllama => Ollama::new(&e.settings).and_then(|o| o.start()),
                     Command::PullModel => {
-                        busy(&shared, "Downloading the selected local model…");
+                        busy(&shared, &pulse, "Downloading the selected local model…");
                         Ollama::new(&e.settings)
-                            .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &p)))
+                            .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &pulse, &p)))
                     }
                     Command::InspectModel => {
-                        busy(&shared, "Refreshing local model status…");
+                        busy(&shared, &pulse, "Refreshing local model status…");
                         e.inspect_model_status()
                     }
                     Command::QualifyModel => {
@@ -593,7 +726,7 @@ fn run(
                         e.compare_models().map(|_| ())
                     }
                     Command::IntegrityCheck => {
-                        busy(&shared, "Checking encrypted database integrity…");
+                        busy(&shared, &pulse, "Checking encrypted database integrity…");
                         e.db.integrity_check()
                     }
                     Command::Backup { out } => {
@@ -623,7 +756,7 @@ fn run(
                         )
                     }
                     Command::Diagnostics { out } => {
-                        busy(&shared, "Writing privacy-safe diagnostics locally…");
+                        busy(&shared, &pulse, "Writing privacy-safe diagnostics locally…");
                         crate::diagnostics::write_report(&e, &out)
                     }
                     Command::List { review: r, page: p } => {
@@ -678,7 +811,7 @@ fn run(
                 if settings_changed && let Ok(mut s) = shared.lock() {
                     s.settings_revision += 1;
                 }
-                report(&shared, operation, &result);
+                report(&shared, &pulse, operation, &result);
                 record_current_operation(&journal, &shared);
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
@@ -708,7 +841,7 @@ fn run(
                     policy_due = Instant::now() + Duration::from_secs(60);
                     if changed {
                         let completed: Result<()> = Ok(());
-                        report(&shared, OperationKind::EnterprisePolicyReload, &completed);
+                        report(&shared, &pulse, OperationKind::EnterprisePolicyReload, &completed);
                         record_current_operation(&journal, &shared);
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
@@ -724,6 +857,7 @@ fn run(
                     } else {
                         report_silent_success(
                             &shared,
+                            &pulse,
                             OperationKind::EnterprisePolicyReload,
                             "Enterprise policy unchanged",
                         );
@@ -735,7 +869,7 @@ fn run(
                     policy_due = Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
-                    report(&shared, OperationKind::EnterprisePolicyReload, &failed);
+                    report(&shared, &pulse, OperationKind::EnterprisePolicyReload, &failed);
                     record_current_operation(&journal, &shared);
                 }
             }
@@ -750,7 +884,7 @@ fn run(
             record_current_operation(&journal, &shared);
             let operation_result = e.db.purge(e.settings.retention_days).map(|_| ());
             let result = protect_audit_boundary(&e, operation_result);
-            report(&shared, OperationKind::PurgeRetention, &result);
+            report(&shared, &pulse, OperationKind::PurgeRetention, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
                 retention_failures = 0;
@@ -779,7 +913,7 @@ fn run(
             record_current_operation(&journal, &shared);
             let operation_result = e.synchronize().map(|_| ());
             let result = protect_audit_boundary(&e, operation_result);
-            report(&shared, OperationKind::SyncMailbox, &result);
+            report(&shared, &pulse, OperationKind::SyncMailbox, &result);
             record_current_operation(&journal, &shared);
             sync_retry =
                 Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
@@ -797,7 +931,7 @@ fn run(
             record_current_operation(&journal, &shared);
             let operation_result = e.process_one().map(|_| ());
             let result = protect_audit_boundary(&e, operation_result);
-            report(&shared, OperationKind::AnalyzeQueuedMail, &result);
+            report(&shared, &pulse, OperationKind::AnalyzeQueuedMail, &result);
             record_current_operation(&journal, &shared);
             if result.is_ok() {
                 process_failures = 0;
@@ -832,6 +966,7 @@ fn run(
             if matches!(result, Ok(false)) {
                 report_silent_success(
                     &shared,
+                    &pulse,
                     OperationKind::AutomaticDispatch,
                     "No eligible automatic reply",
                 );
