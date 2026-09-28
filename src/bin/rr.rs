@@ -34,7 +34,11 @@ enum Action {
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
     Doctor,
     /// Print privacy-safe operational metrics for local monitoring.
-    Metrics,
+    Metrics {
+        /// Emit OpenMetrics 1.0 text instead of JSON.
+        #[arg(long)]
+        openmetrics: bool,
+    },
     /// Evaluate the configured local model on the full synthetic recruiting pipeline.
     Evaluate {
         #[arg(long)]
@@ -192,7 +196,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Action::Metrics => {
+        Action::Metrics { openmetrics } => {
             let e = Engine::open(
                 dir,
                 false,
@@ -200,7 +204,11 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
             )?;
             let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
-            println!("{}", serde_json::to_string_pretty(&metrics)?);
+            if openmetrics {
+                print!("{}", rejection_rejector::metrics::render_openmetrics(&metrics));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&metrics)?);
+            }
         }
         Action::Doctor => {
             let e = Engine::open(
