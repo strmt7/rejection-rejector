@@ -99,10 +99,10 @@ jobs:
           components: rustfmt, clippy
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Install pinned SBOM generator
+      - name: Install pinned release-audit tooling
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
-          tool: cargo-cyclonedx@0.5.9
+          tool: cargo-cyclonedx@0.5.9,cargo-auditable@0.7.6,cargo-audit@0.22.2
           checksum: true
           fallback: none
       - name: Verify release source
@@ -112,8 +112,18 @@ jobs:
           cargo fmt --all -- --check
           cargo test --locked --all-features
           cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Build native release binaries
-        run: cargo build --locked --release --bins
+      - name: Build auditable native release binaries
+        run: cargo auditable build --locked --release --bins
+      - name: Audit the shipped executables themselves
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          cargo audit bin target/release/rejection-rejector.exe | Tee-Object -FilePath artifacts/rejection-rejector-binary-audit.txt
+          cargo audit bin target/release/rr.exe | Tee-Object -FilePath artifacts/rr-binary-audit.txt
+          if ($LASTEXITCODE -ne 0) { throw "Binary RustSec audit failed" }
+          cargo auditable --version | Set-Content artifacts/cargo-auditable-version.txt -Encoding ascii
+          cargo audit --version | Set-Content artifacts/cargo-audit-version.txt -Encoding ascii
       - name: Generate CycloneDX SBOM
         shell: bash
         run: |
