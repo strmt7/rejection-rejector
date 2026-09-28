@@ -111,7 +111,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity; Authen
 | Crash during send | process failure | startup converts unresolved Sending to Uncertain; reservation remains authoritative |
 | Crash during backup/restore | process/storage failure | staged artifact/rollback path; exclusive workspace lock; recovery drill |
 | Database tampering | local filesystem write without key | AEAD payload auth + audit hash chain + structural checks |
-| Whole-database rollback | attacker/operator restores older internally valid DB | detectable only when a prior audit head is retained outside that rollback; external anchoring is required for this threat |
+| Whole-database rollback | attacker/operator restores older internally valid DB | detectable when a prior sequence/hash audit point is retained outside that rollback. Use an external anchor file under another trust domain or the Windows/macOS OS credential-store monotonic anchor; protected anchors are verified before runtime recovery mutates state |
 | Stolen local API token | same-user/local compromise | read-only API, loopback/Host/Origin checks, token rotation; token still grants private read access |
 | Local malicious process talks to Ollama/API | same OS user | loopback is not authentication; API bearer token protects API, Ollama is assumed under user's local trust boundary |
 | Malicious/compromised model package | model supply-chain compromise | explicit download, local-only use, digest pin, task evaluation; model weights are still third-party trust |
