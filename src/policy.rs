@@ -860,8 +860,11 @@ mod tests {
             assert!(load_file_with_controls(&path, None, Some(requirement.clone())).is_err());
         }
 
-        std::fs::write(&signature_path, vec![b'A'; (MAX_POLICY_SIGNATURE_BYTES + 1) as usize])
-            .unwrap();
+        std::fs::write(
+            &signature_path,
+            vec![b'A'; (MAX_POLICY_SIGNATURE_BYTES + 1) as usize],
+        )
+        .unwrap();
         assert!(load_file_with_controls(&path, None, Some(requirement)).is_err());
     }
 
