@@ -15,6 +15,7 @@ pub struct OperationalIndicators {
     pub task_qualification_age_seconds: Option<i64>,
     pub storage_write_safe: bool,
     pub scheduled_backup_overdue: bool,
+    pub backup_distinct_failure_domain: Option<bool>,
     pub degraded: bool,
     pub degradation_reasons: Vec<&'static str>,
 }
@@ -27,6 +28,7 @@ pub struct OperationalContext<'a> {
     pub database_integrity_ok: bool,
     pub storage_write_safe: bool,
     pub scheduled_backup_overdue: bool,
+    pub backup_distinct_failure_domain: Option<bool>,
     pub connected: bool,
     pub now: DateTime<Utc>,
 }
@@ -39,6 +41,7 @@ pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalInd
         database_integrity_ok,
         storage_write_safe,
         scheduled_backup_overdue,
+        backup_distinct_failure_domain,
         connected,
         now,
     } = context;
@@ -64,6 +67,9 @@ pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalInd
     if scheduled_backup_overdue {
         degradation_reasons.push("scheduled_backup_overdue");
     }
+    if settings.scheduled_backup_enabled && backup_distinct_failure_domain == Some(false) {
+        degradation_reasons.push("scheduled_backup_same_failure_domain");
+    }
     if !connected {
         degradation_reasons.push("gmail_disconnected");
     } else if !sync_fresh {
@@ -85,6 +91,7 @@ pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalInd
         task_qualification_age_seconds,
         storage_write_safe,
         scheduled_backup_overdue,
+        backup_distinct_failure_domain,
         degraded: !degradation_reasons.is_empty(),
         degradation_reasons,
     }
@@ -211,6 +218,7 @@ mod tests {
             database_integrity_ok: true,
             storage_write_safe: true,
             scheduled_backup_overdue: false,
+            backup_distinct_failure_domain: None,
             connected: true,
             now,
         });
@@ -238,6 +246,7 @@ mod tests {
             database_integrity_ok: true,
             storage_write_safe: true,
             scheduled_backup_overdue: false,
+            backup_distinct_failure_domain: None,
             connected: true,
             now,
         });
@@ -277,20 +286,44 @@ mod tests {
         );
 
         let now = Utc::now();
-        let backup_overdue = operational_indicators(
-            &Settings::default(),
-            &Counts::default(),
-            Some(now),
-            true,
-            true,
-            true,
-            true,
+        let backup_settings = Settings::default();
+        let backup_counts = Counts::default();
+        let backup_overdue = operational_indicators(OperationalContext {
+            settings: &backup_settings,
+            counts: &backup_counts,
+            last_poll: Some(now),
+            database_integrity_ok: true,
+            storage_write_safe: true,
+            scheduled_backup_overdue: true,
+            backup_distinct_failure_domain: None,
+            connected: true,
             now,
-        );
+        });
         assert!(
             backup_overdue
                 .degradation_reasons
                 .contains(&"scheduled_backup_overdue")
+        );
+        let scheduled_settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: "/synthetic".into(),
+            ..Settings::default()
+        };
+        let same_domain = operational_indicators(OperationalContext {
+            settings: &scheduled_settings,
+            counts: &backup_counts,
+            last_poll: Some(now),
+            database_integrity_ok: true,
+            storage_write_safe: true,
+            scheduled_backup_overdue: false,
+            backup_distinct_failure_domain: Some(false),
+            connected: true,
+            now,
+        });
+        assert!(
+            same_domain
+                .degradation_reasons
+                .contains(&"scheduled_backup_same_failure_domain")
         );
     }
 }
