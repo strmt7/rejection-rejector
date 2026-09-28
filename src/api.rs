@@ -181,11 +181,8 @@ pub fn start(
                         .expect("UUID request ID is valid header content"),
                 )
                 .with_header(
-                    Header::from_bytes(
-                        "X-RR-API-Contract-SHA256",
-                        contract_sha256.as_bytes(),
-                    )
-                    .expect("SHA-256 contract fingerprint is valid header content"),
+                    Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256.as_bytes())
+                        .expect("SHA-256 contract fingerprint is valid header content"),
                 );
             let _ = request.respond(response);
         }
@@ -211,12 +208,13 @@ mod tests {
         let live = direct_get("/v1/live").unwrap();
         assert_eq!(live["live"], true);
         assert_eq!(live["api_version"], API_VERSION);
-        assert_eq!(
-            live["api_contract_sha256"].as_str().unwrap().len(),
-            64
-        );
+        assert_eq!(live["api_contract_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(openapi_sha256().len(), 64);
-        assert!(openapi_sha256().bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(
+            openapi_sha256()
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
 
         let spec = direct_get("/v1/openapi.json").unwrap();
         assert_eq!(spec["openapi"], "3.1.0");
