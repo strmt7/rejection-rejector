@@ -308,7 +308,7 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "build": build_info::current(),
-                    "configuration_readiness": readiness,
+                    "configuration_readiness": readiness.clone(),
                     "enterprise_policy": e.enterprise_policy_status(),
                     "storage": storage,
                     "scheduled_backup": scheduled_backup,
