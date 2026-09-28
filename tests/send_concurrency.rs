@@ -55,9 +55,13 @@ fn race(same_thread: bool, cap: u16) -> usize {
 }
 #[test]
 fn concurrent_same_conversation_has_only_one_reservation() {
-    assert_eq!(race(true, 10), 1);
+    for _ in 0..20 {
+        assert_eq!(race(true, 10), 1);
+    }
 }
 #[test]
 fn concurrent_different_conversations_cannot_exceed_attempt_cap() {
-    assert_eq!(race(false, 1), 1);
+    for _ in 0..20 {
+        assert_eq!(race(false, 1), 1);
+    }
 }
