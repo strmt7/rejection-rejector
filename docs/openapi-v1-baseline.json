@@ -1,0 +1,1490 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Rejection Rejector Local Integration API",
+    "version": "1.10.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}",
+      "variables": {
+        "port": {
+          "default": "8734"
+        }
+      }
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Random local token stored encrypted by Rejection Rejector."
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "request_id",
+          "error"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "examples": [
+                  "worker_busy"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "AutomaticPolicyBlock": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable snake_case automatic-policy reason code."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "AutomaticPolicyDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eligible",
+          "blocks"
+        ],
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomaticPolicyBlock"
+            }
+          }
+        }
+      },
+      "RuntimeLogStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "available",
+          "current_bytes",
+          "archive_bytes",
+          "total_bytes",
+          "archive_count",
+          "max_current_bytes",
+          "max_archives"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "current_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "archive_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "archive_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_current_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_archives": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "description": "Privacy-minimal local runtime-journal storage health; contains no log records or private mailbox/profile fields."
+      },
+      "OperationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "kind",
+          "state",
+          "code",
+          "retryable",
+          "message",
+          "started_at",
+          "finished_at"
+        ],
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Locally generated UUID correlating one worker operation lifecycle across status and runtime journal records."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "worker": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "operation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OperationStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "audit_protection": {
+            "$ref": "#/components/schemas/AuditProtectionStatus"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageHealth"
+          },
+          "scheduled_backup": {
+            "$ref": "#/components/schemas/ScheduledBackupStatus"
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AuditAnchor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format_version",
+          "application_version",
+          "created_at",
+          "workspace_fingerprint",
+          "audit_sequence",
+          "audit_head"
+        ],
+        "properties": {
+          "format_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "application_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspace_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "audit_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "audit_head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "AuditAnchorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "algorithm",
+          "head",
+          "sequence",
+          "workspace_fingerprint",
+          "verified",
+          "anchor"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "const": "sha256-chain-v1"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workspace_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "verified": {
+            "type": "boolean",
+            "const": true
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/AuditAnchor"
+          }
+        }
+      },
+      "AuditProtectionStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policy_requires_independent_anchor",
+          "external_file_anchor_configured",
+          "os_protected_anchor_required",
+          "independent_anchor_configured"
+        ],
+        "properties": {
+          "policy_requires_independent_anchor": {
+            "type": "boolean"
+          },
+          "external_file_anchor_configured": {
+            "type": "boolean"
+          },
+          "os_protected_anchor_required": {
+            "type": "boolean"
+          },
+          "independent_anchor_configured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MetricsSnapshot": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema_version",
+          "generated_at",
+          "service_name",
+          "application_version",
+          "database_schema_version",
+          "storage",
+          "audit_sequence",
+          "audit_head_present",
+          "stored_items",
+          "queued_items",
+          "review_items",
+          "sent_items",
+          "uncertain_deliveries",
+          "send_attempts_24h",
+          "gmail_connected",
+          "gmail_send_scope",
+          "model_digest_pinned",
+          "task_qualification_current",
+          "enterprise_policy_active",
+          "policy_requires_independent_audit_anchor",
+          "external_audit_anchor_configured",
+          "os_protected_audit_anchor_required",
+          "independent_audit_anchor_configured",
+          "operational",
+          "scheduled_backup"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 3
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "service_name": {
+            "type": "string",
+            "const": "rejection-rejector"
+          },
+          "application_version": {
+            "type": "string"
+          },
+          "database_schema_version": {
+            "type": "integer"
+          },
+          "database_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "audit_head_present": {
+            "type": "boolean"
+          },
+          "stored_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "queued_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "review_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sent_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uncertain_deliveries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "send_attempts_24h": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gmail_connected": {
+            "type": "boolean"
+          },
+          "gmail_send_scope": {
+            "type": "boolean"
+          },
+          "model_digest_pinned": {
+            "type": "boolean"
+          },
+          "task_qualification_current": {
+            "type": "boolean"
+          },
+          "enterprise_policy_active": {
+            "type": "boolean"
+          },
+          "enterprise_policy_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy_requires_independent_audit_anchor": {
+            "type": "boolean"
+          },
+          "external_audit_anchor_configured": {
+            "type": "boolean"
+          },
+          "os_protected_audit_anchor_required": {
+            "type": "boolean"
+          },
+          "independent_audit_anchor_configured": {
+            "type": "boolean"
+          },
+          "operational": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageHealth"
+          },
+          "scheduled_backup": {
+            "$ref": "#/components/schemas/ScheduledBackupStatus"
+          }
+        }
+      },
+      "WorkerLiveness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "worker_responsive",
+          "last_progress_at",
+          "progress_age_seconds",
+          "current_operation",
+          "operation_started_at",
+          "operation_age_seconds",
+          "stall_budget_seconds"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "worker_responsive": {
+            "type": "boolean"
+          },
+          "last_progress_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "progress_age_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "current_operation": {
+            "type": "string"
+          },
+          "operation_started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation_age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stall_budget_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Operation-specific monitoring threshold. This is not a forced-cancellation deadline."
+          }
+        }
+      },
+      "LiveResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "live",
+          "api_thread_live",
+          "worker_responsive",
+          "worker",
+          "api_version",
+          "api_contract_sha256",
+          "application_version",
+          "build"
+        ],
+        "properties": {
+          "live": {
+            "type": "boolean",
+            "const": true,
+            "description": "Backward-compatible API/process-thread liveness indicator."
+          },
+          "api_thread_live": {
+            "type": "boolean",
+            "const": true
+          },
+          "worker_responsive": {
+            "type": "boolean"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerLiveness"
+          },
+          "api_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "api_contract_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "application_version": {
+            "type": "string"
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          }
+        }
+      },
+      "BuildInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "application_version",
+          "source_commit",
+          "source_commit_verified",
+          "rustc_version",
+          "target",
+          "profile",
+          "cargo_lock_sha256",
+          "identity_sha256"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "application_version": {
+            "type": "string"
+          },
+          "source_commit": {
+            "type": "string"
+          },
+          "source_commit_verified": {
+            "type": "boolean"
+          },
+          "rustc_version": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "cargo_lock_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "identity_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "StorageHealth": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "database_bytes",
+          "wal_bytes",
+          "shm_bytes",
+          "workspace_database_bytes",
+          "available_bytes",
+          "total_bytes",
+          "runtime_required_bytes",
+          "backup_required_bytes",
+          "runtime_write_safe",
+          "backup_safe"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "database_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wal_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shm_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workspace_database_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runtime_required_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "backup_required_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runtime_write_safe": {
+            "type": "boolean"
+          },
+          "backup_safe": {
+            "type": "boolean"
+          }
+        },
+        "description": "Privacy-safe workspace filesystem headroom. Thresholds are conservative engineering guardrails, not availability SLOs."
+      },
+      "ScheduledBackupStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "enabled",
+          "interval_hours",
+          "keep",
+          "last_success_at",
+          "age_seconds",
+          "overdue"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "type": "integer",
+            "minimum": 24
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "overdue": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "description": "Per-request correlation identifier generated locally by Rejection Rejector.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ContractFingerprint": {
+        "description": "SHA-256 of the exact OpenAPI document bytes served by /v1/openapi.json. Semantic compatibility remains governed by api_version/v1.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "BuildIdentityFingerprint": {
+        "description": "SHA-256 identity of deterministic build inputs embedded in the running binary.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request or unavailable resource",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication, Host or Origin policy rejected the request",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "The endpoint is read-only",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "WorkerUnavailable": {
+        "description": "Worker queue busy or local worker timeout",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/live": {
+      "get": {
+        "summary": "Process/API-thread liveness plus state-worker responsiveness",
+        "responses": {
+          "200": {
+            "description": "API thread is alive; body separately reports whether the state-owning worker is within its operation-specific progress budget.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "summary": "This API contract",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "summary": "Versioned capability discovery",
+        "responses": {
+          "200": {
+            "description": "Capabilities",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "summary": "Workspace readiness and integrity",
+        "responses": {
+          "200": {
+            "description": "Readiness state including database integrity, enterprise policy, typed worker operation state and privacy-minimal runtime-journal storage health.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "summary": "Application status",
+        "responses": {
+          "200": {
+            "description": "Status",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/items": {
+      "get": {
+        "summary": "Paginated retained jobs",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job page",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/items/{id}": {
+      "get": {
+        "summary": "One retained job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "summary": "Audit events after sequence",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit events",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/audit/anchor": {
+      "get": {
+        "summary": "Current tamper-evident audit-chain anchor",
+        "responses": {
+          "200": {
+            "description": "Current verified tamper-evident audit anchor. Existing top-level head remains for v1 compatibility; sequence/workspace fields and the versioned nested anchor are additive.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditAnchorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/audit/contains": {
+      "get": {
+        "summary": "Check whether an audit anchor is known",
+        "parameters": [
+          {
+            "name": "head",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Anchor membership",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "summary": "Privacy-safe operational metrics snapshot",
+        "description": "Aggregate local operational metrics only. No mailbox address, message content, recipients, OAuth credentials, API token, signature, or candidate facts are included.",
+        "responses": {
+          "200": {
+            "description": "Metrics snapshot",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/item-feed": {
+      "get": {
+        "summary": "Snapshot-consistent retained-item feed",
+        "description": "Cursor-based traversal over a fixed SQLite row high-water mark. New messages arriving after the first page do not shift or appear inside the in-progress traversal. Cursor values are opaque URL-safe tokens.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque continuation cursor returned by the previous page.",
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Snapshot-consistent item page",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "schema_version",
+                    "items",
+                    "next_cursor"
+                  ],
+                  "properties": {
+                    "schema_version": {
+                      "type": "integer",
+                      "const": 1
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/items/{id}/automatic-policy": {
+      "get": {
+        "summary": "Explain whether a stored rejection is eligible for unattended dispatch",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Automatic-dispatch policy decision",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticPolicyDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    }
+  }
+}
