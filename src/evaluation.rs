@@ -187,9 +187,9 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                 critical_negative_unsafe_drafts +=
                     usize::from(critical_negative && non_rejection_draft);
                 for tag in &case.tags {
-                    let metrics = tag_metrics
-                        .get_mut(tag.as_str())
-                        .ok_or_else(|| anyhow::anyhow!("Evaluation tag registry invariant failed"))?;
+                    let metrics = tag_metrics.get_mut(tag.as_str()).ok_or_else(|| {
+                        anyhow::anyhow!("Evaluation tag registry invariant failed")
+                    })?;
                     metrics.completed += 1;
                     metrics.correct += usize::from(matched);
                     metrics.rejection_false_positives += usize::from(rejection_false_positive);
