@@ -1,4 +1,5 @@
 use crate::{
+    audit_anchor,
     config::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
         settings_context_hash,
@@ -183,6 +184,11 @@ impl Engine {
             Vault::open(&directory)?
         };
         let mut db = Store::open(&directory.join("state.sqlite3"), vault)?;
+        // Verify independently persisted rollback evidence before any runtime
+        // recovery event mutates the workspace audit journal.
+        if !demo {
+            audit_anchor::verify_configured_anchor(&db, &directory)?;
+        }
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
