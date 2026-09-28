@@ -13,7 +13,7 @@ use crate::{
     store::Store,
     sync,
     types::*,
-    vault::{InstanceLock, Vault},
+    vault::{InstanceLock, Vault, write_new_private},
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
@@ -179,6 +179,10 @@ impl Engine {
             .unwrap_or(directory);
         let lock = InstanceLock::acquire(&directory)?;
         let vault = if demo {
+            write_new_private(
+                &directory.join("vault-id"),
+                uuid::Uuid::new_v4().to_string().as_bytes(),
+            )?;
             Vault::random()
         } else {
             Vault::open(&directory)?
