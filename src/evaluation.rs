@@ -502,6 +502,11 @@ mod tests {
             CaseTag::Ambiguous,
             CaseTag::Multilingual,
             CaseTag::AtsAutomation,
+            CaseTag::Assessment,
+            CaseTag::TalentPool,
+            CaseTag::RoleClosure,
+            CaseTag::ApplicationActionRequired,
+            CaseTag::Survey,
         ] {
             assert!(
                 rows.iter()
@@ -520,6 +525,32 @@ mod tests {
                 .count()
                 >= 15,
             "Critical hard-negative corpus is too small"
+        );
+    }
+
+    #[test]
+    fn deterministic_automatic_policy_is_safe_on_the_full_fixture_corpus() {
+        let rows = fixtures().unwrap();
+        let mut expected_rejections = 0usize;
+        let mut deterministic_hits = 0usize;
+        let mut deterministic_false_positives = 0usize;
+        for case in &rows {
+            let evidence = mail::clear_rejection_language(&case.subject, &case.text)
+                && !mail::auto_language_conflict(&case.subject, &case.text);
+            if case.expected == Category::Rejection {
+                expected_rejections += 1;
+                deterministic_hits += usize::from(evidence);
+            } else {
+                deterministic_false_positives += usize::from(evidence);
+            }
+        }
+        assert_eq!(
+            deterministic_false_positives, 0,
+            "Deterministic Automatic-mode gate must never fire on a non-rejection fixture"
+        );
+        assert!(
+            ratio(deterministic_hits, expected_rejections).unwrap_or(0.0) >= 0.90,
+            "Deterministic rejection evidence must cover at least 90% of rejection fixtures"
         );
     }
 
