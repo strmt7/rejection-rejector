@@ -25,8 +25,8 @@ pub fn report(engine: &Engine) -> Result<Value> {
         paused,
         stopping,
     );
-    let operational = crate::readiness::operational_indicators(
-        crate::readiness::OperationalContext {
+    let operational =
+        crate::readiness::operational_indicators(crate::readiness::OperationalContext {
             settings: &engine.settings,
             counts: &counts,
             last_poll: engine.last_poll()?,
@@ -36,8 +36,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
             connected: engine.connected(),
             now: chrono::Utc::now(),
-        },
-    );
+        });
 
     let local_ai = Ollama::new(&engine.settings)?;
     let runtime_version = local_ai.runtime_version().ok();
