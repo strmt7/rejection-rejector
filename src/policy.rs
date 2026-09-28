@@ -377,7 +377,20 @@ fn validate_signature_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Result<()> {
-    validate_signature_distinct(policy_path, &signature_path)?;
+    ensure!(
+        policy_path != signature_path,
+        "Enterprise policy signature file must be distinct from the policy file"
+    );
+    if policy_path.exists() && signature_path.exists() {
+        let policy_canonical = fs::canonicalize(policy_path)
+            .context("Cannot canonicalize enterprise policy path")?;
+        let signature_canonical = fs::canonicalize(signature_path)
+            .context("Cannot canonicalize enterprise policy signature path")?;
+        ensure!(
+            policy_canonical != signature_canonical,
+            "Enterprise policy signature resolves to the policy file"
+        );
+    }
     Ok(())
 }
 
@@ -401,10 +414,7 @@ fn configured_signature_requirement(policy_path: &Path) -> Result<Option<Signatu
         .map(validate_signature_path)
         .transpose()?
         .unwrap_or_else(|| signature_path_for_policy(policy_path));
-    ensure!(
-        signature_path != policy_path,
-        "Enterprise policy signature file must be distinct from the policy file"
-    );
+    validate_signature_distinct(policy_path, &signature_path)?;
     Ok(Some(SignatureRequirement {
         public_key,
         signer_key_sha256,
@@ -558,6 +568,7 @@ fn load_file_with_controls(
     }
     let (signature_enforced, signature_verified, signer_key_sha256) =
         if let Some(requirement) = &signature_requirement {
+            validate_signature_distinct(path, &requirement.signature_path)?;
             verify_detached_signature(requirement, &bytes)?;
             (true, true, Some(requirement.signer_key_sha256.clone()))
         } else {
@@ -884,6 +895,13 @@ mod tests {
 
         let absolute = std::env::temp_dir().join("policy.json");
         assert!(validate_signature_distinct(&absolute, &absolute).is_err());
+
+        let root = tempfile::tempdir().unwrap();
+        let policy = root.path().join("policy.json");
+        std::fs::write(&policy, b"{}").unwrap();
+        let lexical_alias = root.path().join(".").join("policy.json");
+        assert!(validate_signature_distinct(&policy, &lexical_alias).is_err());
+
         assert_eq!(
             signature_path_for_policy(&absolute),
             PathBuf::from(format!("{}.sig", absolute.display()))
