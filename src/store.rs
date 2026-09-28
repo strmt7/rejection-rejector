@@ -614,6 +614,82 @@ impl Store {
         Ok(())
     }
 
+    /// Verify only the audit suffix after an already trusted external point.
+    ///
+    /// This is suitable for frequent protected-anchor checkpoints: it proves
+    /// that the current authenticated head extends the trusted sequence/hash
+    /// without rescanning the entire historical prefix on every operation.
+    pub fn verify_audit_extension(
+        &self,
+        sequence: i64,
+        anchor: &str,
+    ) -> Result<(i64, String)> {
+        ensure!(sequence >= 0, "Audit anchor sequence is invalid");
+        ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
+
+        if sequence == 0 {
+            ensure!(
+                anchor == AUDIT_GENESIS,
+                "Sequence zero must use the audit genesis hash"
+            );
+        } else {
+            let stored: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT event_hash FROM events WHERE seq=?1",
+                    [sequence],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            ensure!(
+                stored.as_deref() == Some(anchor),
+                "Current workspace does not contain the trusted audit point"
+            );
+        }
+
+        let mut previous_hash = anchor.to_owned();
+        let mut latest_sequence = sequence;
+        let mut query = self.conn.prepare(
+            "SELECT seq,event_id,payload,prev_hash,event_hash
+             FROM events WHERE seq>?1 ORDER BY seq",
+        )?;
+        let rows = query.query_map([sequence], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (event_sequence, event_id, payload, stored_previous, stored_hash) = row?;
+            ensure!(
+                event_sequence > latest_sequence,
+                "Audit journal sequence is not strictly increasing"
+            );
+            ensure!(
+                stored_previous == previous_hash,
+                "Audit journal extension does not link to the trusted anchor"
+            );
+            ensure!(
+                valid_audit_hash(&stored_hash),
+                "Audit journal event hash is invalid"
+            );
+            let computed = audit_hash(&stored_previous, &event_id, &payload);
+            ensure!(computed == stored_hash, "Audit journal event was modified");
+            previous_hash = stored_hash;
+            latest_sequence = event_sequence;
+        }
+
+        ensure!(
+            previous_hash == self.audit_head()?,
+            "Audit journal extension does not reach the authenticated current head"
+        );
+        Ok((latest_sequence, previous_hash))
+    }
+
     /// Check whether an externally persisted audit anchor is still represented
     /// by this database's history. This enables rollback detection when another
     /// trusted component stores previously observed heads.
@@ -2069,6 +2145,29 @@ mod tests {
         assert!(pruned.drafted_at.is_none());
         assert_eq!(pruned.attempts, 0);
         assert_eq!(pruned.retry_at, 0);
+    }
+
+    #[test]
+    fn incremental_audit_extension_verifies_only_new_suffix_semantics() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.log("test.anchor", None, "trusted point").unwrap();
+        let (sequence, head) = db.audit_point().unwrap();
+
+        db.log("test.after_anchor", None, "one").unwrap();
+        db.log("test.after_anchor", None, "two").unwrap();
+        let (latest_sequence, latest_head) =
+            db.verify_audit_extension(sequence, &head).unwrap();
+        assert!(latest_sequence > sequence);
+        assert_eq!(latest_head, db.audit_head().unwrap());
+
+        db.conn
+            .execute(
+                "UPDATE events SET prev_hash=?2 WHERE seq=?1",
+                params![latest_sequence, AUDIT_GENESIS],
+            )
+            .unwrap();
+        assert!(db.verify_audit_extension(sequence, &head).is_err());
     }
 
     #[test]
