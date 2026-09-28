@@ -303,15 +303,14 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
         use std::path::Component;
         fn volume_prefix(path: &Path) -> Result<Option<String>> {
             let canonical = fs::canonicalize(path)?;
-            Ok(canonical.components().find_map(|component| match component {
-                Component::Prefix(prefix) => Some(
-                    prefix
-                        .as_os_str()
-                        .to_string_lossy()
-                        .to_ascii_lowercase(),
-                ),
-                _ => None,
-            }))
+            Ok(canonical
+                .components()
+                .find_map(|component| match component {
+                    Component::Prefix(prefix) => {
+                        Some(prefix.as_os_str().to_string_lossy().to_ascii_lowercase())
+                    }
+                    _ => None,
+                }))
         }
         let workspace_prefix = volume_prefix(workspace)?;
         let backup_prefix = volume_prefix(backup)?;
@@ -351,8 +350,7 @@ pub fn backup_isolation_status(
         });
     }
     ensure!(
-        destination.is_dir()
-            && !fs::symlink_metadata(&destination)?.file_type().is_symlink(),
+        destination.is_dir() && !fs::symlink_metadata(&destination)?.file_type().is_symlink(),
         "Scheduled backup destination must be a real directory"
     );
     let same = backup_same_filesystem(data_dir, &destination)?;
