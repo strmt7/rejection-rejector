@@ -14,6 +14,5 @@ examine_globs = [
 all_features = true
 timeout_multiplier = 3.0
 minimum_test_timeout = 20.0
-jobs = 2
 error_values = ["::anyhow::anyhow!(\"mutated failure\")"]
 output = "artifacts/mutants"

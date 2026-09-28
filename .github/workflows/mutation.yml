@@ -50,9 +50,18 @@ jobs:
         id: mutants
         shell: bash
         run: |
+          mkdir -p artifacts
           set +e
-          cargo mutants             --all-features             --timeout-multiplier 3             --minimum-test-timeout 20             --jobs 2             --output artifacts/mutants
-          status=$?
+          set -o pipefail
+          cargo mutants \
+            --all-features \
+            --timeout-multiplier 3 \
+            --minimum-test-timeout 20 \
+            --jobs 2 \
+            --output artifacts/mutants \
+            2>&1 | tee artifacts/mutation-run.log
+          status=${PIPESTATUS[0]}
+          set +o pipefail
           set -e
           echo "status=$status" >> "$GITHUB_OUTPUT"
           case "$status" in
@@ -96,6 +105,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rejection-rejector-mutants-${{ github.sha }}
-          path: artifacts/mutants/
-          if-no-files-found: error
+          path: artifacts/
+          if-no-files-found: warn
           retention-days: 30
