@@ -1007,6 +1007,9 @@ fn api_query_with_operation(
             let anchor = crate::audit_anchor::current(&e.db, &e.directory)?;
             Ok(json!({
                 "algorithm": "sha256-chain-v1",
+                "head": anchor.audit_head,
+                "sequence": anchor.audit_sequence,
+                "workspace_fingerprint": anchor.workspace_fingerprint,
                 "verified": true,
                 "anchor": anchor
             }))
