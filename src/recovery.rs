@@ -1,6 +1,8 @@
 use crate::{
     store::Store,
-    vault::{InstanceLock, Vault, private_dir, write_new_private},
+    vault::{
+        InstanceLock, RecoveryKeyEnvelope, Vault, private_dir, vault_id, write_new_private,
+    },
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
@@ -15,6 +17,7 @@ use std::{
 const MANIFEST_NAME: &str = "backup-manifest.json";
 const DATABASE_NAME: &str = "state.sqlite3";
 const VAULT_ID_NAME: &str = "vault-id";
+const RECOVERY_KEY_NAME: &str = "recovery-key.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -103,6 +106,37 @@ fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
     std::io::copy(&mut input, &mut output)?;
     output.flush()?;
     output.sync_all()?;
+    Ok(())
+}
+
+fn read_recovery_envelope(path: &Path) -> Result<RecoveryKeyEnvelope> {
+    let bytes = read_small(path, 64 * 1024)?;
+    serde_json::from_slice(&bytes).context("Recovery-key envelope is invalid")
+}
+
+fn verify_vault_marker(database: &Path, vault: &Vault) -> Result<()> {
+    ensure!(database.is_file(), "Recovery database is missing");
+    ensure!(
+        !fs::symlink_metadata(database)?.file_type().is_symlink(),
+        "Recovery database must not be a symlink"
+    );
+    let connection = rusqlite::Connection::open_with_flags(
+        database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let encrypted: Vec<u8> = connection
+        .query_row(
+            "SELECT payload FROM meta WHERE name='vault_check'",
+            [],
+            |row| row.get(0),
+        )
+        .context("Recovery database vault marker is missing")?;
+    let marker: String = vault.open_value("meta/vault_check", &encrypted)?;
+    ensure!(
+        marker == "rejection-rejector:v1",
+        "Recovery key does not authenticate this database"
+    );
     Ok(())
 }
 
@@ -214,6 +248,97 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
             Err(error)
         }
     }
+}
+
+/// Export a passphrase-wrapped master-key envelope for off-machine disaster recovery.
+///
+/// The output is intentionally separate from normal backups so organizations can
+/// store encrypted data and its recovery credential in different locations.
+pub fn export_recovery_key(
+    data_dir: &Path,
+    passphrase: &[u8],
+    destination: &Path,
+) -> Result<RecoveryKeyEnvelope> {
+    ensure!(!destination.exists(), "Recovery-key destination already exists");
+    let vault = Vault::open(data_dir)?;
+    let id = vault_id(data_dir)?;
+    let envelope = vault.recovery_envelope(&id, passphrase)?;
+    if let Some(parent) = destination.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+        ensure!(
+            !fs::symlink_metadata(parent)?.file_type().is_symlink(),
+            "Recovery-key parent directory must not be a symlink"
+        );
+    }
+    write_new_private(destination, &serde_json::to_vec_pretty(&envelope)?)?;
+    Ok(envelope)
+}
+
+/// Prove a recovery-key envelope can unlock a specific backup without writing any
+/// key material to the OS credential store.
+pub fn verify_recovery_key_for_backup(
+    backup_dir: &Path,
+    recovery_key_file: &Path,
+    passphrase: &[u8],
+) -> Result<RecoveryKeyEnvelope> {
+    let (manifest, database) = validate_bundle_files(backup_dir)?;
+    let envelope = read_recovery_envelope(recovery_key_file)?;
+    ensure!(
+        envelope.vault_id == manifest.vault_id,
+        "Recovery key belongs to a different vault"
+    );
+    let recovered = Vault::from_recovery_envelope(&envelope, passphrase)?;
+    verify_vault_marker(&database, &recovered)?;
+    Ok(envelope)
+}
+
+/// Install a previously verified recovery key into the local OS credential store.
+///
+/// Existing credentials are never replaced. If a live database already exists it
+/// must authenticate under the recovered key before installation is attempted.
+pub fn import_recovery_key_for_backup(
+    data_dir: &Path,
+    backup_dir: &Path,
+    recovery_key_file: &Path,
+    passphrase: &[u8],
+) -> Result<RecoveryKeyEnvelope> {
+    let envelope =
+        verify_recovery_key_for_backup(backup_dir, recovery_key_file, passphrase)?;
+    private_dir(data_dir)?;
+
+    let id_path = data_dir.join(VAULT_ID_NAME);
+    let created_vault_id = !id_path.exists();
+    if created_vault_id {
+        write_new_private(&id_path, envelope.vault_id.as_bytes())?;
+    } else {
+        ensure!(
+            vault_id(data_dir)? == envelope.vault_id,
+            "Workspace belongs to a different vault"
+        );
+    }
+
+    let recovered = Vault::from_recovery_envelope(&envelope, passphrase)?;
+    let live = data_dir.join(DATABASE_NAME);
+    if live.exists()
+        && let Err(error) = verify_vault_marker(&live, &recovered)
+    {
+        if created_vault_id {
+            let _ = fs::remove_file(&id_path);
+        }
+        return Err(error.context(
+            "Existing workspace does not authenticate under the recovered vault key",
+        ));
+    }
+
+    if let Err(error) = recovered.install_os_key_if_missing(data_dir) {
+        if created_vault_id {
+            let _ = fs::remove_file(&id_path);
+        }
+        return Err(error);
+    }
+    Ok(envelope)
 }
 
 /// Verify manifest, checksum, vault identity and SQLite structure without
@@ -411,6 +536,10 @@ pub fn backup_manifest_path(directory: &Path) -> PathBuf {
     directory.join(MANIFEST_NAME)
 }
 
+pub fn recovery_key_default_path(directory: &Path) -> PathBuf {
+    directory.join(RECOVERY_KEY_NAME)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +548,49 @@ mod tests {
         vault::Vault,
     };
     use std::io::Write;
+
+    #[test]
+    fn wrapped_recovery_key_authenticates_the_backup_without_plaintext_key_export() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        private_dir(&data).unwrap();
+        let vault_id_value = uuid::Uuid::new_v4().to_string();
+        write_new_private(&data.join(VAULT_ID_NAME), vault_id_value.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let store = Store::open(&data.join(DATABASE_NAME), vault.clone()).unwrap();
+
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault
+            .recovery_envelope(&vault_id_value, passphrase)
+            .unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+
+        let verified =
+            verify_recovery_key_for_backup(&backup, &recovery_file, passphrase).unwrap();
+        assert_eq!(verified.vault_id, vault_id_value);
+        assert!(
+            verify_recovery_key_for_backup(
+                &backup,
+                &recovery_file,
+                b"wrong passphrase but definitely long enough",
+            )
+            .is_err()
+        );
+
+        let serialized = fs::read(&recovery_file).unwrap();
+        let raw_key_probe = vault.seal("probe", &"secret").unwrap();
+        assert!(!serialized.windows(32).any(|window| {
+            raw_key_probe.windows(32).any(|probe| probe == window)
+        }));
+    }
 
     #[test]
     fn restore_replaces_state_and_preserves_rollback_snapshot() {
