@@ -13,6 +13,7 @@ pub struct OperationalIndicators {
     pub review_depth: u64,
     pub uncertain_deliveries: u64,
     pub task_qualification_age_seconds: Option<i64>,
+    pub storage_write_safe: bool,
     pub degraded: bool,
     pub degradation_reasons: Vec<&'static str>,
 }
@@ -22,6 +23,7 @@ pub fn operational_indicators(
     counts: &Counts,
     last_poll: Option<DateTime<Utc>>,
     database_integrity_ok: bool,
+    storage_write_safe: bool,
     connected: bool,
     now: DateTime<Utc>,
 ) -> OperationalIndicators {
@@ -40,6 +42,9 @@ pub fn operational_indicators(
     let mut degradation_reasons = Vec::new();
     if !database_integrity_ok {
         degradation_reasons.push("database_integrity_failed");
+    }
+    if !storage_write_safe {
+        degradation_reasons.push("storage_headroom_low");
     }
     if !connected {
         degradation_reasons.push("gmail_disconnected");
@@ -60,6 +65,7 @@ pub fn operational_indicators(
         review_depth: counts.review,
         uncertain_deliveries: counts.uncertain,
         task_qualification_age_seconds,
+        storage_write_safe,
         degraded: !degradation_reasons.is_empty(),
         degradation_reasons,
     }
@@ -78,13 +84,14 @@ pub struct RuntimeReadiness {
 pub fn assess(
     settings: &Settings,
     database_integrity_ok: bool,
+    storage_write_safe: bool,
     connected: bool,
     send_scope: bool,
     paused: bool,
     stopping: bool,
 ) -> RuntimeReadiness {
     let live = !stopping;
-    let workspace_ready = live && database_integrity_ok;
+    let workspace_ready = live && database_integrity_ok && storage_write_safe;
     let mailbox_sync_ready = workspace_ready && connected;
     let analysis_ready = mailbox_sync_ready && settings.model_digest.is_some();
 
@@ -94,6 +101,9 @@ pub fn assess(
     }
     if !database_integrity_ok {
         reasons.push("database_integrity_failed");
+    }
+    if !storage_write_safe {
+        reasons.push("storage_headroom_low");
     }
     if !connected {
         reasons.push("gmail_disconnected");
@@ -181,6 +191,7 @@ mod tests {
             Some(now - chrono::Duration::hours(3)),
             true,
             true,
+            true,
             now,
         );
         assert!(!indicators.sync_fresh);
@@ -205,6 +216,7 @@ mod tests {
             Some(now - chrono::Duration::minutes(30)),
             true,
             true,
+            true,
             now,
         );
         assert!(fresh.sync_fresh);
@@ -213,7 +225,7 @@ mod tests {
 
     #[test]
     fn readiness_is_fail_closed_and_reasoned() {
-        let default = assess(&Settings::default(), true, false, false, false, false);
+        let default = assess(&Settings::default(), true, true, false, false, false, false);
         assert!(default.live);
         assert!(default.workspace_ready);
         assert!(!default.mailbox_sync_ready);
@@ -225,12 +237,21 @@ mod tests {
         );
 
         let settings = automatic_settings();
-        let ready = assess(&settings, true, true, true, false, false);
+        let ready = assess(&settings, true, true, true, true, false, false);
         assert!(ready.automatic_dispatch_ready);
         assert!(ready.automatic_block_reasons.is_empty());
 
-        let paused = assess(&settings, true, true, true, true, false);
+        let paused = assess(&settings, true, true, true, true, true, false);
         assert!(!paused.automatic_dispatch_ready);
         assert_eq!(paused.automatic_block_reasons, vec!["worker_paused"]);
+
+        let storage_low = assess(&settings, true, false, true, true, false, false);
+        assert!(!storage_low.workspace_ready);
+        assert!(!storage_low.automatic_dispatch_ready);
+        assert!(
+            storage_low
+                .automatic_block_reasons
+                .contains(&"storage_headroom_low")
+        );
     }
 }

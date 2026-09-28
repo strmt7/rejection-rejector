@@ -20,6 +20,7 @@ pub mod readiness;
 pub mod recovery;
 pub mod runtime_log;
 pub mod store;
+pub mod storage;
 pub mod sync;
 pub mod types;
 pub mod vault;

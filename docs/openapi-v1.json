@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.8.0",
+    "version": "1.9.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
   },
   "servers": [
@@ -250,6 +250,9 @@
           },
           "audit_protection": {
             "$ref": "#/components/schemas/AuditProtectionStatus"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageHealth"
           }
         }
       },
@@ -378,6 +381,7 @@
           "service_name",
           "application_version",
           "database_schema_version",
+          "storage",
           "audit_sequence",
           "audit_head_present",
           "stored_items",
@@ -400,7 +404,7 @@
         "properties": {
           "schema_version": {
             "type": "integer",
-            "const": 2
+            "const": 3
           },
           "generated_at": {
             "type": "string",
@@ -499,6 +503,9 @@
           "operational": {
             "type": "object",
             "additionalProperties": true
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageHealth"
           }
         }
       },
@@ -654,6 +661,68 @@
             "pattern": "^[0-9a-f]{64}$"
           }
         }
+      },
+      "StorageHealth": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "database_bytes",
+          "wal_bytes",
+          "shm_bytes",
+          "workspace_database_bytes",
+          "available_bytes",
+          "total_bytes",
+          "runtime_required_bytes",
+          "backup_required_bytes",
+          "runtime_write_safe",
+          "backup_safe"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "database_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wal_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shm_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workspace_database_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runtime_required_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "backup_required_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runtime_write_safe": {
+            "type": "boolean"
+          },
+          "backup_safe": {
+            "type": "boolean"
+          }
+        },
+        "description": "Privacy-safe workspace filesystem headroom. Thresholds are conservative engineering guardrails, not availability SLOs."
       }
     },
     "headers": {
