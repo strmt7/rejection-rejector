@@ -69,6 +69,9 @@ pub enum Command {
     Backup {
         out: PathBuf,
     },
+    RecoveryDrill {
+        backup: PathBuf,
+    },
     Diagnostics {
         out: PathBuf,
     },
@@ -123,6 +126,7 @@ impl Command {
             Self::CompareModels => OperationKind::CompareModels,
             Self::IntegrityCheck => OperationKind::IntegrityCheck,
             Self::Backup { .. } => OperationKind::Backup,
+            Self::RecoveryDrill { .. } => OperationKind::RecoveryDrill,
             Self::Diagnostics { .. } => OperationKind::Diagnostics,
             Self::List { .. } => OperationKind::ListItems,
             Self::Select(_) => OperationKind::SelectItem,
@@ -525,6 +529,25 @@ fn run(
                             "Creating and verifying encrypted same-vault backup…",
                         );
                         crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
+                    }
+                    Command::RecoveryDrill { backup } => {
+                        busy(
+                            &shared,
+                            "Restoring backup in an isolated temporary workspace and deeply verifying it…",
+                        );
+                        let report = crate::recovery::recovery_drill(&e.directory, &backup)?;
+                        e.db.log(
+                            "backup.drill_passed",
+                            None,
+                            &format!(
+                                "Isolated recovery drill passed: schema={} metadata={} items={} audit_events={} deliveries={}",
+                                report.restored_schema_version,
+                                report.metadata_records,
+                                report.item_records,
+                                report.audit_events,
+                                report.delivery_records
+                            ),
+                        )
                     }
                     Command::Diagnostics { out } => {
                         busy(&shared, "Writing privacy-safe diagnostics locally…");
