@@ -25,6 +25,7 @@ pub struct EnterprisePolicy {
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
     pub prohibit_recovery_key_export: bool,
+    pub require_external_audit_anchor: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
@@ -49,6 +50,7 @@ pub struct PolicyStatus {
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
     pub prohibit_recovery_key_export: bool,
+    pub require_external_audit_anchor: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
@@ -294,6 +296,7 @@ impl LoadedPolicy {
             prohibit_sending: self.policy.prohibit_sending,
             prohibit_integration_api: self.policy.prohibit_integration_api,
             prohibit_recovery_key_export: self.policy.prohibit_recovery_key_export,
+            require_external_audit_anchor: self.policy.require_external_audit_anchor,
             max_daily_send_limit: self.policy.max_daily_send_limit,
             min_cooldown_minutes: self.policy.min_cooldown_minutes,
             min_retention_days: self.policy.min_retention_days,
@@ -321,6 +324,7 @@ pub fn inactive_status() -> PolicyStatus {
         prohibit_sending: false,
         prohibit_integration_api: false,
         prohibit_recovery_key_export: false,
+        require_external_audit_anchor: false,
         max_daily_send_limit: None,
         min_cooldown_minutes: None,
         min_retention_days: None,
@@ -593,6 +597,7 @@ mod tests {
             prohibit_sending: true,
             prohibit_integration_api: true,
             prohibit_recovery_key_export: true,
+            require_external_audit_anchor: false,
             max_daily_send_limit: Some(3),
             min_cooldown_minutes: Some(90),
             min_retention_days: Some(365),
@@ -624,6 +629,22 @@ mod tests {
         assert_eq!(settings.model, "granite4.2:8b-q8_0");
         assert!(settings.model_digest.is_none());
         assert!(settings.task_qualification.is_none());
+    }
+
+    #[test]
+    fn policy_status_exposes_external_audit_anchor_requirement() {
+        let mut managed = policy();
+        managed.require_external_audit_anchor = true;
+        let loaded = LoadedPolicy {
+            policy: managed,
+            digest: "a".repeat(64),
+            expected_digest: None,
+            signature_enforced: false,
+            signature_verified: false,
+            signer_key_sha256: None,
+        };
+        assert!(loaded.status().require_external_audit_anchor);
+        assert!(!inactive_status().require_external_audit_anchor);
     }
 
     #[test]
