@@ -301,7 +301,9 @@ impl App {
                                 } else {
                                     match status.distinct_failure_domain {
                                         Some(true) => "Distinct filesystem / volume".to_owned(),
-                                        Some(false) => "SAME VOLUME — disk loss affects both".to_owned(),
+                                        Some(false) => {
+                                            "SAME VOLUME — disk loss affects both".to_owned()
+                                        }
                                         None => "Could not determine on this platform".to_owned(),
                                     }
                                 }
