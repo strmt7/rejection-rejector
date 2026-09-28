@@ -194,14 +194,15 @@ impl Engine {
         // make the external anchor mandatory.
         if !demo {
             let external_anchor = audit_anchor::verify_configured_anchor(&db, &directory)?;
+            let os_anchor_mode = audit_anchor::os_anchor_required()?;
             audit_anchor::verify_os_anchor_if_required(&db, &directory)?;
             if enterprise_policy
                 .as_ref()
                 .is_some_and(|loaded| loaded.policy.require_external_audit_anchor)
             {
                 ensure!(
-                    external_anchor.is_some(),
-                    "Enterprise policy requires RR_AUDIT_ANCHOR_FILE with a valid independently stored audit anchor"
+                    external_anchor.is_some() || os_anchor_mode,
+                    "Enterprise policy requires independently protected audit anchoring: configure RR_AUDIT_ANCHOR_FILE or RR_OS_AUDIT_ANCHOR=required"
                 );
             }
         }
@@ -313,14 +314,15 @@ impl Engine {
         }
         let loaded = policy::load_optional()?;
         let external_anchor = audit_anchor::verify_configured_anchor(&self.db, &self.directory)?;
+        let os_anchor_mode = audit_anchor::os_anchor_required()?;
         audit_anchor::verify_os_anchor_if_required(&self.db, &self.directory)?;
         if loaded
             .as_ref()
             .is_some_and(|current| current.policy.require_external_audit_anchor)
         {
             ensure!(
-                external_anchor.is_some(),
-                "Enterprise policy requires RR_AUDIT_ANCHOR_FILE with a valid independently stored audit anchor"
+                external_anchor.is_some() || os_anchor_mode,
+                "Enterprise policy requires independently protected audit anchoring: configure RR_AUDIT_ANCHOR_FILE or RR_OS_AUDIT_ANCHOR=required"
             );
         }
         let old_digest = self
