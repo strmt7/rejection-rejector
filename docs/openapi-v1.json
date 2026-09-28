@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.6.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, and errors use stable machine-readable codes."
+    "version": "1.7.0",
+    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
   },
   "servers": [
     {
@@ -149,6 +149,122 @@
           }
         },
         "description": "Privacy-minimal local runtime-journal storage health; contains no log records or private mailbox/profile fields."
+      },
+      "OperationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "kind",
+          "state",
+          "code",
+          "retryable",
+          "message",
+          "started_at",
+          "finished_at"
+        ],
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Locally generated UUID correlating one worker operation lifecycle across status and runtime journal records."
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "worker": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "operation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OperationStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       }
     },
     "headers": {
@@ -339,6 +455,13 @@
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
               }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
             }
           },
           "400": {
@@ -376,6 +499,13 @@
               },
               "X-RR-API-Contract-SHA256": {
                 "$ref": "#/components/headers/ContractFingerprint"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
               }
             }
           },

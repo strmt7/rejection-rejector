@@ -432,6 +432,8 @@ pub enum OperationState {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationStatus {
+    /// Locally generated correlation UUID for one worker operation lifecycle.
+    pub operation_id: Option<String>,
     pub kind: OperationKind,
     pub state: OperationState,
     pub code: Option<String>,

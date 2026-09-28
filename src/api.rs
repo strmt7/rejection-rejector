@@ -220,6 +220,11 @@ mod tests {
         assert_eq!(spec["openapi"], "3.1.0");
         assert!(spec["paths"]["/v1/health"].is_object());
         assert!(spec["paths"]["/v1/audit/anchor"].is_object());
+        assert!(spec["components"]["schemas"]["OperationStatus"].is_object());
+        assert!(
+            spec["components"]["schemas"]["OperationStatus"]["properties"]["operation_id"]
+                .is_object()
+        );
         assert!(direct_get("/v1/unknown").is_none());
     }
 

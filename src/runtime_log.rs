@@ -1,5 +1,5 @@
 use crate::{
-    types::{OperationKind, OperationState},
+    types::{OperationKind, OperationState, OperationStatus},
     vault::private_dir,
 };
 use anyhow::{Result, ensure};
@@ -14,7 +14,7 @@ use std::{
 
 pub const DEFAULT_MAX_CURRENT_BYTES: u64 = 2 * 1024 * 1024;
 pub const DEFAULT_MAX_ARCHIVES: usize = 3;
-const LOG_SCHEMA_VERSION: u32 = 1;
+const LOG_SCHEMA_VERSION: u32 = 2;
 const CURRENT_FILE: &str = "runtime.jsonl";
 
 #[derive(Clone, Copy, Debug)]
@@ -66,8 +66,9 @@ struct RuntimeRecord {
     level: &'static str,
     event: &'static str,
     operation: Option<OperationKind>,
+    operation_id: Option<String>,
     state: Option<OperationState>,
-    code: Option<&'static str>,
+    code: Option<String>,
     retryable: bool,
 }
 
@@ -115,6 +116,7 @@ impl RuntimeJournal {
             level: event.level(),
             event: event.code(),
             operation: None,
+            operation_id: None,
             state: None,
             code: None,
             retryable: false,
@@ -122,16 +124,37 @@ impl RuntimeJournal {
     }
 
     pub fn record_operation(&self, kind: OperationKind, state: OperationState) -> Result<()> {
-        let failed = state == OperationState::Failed;
+        let status = OperationStatus {
+            operation_id: None,
+            kind,
+            state,
+            code: (state == OperationState::Failed).then(|| kind.failure_code().into()),
+            retryable: state == OperationState::Failed && kind.retryable(),
+            message: String::new(),
+            started_at: None,
+            finished_at: None,
+        };
+        self.record_operation_status(&status)
+    }
+
+    pub fn record_operation_status(&self, status: &OperationStatus) -> Result<()> {
+        if let Some(operation_id) = &status.operation_id {
+            ensure!(
+                uuid::Uuid::parse_str(operation_id).is_ok(),
+                "Runtime operation ID must be a UUID"
+            );
+        }
+        let failed = status.state == OperationState::Failed;
         self.write(RuntimeRecord {
             schema_version: LOG_SCHEMA_VERSION,
             at: Utc::now(),
             level: if failed { "error" } else { "info" },
             event: "operation",
-            operation: Some(kind),
-            state: Some(state),
-            code: failed.then(|| kind.failure_code()),
-            retryable: failed && kind.retryable(),
+            operation: Some(status.kind),
+            operation_id: status.operation_id.clone(),
+            state: Some(status.state),
+            code: status.code.clone(),
+            retryable: status.retryable,
         })
     }
 
@@ -288,6 +311,30 @@ mod tests {
         ] {
             assert!(!text.contains(forbidden));
         }
+    }
+
+    #[test]
+    fn runtime_operation_id_is_stable_and_privacy_safe() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let status = OperationStatus {
+            operation_id: Some(operation_id.clone()),
+            kind: OperationKind::Backup,
+            state: OperationState::Running,
+            code: None,
+            retryable: false,
+            message: "PRIVATE_MESSAGE_MUST_NOT_BE_LOGGED".into(),
+            started_at: Some(Utc::now()),
+            finished_at: None,
+        };
+        journal.record_operation_status(&status).unwrap();
+        let line = fs::read_to_string(root.path().join("logs").join(CURRENT_FILE)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(value["schema_version"], LOG_SCHEMA_VERSION);
+        assert_eq!(value["operation_id"], operation_id);
+        assert!(uuid::Uuid::parse_str(value["operation_id"].as_str().unwrap()).is_ok());
+        assert!(!line.contains("PRIVATE_MESSAGE_MUST_NOT_BE_LOGGED"));
     }
 
     #[test]

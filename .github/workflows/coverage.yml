@@ -1,6 +1,14 @@
 name: Rust coverage
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/coverage.yml"
   schedule:
     - cron: "43 2 * * 4"
   workflow_dispatch:

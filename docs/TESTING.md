@@ -37,6 +37,12 @@ Test counts evolve as controls are added. Treat the exact current GitHub Actions
 
 The tests cover default disarming and exact presets; encryption/tampering/wrong keys and instance locks; stale revisions, durable reservations and caps; concurrent reservation races; mailbox/header injection and MIME threading; duplicate OAuth codes/state; failed history pages, cursor expiry, replay and changed lookback; exact model evidence, stale digest/context and offload rejection; the independent current-message rejection gate for Automatic mode, including quoted-history negatives; response-size limits, redirect/retry policy and redacted errors; editor message/revision binding and demo-only screenshot controls.
 
+## Coverage and mutation quality gates
+
+The safety-critical mutation workflow targets configuration, mail-policy, readiness, enterprise-policy and recovery code. A workflow run now succeeds only when cargo-mutants reports that all viable tested mutants were caught; surviving mutants **or mutation timeouts fail the job**. Because the release workflow requires recent successful mutation evidence, an inconclusive or survivor-bearing run can no longer satisfy the release gate.
+
+Coverage runs on relevant `main` changes as well as its schedule/manual trigger. The first purpose of the push trigger is to establish an observed baseline on the real suite. A numeric coverage floor is intentionally not invented in advance; the next quality round should ratchet from measured evidence and record the chosen floor with its source run.
+
 ## Actual native interface checks
 
 The Linux job launches the native executable under Xvfb/Openbox with software OpenGL. It captures Overview, Review, Activity, Local AI and Settings at 1440x940, plus Review at 1180x760. Review capture additionally asserts that the rendered action row lies below the message cards and inside the visible viewport. The regression test rejects off-screen or misplaced action rectangles.
