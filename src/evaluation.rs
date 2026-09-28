@@ -168,7 +168,8 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
             && case.tags.iter().copied().any(CaseTag::critical_negative);
         critical_negative_cases += usize::from(critical_negative);
         let deterministic_rejection_evidence =
-            mail::clear_rejection_language(&case.subject, &case.text);
+            mail::clear_rejection_language(&case.subject, &case.text)
+                && !mail::auto_language_conflict(&case.subject, &case.text);
         deterministic_rejection_evidence_hits += usize::from(
             case.expected == Category::Rejection && deterministic_rejection_evidence,
         );
