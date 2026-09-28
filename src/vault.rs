@@ -79,15 +79,14 @@ pub struct Vault {
     key: Arc<Zeroizing<[u8; 32]>>,
 }
 impl Vault {
-    pub fn from_key(key: [u8; 32]) -> Self {
-        Self {
-            key: Arc::new(Zeroizing::new(key)),
-        }
+    fn from_zeroizing_key(key: Zeroizing<[u8; 32]>) -> Self {
+        Self { key: Arc::new(key) }
     }
+
     pub fn random() -> Self {
-        let mut k = [0; 32];
-        rand::rngs::OsRng.fill_bytes(&mut k);
-        Self::from_key(k)
+        let mut key = Zeroizing::new([0u8; 32]);
+        rand::rngs::OsRng.fill_bytes(key.as_mut());
+        Self::from_zeroizing_key(key)
     }
     pub fn open(dir: &Path) -> Result<Self> {
         private_dir(dir)?;
@@ -112,15 +111,15 @@ impl Vault {
                 Ok(encoded) => {
                     let bytes = Zeroizing::new(STANDARD.decode(encoded)?);
                     ensure!(bytes.len() == 32, "Invalid OS credential-store key");
-                    let mut k = [0; 32];
-                    k.copy_from_slice(&bytes);
-                    Ok(Self::from_key(k))
+                    let mut key = Zeroizing::new([0u8; 32]);
+                    key.copy_from_slice(&bytes);
+                    Ok(Self::from_zeroizing_key(key))
                 }
                 Err(keyring::Error::NoEntry) if is_new || !dir.join("state.sqlite3").exists() => {
-                    let mut k = [0; 32];
-                    rand::rngs::OsRng.fill_bytes(&mut k);
-                    entry.set_password(&STANDARD.encode(k)).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
-                    Ok(Self::from_key(k))
+                    let mut key = Zeroizing::new([0u8; 32]);
+                    rand::rngs::OsRng.fill_bytes(key.as_mut());
+                    entry.set_password(&STANDARD.encode(key.as_ref())).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
+                    Ok(Self::from_zeroizing_key(key))
                 }
                 Err(e) => Err(anyhow::anyhow!(
                     "OS credential store unavailable or original key missing: {e}"
@@ -136,11 +135,11 @@ impl Vault {
                 "Vault passphrase must be at least 20 characters"
             );
             let salt = uuid::Uuid::parse_str(id.trim())?;
-            let mut k = [0; 32];
+            let mut key = Zeroizing::new([0u8; 32]);
             argon2::Argon2::default()
-                .hash_password_into(pass.as_bytes(), salt.as_bytes(), &mut k)
+                .hash_password_into(pass.as_bytes(), salt.as_bytes(), key.as_mut())
                 .map_err(|_| anyhow::anyhow!("Key derivation failed"))?;
-            Ok(Self::from_key(k))
+            Ok(Self::from_zeroizing_key(key))
         }
     }
     /// Wrap this vault's master key for offline disaster recovery.
@@ -261,9 +260,9 @@ impl Vault {
                 })?,
         );
         ensure!(plain.len() == 32, "Invalid recovered vault-key length");
-        let mut key = [0u8; 32];
+        let mut key = Zeroizing::new([0u8; 32]);
         key.copy_from_slice(&plain);
-        Ok(Self::from_key(key))
+        Ok(Self::from_zeroizing_key(key))
     }
 
     #[cfg(any(windows, target_os = "macos"))]
