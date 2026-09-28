@@ -81,9 +81,7 @@ impl EnterprisePolicy {
                     self.revision.is_some_and(|revision| revision >= 1),
                     "Policy v2 requires revision >= 1"
                 );
-                if let (Some(not_before), Some(expires_at)) =
-                    (self.not_before, self.expires_at)
-                {
+                if let (Some(not_before), Some(expires_at)) = (self.not_before, self.expires_at) {
                     ensure!(
                         not_before < expires_at,
                         "Policy v2 not_before must be before expires_at"
