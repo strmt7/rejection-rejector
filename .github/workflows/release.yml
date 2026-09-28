@@ -92,7 +92,8 @@ jobs:
           $requirements = @(
             @{ Name = 'Rust fuzzing'; MaxAgeDays = 8 },
             @{ Name = 'Rust coverage'; MaxAgeDays = 8 },
-            @{ Name = 'Mutation testing'; MaxAgeDays = 8 }
+            @{ Name = 'Mutation testing'; MaxAgeDays = 8 },
+            @{ Name = 'Enterprise deep verification'; MaxAgeDays = 8 }
           )
           $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&status=success&per_page=100" | ConvertFrom-Json
           $now = [DateTimeOffset]::UtcNow
