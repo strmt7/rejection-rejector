@@ -405,6 +405,68 @@ impl Store {
         Ok(head)
     }
 
+    /// Return the current tamper-evident audit point after validating the full chain.
+    pub fn audit_point(&self) -> Result<(i64, String)> {
+        self.verify_audit_chain()?;
+        let row: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT seq,event_hash FROM events ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((sequence, head)) => {
+                ensure!(sequence > 0, "Audit sequence is invalid");
+                ensure!(valid_audit_hash(&head), "Audit journal head is invalid");
+                ensure!(
+                    head == self.audit_head()?,
+                    "Audit point does not match authenticated journal head"
+                );
+                Ok((sequence, head))
+            }
+            None => {
+                let head = self.audit_head()?;
+                ensure!(
+                    head == AUDIT_GENESIS,
+                    "Empty audit journal has a non-genesis head"
+                );
+                Ok((0, head))
+            }
+        }
+    }
+
+    /// Verify that an externally persisted sequence/hash pair is an exact prefix
+    /// of the current audit journal. A newer current head is allowed; rollback,
+    /// chain replacement and sequence/hash mismatch fail closed.
+    pub fn verify_audit_point(&self, sequence: i64, anchor: &str) -> Result<()> {
+        ensure!(sequence >= 0, "Audit anchor sequence is invalid");
+        ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
+        self.verify_audit_chain()?;
+        if sequence == 0 {
+            ensure!(
+                anchor == AUDIT_GENESIS,
+                "Sequence zero must use the audit genesis hash"
+            );
+            return Ok(());
+        }
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT event_hash FROM events WHERE seq=?1",
+                [sequence],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let stored = stored.context("Current workspace no longer contains the anchored audit sequence")?;
+        ensure!(
+            stored == anchor,
+            "Current workspace does not extend the anchored audit history"
+        );
+        Ok(())
+    }
+
     /// Check whether an externally persisted audit anchor is still represented
     /// by this database's history. This enables rollback detection when another
     /// trusted component stores previously observed heads.
@@ -1930,6 +1992,31 @@ mod tests {
         }
 
         assert!(db.verify_backup_file(&backup).is_err());
+    }
+
+    #[test]
+    fn audit_points_detect_rollback_or_hash_substitution() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let (genesis_seq, genesis) = db.audit_point().unwrap();
+        assert_eq!(genesis_seq, 0);
+        db.verify_audit_point(genesis_seq, &genesis).unwrap();
+
+        db.log("test.first", None, "first").unwrap();
+        let (first_seq, first_head) = db.audit_point().unwrap();
+        assert!(first_seq > 0);
+        db.verify_audit_point(first_seq, &first_head).unwrap();
+
+        db.log("test.second", None, "second").unwrap();
+        let (second_seq, second_head) = db.audit_point().unwrap();
+        assert!(second_seq > first_seq);
+        assert_ne!(first_head, second_head);
+        db.verify_audit_point(first_seq, &first_head).unwrap();
+        db.verify_audit_point(second_seq, &second_head).unwrap();
+
+        assert!(db.verify_audit_point(first_seq, &second_head).is_err());
+        assert!(db.verify_audit_point(second_seq + 1, &second_head).is_err());
+        assert!(db.verify_audit_point(-1, &first_head).is_err());
     }
 
     #[test]
