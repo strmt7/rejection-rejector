@@ -34,6 +34,7 @@ Policy v1 remains readable for backward compatibility, but it has no local anti-
   "prohibit_sending": true,
   "prohibit_integration_api": true,
   "prohibit_recovery_key_export": true,
+  "require_external_audit_anchor": true,
   "max_daily_send_limit": 3,
   "min_cooldown_minutes": 90,
   "min_retention_days": 365,
