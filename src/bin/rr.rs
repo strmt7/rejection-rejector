@@ -101,6 +101,14 @@ fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
         "Recovery passphrase file must not be a symlink"
     );
     let metadata = std::fs::metadata(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        ensure!(
+            metadata.permissions().mode() & 0o077 == 0,
+            "Recovery passphrase file must not be readable or writable by group/other users"
+        );
+    }
     ensure!(
         metadata.len() <= 4096,
         "Recovery passphrase file exceeds the 4 KiB safety limit"
