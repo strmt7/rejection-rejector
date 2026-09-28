@@ -586,10 +586,8 @@ mod tests {
         );
 
         let serialized = fs::read(&recovery_file).unwrap();
-        let raw_key_probe = vault.seal("probe", &"secret").unwrap();
-        assert!(!serialized.windows(32).any(|window| {
-            raw_key_probe.windows(32).any(|probe| probe == window)
-        }));
+        assert!(!serialized.windows(passphrase.len()).any(|window| window == passphrase));
+        assert!(!serialized.windows(b"secret".len()).any(|window| window == b"secret"));
     }
 
     #[test]
