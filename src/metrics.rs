@@ -33,7 +33,7 @@ pub struct MetricsSnapshot {
 
 pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let counts = engine.db.counts(&engine.account)?;
-    let integrity_ok = engine.db.fast_health_check().is_ok();
+    let integrity_ok = engine.db.readiness_check().is_ok();
     let operational = operational_indicators(
         &engine.settings,
         &counts,
@@ -54,7 +54,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         database_schema_version: engine.db.schema_version()?,
         database_bytes,
         audit_sequence: engine.db.latest_event_seq()?,
-        audit_head_present: engine.db.audit_head()?.is_some(),
+        audit_head_present: engine.db.audit_head().is_ok(),
         stored_items: counts.stored,
         queued_items: counts.queued,
         review_items: counts.review,
