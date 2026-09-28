@@ -773,6 +773,7 @@ fn api_query_with_operation(
                     "tamper_evident_audit_chain": true,
                     "external_audit_anchor": true,
                     "verified_backup_bundle": true,
+                    "portable_recovery_key_envelope": true,
                     "task_model_bakeoff": true,
                     "typed_operation_status": true,
                     "typed_audit_events": true,
