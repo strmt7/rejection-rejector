@@ -1,0 +1,102 @@
+name: Enterprise deep verification
+
+on:
+  schedule:
+    - cron: "29 1 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enterprise-deep-verification-main
+  cancel-in-progress: true
+
+jobs:
+  deep-verification:
+    name: Nextest, docs and recovery drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_BUILD_WARNINGS: deny
+      RR_VAULT_PASSPHRASE: ci-only-enterprise-deep-verification-passphrase
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-nextest@0.9.146
+          checksum: true
+          fallback: none
+      - name: Linux desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
+      - name: Prepare evidence directory
+        run: mkdir -p artifacts
+      - name: Full all-feature suite with nextest
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo nextest run --locked --all-features --no-fail-fast 2>&1 | tee artifacts/nextest.log
+      - name: Rustdoc warnings are errors
+        shell: bash
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -o pipefail
+          cargo doc --locked --all-features --no-deps 2>&1 | tee artifacts/rustdoc.log
+      - name: Doctests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --all-features --doc 2>&1 | tee artifacts/doctests.log
+      - name: Synthetic encrypted recovery drill
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$RUNNER_TEMP/rr-enterprise-deep-workspace"
+          backup="$RUNNER_TEMP/rr-enterprise-deep-backup"
+          rm -rf "$workspace" "$backup"
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" status > artifacts/recovery-init.json
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" integrity > artifacts/recovery-integrity.json
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" backup --out "$backup" > artifacts/recovery-backup.json
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" verify-backup "$backup" > artifacts/recovery-verify.json
+          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" recovery-drill "$backup" > artifacts/recovery-drill.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          drill = json.loads(Path("artifacts/recovery-drill.json").read_text(encoding="utf-8"))
+          assert drill["isolated_restore_succeeded"] is True
+          assert drill["restored_schema_version"] >= 1
+          assert len(drill["source_database_sha256"]) == 64
+          assert len(drill["source_audit_head"]) == 64
+          verify = json.loads(Path("artifacts/recovery-verify.json").read_text(encoding="utf-8"))
+          assert verify["format_version"] >= 2
+          assert len(verify["database_sha256"]) == 64
+          PY
+      - name: Record API contract and source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum docs/openapi-v1.json > artifacts/openapi-v1.sha256
+          git rev-parse HEAD > artifacts/COMMIT.txt
+          rustc --version > artifacts/toolchain.txt
+          cargo nextest --version >> artifacts/toolchain.txt
+          git diff --exit-code HEAD
+      - name: Upload deep-verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-enterprise-deep-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
