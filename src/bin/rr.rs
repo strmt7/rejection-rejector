@@ -79,6 +79,8 @@ enum Action {
     },
     /// Verify the active encrypted database structure and authenticated vault marker.
     Integrity,
+    /// Checkpoint, VACUUM, optimize and re-verify the encrypted SQLite workspace.
+    Compact,
     /// Create a checksum-bound same-vault backup directory. Existing paths are never overwritten.
     Backup {
         #[arg(long)]
@@ -420,6 +422,16 @@ fn main() -> Result<()> {
                     "note": "SQLite quick_check, foreign-key integrity and authenticated vault marker passed."
                 }))?
             );
+        }
+        Action::Compact => {
+            let mut e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let report = e.compact_database()?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Action::Backup { out } => {
             let e = Engine::open(
