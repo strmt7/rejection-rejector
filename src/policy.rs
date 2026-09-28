@@ -382,8 +382,8 @@ fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Res
         "Enterprise policy signature file must be distinct from the policy file"
     );
     if policy_path.exists() && signature_path.exists() {
-        let policy_canonical = fs::canonicalize(policy_path)
-            .context("Cannot canonicalize enterprise policy path")?;
+        let policy_canonical =
+            fs::canonicalize(policy_path).context("Cannot canonicalize enterprise policy path")?;
         let signature_canonical = fs::canonicalize(signature_path)
             .context("Cannot canonicalize enterprise policy signature path")?;
         ensure!(
