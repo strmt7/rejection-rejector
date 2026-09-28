@@ -556,6 +556,24 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn recovery_key_export_requires_an_existing_authenticated_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("empty-workspace");
+        private_dir(&data).unwrap();
+        let destination = root.path().join("recovery-key.json");
+        assert!(
+            export_recovery_key(
+                &data,
+                b"correct horse battery staple",
+                &destination,
+            )
+            .is_err()
+        );
+        assert!(!destination.exists());
+        assert!(!data.join(VAULT_ID_NAME).exists());
+    }
+
+    #[test]
     fn wrapped_recovery_key_authenticates_the_backup_without_plaintext_key_export() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
