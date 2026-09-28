@@ -945,6 +945,7 @@ fn api_query_with_operation(
                     "database_integrity": true,
                     "tamper_evident_audit_chain": true,
                     "external_audit_anchor": true,
+                    "os_protected_audit_anchor": true,
                     "verified_backup_bundle": true,
                     "portable_recovery_key_envelope": true,
                     "task_model_bakeoff": true,
@@ -978,6 +979,12 @@ fn api_query_with_operation(
                 stopping,
             );
             let counts = e.db.counts(&e.account)?;
+            let policy_status = e.enterprise_policy_status();
+            let external_audit_anchor_configured =
+                std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
+            let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
+            let independent_audit_anchor_configured =
+                external_audit_anchor_configured || os_protected_audit_anchor_required;
             let operational = crate::readiness::operational_indicators(
                 &e.settings,
                 &counts,
@@ -1007,7 +1014,13 @@ fn api_query_with_operation(
                     "stopping": stopping,
                     "operation": operation
                 },
-                "enterprise_policy": e.enterprise_policy_status(),
+                "enterprise_policy": policy_status,
+                "audit_protection": {
+                    "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
+                    "external_file_anchor_configured": external_audit_anchor_configured,
+                    "os_protected_anchor_required": os_protected_audit_anchor_required,
+                    "independent_anchor_configured": independent_audit_anchor_configured
+                },
                 "mode": e.settings.mode,
                 "sending_enabled": e.settings.sending_enabled,
                 "model": {
@@ -1191,6 +1204,10 @@ mod tests {
         assert!(health["runtime_log"].is_object());
         assert_eq!(health["database"]["integrity_ok"], true);
         assert_eq!(health["enterprise_policy"]["active"], false);
+        assert_eq!(
+            health["audit_protection"]["independent_anchor_configured"],
+            false
+        );
         assert!(health.get("account").is_none());
 
         let value = api_query(&engine, "/v1/capabilities").unwrap();
