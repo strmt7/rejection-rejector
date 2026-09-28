@@ -149,6 +149,7 @@ pub struct Worker {
     pub snapshot: Arc<Mutex<Snapshot>>,
     pub paused: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
 }
 impl Worker {
     pub fn spawn(dir: PathBuf, demo: bool) -> Self {
@@ -165,7 +166,7 @@ impl Worker {
             let _ = journal.record_event(RuntimeEvent::ProcessStarted);
         }
         let (s, p, c, sender) = (snapshot.clone(), paused.clone(), stop.clone(), tx.clone());
-        std::thread::spawn(move || {
+        let join = std::thread::spawn(move || {
             let panic_pause = p.clone();
             let panic_stop = c.clone();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -198,6 +199,7 @@ impl Worker {
             snapshot,
             paused,
             stop,
+            join: Some(join),
         }
     }
     pub fn command(&self, command: Command) {
@@ -221,11 +223,44 @@ impl Worker {
     pub fn view(&self) -> Snapshot {
         self.snapshot.lock().map(|s| s.clone()).unwrap_or_default()
     }
+
+    pub fn request_stop(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Request shutdown and wait only for a bounded grace period.
+    ///
+    /// Long blocking provider/model calls are intentionally not waited forever.
+    /// Delivery ambiguity is handled by the durable reservation state machine.
+    pub fn shutdown(&mut self, timeout: Duration) -> bool {
+        self.request_stop();
+        let deadline = Instant::now() + timeout;
+        while self
+            .join
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if self
+            .join
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            if let Some(handle) = self.join.take() {
+                let _ = handle.join();
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.paused.store(true, Ordering::SeqCst);
-        self.stop.store(true, Ordering::SeqCst);
+        let _ = self.shutdown(Duration::from_secs(2));
     }
 }
 
@@ -1394,7 +1429,7 @@ mod tests {
     #[test]
     fn demo_worker_initializes_and_publishes_selection() {
         let dir = tempfile::tempdir().unwrap();
-        let worker = Worker::spawn(dir.path().into(), true);
+        let mut worker = Worker::spawn(dir.path().into(), true);
         let start = Instant::now();
         let first = loop {
             let s = worker.view();
@@ -1424,5 +1459,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(worker.shutdown(Duration::from_secs(2)));
     }
 }
