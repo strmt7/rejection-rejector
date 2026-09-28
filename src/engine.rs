@@ -194,6 +194,7 @@ impl Engine {
         // make the external anchor mandatory.
         if !demo {
             let external_anchor = audit_anchor::verify_configured_anchor(&db, &directory)?;
+            audit_anchor::verify_os_anchor_if_required(&db, &directory)?;
             if enterprise_policy
                 .as_ref()
                 .is_some_and(|loaded| loaded.policy.require_external_audit_anchor)
@@ -275,9 +276,21 @@ impl Engine {
         };
         if demo {
             e.seed_demo()?;
+        } else {
+            audit_anchor::checkpoint_os_anchor_if_required(&e.db, &e.directory)?;
         }
         Ok(e)
     }
+
+    /// Advance independently protected audit evidence after an operation boundary.
+    /// This is a no-op unless RR_OS_AUDIT_ANCHOR=required is explicitly configured.
+    pub fn checkpoint_audit_protection(&self) -> Result<()> {
+        if !self.demo {
+            audit_anchor::checkpoint_os_anchor_if_required(&self.db, &self.directory)?;
+        }
+        Ok(())
+    }
+
     pub fn connected(&self) -> bool {
         self.gmail.is_some()
     }
@@ -300,6 +313,7 @@ impl Engine {
         }
         let loaded = policy::load_optional()?;
         let external_anchor = audit_anchor::verify_configured_anchor(&self.db, &self.directory)?;
+        audit_anchor::verify_os_anchor_if_required(&self.db, &self.directory)?;
         if loaded
             .as_ref()
             .is_some_and(|current| current.policy.require_external_audit_anchor)
