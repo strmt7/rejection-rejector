@@ -20,6 +20,7 @@ For higher-assurance deployments, provision `RR_ENTERPRISE_POLICY_SHA256` indepe
   "force_human_review": true,
   "prohibit_sending": true,
   "prohibit_integration_api": true,
+  "prohibit_recovery_key_export": true,
   "max_daily_send_limit": 3,
   "min_cooldown_minutes": 90,
   "min_retention_days": 365,
@@ -32,6 +33,7 @@ All fields are optional except `version`; omitted controls use their non-restric
 - `force_human_review`: prevents Automatic mode.
 - `prohibit_sending`: disables application sending and prevents requesting Gmail send scope.
 - `prohibit_integration_api`: disables the local integration API.
+- `prohibit_recovery_key_export`: prevents creation of portable recovery-key envelopes while still allowing ordinary backup/restore operations.
 - `max_daily_send_limit`: upper bound for send attempts per rolling 24 hours.
 - `min_cooldown_minutes`: lower bound between detection and unattended dispatch.
 - `min_retention_days`: lower bound for completed-content retention.
@@ -75,5 +77,6 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - If `RR_ENTERPRISE_POLICY_SHA256` is configured, missing or modified policy bytes fail closed.
 - Policy status reports whether digest pin enforcement is active and whether the loaded bytes match.
 - Policy application is re-run on every settings mutation and hot-reload.
+- Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by avoiding the desktop UI.
 
 This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Enterprise packaging and signed deployment remain separate release concerns.
