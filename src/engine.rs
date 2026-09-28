@@ -8,7 +8,7 @@ use crate::{
     mail,
     oauth::{self, Credentials},
     ollama::{self, ModelStatus, Ollama},
-    policy::{self, LoadedPolicy, PolicyStatus},
+    policy::{self, LoadedPolicy, PolicyRevisionFloor, PolicyStatus},
     store::Store,
     sync,
     types::*,
@@ -143,6 +143,23 @@ pub struct Engine {
     _temporary: Option<tempfile::TempDir>,
     pub directory: PathBuf,
 }
+fn staged_policy_revision_floor(
+    db: &Store,
+    loaded: Option<&LoadedPolicy>,
+) -> Result<(Option<PolicyRevisionFloor>, bool)> {
+    let Some(loaded) = loaded else {
+        return Ok((None, false));
+    };
+    if loaded.policy.version < 2 {
+        return Ok((None, false));
+    }
+    let mut floor: PolicyRevisionFloor = db
+        .meta("enterprise_policy_revision_floor")?
+        .unwrap_or_default();
+    let changed = floor.observe(loaded)?;
+    Ok((Some(floor), changed))
+}
+
 impl Engine {
     pub fn open(
         directory: PathBuf,
@@ -170,21 +187,49 @@ impl Engine {
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
         let enterprise_policy = if demo { None } else { policy::load_optional()? };
+        let (revision_floor, revision_floor_changed) =
+            staged_policy_revision_floor(&db, enterprise_policy.as_ref())?;
         let policy_changed = match &enterprise_policy {
             Some(loaded) => loaded.policy.enforce(&mut settings, true)?,
             None => false,
         };
         settings.validate()?;
-        if repaired || policy_changed {
-            db.set_meta("settings", &settings)?;
-            db.log(
-                "settings.repaired",
-                None,
-                if policy_changed {
-                    "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed"
+        if repaired || policy_changed || revision_floor_changed {
+            let mut upserts = vec![("settings", serde_json::to_value(&settings)?)];
+            if revision_floor_changed {
+                upserts.push((
+                    "enterprise_policy_revision_floor",
+                    serde_json::to_value(
+                        revision_floor
+                            .as_ref()
+                            .context("Policy revision floor staging was lost")?,
+                    )?,
+                ));
+            }
+            let detail = if revision_floor_changed {
+                let loaded = enterprise_policy
+                    .as_ref()
+                    .context("Policy revision floor changed without active policy")?;
+                format!(
+                    "Enterprise policy accepted fail-closed: policy_id={} revision={} sha256={}; persisted settings and rollback floor committed together",
+                    loaded.policy.policy_id.as_deref().unwrap_or("<missing>"),
+                    loaded.policy.revision.unwrap_or_default(),
+                    loaded.digest
+                )
+            } else if policy_changed {
+                "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed".into()
+            } else {
+                "Legacy Automatic mode without current qualification was disabled fail-closed".into()
+            };
+            db.change_meta(
+                &upserts,
+                &[],
+                if revision_floor_changed {
+                    "policy.accepted"
                 } else {
-                    "Legacy Automatic mode without current qualification was disabled fail-closed"
+                    "settings.repaired"
                 },
+                &detail,
             )?;
         }
         let creds: Option<Credentials> = db.meta("google_credentials")?;
@@ -242,16 +287,14 @@ impl Engine {
             return Ok(false);
         }
 
+        let (revision_floor, revision_floor_changed) =
+            staged_policy_revision_floor(&self.db, loaded.as_ref())?;
         let mut settings = self.settings.clone();
         let settings_changed = match &loaded {
             Some(current) => current.policy.enforce(&mut settings, true)?,
             None => false,
         };
-        if settings_changed {
-            self.db.set_meta("settings", &settings)?;
-            self.settings = settings;
-            self.model = ModelStatus::default();
-        }
+        settings.validate()?;
         let detail = match &loaded {
             Some(current) => format!(
                 "Enterprise policy reloaded; sha256={}{}",
@@ -264,8 +307,35 @@ impl Engine {
             ),
             None => "Enterprise policy removed; existing restrictive settings were not relaxed automatically".into(),
         };
+        let mut upserts = Vec::new();
+        if settings_changed {
+            upserts.push(("settings", serde_json::to_value(&settings)?));
+        }
+        if revision_floor_changed {
+            upserts.push((
+                "enterprise_policy_revision_floor",
+                serde_json::to_value(
+                    revision_floor
+                        .as_ref()
+                        .context("Policy revision floor staging was lost")?,
+                )?,
+            ));
+        }
+        if !upserts.is_empty() {
+            self.db.change_meta(
+                &upserts,
+                &[],
+                "policy.reloaded",
+                &detail,
+            )?;
+        } else {
+            self.db.log("policy.reloaded", None, &detail)?;
+        }
+        if settings_changed {
+            self.settings = settings;
+            self.model = ModelStatus::default();
+        }
         self.enterprise_policy = loaded;
-        self.db.log("policy.reloaded", None, &detail)?;
         Ok(true)
     }
     pub fn connect(&mut self, path: &Path, send: bool) -> Result<()> {
