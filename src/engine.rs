@@ -504,7 +504,10 @@ impl Engine {
         Ok(())
     }
     pub fn compact_database(&mut self) -> Result<crate::store::DatabaseCompactionReport> {
-        ensure!(!self.demo, "Synthetic demo mode does not compact a real workspace");
+        ensure!(
+            !self.demo,
+            "Synthetic demo mode does not compact a real workspace"
+        );
         let storage = crate::storage::inspect(&self.directory)?;
         ensure!(
             storage.backup_safe,
