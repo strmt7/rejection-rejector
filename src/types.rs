@@ -359,6 +359,16 @@ impl OperationKind {
         }
     }
 
+    /// Operations for which process termination can leave an external side
+    /// effect ambiguous or an operator artifact incomplete. SQLite-only
+    /// transactions are intentionally excluded because they roll back atomically.
+    pub fn shutdown_sensitive(self) -> bool {
+        matches!(
+            self,
+            Self::SendReply | Self::AutomaticDispatch | Self::Backup | Self::RecoveryDrill
+        )
+    }
+
     pub fn retryable(self) -> bool {
         matches!(
             self,
@@ -381,6 +391,32 @@ impl OperationKind {
                 | Self::AnalyzeQueuedMail
                 | Self::AutomaticDispatch
         )
+    }
+}
+
+#[cfg(test)]
+mod operation_kind_tests {
+    use super::OperationKind;
+
+    #[test]
+    fn shutdown_sensitive_operations_are_explicit_and_narrow() {
+        for kind in [
+            OperationKind::SendReply,
+            OperationKind::AutomaticDispatch,
+            OperationKind::Backup,
+            OperationKind::RecoveryDrill,
+        ] {
+            assert!(kind.shutdown_sensitive(), "{kind:?}");
+        }
+        for kind in [
+            OperationKind::Refresh,
+            OperationKind::SyncMailbox,
+            OperationKind::UpdateSettings,
+            OperationKind::Diagnostics,
+            OperationKind::PurgeRetention,
+        ] {
+            assert!(!kind.shutdown_sensitive(), "{kind:?}");
+        }
     }
 }
 
