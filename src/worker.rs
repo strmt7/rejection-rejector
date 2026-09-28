@@ -210,6 +210,7 @@ impl Worker {
             let message = "Command queue is busy. Wait for the current operation to finish.";
             s.error = message.into();
             s.operation = OperationStatus {
+                operation_id: Some(uuid::Uuid::new_v4().to_string()),
                 kind,
                 state: OperationState::Failed,
                 code: Some("worker_queue_busy".into()),
@@ -270,6 +271,7 @@ fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
         view.fatal = true;
         view.busy.clear();
         view.operation = OperationStatus {
+            operation_id: Some(uuid::Uuid::new_v4().to_string()),
             kind: OperationKind::Idle,
             state: OperationState::Failed,
             code: Some("worker_fatal".into()),
@@ -319,6 +321,7 @@ fn begin_operation(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, text: &st
         let now = Utc::now();
         s.busy = text.into();
         s.operation = OperationStatus {
+            operation_id: Some(uuid::Uuid::new_v4().to_string()),
             kind,
             state: OperationState::Running,
             code: None,
@@ -327,6 +330,15 @@ fn begin_operation(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, text: &st
             started_at: Some(now),
             finished_at: None,
         };
+    }
+}
+
+fn record_current_operation(journal: &Option<RuntimeJournal>, shared: &Arc<Mutex<Snapshot>>) {
+    let Some(journal) = journal else {
+        return;
+    };
+    if let Ok(snapshot) = shared.lock() {
+        let _ = journal.record_operation_status(&snapshot.operation);
     }
 }
 
@@ -348,6 +360,7 @@ fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()
                 s.error.clear();
                 s.notice = "Operation completed.".into();
                 s.operation = OperationStatus {
+                    operation_id: s.operation.operation_id.clone(),
                     kind,
                     state: OperationState::Succeeded,
                     code: None,
@@ -362,6 +375,7 @@ fn report(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, result: &Result<()
                 s.error = message.clone();
                 s.notice.clear();
                 s.operation = OperationStatus {
+                    operation_id: s.operation.operation_id.clone(),
                     kind,
                     state: OperationState::Failed,
                     code: Some(kind.failure_code().into()),
@@ -379,6 +393,7 @@ fn report_silent_success(shared: &Arc<Mutex<Snapshot>>, kind: OperationKind, mes
         s.busy.clear();
         s.error.clear();
         s.operation = OperationStatus {
+            operation_id: s.operation.operation_id.clone(),
             kind,
             state: OperationState::Succeeded,
             code: None,
@@ -492,10 +507,8 @@ fn run(
             }
             Ok(command) => {
                 let operation = command.kind();
-                if let Some(journal) = &journal {
-                    let _ = journal.record_operation(operation, OperationState::Running);
-                }
                 begin_operation(&shared, operation, "Working locally…");
+                record_current_operation(&journal, &shared);
                 let mut settings_changed = false;
                 let result: Result<()> = match command {
                     Command::Refresh => Ok(()),
@@ -648,10 +661,7 @@ fn run(
                     s.settings_revision += 1;
                 }
                 report(&shared, operation, &result);
-                if let Some(journal) = &journal {
-                    let _ =
-                        journal.record_operation(operation, operation_state_for_result(&result));
-                }
+                record_current_operation(&journal, &shared);
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -666,17 +676,12 @@ fn run(
             snapshot.api_token_expires = None;
         }
         if !e.demo && Instant::now() >= policy_due {
-            if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::EnterprisePolicyReload,
-                    OperationState::Running,
-                );
-            }
             begin_operation(
                 &shared,
                 OperationKind::EnterprisePolicyReload,
                 "Checking administrator enterprise policy…",
             );
+            record_current_operation(&journal, &shared);
             let result = e.reload_enterprise_policy();
             match result {
                 Ok(changed) => {
@@ -685,12 +690,7 @@ fn run(
                     if changed {
                         let completed: Result<()> = Ok(());
                         report(&shared, OperationKind::EnterprisePolicyReload, &completed);
-                        if let Some(journal) = &journal {
-                            let _ = journal.record_operation(
-                                OperationKind::EnterprisePolicyReload,
-                                OperationState::Succeeded,
-                            );
-                        }
+                        record_current_operation(&journal, &shared);
                         if e.enterprise_policy_status().prohibit_integration_api
                             && !api_disabled.swap(true, Ordering::SeqCst)
                             && let Ok(mut snapshot) = shared.lock()
@@ -708,12 +708,7 @@ fn run(
                             OperationKind::EnterprisePolicyReload,
                             "Enterprise policy unchanged",
                         );
-                        if let Some(journal) = &journal {
-                            let _ = journal.record_operation(
-                                OperationKind::EnterprisePolicyReload,
-                                OperationState::Succeeded,
-                            );
-                        }
+                        record_current_operation(&journal, &shared);
                     }
                 }
                 Err(error) => {
@@ -722,34 +717,21 @@ fn run(
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
                     report(&shared, OperationKind::EnterprisePolicyReload, &failed);
-                    if let Some(journal) = &journal {
-                        let _ = journal.record_operation(
-                            OperationKind::EnterprisePolicyReload,
-                            OperationState::Failed,
-                        );
-                    }
+                    record_current_operation(&journal, &shared);
                 }
             }
         }
 
         if !e.demo && Instant::now() >= retention_due {
-            if let Some(journal) = &journal {
-                let _ = journal
-                    .record_operation(OperationKind::PurgeRetention, OperationState::Running);
-            }
             begin_operation(
                 &shared,
                 OperationKind::PurgeRetention,
                 "Applying local retention policy to completed content…",
             );
+            record_current_operation(&journal, &shared);
             let result = e.db.purge(e.settings.retention_days).map(|_| ());
             report(&shared, OperationKind::PurgeRetention, &result);
-            if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::PurgeRetention,
-                    operation_state_for_result(&result),
-                );
-            }
+            record_current_operation(&journal, &shared);
             if result.is_ok() {
                 retention_failures = 0;
                 retention_due = Instant::now() + Duration::from_secs(24 * 60 * 60);
@@ -769,23 +751,15 @@ fn run(
                 now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
             })
         {
-            if let Some(journal) = &journal {
-                let _ =
-                    journal.record_operation(OperationKind::SyncMailbox, OperationState::Running);
-            }
             begin_operation(
                 &shared,
                 OperationKind::SyncMailbox,
                 "Scheduled Gmail check: fetching only missing identities…",
             );
+            record_current_operation(&journal, &shared);
             let result = e.synchronize().map(|_| ());
             report(&shared, OperationKind::SyncMailbox, &result);
-            if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::SyncMailbox,
-                    operation_state_for_result(&result),
-                );
-            }
+            record_current_operation(&journal, &shared);
             sync_retry =
                 Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
             refresh(&e, &shared, selected.as_deref(), review, page)?;
@@ -794,23 +768,15 @@ fn run(
             && e.settings.model_digest.is_some()
             && e.db.next_queued(&e.account, Utc::now())?.is_some()
         {
-            if let Some(journal) = &journal {
-                let _ = journal
-                    .record_operation(OperationKind::AnalyzeQueuedMail, OperationState::Running);
-            }
             begin_operation(
                 &shared,
                 OperationKind::AnalyzeQueuedMail,
                 "Local AI: classifying, drafting and checking one new email…",
             );
+            record_current_operation(&journal, &shared);
             let result = e.process_one().map(|_| ());
             report(&shared, OperationKind::AnalyzeQueuedMail, &result);
-            if let Some(journal) = &journal {
-                let _ = journal.record_operation(
-                    OperationKind::AnalyzeQueuedMail,
-                    operation_state_for_result(&result),
-                );
-            }
+            record_current_operation(&journal, &shared);
             if result.is_ok() {
                 process_failures = 0;
                 process_due = Instant::now() + Duration::from_secs(1);
@@ -821,15 +787,12 @@ fn run(
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if Instant::now() >= auto_due {
-            if let Some(journal) = &journal {
-                let _ = journal
-                    .record_operation(OperationKind::AutomaticDispatch, OperationState::Running);
-            }
             begin_operation(
                 &shared,
                 OperationKind::AutomaticDispatch,
                 "Evaluating automatic dispatch policy…",
             );
+            record_current_operation(&journal, &shared);
             let result = e.automatic_tick();
             match &result {
                 Ok(_) => {
@@ -856,9 +819,8 @@ fn run(
                     &result.map(|_| ()),
                 );
             }
-            if let Some(journal) = &journal {
-                let _ = journal.record_operation(OperationKind::AutomaticDispatch, automatic_state);
-            }
+            let _ = automatic_state;
+            record_current_operation(&journal, &shared);
             if refresh_after_tick {
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
@@ -1229,7 +1191,9 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
+        let operation_id = uuid::Uuid::new_v4().to_string();
         let operation = OperationStatus {
+            operation_id: Some(operation_id.clone()),
             kind: OperationKind::Backup,
             state: OperationState::Failed,
             code: Some("backup_failed".into()),
@@ -1240,6 +1204,7 @@ mod tests {
         };
         let health = api_query_with_operation(&engine, "/v1/health", Some(&operation)).unwrap();
         assert_eq!(health["worker"]["operation"]["kind"], "backup");
+        assert_eq!(health["worker"]["operation"]["operation_id"], operation_id);
         assert_eq!(health["worker"]["operation"]["state"], "failed");
         assert_eq!(health["worker"]["operation"]["code"], "backup_failed");
         assert_eq!(health["worker"]["operation"]["retryable"], true);
