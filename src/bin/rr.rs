@@ -40,6 +40,11 @@ enum Action {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Profile the configured local model with cold, warm-repeat and near-context synthetic passes.
+    ProfileModel {
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Compare already-installed curated local models on the task-specific pipeline.
     CompareModels {
         #[arg(long)]
@@ -330,6 +335,19 @@ fn main() -> Result<()> {
             e.evaluate_model_to(&out)?;
             println!(
                 "Task-specific evaluation passed and qualification was stored: {}",
+                out.display()
+            );
+        }
+        Action::ProfileModel { out } => {
+            let mut e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            e.profile_model_runtime_to(&out)?;
+            println!(
+                "Local model runtime profile written to {}",
                 out.display()
             );
         }
