@@ -1204,14 +1204,16 @@ fn api_query_with_operation(
             let independent_audit_anchor_configured =
                 external_audit_anchor_configured || os_protected_audit_anchor_required;
             let operational = crate::readiness::operational_indicators(
-                &e.settings,
-                &counts,
-                e.last_poll()?,
-                integrity_ok,
-                storage.runtime_write_safe,
-                scheduled_backup.overdue,
-                e.connected(),
-                Utc::now(),
+                crate::readiness::OperationalContext {
+                    settings: &e.settings,
+                    counts: &counts,
+                    last_poll: e.last_poll()?,
+                    database_integrity_ok: integrity_ok,
+                    storage_write_safe: storage.runtime_write_safe,
+                    scheduled_backup_overdue: scheduled_backup.overdue,
+                    connected: e.connected(),
+                    now: Utc::now(),
+                },
             );
             Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
