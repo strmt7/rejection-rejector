@@ -16,6 +16,7 @@ pub struct EnterprisePolicy {
     pub force_human_review: bool,
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
+    pub prohibit_recovery_key_export: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
@@ -31,6 +32,7 @@ pub struct PolicyStatus {
     pub force_human_review: bool,
     pub prohibit_sending: bool,
     pub prohibit_integration_api: bool,
+    pub prohibit_recovery_key_export: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
@@ -118,6 +120,10 @@ impl EnterprisePolicy {
     pub fn allows_send_scope(&self) -> bool {
         !self.prohibit_sending
     }
+
+    pub fn allows_recovery_key_export(&self) -> bool {
+        !self.prohibit_recovery_key_export
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +146,7 @@ impl LoadedPolicy {
             force_human_review: self.policy.force_human_review,
             prohibit_sending: self.policy.prohibit_sending,
             prohibit_integration_api: self.policy.prohibit_integration_api,
+            prohibit_recovery_key_export: self.policy.prohibit_recovery_key_export,
             max_daily_send_limit: self.policy.max_daily_send_limit,
             min_cooldown_minutes: self.policy.min_cooldown_minutes,
             min_retention_days: self.policy.min_retention_days,
@@ -158,6 +165,7 @@ pub fn inactive_status() -> PolicyStatus {
         force_human_review: false,
         prohibit_sending: false,
         prohibit_integration_api: false,
+        prohibit_recovery_key_export: false,
         max_daily_send_limit: None,
         min_cooldown_minutes: None,
         min_retention_days: None,
@@ -288,6 +296,7 @@ mod tests {
             force_human_review: true,
             prohibit_sending: true,
             prohibit_integration_api: true,
+            prohibit_recovery_key_export: true,
             max_daily_send_limit: Some(3),
             min_cooldown_minutes: Some(90),
             min_retention_days: Some(365),
@@ -312,6 +321,7 @@ mod tests {
         assert_eq!(settings.mode, Mode::HumanReview);
         assert!(!settings.sending_enabled);
         assert!(!settings.api_enabled);
+        assert!(!policy().allows_recovery_key_export());
         assert_eq!(settings.daily_send_limit, 3);
         assert_eq!(settings.cooldown_minutes, 90);
         assert_eq!(settings.retention_days, 365);
