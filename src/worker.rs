@@ -809,7 +809,8 @@ fn api_query_with_operation(
                     "privacy_safe_metrics": true,
                     "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
-                    "enterprise_policy_digest_pin": true
+                    "enterprise_policy_digest_pin": true,
+                    "enterprise_policy_ed25519_signature": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
@@ -1012,14 +1013,17 @@ mod tests {
             "/v1/health",
             "/v1/status",
             "/v1/items",
+            "/v1/item-feed",
             "/v1/items/{id}",
+            "/v1/items/{id}/automatic-policy",
             "/v1/events",
             "/v1/audit/anchor",
             "/v1/audit/contains",
+            "/v1/metrics",
         ] {
             assert!(paths.contains_key(expected), "OpenAPI missing {expected}");
         }
-        assert_eq!(paths.len(), 10);
+        assert_eq!(paths.len(), 13);
         assert_eq!(spec["openapi"], "3.1.0");
     }
 
