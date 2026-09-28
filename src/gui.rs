@@ -1,7 +1,7 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
     config::{LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS, Settings, Tone},
-    types::{Job, JobState, hash},
+    types::{Job, JobState, OperationState, OperationStatus, hash},
     worker::{Command, Snapshot, Worker},
 };
 use eframe::egui::{self, Color32, RichText, Vec2};
@@ -1066,18 +1066,41 @@ impl App {
     }
     fn dialogs(&mut self, ctx: &egui::Context, s: &Snapshot) {
         if self.close_confirmation {
-            egui::Window::new("Unsaved reply — close application?")
+            let sensitive_operation = s.operation.state == OperationState::Running
+                && s.operation.kind.shutdown_sensitive();
+            let title = if sensitive_operation {
+                "Operation still running — close application?"
+            } else {
+                "Unsaved reply — close application?"
+            };
+            egui::Window::new(title)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(
-                        "Your edited reply has not been saved. Closing will discard this text.",
-                    );
-                    if ui.button("Keep editing").clicked() {
+                    if self.dirty {
+                        ui.label(
+                            "Your edited reply has not been saved. Closing will discard this text.",
+                        );
+                    }
+                    if sensitive_operation {
+                        ui.colored_label(
+                            AMBER,
+                            format!(
+                                "{:?} is still running. Closing now can interrupt an external side effect or leave an incomplete operator artifact. Delivery reservations remain fail-safe, but an in-flight Gmail result may become Uncertain on restart.",
+                                s.operation.kind
+                            ),
+                        );
+                    }
+                    if ui.button("Keep application open").clicked() {
                         self.close_confirmation = false;
                     }
-                    if ui.button("Discard unsaved text and close").clicked() {
+                    if ui.button(if self.dirty {
+                        "Force close and discard unsaved text"
+                    } else {
+                        "Force close now"
+                    }).clicked() {
+                        self.worker.request_stop();
                         self.close_approved = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -1126,7 +1149,10 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(250));
         let s = self.worker.view();
         self.sync_view(&s);
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.close_approved {
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.close_approved
+            && requires_close_confirmation(self.dirty, &s.operation)
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_confirmation = true;
         }
@@ -1257,6 +1283,11 @@ impl eframe::App for App {
     }
 }
 
+fn requires_close_confirmation(dirty: bool, operation: &OperationStatus) -> bool {
+    dirty
+        || (operation.state == OperationState::Running && operation.kind.shutdown_sensitive())
+}
+
 /// Only the exact persisted draft is a valid GUI send candidate.
 fn visible_draft_matches(job: &Job, text: &str) -> bool {
     job.draft.as_ref().is_some_and(|d| d.body == text)
@@ -1287,6 +1318,20 @@ fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn close_confirmation_covers_unsaved_text_and_sensitive_operations() {
+        let mut operation = OperationStatus::default();
+        assert!(!requires_close_confirmation(false, &operation));
+        assert!(requires_close_confirmation(true, &operation));
+
+        operation.state = OperationState::Running;
+        operation.kind = crate::types::OperationKind::SendReply;
+        assert!(requires_close_confirmation(false, &operation));
+
+        operation.kind = crate::types::OperationKind::SyncMailbox;
+        assert!(!requires_close_confirmation(false, &operation));
+    }
+
     #[test]
     fn unsaved_editor_never_matches_send_candidate() {
         let email = crate::ollama::sample_email("Synthetic", "Synthetic rejection");
