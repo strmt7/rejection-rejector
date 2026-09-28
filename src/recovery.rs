@@ -412,21 +412,14 @@ fn recovery_drill_with_vault(
         "Backup vault identifier does not match this workspace"
     );
 
-    let isolated = tempfile::tempdir().context("Cannot create isolated recovery-drill workspace")?;
+    let isolated =
+        tempfile::tempdir().context("Cannot create isolated recovery-drill workspace")?;
     let drill_dir = isolated.path();
     private_dir(drill_dir)?;
-    write_new_private(
-        &drill_dir.join(VAULT_ID_NAME),
-        manifest.vault_id.as_bytes(),
-    )?;
+    write_new_private(&drill_dir.join(VAULT_ID_NAME), manifest.vault_id.as_bytes())?;
 
-    let restore = restore_backup_with_vault(
-        drill_dir,
-        backup_dir,
-        &manifest,
-        vault.clone(),
-    )
-    .context("Isolated recovery drill could not restore the backup")?;
+    let restore = restore_backup_with_vault(drill_dir, backup_dir, &manifest, vault.clone())
+        .context("Isolated recovery drill could not restore the backup")?;
 
     let restored_database = drill_dir.join(DATABASE_NAME);
     let restored = Store::open(&restored_database, vault)?;
@@ -726,8 +719,7 @@ mod tests {
         let manifest = create_backup(&store, &data, &backup).unwrap();
         let live_hash_before = sha256_file(&data.join(DATABASE_NAME)).unwrap();
 
-        let report =
-            recovery_drill_with_vault(&data, &backup, vault).unwrap();
+        let report = recovery_drill_with_vault(&data, &backup, vault).unwrap();
         assert!(report.isolated_restore_succeeded);
         assert_eq!(report.restored_schema_version, manifest.schema_version);
         assert_eq!(report.item_records, 1);
