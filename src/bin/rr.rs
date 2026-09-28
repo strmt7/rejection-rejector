@@ -432,11 +432,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn recovery_passphrase_file_must_be_private() {
         use std::os::unix::fs::PermissionsExt;
