@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Native local-first core. Constructing this library never sends email.
 pub mod api;
+pub mod audit_anchor;
 pub mod config;
 pub mod diagnostics;
 pub mod engine;
