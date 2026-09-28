@@ -16,6 +16,10 @@ $headers = @{ Authorization = "Bearer $token" }
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/capabilities' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/status' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/metrics' -Headers $headers
+$feed = Invoke-RestMethod 'http://127.0.0.1:8734/v1/item-feed?limit=25' -Headers $headers
+if ($feed.next_cursor) {
+    Invoke-RestMethod ("http://127.0.0.1:8734/v1/item-feed?limit=25&cursor=" + [uri]::EscapeDataString($feed.next_cursor)) -Headers $headers
+}
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/items?page=0' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 ```
@@ -25,7 +29,8 @@ Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 | /v1/capabilities | API/application versions, read-only contract, provider, modes, supported features and schedule presets |
 | /v1/status | Version, account, mode, pause/send settings, counts and last successful sync |
 | /v1/metrics | Privacy-safe aggregate operational snapshot: queue/review/sent/uncertain counts, send attempts, sync freshness, database size/schema, audit sequence, qualification state and enterprise-policy revision; no mailbox identity/content |
-| /v1/items?page=N | Page of 25 account-owned jobs with retained original/draft content |
+| /v1/item-feed?limit=N&cursor=TOKEN | Preferred integration feed. Opaque cursor traverses a fixed high-water-mark snapshot, so new mail cannot shift pages during synchronization |
+| /v1/items?page=N | Legacy offset pagination used by the current UI; suitable for browsing, not durable synchronization |
 | /v1/items/ID | One account-owned job |
 | /v1/events?after=SEQ | Up to 100 tamper-evident encrypted-journal events after decryption, including stable `kind`, typed `domain` and `severity`; persist the highest returned sequence |
 | /v1/audit/anchor | Current verified SHA-256 audit-chain head for external anchoring |
@@ -39,3 +44,10 @@ Version 0.1 has no write/send HTTP routes, automatic webhook uploads or cross-se
 ## Fleet monitoring contract
 
 For enterprise monitoring, prefer `/v1/metrics` or `rr.exe metrics` over scraping UI labels. The metrics schema is explicitly privacy-safe and versioned independently with `schema_version`. It contains aggregate state only and performs no external upload. Treat metric names/fields as a contract and gate consumers on `schema_version`; do not infer private mailbox identity from counts or timing.
+
+
+## Cursor synchronization
+
+For application-to-application synchronization, use `/v1/item-feed` rather than offset pages. Start without a cursor. Persist the returned `next_cursor` only after successfully processing that page, then request the next page with the token unchanged. The cursor is opaque: do not parse, construct, truncate, or compare it.
+
+The first request captures the account's current SQLite row high-water mark. Every continuation remains bounded by that snapshot. Mail inserted after traversal starts appears only in a later fresh traversal, preventing offset-shift duplicates or omissions. Cursors are local implementation tokens, not durable cross-version identifiers; restart a feed from page one after an API contract/version change.
