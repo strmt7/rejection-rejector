@@ -10,7 +10,12 @@ Rejection Rejector supports an optional, local administrator policy overlay. It 
 
 A configured relative override is rejected. A malformed or unsupported policy fails startup rather than silently disabling policy enforcement.
 
-For higher-assurance deployments, provision `RR_ENTERPRISE_POLICY_SHA256` independently from the policy file. It must contain the exact 64-hex SHA-256 digest of the deployed policy bytes. When configured, a missing policy file or any byte-level drift fails startup/reload closed. This is an integrity/provenance pin, not a digital signature: protect the environment/MDM source that provisions the pin separately from the policy file.
+For higher-assurance deployments, Rejection Rejector supports **two independent policy-authentication controls**:
+
+- `RR_ENTERPRISE_POLICY_SHA256`: exact 64-hex SHA-256 digest pin of the deployed policy bytes.
+- `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY`: standard-base64 raw 32-byte Ed25519 public key. When present, the exact policy bytes must have a valid detached signature in `policy.json.sig` (or the absolute path in `RR_ENTERPRISE_POLICY_SIGNATURE`).
+
+The signature file is bounded to 4 KiB, rejects symlinks and unknown JSON fields, and uses the extensible envelope `{"version":1,"algorithm":"ed25519","signature":"BASE64"}`. The signature is over the **exact policy file bytes**, so whitespace changes require re-signing. SHA-256 pinning and Ed25519 verification may be enabled together; both must pass. The public key or digest should be provisioned independently from the policy/signature files through MDM, image management, or another administrator-controlled channel.
 
 ## Policy formats
 
@@ -69,13 +74,16 @@ Policy can only make the user configuration more restrictive. It never grants ca
    ```powershell
    (Get-FileHash C:\staging\policy.json -Algorithm SHA256).Hash.ToLowerInvariant()
    ```
-5. Deploy the policy to the machine-wide default path with administrator-controlled ACLs. For high-assurance environments, separately provision the digest as `RR_ENTERPRISE_POLICY_SHA256` through the enterprise configuration mechanism.
-6. Restart Rejection Rejector.
-7. Verify the effective policy:
+5. Deploy the policy to the machine-wide default path with administrator-controlled ACLs.
+6. For high-assurance environments, choose one or both independent authentication controls:
+   - provision the exact digest as `RR_ENTERPRISE_POLICY_SHA256`; and/or
+   - sign the **exact policy bytes** with your organization-held Ed25519 private key, deploy the detached JSON signature as `policy.json.sig`, and provision the corresponding raw 32-byte public key as standard base64 in `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY`. If the signature lives elsewhere, set `RR_ENTERPRISE_POLICY_SIGNATURE` to its absolute path.
+7. Restart Rejection Rejector.
+8. Verify the effective policy:
    ```powershell
    rr.exe policy-status
    ```
-8. Export redacted diagnostics if audit evidence is needed:
+9. Export redacted diagnostics if audit evidence is needed:
    ```powershell
    rr.exe diagnostics --out diagnostics.json
    ```
@@ -92,6 +100,7 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - Interactive selection of a disallowed model fails instead of being silently rewritten.
 - Invalid policy is a startup failure.
 - If `RR_ENTERPRISE_POLICY_SHA256` is configured, missing or modified policy bytes fail closed.
+- If `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY` is configured, a missing, malformed, symlinked, oversized or invalid detached signature fails closed. The signer public-key SHA-256 fingerprint is exposed in policy status for inventory/audit without exposing private material.
 - V2 policies reject future `not_before`, expired `expires_at`, revision rollback, and same-revision byte drift.
 - The revision floor is encrypted in the local workspace and survives restart. It is not a substitute for independently protecting the policy file/digest-pin provisioning channel.
 - A new `policy_id` intentionally starts a new rollback namespace; administrators should not rotate IDs merely to change settings.
@@ -99,4 +108,4 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - Policy application is re-run on every settings mutation and hot-reload.
 - Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by avoiding the desktop UI.
 
-This is an enforcement mechanism, not full Windows Group Policy/MDM integration. The SHA-256 pin plus v2 rollback floor provide integrity, provenance pinning and replay resistance when the pin/provisioning channel is independently protected, but they are **not an asymmetric digital signature**. A signed policy format remains a future extension. Enterprise packaging and signed deployment remain separate release concerns.
+This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Ed25519 signatures authenticate policy provenance when the public-key provisioning channel is independently protected; the optional SHA-256 pin can additionally lock a machine to one exact byte representation. Policy v2's encrypted revision floor adds local rollback resistance. Enterprise packaging and signed application deployment remain separate release concerns.

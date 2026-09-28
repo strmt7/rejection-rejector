@@ -17,8 +17,8 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - CodeQL scans Rust source, scheduled fuzzing exercises bounded parsers/policy surfaces, and coverage evidence is generated separately from correctness gates.
 - Backups are checksum/audit-bound and deeply authenticate encrypted records. Offline restore stages and validates the backup, preserves the previous SQLite/WAL/SHM files, installs a clean image, verifies the result, and rolls back automatically on validation failure.
 - Portable disaster recovery can export the 256-bit vault key only as an Argon2id-derived, XChaCha20-Poly1305-wrapped recovery envelope bound to the vault UUID. Import authenticates the envelope against the backup before OS credential-store installation and never overwrites an existing credential automatically.
-- Optional machine-wide enterprise policy can force Human Review, prohibit sending/API exposure, constrain local models and enforce retention/cooldown/send caps. Invalid policy fails closed.
-- The integration API exposes versioned OpenAPI 3.1, canonical readiness, typed worker-operation state, stable policy reason codes, request IDs and stable error envelopes.
+- Optional machine-wide enterprise policy can force Human Review, prohibit sending/API exposure, constrain local models and enforce retention/cooldown/send caps. Policy v2 has local revision rollback protection; deployments can independently authenticate exact policy bytes with a SHA-256 pin, an Ed25519 detached signature, or both. Invalid or unauthenticated managed policy fails closed.
+- The integration API exposes versioned OpenAPI 3.1, canonical readiness, typed worker-operation state, stable policy reason codes, request IDs and stable error envelopes. CI asserts every public route is represented by the contract, including metrics, snapshot cursor feeds and per-item Automatic-policy explanations.
 
 ## Enterprise gaps still open
 
