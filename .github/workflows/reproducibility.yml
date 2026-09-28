@@ -64,7 +64,7 @@ jobs:
             $env:CARGO_TARGET_DIR = $target
             # RUSTFLAGS takes precedence over Cargo target rustflags, so include
             # both MSVC deterministic-link mode and path normalization here.
-            $env:RUSTFLAGS = "-C link-arg=/Brepro --remap-path-prefix=$workspace=$canonicalSource --remap-path-prefix=$target=$canonicalTarget"
+            $env:RUSTFLAGS = "-C link-arg=/Brepro -C link-arg=/PDBALTPATH:%_PDB% --remap-path-prefix=$workspace=$canonicalSource --remap-path-prefix=$target=$canonicalTarget"
             cargo auditable build --locked --release --bins
             if ($LASTEXITCODE -ne 0) { throw "$label release build failed" }
           }
