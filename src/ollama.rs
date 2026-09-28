@@ -399,8 +399,7 @@ impl Ollama {
         let before = self.counter_snapshot();
         let started = std::time::Instant::now();
         let (analysis, draft, flags) = self.analyze(email)?;
-        let elapsed_millis =
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let elapsed_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let after = self.counter_snapshot();
         let status = self.residency(&analysis.model_digest)?;
         Ok(PipelineProfile {
@@ -449,15 +448,12 @@ impl Ollama {
         let warm_repeat_pipeline = candidate.profile_pipeline(&baseline)?;
 
         let target_bytes = if pinned.num_ctx <= 8192 { 3_000 } else { 8_500 };
-        let sentence =
-            "Synthetic neutral application context for local runtime profiling only. ";
+        let sentence = "Synthetic neutral application context for local runtime profiling only. ";
         let mut filler = sentence.repeat(target_bytes.div_ceil(sentence.len()));
         filler.truncate(target_bytes);
         let stress = sample_email(
             "Your application status",
-            &format!(
-                "We have decided not to move forward with your application. {filler}"
-            ),
+            &format!("We have decided not to move forward with your application. {filler}"),
         );
         let near_context_pipeline = candidate.profile_pipeline(&stress)?;
 
