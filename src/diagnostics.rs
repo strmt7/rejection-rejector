@@ -64,8 +64,15 @@ pub fn report(engine: &Engine) -> Result<Value> {
         })
     });
 
+    let policy_status = engine.enterprise_policy_status();
+    let external_audit_anchor_configured =
+        std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
+    let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
+    let independent_audit_anchor_configured =
+        external_audit_anchor_configured || os_protected_audit_anchor_required;
+
     Ok(json!({
-        "report_version": 1,
+        "report_version": 2,
         "generated_at": chrono::Utc::now(),
         "privacy": {
             "contains_account_address": false,
@@ -108,7 +115,13 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "last_poll": engine.last_poll()?,
             "paused": paused
         },
-        "enterprise_policy": engine.enterprise_policy_status(),
+        "enterprise_policy": policy_status,
+        "audit_protection": {
+            "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
+            "external_file_anchor_configured": external_audit_anchor_configured,
+            "os_protected_anchor_required": os_protected_audit_anchor_required,
+            "independent_anchor_configured": independent_audit_anchor_configured
+        },
         "delivery_policy": {
             "mode": engine.settings.mode,
             "sending_enabled": engine.settings.sending_enabled,
@@ -204,7 +217,16 @@ mod tests {
         assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
         assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
+        assert_eq!(report["report_version"], 2);
         assert_eq!(report["enterprise_policy"]["active"], false);
+        assert_eq!(
+            report["audit_protection"]["policy_requires_independent_anchor"],
+            false
+        );
+        assert_eq!(
+            report["audit_protection"]["independent_anchor_configured"],
+            false
+        );
         assert_eq!(report["database"]["integrity_ok"], true);
         assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
         if report["runtime_log"].is_object() {
