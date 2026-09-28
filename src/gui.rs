@@ -630,6 +630,19 @@ impl App {
                 }
                 if ui
                     .add_enabled(
+                        s.busy.is_empty()
+                            && !s.demo
+                            && !model_config_dirty
+                            && s.settings.model_digest.is_some(),
+                        egui::Button::new("Profile runtime"),
+                    )
+                    .on_hover_text("Runs cold-load, warm-repeat and near-context synthetic recruiting-email passes and writes a local JSON profile. This measures the target machine; it does not change Automatic-mode eligibility.")
+                    .clicked()
+                {
+                    self.worker.command(Command::ProfileModel);
+                }
+                if ui
+                    .add_enabled(
                         s.busy.is_empty() && !s.demo && !model_config_dirty,
                         egui::Button::new("Compare installed candidates"),
                     )
