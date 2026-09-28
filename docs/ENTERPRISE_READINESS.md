@@ -16,18 +16,19 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - OpenSSF Scorecard runs independently with least-privilege workflow permissions.
 - CodeQL scans Rust source, scheduled fuzzing exercises bounded parsers/policy surfaces, and coverage evidence is generated separately from correctness gates.
 - Backups are checksum/audit-bound and deeply authenticate encrypted records. Offline restore stages and validates the backup, preserves the previous SQLite/WAL/SHM files, installs a clean image, verifies the result, and rolls back automatically on validation failure.
+- Portable disaster recovery can export the 256-bit vault key only as an Argon2id-derived, XChaCha20-Poly1305-wrapped recovery envelope bound to the vault UUID. Import authenticates the envelope against the backup before OS credential-store installation and never overwrites an existing credential automatically.
 - Optional machine-wide enterprise policy can force Human Review, prohibit sending/API exposure, constrain local models and enforce retention/cooldown/send caps. Invalid policy fails closed.
 - The integration API exposes versioned OpenAPI 3.1, canonical readiness, typed worker-operation state, stable policy reason codes, request IDs and stable error envelopes.
 
 ## Enterprise gaps still open
 
-1. **Portable disaster recovery:** encrypted backups still require the original OS-protected master key (or the same Linux passphrase + vault ID). No portable master-key export is implemented.
-2. **Publisher trust:** release ZIPs can be provenance/SBOM-attested, but Windows binaries are not Authenticode-signed and there is no signed MSIX/MSI/update channel.
-3. **Live acceptance:** CI does not authorize a real Gmail account, send a real reply, or certify provider-side behavior.
-4. **Physical GPU certification:** Ollama residency is checked, but whole-device transient peaks and every driver/backend combination are not certified.
-5. **Independent AI verifier:** drafting and verification currently use the same local model; deterministic Rust gates compensate for correlated model errors but do not make the verifier independent.
-6. **Accessibility:** Linux native screenshots and geometry checks exist, but Windows Narrator, keyboard-only navigation, IME and 100/125/150/200% DPI acceptance remain owner-environment work.
-7. **Enterprise deployment:** a local administrator policy overlay exists, but signed MSI/MSIX/Intune packaging and Windows-service operation are not implemented.
+1. **Publisher trust:** release ZIPs can be provenance/SBOM-attested and shipped binaries can embed dependency provenance, but Windows binaries are not Authenticode-signed and there is no signed MSIX/MSI/update channel.
+2. **Live acceptance:** CI does not authorize a real Gmail account, send a real reply, or certify provider-side behavior.
+3. **Physical GPU certification:** Ollama residency is checked, but whole-device transient peaks and every driver/backend combination are not certified.
+4. **Independent AI verifier:** drafting and verification currently use the same local model; deterministic Rust gates compensate for correlated model errors but do not make the verifier independent.
+5. **Accessibility:** Linux native screenshots and geometry checks exist, but Windows Narrator, keyboard-only navigation, IME and 100/125/150/200% DPI acceptance remain owner-environment work.
+6. **Enterprise deployment:** a local administrator policy overlay exists, but signed MSI/MSIX/Intune packaging and Windows-service operation are not implemented.
+7. **Portable-recovery usability:** the recovery-key cryptographic path is implemented, but GUI-first recovery/import and organization-managed key escrow integrations are not yet implemented.
 8. **Security audit:** automated controls exist; no external penetration test or formal security certification is claimed.
 
 ## Release policy
