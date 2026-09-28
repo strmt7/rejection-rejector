@@ -52,6 +52,8 @@ pub struct RuntimeLogStatus {
     pub schema_version: u32,
     pub available: bool,
     pub current_bytes: u64,
+    pub archive_bytes: u64,
+    pub total_bytes: u64,
     pub archive_count: usize,
     pub max_current_bytes: u64,
     pub max_archives: usize,
@@ -170,6 +172,8 @@ fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<R
             schema_version: LOG_SCHEMA_VERSION,
             available: false,
             current_bytes: 0,
+            archive_bytes: 0,
+            total_bytes: 0,
             archive_count: 0,
             max_current_bytes: max_bytes,
             max_archives,
@@ -183,15 +187,21 @@ fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<R
     reject_symlink_if_present(&current)?;
     let current_bytes = fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
     let mut archive_count = 0usize;
+    let mut archive_bytes = 0u64;
     for index in 1..=max_archives {
         let path = archive_path(directory, index);
         reject_symlink_if_present(&path)?;
-        archive_count += usize::from(path.is_file());
+        if path.is_file() {
+            archive_count += 1;
+            archive_bytes = archive_bytes.saturating_add(fs::metadata(&path)?.len());
+        }
     }
     Ok(RuntimeLogStatus {
         schema_version: LOG_SCHEMA_VERSION,
         available: current.is_file(),
         current_bytes,
+        archive_bytes,
+        total_bytes: current_bytes.saturating_add(archive_bytes),
         archive_count,
         max_current_bytes: max_bytes,
         max_archives,
@@ -290,6 +300,8 @@ mod tests {
         assert!(status.available);
         assert!(status.current_bytes > 0);
         assert!(status.archive_count <= 2);
+        assert!(status.archive_bytes > 0);
+        assert_eq!(status.total_bytes, status.current_bytes + status.archive_bytes);
         assert!(root.path().join("logs/runtime.1.jsonl").is_file());
         assert!(!root.path().join("logs/runtime.3.jsonl").exists());
     }
@@ -300,6 +312,8 @@ mod tests {
         let status = status(root.path()).unwrap();
         assert!(!status.available);
         assert_eq!(status.current_bytes, 0);
+        assert_eq!(status.archive_bytes, 0);
+        assert_eq!(status.total_bytes, 0);
         assert_eq!(status.archive_count, 0);
         assert!(!root.path().join("logs").exists());
     }

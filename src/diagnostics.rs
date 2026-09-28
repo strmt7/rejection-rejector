@@ -207,6 +207,9 @@ mod tests {
         assert_eq!(report["enterprise_policy"]["active"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
         assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
+        if report["runtime_log"].is_object() {
+            assert!(report["runtime_log"]["total_bytes"].is_u64());
+        }
         assert!(report["operational"]["queue_depth"].is_number());
         assert!(report["operational"]["degradation_reasons"].is_array());
         assert!(report["recent_audit"]["domains"].is_object());

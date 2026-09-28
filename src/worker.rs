@@ -411,6 +411,14 @@ fn rotate_api_token(
     Ok(())
 }
 
+fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> OperationState {
+    if result.is_ok() {
+        OperationState::Succeeded
+    } else {
+        OperationState::Failed
+    }
+}
+
 fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
     let shift = failures.saturating_sub(1).min(6);
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
@@ -641,12 +649,8 @@ fn run(
                 }
                 report(&shared, operation, &result);
                 if let Some(journal) = &journal {
-                    let state = if result.is_ok() {
-                        OperationState::Succeeded
-                    } else {
-                        OperationState::Failed
-                    };
-                    let _ = journal.record_operation(operation, state);
+                    let _ =
+                        journal.record_operation(operation, operation_state_for_result(&result));
                 }
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             }
@@ -743,12 +747,10 @@ fn run(
             let result = e.db.purge(e.settings.retention_days).map(|_| ());
             report(&shared, OperationKind::PurgeRetention, &result);
             if let Some(journal) = &journal {
-                let state = if result.is_ok() {
-                    OperationState::Succeeded
-                } else {
-                    OperationState::Failed
-                };
-                let _ = journal.record_operation(OperationKind::PurgeRetention, state);
+                let _ = journal.record_operation(
+                    OperationKind::PurgeRetention,
+                    operation_state_for_result(&result),
+                );
             }
             if result.is_ok() {
                 retention_failures = 0;
@@ -783,12 +785,10 @@ fn run(
             let result = e.synchronize().map(|_| ());
             report(&shared, OperationKind::SyncMailbox, &result);
             if let Some(journal) = &journal {
-                let state = if result.is_ok() {
-                    OperationState::Succeeded
-                } else {
-                    OperationState::Failed
-                };
-                let _ = journal.record_operation(OperationKind::SyncMailbox, state);
+                let _ = journal.record_operation(
+                    OperationKind::SyncMailbox,
+                    operation_state_for_result(&result),
+                );
             }
             sync_retry =
                 Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
@@ -812,12 +812,10 @@ fn run(
             let result = e.process_one().map(|_| ());
             report(&shared, OperationKind::AnalyzeQueuedMail, &result);
             if let Some(journal) = &journal {
-                let state = if result.is_ok() {
-                    OperationState::Succeeded
-                } else {
-                    OperationState::Failed
-                };
-                let _ = journal.record_operation(OperationKind::AnalyzeQueuedMail, state);
+                let _ = journal.record_operation(
+                    OperationKind::AnalyzeQueuedMail,
+                    operation_state_for_result(&result),
+                );
             }
             if result.is_ok() {
                 process_failures = 0;
@@ -852,32 +850,22 @@ fn run(
                 }
             }
             let refresh_after_tick = !matches!(result, Ok(false));
+            let automatic_state = operation_state_for_result(&result);
             if matches!(result, Ok(false)) {
                 report_silent_success(
                     &shared,
                     OperationKind::AutomaticDispatch,
                     "No eligible automatic reply",
                 );
-                if let Some(journal) = &journal {
-                    let _ = journal.record_operation(
-                        OperationKind::AutomaticDispatch,
-                        OperationState::Succeeded,
-                    );
-                }
             } else {
                 report(
                     &shared,
                     OperationKind::AutomaticDispatch,
                     &result.map(|_| ()),
                 );
-                if let Some(journal) = &journal {
-                    let state = if refresh_after_tick {
-                        OperationState::Succeeded
-                    } else {
-                        OperationState::Failed
-                    };
-                    let _ = journal.record_operation(OperationKind::AutomaticDispatch, state);
-                }
+            }
+            if let Some(journal) = &journal {
+                let _ = journal.record_operation(OperationKind::AutomaticDispatch, automatic_state);
             }
             if refresh_after_tick {
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
@@ -989,6 +977,7 @@ fn api_query_with_operation(
                     "typed_operation_status": true,
                     "typed_audit_events": true,
                     "privacy_safe_metrics": true,
+                    "privacy_minimal_runtime_journal": true,
                     "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
                     "enterprise_policy_digest_pin": true,
@@ -1034,6 +1023,7 @@ fn api_query_with_operation(
                     "schema_version": e.db.schema_version()?,
                     "audit_head": e.db.audit_head()?
                 },
+                "runtime_log": crate::runtime_log::status(&e.directory).ok(),
                 "gmail": {
                     "connected": e.connected(),
                     "send_scope": e.send_scope()
@@ -1221,6 +1211,7 @@ mod tests {
         .unwrap();
         let health = api_query(&engine, "/v1/health").unwrap();
         assert_eq!(health["healthy"], true);
+        assert!(health["runtime_log"].is_object());
         assert_eq!(health["database"]["integrity_ok"], true);
         assert_eq!(health["enterprise_policy"]["active"], false);
         assert!(health.get("account").is_none());
@@ -1416,6 +1407,14 @@ mod tests {
         assert_eq!(event.severity, AuditSeverity::Security);
         assert!(!event.detail.contains(&old));
         assert!(!event.detail.contains(&stored));
+    }
+
+    #[test]
+    fn result_state_mapping_is_consistent_for_scheduled_and_user_operations() {
+        let ok: Result<bool> = Ok(false);
+        let err: Result<bool> = Err(anyhow::anyhow!("synthetic failure"));
+        assert_eq!(operation_state_for_result(&ok), OperationState::Succeeded);
+        assert_eq!(operation_state_for_result(&err), OperationState::Failed);
     }
 
     #[test]
