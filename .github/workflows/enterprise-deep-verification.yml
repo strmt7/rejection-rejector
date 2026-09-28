@@ -1,6 +1,21 @@
 name: Enterprise deep verification
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src/store.rs"
+      - "src/recovery.rs"
+      - "src/vault.rs"
+      - "src/api.rs"
+      - "src/worker.rs"
+      - "docs/openapi-v1.json"
+      - "tests/send_concurrency.rs"
+      - "tests/sync_recovery.rs"
+      - "tests/http_boundary.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/enterprise-deep-verification.yml"
   schedule:
     - cron: "29 1 * * 2"
   workflow_dispatch:

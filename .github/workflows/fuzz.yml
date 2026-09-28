@@ -1,6 +1,16 @@
 name: Rust fuzzing
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src/mail.rs"
+      - "src/gmail.rs"
+      - "src/policy.rs"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
   schedule:
     - cron: "17 2 * * 3"
   workflow_dispatch:

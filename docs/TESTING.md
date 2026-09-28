@@ -19,6 +19,10 @@ cargo run --locked --no-default-features --bin rr -- demo
 
 Both Windows and Ubuntu run these checks. Windows additionally builds optimized GUI/CLI executables and packages them with documentation, COMMIT.txt, toolchain evidence, Cargo.lock and per-file SHA-256 sums. A separate SHA256.txt covers the complete Windows ZIP. Checksums detect file changes; these are unsigned builds, not publisher-identity attestations.
 
+## Change-aware deep verification
+
+Expensive workflows are automatically triggered only by the subsystems whose changes can invalidate their evidence. Fuzzing runs when mail/MIME/policy/fuzz code or its dependency graph changes. Enterprise deep verification runs when storage, recovery, vault, API/worker contract, recovery/concurrency tests or their dependency graph changes. Coverage and mutation testing have analogous path-aware triggers. This keeps release evidence causally connected to relevant code changes without running every expensive campaign for documentation-only commits.
+
 ## Release evidence freshness and lineage
 
 The manual attested-package workflow does not accept an arbitrary recent green run. For fuzzing, coverage, mutation testing and enterprise deep verification it selects the **latest** run on `main`, requires that run itself to be completed successfully and within its age window, and verifies through GitHub's compare API that the evidence commit is an ancestor of the exact release commit. A newer failed, cancelled or still-running deep-quality job blocks packaging rather than allowing an older success to mask it.
