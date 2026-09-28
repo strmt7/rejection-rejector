@@ -29,7 +29,7 @@ Invoke-RestMethod 'http://127.0.0.1:8734/v1/events?after=0' -Headers $headers
 | /v1/capabilities | API/application versions, read-only contract, provider, modes, supported features and schedule presets |
 | /v1/health | Canonical readiness/integrity state plus filesystem headroom, typed worker operation, enterprise policy and privacy-minimal runtime-journal health |
 | /v1/status | Version, account, mode, pause/send settings, counts and last successful sync |
-| /v1/metrics | Privacy-safe aggregate operational snapshot: queue/review/sent/uncertain counts, send attempts, sync freshness, database/storage headroom, audit sequence, qualification state and enterprise-policy revision; no mailbox identity/content |
+| /v1/metrics | Privacy-safe aggregate operational snapshot: queue/review/sent/uncertain counts, send attempts, sync freshness, database/storage headroom, scheduled-backup freshness, audit sequence, qualification state and enterprise-policy revision; no mailbox identity/content |
 | /v1/item-feed?limit=N&cursor=TOKEN | Preferred integration feed. Opaque cursor traverses a fixed high-water-mark snapshot, so new mail cannot shift pages during synchronization |
 | /v1/items?page=N | Legacy offset pagination used by the current UI; suitable for browsing, not durable synchronization |
 | /v1/items/ID | One account-owned job |

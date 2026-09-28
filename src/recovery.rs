@@ -1,4 +1,5 @@
 use crate::{
+    config::Settings,
     store::Store,
     vault::{InstanceLock, RecoveryKeyEnvelope, Vault, private_dir, vault_id, write_new_private},
 };
@@ -16,6 +17,8 @@ const MANIFEST_NAME: &str = "backup-manifest.json";
 const DATABASE_NAME: &str = "state.sqlite3";
 const VAULT_ID_NAME: &str = "vault-id";
 const RECOVERY_KEY_NAME: &str = "recovery-key.json";
+const SCHEDULED_BACKUP_PREFIX: &str = "rejection-rejector-auto-";
+pub const LAST_SCHEDULED_BACKUP_META: &str = "scheduled_backup_last_success";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +47,17 @@ pub struct RestoreReport {
     pub restored_schema_version: i64,
     pub rollback_directory: Option<String>,
     pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScheduledBackupStatus {
+    pub schema_version: u32,
+    pub enabled: bool,
+    pub interval_hours: u16,
+    pub keep: u8,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub age_seconds: Option<i64>,
+    pub overdue: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -266,6 +280,125 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
             Err(error)
         }
     }
+}
+
+pub fn scheduled_backup_status(
+    store: &Store,
+    settings: &Settings,
+    now: DateTime<Utc>,
+) -> Result<ScheduledBackupStatus> {
+    let last_success_at: Option<DateTime<Utc>> = store.meta(LAST_SCHEDULED_BACKUP_META)?;
+    let age_seconds = last_success_at.map(|at| now.signed_duration_since(at).num_seconds().max(0));
+    let due_after = i64::from(settings.scheduled_backup_interval_hours) * 60 * 60;
+    let overdue = settings.scheduled_backup_enabled
+        && age_seconds.is_none_or(|age| age >= due_after);
+    Ok(ScheduledBackupStatus {
+        schema_version: 1,
+        enabled: settings.scheduled_backup_enabled,
+        interval_hours: settings.scheduled_backup_interval_hours,
+        keep: settings.scheduled_backup_keep,
+        last_success_at,
+        age_seconds,
+        overdue,
+    })
+}
+
+pub fn prune_verified_scheduled_backups(
+    store: &Store,
+    parent: &Path,
+    keep: usize,
+) -> Result<usize> {
+    ensure!((2..=30).contains(&keep), "Scheduled backup retention is invalid");
+    if !parent.exists() {
+        return Ok(0);
+    }
+    ensure!(parent.is_dir(), "Scheduled backup root is not a directory");
+    ensure!(
+        !fs::symlink_metadata(parent)?.file_type().is_symlink(),
+        "Scheduled backup root must not be a symlink"
+    );
+    let mut candidates = Vec::<(DateTime<Utc>, PathBuf)>::new();
+    let mut scanned = 0usize;
+    for entry in fs::read_dir(parent)? {
+        scanned = scanned.saturating_add(1);
+        ensure!(
+            scanned <= 512,
+            "Scheduled backup root contains too many entries to prune safely"
+        );
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(SCHEDULED_BACKUP_PREFIX) {
+            continue;
+        }
+        if let Ok(manifest) = verify_backup(store, &path) {
+            candidates.push((manifest.created_at, path));
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+    });
+    let mut removed = 0usize;
+    for (_, path) in candidates.into_iter().skip(keep) {
+        fs::remove_dir_all(&path)?;
+        removed = removed.saturating_add(1);
+    }
+    Ok(removed)
+}
+
+pub fn create_scheduled_backup(
+    store: &mut Store,
+    data_dir: &Path,
+    settings: &Settings,
+    now: DateTime<Utc>,
+) -> Result<BackupManifest> {
+    ensure!(
+        settings.scheduled_backup_enabled,
+        "Scheduled backups are not enabled"
+    );
+    settings.validate()?;
+    let root = PathBuf::from(&settings.scheduled_backup_directory);
+    fs::create_dir_all(&root)?;
+    ensure!(
+        !fs::symlink_metadata(&root)?.file_type().is_symlink(),
+        "Scheduled backup root must not be a symlink"
+    );
+    let destination = root.join(format!(
+        "{SCHEDULED_BACKUP_PREFIX}{}-{}",
+        now.format("%Y%m%d-%H%M%S"),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let manifest = create_backup(store, data_dir, &destination)?;
+    store.set_meta(LAST_SCHEDULED_BACKUP_META, &now)?;
+    store.log(
+        "backup.scheduled_succeeded",
+        None,
+        "Scheduled encrypted backup created and verified",
+    )?;
+    if prune_verified_scheduled_backups(
+        store,
+        &root,
+        usize::from(settings.scheduled_backup_keep),
+    )
+    .is_err()
+    {
+        store.log(
+            "backup.retention_warning",
+            None,
+            "Scheduled backup succeeded but old verified backups could not be fully pruned",
+        )?;
+    }
+    Ok(manifest)
 }
 
 /// Export a passphrase-wrapped master-key envelope for off-machine disaster recovery.
@@ -637,6 +770,58 @@ mod tests {
         vault::Vault,
     };
     use std::io::Write;
+
+    #[test]
+    fn scheduled_backup_retention_only_removes_verified_same_vault_backups() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let backups = root.path().join("backups");
+        private_dir(&data).unwrap();
+        fs::create_dir_all(&backups).unwrap();
+        let vault_id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&data.join(VAULT_ID_NAME), vault_id.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let mut store = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
+
+        let mut settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: backups.to_string_lossy().into_owned(),
+            scheduled_backup_keep: 2,
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+
+        for offset in 0..3 {
+            create_scheduled_backup(
+                &mut store,
+                &data,
+                &settings,
+                Utc::now() + chrono::Duration::seconds(offset),
+            )
+            .unwrap();
+        }
+        let valid_count = fs::read_dir(&backups)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(SCHEDULED_BACKUP_PREFIX)
+            })
+            .count();
+        assert_eq!(valid_count, 2);
+
+        let unrelated = backups.join("do-not-delete");
+        fs::create_dir_all(&unrelated).unwrap();
+        prune_verified_scheduled_backups(&store, &backups, 2).unwrap();
+        assert!(unrelated.is_dir());
+
+        settings.scheduled_backup_enabled = false;
+        let status = scheduled_backup_status(&store, &settings, Utc::now()).unwrap();
+        assert!(!status.overdue);
+    }
 
     #[test]
     fn recovery_key_export_requires_an_existing_authenticated_workspace() {

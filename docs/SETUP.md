@@ -47,6 +47,12 @@ ollama serve
 
 Do not start a second server on an occupied port. Environment variables do not retroactively change an existing process. GPU compatibility depends on Ollama/backend/driver. The app does not guarantee every 16 GiB card works identically.
 
+### Scheduled verified backups
+
+The desktop can optionally create encrypted same-vault backups every 24, 72, 168 or 336 hours and retain 2–30 verified generations. A new backup is created and authenticated before retention pruning runs. Pruning considers only direct child directories created by the scheduled-backup naming convention and deletes a directory only after its manifest, checksum, schema, vault identity and audit head verify under the active workspace key. Unrelated or unverifiable folders are ignored.
+
+Scheduled backups continue while Gmail is disconnected or delivery is paused, but require the desktop or headless worker process to be running. Backup age is exposed only as privacy-safe operational metadata.
+
 ### Readiness check
 
 Close the GUI, then run:

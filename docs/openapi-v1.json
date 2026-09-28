@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.9.0",
+    "version": "1.10.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, and errors use stable machine-readable codes."
   },
   "servers": [
@@ -253,6 +253,9 @@
           },
           "storage": {
             "$ref": "#/components/schemas/StorageHealth"
+          },
+          "scheduled_backup": {
+            "$ref": "#/components/schemas/ScheduledBackupStatus"
           }
         }
       },
@@ -399,7 +402,8 @@
           "external_audit_anchor_configured",
           "os_protected_audit_anchor_required",
           "independent_audit_anchor_configured",
-          "operational"
+          "operational",
+          "scheduled_backup"
         ],
         "properties": {
           "schema_version": {
@@ -506,6 +510,9 @@
           },
           "storage": {
             "$ref": "#/components/schemas/StorageHealth"
+          },
+          "scheduled_backup": {
+            "$ref": "#/components/schemas/ScheduledBackupStatus"
           }
         }
       },
@@ -723,6 +730,62 @@
           }
         },
         "description": "Privacy-safe workspace filesystem headroom. Thresholds are conservative engineering guardrails, not availability SLOs."
+      },
+      "ScheduledBackupStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "enabled",
+          "interval_hours",
+          "keep",
+          "last_success_at",
+          "age_seconds",
+          "overdue"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "interval_hours": {
+            "type": "integer",
+            "minimum": 24
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "overdue": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "headers": {

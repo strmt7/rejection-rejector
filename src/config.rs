@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
 pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
+pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
 pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
 /// Old runtimes are rejected because structured-output and newer model support
 /// are part of the application's correctness boundary.
@@ -128,6 +129,10 @@ pub struct Settings {
     pub api_port: u16,
     pub api_allow_writes: bool,
     pub retention_days: u16,
+    pub scheduled_backup_enabled: bool,
+    pub scheduled_backup_directory: String,
+    pub scheduled_backup_interval_hours: u16,
+    pub scheduled_backup_keep: u8,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -155,6 +160,10 @@ impl Default for Settings {
             api_port: 8734,
             api_allow_writes: false,
             retention_days: 90,
+            scheduled_backup_enabled: false,
+            scheduled_backup_directory: String::new(),
+            scheduled_backup_interval_hours: 24,
+            scheduled_backup_keep: 7,
         }
     }
 }
@@ -186,6 +195,32 @@ impl Settings {
             (30..=3650).contains(&self.retention_days),
             "Retention must be 30..3650 days"
         );
+        ensure!(
+            BACKUP_INTERVAL_HOURS.contains(&self.scheduled_backup_interval_hours),
+            "Backup interval must be 24, 72, 168 or 336 hours"
+        );
+        ensure!(
+            (2..=30).contains(&self.scheduled_backup_keep),
+            "Scheduled backup retention must be 2..30 backups"
+        );
+        ensure!(
+            self.scheduled_backup_directory.len() <= 2048
+                && !self
+                    .scheduled_backup_directory
+                    .chars()
+                    .any(char::is_control),
+            "Scheduled backup directory is invalid"
+        );
+        if self.scheduled_backup_enabled {
+            ensure!(
+                !self.scheduled_backup_directory.trim().is_empty(),
+                "Choose a scheduled backup directory before enabling scheduled backups"
+            );
+            ensure!(
+                std::path::Path::new(&self.scheduled_backup_directory).is_absolute(),
+                "Scheduled backup directory must be an absolute path"
+            );
+        }
         ensure!(
             [8192, 16384].contains(&self.num_ctx),
             "Supported context sizes are 8192 and 16384; qualify GPU residency after changing this"
@@ -592,6 +627,23 @@ mod tests {
         }
         validate_local_url("http://127.0.0.1:11434").unwrap();
     }
+    #[test]
+    fn scheduled_backup_settings_are_explicit_and_bounded() {
+        let mut settings = Settings::default();
+        settings.scheduled_backup_enabled = true;
+        assert!(settings.validate().is_err());
+
+        let absolute = std::env::temp_dir().join("rr-scheduled-backups");
+        settings.scheduled_backup_directory = absolute.to_string_lossy().into_owned();
+        settings.validate().unwrap();
+
+        settings.scheduled_backup_interval_hours = 48;
+        assert!(settings.validate().is_err());
+        settings.scheduled_backup_interval_hours = 72;
+        settings.scheduled_backup_keep = 1;
+        assert!(settings.validate().is_err());
+    }
+
     #[test]
     fn cloud_tag_denied() {
         assert!(validate_model_name("gemma4:31b-cloud").is_err());

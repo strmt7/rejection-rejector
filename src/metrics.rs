@@ -1,6 +1,7 @@
 use crate::{
     engine::Engine,
     readiness::{OperationalIndicators, operational_indicators},
+    recovery::ScheduledBackupStatus,
     storage::StorageHealth,
 };
 use anyhow::Result;
@@ -16,6 +17,7 @@ pub struct MetricsSnapshot {
     pub database_schema_version: i64,
     pub database_bytes: Option<u64>,
     pub storage: StorageHealth,
+    pub scheduled_backup: ScheduledBackupStatus,
     pub audit_sequence: i64,
     pub audit_head_present: bool,
     pub stored_items: u64,
@@ -41,12 +43,15 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let counts = engine.db.counts(&engine.account)?;
     let integrity_ok = engine.db.readiness_check().is_ok();
     let storage = crate::storage::inspect(&engine.directory)?;
+    let scheduled_backup =
+        crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, now)?;
     let operational = operational_indicators(
         &engine.settings,
         &counts,
         engine.last_poll()?,
         integrity_ok,
         storage.runtime_write_safe,
+        scheduled_backup.overdue,
         engine.connected(),
         now,
     );
@@ -67,6 +72,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         database_schema_version: engine.db.schema_version()?,
         database_bytes,
         storage,
+        scheduled_backup,
         audit_sequence: engine.db.latest_event_seq()?,
         audit_head_present: engine.db.audit_head().is_ok(),
         stored_items: counts.stored,
@@ -111,6 +117,8 @@ mod tests {
         assert_eq!(metrics.service_name, "rejection-rejector");
         assert!(metrics.database_schema_version >= 1);
         assert_eq!(metrics.storage.schema_version, 1);
+        assert_eq!(metrics.scheduled_backup.schema_version, 1);
+        assert!(!metrics.scheduled_backup.enabled);
         assert!(metrics.storage.total_bytes >= metrics.storage.available_bytes);
         assert!(metrics.stored_items >= 3);
         assert!(!metrics.policy_requires_independent_audit_anchor);
