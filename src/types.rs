@@ -300,6 +300,7 @@ pub enum OperationKind {
     InspectModel,
     QualifyModel,
     EvaluateModel,
+    ProfileModel,
     CompareModels,
     IntegrityCheck,
     Backup,
@@ -336,6 +337,7 @@ impl OperationKind {
             Self::InspectModel => "model_inspection_failed",
             Self::QualifyModel => "model_smoke_qualification_failed",
             Self::EvaluateModel => "model_task_evaluation_failed",
+            Self::ProfileModel => "model_runtime_profile_failed",
             Self::CompareModels => "model_comparison_failed",
             Self::IntegrityCheck => "database_integrity_failed",
             Self::Backup => "backup_failed",
@@ -380,6 +382,7 @@ impl OperationKind {
                 | Self::InspectModel
                 | Self::QualifyModel
                 | Self::EvaluateModel
+                | Self::ProfileModel
                 | Self::CompareModels
                 | Self::Backup
                 | Self::RecoveryDrill
@@ -417,7 +420,7 @@ impl OperationKind {
             }
             Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
             Self::InstallOllama | Self::Backup | Self::RecoveryDrill => 3_600,
-            Self::PullModel | Self::EvaluateModel => 7_200,
+            Self::PullModel | Self::EvaluateModel | Self::ProfileModel => 7_200,
             Self::CompareModels => 21_600,
         }
     }
@@ -434,6 +437,10 @@ mod operation_kind_tests {
         assert!(
             OperationKind::EvaluateModel.stall_budget_seconds()
                 > OperationKind::AnalyzeQueuedMail.stall_budget_seconds()
+        );
+        assert_eq!(
+            OperationKind::ProfileModel.stall_budget_seconds(),
+            OperationKind::EvaluateModel.stall_budget_seconds()
         );
         assert!(
             OperationKind::CompareModels.stall_budget_seconds()
