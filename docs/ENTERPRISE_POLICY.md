@@ -88,7 +88,7 @@ Policy can only make the user configuration more restrictive. It never grants ca
    ```powershell
    rr.exe policy-status
    ```
-9. Export redacted diagnostics if audit evidence is needed:
+10. Export redacted diagnostics if audit evidence is needed:
    ```powershell
    rr.exe diagnostics --out diagnostics.json
    ```
