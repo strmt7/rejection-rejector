@@ -70,6 +70,8 @@ pub struct TaskQualification {
     pub context_hash: String,
     #[serde(default)]
     pub suite_hash: String,
+    #[serde(default)]
+    pub ollama_runtime_version: String,
     pub task_score: f64,
     pub fixture_count: u32,
     pub qualified_at: DateTime<Utc>,
@@ -261,6 +263,11 @@ impl Settings {
                 qualification.fixture_count > 0,
                 "Task qualification must record evaluated fixtures"
             );
+            ensure!(
+                qualification.ollama_runtime_version.is_empty()
+                    || qualification.ollama_runtime_version.len() <= 64,
+                "Task qualification contains an invalid Ollama runtime version"
+            );
         }
         if self.sending_enabled {
             ensure!(
@@ -287,7 +294,8 @@ impl Settings {
                     && qualification.model == self.model
                     && qualification.prompt_version == PROMPT_VERSION
                     && qualification.context_hash == settings_context_hash(self)
-                    && qualification.suite_hash == evaluation_suite_hash(),
+                    && qualification.suite_hash == evaluation_suite_hash()
+                    && !qualification.ollama_runtime_version.is_empty(),
                 "Task-specific model qualification is stale; evaluate the current configuration again"
             );
             ensure!(
@@ -331,6 +339,7 @@ impl Settings {
                     && qualification.prompt_version == PROMPT_VERSION
                     && qualification.context_hash == settings_context_hash(self)
                     && qualification.suite_hash == evaluation_suite_hash()
+                    && !qualification.ollama_runtime_version.is_empty()
             })
     }
 }
@@ -416,6 +425,7 @@ mod tests {
             prompt_version: PROMPT_VERSION.into(),
             context_hash: settings_context_hash(settings),
             suite_hash: evaluation_suite_hash(),
+            ollama_runtime_version: "0.34.0".into(),
             task_score: 100.0,
             fixture_count: 32,
             qualified_at: Utc::now(),
