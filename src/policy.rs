@@ -567,9 +567,7 @@ mod tests {
             let path = root.path().join(format!("policy-{index}.json"));
             std::fs::write(
                 &path,
-                format!(
-                    r#"{{"version":2,"policy_id":"tenant-{index}","revision":1}}"#
-                ),
+                format!(r#"{{"version":2,"policy_id":"tenant-{index}","revision":1}}"#),
             )
             .unwrap();
             let loaded = load_file(&path).unwrap();
