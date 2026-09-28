@@ -83,6 +83,36 @@ jobs:
             Write-Host "Waiting for exact-commit gates. Missing: $($missing -join ', '); pending: $($pending -join ', ')"
             Start-Sleep -Seconds 15
           }
+      - name: Require recent deep-quality evidence from main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $requirements = @(
+            @{ Name = 'Rust fuzzing'; MaxAgeDays = 8 },
+            @{ Name = 'Rust coverage'; MaxAgeDays = 8 },
+            @{ Name = 'Mutation testing'; MaxAgeDays = 8 }
+          )
+          $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&status=success&per_page=100" | ConvertFrom-Json
+          $now = [DateTimeOffset]::UtcNow
+          foreach ($requirement in $requirements) {
+            $run = @($payload.workflow_runs | Where-Object {
+              $_.name -eq $requirement.Name -and
+              $_.head_branch -eq 'main' -and
+              $_.conclusion -eq 'success'
+            } | Sort-Object run_number -Descending | Select-Object -First 1)
+            if ($run.Count -eq 0) {
+              throw "Release gate failed: no successful '$($requirement.Name)' evidence exists on main"
+            }
+            $completed = [DateTimeOffset]::Parse($run[0].updated_at)
+            $age = $now - $completed
+            if ($age.TotalDays -gt $requirement.MaxAgeDays) {
+              throw "Release gate failed: '$($requirement.Name)' evidence is $([Math]::Round($age.TotalDays, 2)) days old; maximum is $($requirement.MaxAgeDays)"
+            }
+            Write-Host "$($requirement.Name): run #$($run[0].run_number), $([Math]::Round($age.TotalHours, 1)) hours old"
+          }
+
       - name: Confirm main has not moved during release gate
         shell: pwsh
         run: |
