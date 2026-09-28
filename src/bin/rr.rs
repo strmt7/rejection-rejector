@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use rejection_rejector::{
     config, engine::Engine, ollama::Ollama, policy, recovery, worker::Worker,
@@ -11,6 +11,7 @@ use std::{
     },
     time::Duration,
 };
+use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(version, about = "Rejection Rejector headless tools")]
 struct Args {
@@ -55,6 +56,34 @@ enum Action {
         #[arg(long)]
         confirm: String,
     },
+    /// Export an Argon2id/XChaCha20-Poly1305 wrapped vault key for disaster recovery.
+    ExportRecoveryKey {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        passphrase_file: PathBuf,
+    },
+    /// Prove a recovery key unlocks a backup without modifying the OS credential store.
+    VerifyRecoveryKey {
+        #[arg(long)]
+        backup: PathBuf,
+        #[arg(long)]
+        recovery_key: PathBuf,
+        #[arg(long)]
+        passphrase_file: PathBuf,
+    },
+    /// Install a verified recovery key into the OS credential store without overwriting an existing key.
+    ImportRecoveryKey {
+        #[arg(long)]
+        backup: PathBuf,
+        #[arg(long)]
+        recovery_key: PathBuf,
+        #[arg(long)]
+        passphrase_file: PathBuf,
+        /// Credential-store write acknowledgement; must be exactly IMPORT.
+        #[arg(long)]
+        confirm: String,
+    },
     /// Export a privacy-safe local diagnostics JSON report. Nothing is uploaded.
     Diagnostics {
         #[arg(long)]
@@ -65,6 +94,30 @@ enum Action {
     /// Validate and summarize an enterprise policy file without applying it.
     ValidatePolicy { path: PathBuf },
 }
+fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
+    ensure!(path.is_file(), "Recovery passphrase file is missing");
+    ensure!(
+        !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
+        "Recovery passphrase file must not be a symlink"
+    );
+    let metadata = std::fs::metadata(path)?;
+    ensure!(
+        metadata.len() <= 4096,
+        "Recovery passphrase file exceeds the 4 KiB safety limit"
+    );
+    let mut bytes = Zeroizing::new(
+        std::fs::read(path).context("Cannot read recovery passphrase file")?,
+    );
+    while bytes.last().is_some_and(|byte| matches!(byte, b'\r' | b'\n')) {
+        bytes.pop();
+    }
+    ensure!(
+        bytes.len() >= 20,
+        "Recovery passphrase must be at least 20 bytes"
+    );
+    Ok(bytes)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
@@ -285,6 +338,69 @@ fn main() -> Result<()> {
             anyhow::ensure!(confirm == "RESTORE", "Restore requires --confirm RESTORE");
             let report = recovery::restore_backup(&dir, &path)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Action::ExportRecoveryKey {
+            out,
+            passphrase_file,
+        } => {
+            let passphrase = recovery_passphrase(&passphrase_file)?;
+            let envelope = recovery::export_recovery_key(&dir, &passphrase, &out)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "created": out,
+                    "vault_id": envelope.vault_id,
+                    "format_version": envelope.format_version,
+                    "note": "Encrypted recovery key created. Store it separately from the backup and securely delete the passphrase file when appropriate."
+                }))?
+            );
+        }
+        Action::VerifyRecoveryKey {
+            backup,
+            recovery_key,
+            passphrase_file,
+        } => {
+            let passphrase = recovery_passphrase(&passphrase_file)?;
+            let envelope = recovery::verify_recovery_key_for_backup(
+                &backup,
+                &recovery_key,
+                &passphrase,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "verified": true,
+                    "vault_id": envelope.vault_id,
+                    "format_version": envelope.format_version,
+                    "note": "Recovery key authenticated the backup; no OS credential was modified."
+                }))?
+            );
+        }
+        Action::ImportRecoveryKey {
+            backup,
+            recovery_key,
+            passphrase_file,
+            confirm,
+        } => {
+            ensure!(
+                confirm == "IMPORT",
+                "Recovery-key import requires --confirm IMPORT"
+            );
+            let passphrase = recovery_passphrase(&passphrase_file)?;
+            let envelope = recovery::import_recovery_key_for_backup(
+                &dir,
+                &backup,
+                &recovery_key,
+                &passphrase,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "imported": true,
+                    "vault_id": envelope.vault_id,
+                    "note": "Recovered key installed only after authenticating the backup. Existing OS credentials are never overwritten automatically."
+                }))?
+            );
         }
         Action::Diagnostics { out } => {
             let e = Engine::open(
