@@ -534,20 +534,20 @@ mod tests {
         let rows = fixtures().unwrap();
         let mut expected_rejections = 0usize;
         let mut deterministic_hits = 0usize;
-        let mut deterministic_false_positives = 0usize;
+        let mut deterministic_false_positives = Vec::new();
         for case in &rows {
             let evidence = mail::clear_rejection_language(&case.subject, &case.text)
                 && !mail::auto_language_conflict(&case.subject, &case.text);
             if case.expected == Category::Rejection {
                 expected_rejections += 1;
                 deterministic_hits += usize::from(evidence);
-            } else {
-                deterministic_false_positives += usize::from(evidence);
+            } else if evidence {
+                deterministic_false_positives.push(case.id.clone());
             }
         }
-        assert_eq!(
-            deterministic_false_positives, 0,
-            "Deterministic Automatic-mode gate must never fire on a non-rejection fixture"
+        assert!(
+            deterministic_false_positives.is_empty(),
+            "Deterministic Automatic-mode gate must never fire on non-rejection fixtures: {deterministic_false_positives:?}"
         );
         assert!(
             ratio(deterministic_hits, expected_rejections).unwrap_or(0.0) >= 0.90,
