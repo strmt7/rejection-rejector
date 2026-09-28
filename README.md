@@ -20,7 +20,7 @@
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
 | Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
-| Recovery | Durable at-most-once delivery records plus checksum/audit-bound encrypted backup verification and offline transactional same-vault restore with rollback preservation |
+| Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, and separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes for portable disaster recovery |
 | Integration | Reusable Rust library plus optional authenticated read-only loopback API with versioned OpenAPI, typed operation status, stable error codes and request IDs |
 | Testing | Synthetic demo, Rust regression/integration tests, fuzzing, CodeQL, coverage evidence, model evaluation fixtures and Windows/Linux CI |
 
@@ -64,7 +64,7 @@ The app or `rr run` must remain running for scheduled checks. One process and on
 
 Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; the LLM classification and same-model verifier cannot authorize unattended sending by themselves. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
 
-GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. Same-vault backup/restore exists, but no portable master-key export, Authenticode-signed installer or security certification is claimed.
+GPU qualification checks Ollama counters, not whole-device peaks or every graphics driver. Database payloads are encrypted, but state/count/time indexes are not. An attacker running as your OS user is outside that protection boundary. Portable recovery is available only as a **separately stored passphrase-wrapped recovery-key envelope**; no plaintext master-key export exists. Authenticode signing and formal security certification are still not claimed.
 
 ## Documentation
 
