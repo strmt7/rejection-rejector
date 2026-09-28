@@ -10,11 +10,8 @@ pub fn report(engine: &Engine) -> Result<Value> {
         .map(|metadata| metadata.len());
     let counts = engine.db.counts(&engine.account)?;
     let storage = crate::storage::inspect(&engine.directory)?;
-    let scheduled_backup = crate::recovery::scheduled_backup_status(
-        &engine.db,
-        &engine.settings,
-        chrono::Utc::now(),
-    )?;
+    let scheduled_backup =
+        crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, chrono::Utc::now())?;
     let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
     let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
     let readiness = crate::readiness::assess(
