@@ -422,7 +422,9 @@ impl OperationKind {
                 600
             }
             Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
-            Self::InstallOllama | Self::CompactDatabase | Self::Backup | Self::RecoveryDrill => 3_600,
+            Self::InstallOllama | Self::CompactDatabase | Self::Backup | Self::RecoveryDrill => {
+                3_600
+            }
             Self::PullModel | Self::EvaluateModel | Self::ProfileModel => 7_200,
             Self::CompareModels => 21_600,
         }
