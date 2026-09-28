@@ -1,6 +1,6 @@
-use crate::{store::Store, vault::write_new_private};
 #[cfg(any(windows, target_os = "macos"))]
 use crate::vault::vault_id;
+use crate::{store::Store, vault::write_new_private};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
