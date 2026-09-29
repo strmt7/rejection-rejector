@@ -25,6 +25,10 @@ pub enum RuntimeEvent {
     WorkerPanicked,
     ApiListenerStarted,
     ApiListenerFailed,
+    GmailCircuitOpened,
+    GmailCircuitClosed,
+    LocalAiCircuitOpened,
+    LocalAiCircuitClosed,
 }
 
 impl RuntimeEvent {
@@ -36,12 +40,17 @@ impl RuntimeEvent {
             Self::WorkerPanicked => "worker_panicked",
             Self::ApiListenerStarted => "api_listener_started",
             Self::ApiListenerFailed => "api_listener_failed",
+            Self::GmailCircuitOpened => "gmail_circuit_opened",
+            Self::GmailCircuitClosed => "gmail_circuit_closed",
+            Self::LocalAiCircuitOpened => "local_ai_circuit_opened",
+            Self::LocalAiCircuitClosed => "local_ai_circuit_closed",
         }
     }
 
     fn level(self) -> &'static str {
         match self {
             Self::WorkerStartupFailed | Self::WorkerPanicked | Self::ApiListenerFailed => "error",
+            Self::GmailCircuitOpened | Self::LocalAiCircuitOpened => "warning",
             _ => "info",
         }
     }

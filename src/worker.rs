@@ -3,6 +3,7 @@ use crate::{
     config::Settings,
     engine::{Engine, automatic_policy},
     ollama::{self, ModelStatus, Ollama},
+    retry::{CircuitTransition, RetryGate},
     runtime_log::{RuntimeEvent, RuntimeJournal},
     types::*,
 };
@@ -622,6 +623,25 @@ fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Durati
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
 }
 
+fn record_circuit_transition(
+    journal: &Option<RuntimeJournal>,
+    transition: CircuitTransition,
+    opened: RuntimeEvent,
+    closed: RuntimeEvent,
+) {
+    let Some(journal) = journal else {
+        return;
+    };
+    let event = match transition {
+        CircuitTransition::Opened => Some(opened),
+        CircuitTransition::Closed => Some(closed),
+        CircuitTransition::None => None,
+    };
+    if let Some(event) = event {
+        let _ = journal.record_event(event);
+    }
+}
+
 fn run(
     mut e: Engine,
     rx: Receiver<Command>,
@@ -669,13 +689,25 @@ fn run(
             }
         }
     }
-    let mut sync_retry = Instant::now();
+    let now_instant = Instant::now();
+    let mut gmail_gate = RetryGate::new(
+        now_instant,
+        Duration::from_secs(30),
+        Duration::from_secs(15 * 60),
+        3,
+        Duration::from_secs(10 * 60),
+    );
+    let mut local_ai_gate = RetryGate::new(
+        now_instant,
+        Duration::from_secs(30),
+        Duration::from_secs(10 * 60),
+        4,
+        Duration::from_secs(5 * 60),
+    );
     let mut auto_due = Instant::now();
-    let mut process_due = Instant::now();
     let mut retention_due = Instant::now() + Duration::from_secs(60);
     let mut scheduled_backup_due = Instant::now() + Duration::from_secs(60);
     let mut policy_due = Instant::now() + Duration::from_secs(30);
-    let mut process_failures = 0u32;
     let mut automatic_failures = 0u32;
     let mut retention_failures = 0u32;
     let mut scheduled_backup_failures = 0u32;
@@ -712,7 +744,17 @@ fn run(
                     Command::Refresh => Ok(()),
                     Command::CheckNow => {
                         busy(&shared, &pulse, "Checking Gmail for missing messages…");
-                        e.synchronize().map(|_| ())
+                        let result = e.synchronize().map(|_| ());
+                        if result.is_ok() {
+                            let transition = gmail_gate.success(Instant::now());
+                            record_circuit_transition(
+                                &journal,
+                                transition,
+                                RuntimeEvent::GmailCircuitOpened,
+                                RuntimeEvent::GmailCircuitClosed,
+                            );
+                        }
+                        result
                     }
                     Command::Connect { path, send } => {
                         busy(
@@ -1041,7 +1083,7 @@ fn run(
             continue;
         }
         let now = Utc::now();
-        if Instant::now() >= sync_retry
+        if gmail_gate.ready(Instant::now())
             && e.last_poll()?.is_none_or(|t| {
                 now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
             })
@@ -1054,14 +1096,27 @@ fn run(
             );
             record_current_operation(&journal, &shared);
             let operation_result = e.synchronize().map(|_| ());
+            let retry_after = operation_result
+                .as_ref()
+                .err()
+                .and_then(crate::gmail::retry_after_hint);
             let result = protect_audit_boundary(&e, operation_result);
+            let transition = if result.is_ok() {
+                gmail_gate.success(Instant::now())
+            } else {
+                gmail_gate.failure(Instant::now(), retry_after).1
+            };
+            record_circuit_transition(
+                &journal,
+                transition,
+                RuntimeEvent::GmailCircuitOpened,
+                RuntimeEvent::GmailCircuitClosed,
+            );
             report(&shared, &pulse, OperationKind::SyncMailbox, &result);
             record_current_operation(&journal, &shared);
-            sync_retry =
-                Instant::now() + Duration::from_secs(if result.is_ok() { 30 } else { 300 });
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
-        if Instant::now() >= process_due
+        if local_ai_gate.ready(Instant::now())
             && e.settings.model_digest.is_some()
             && e.db.next_queued(&e.account, Utc::now())?.is_some()
         {
@@ -1076,13 +1131,17 @@ fn run(
             let result = protect_audit_boundary(&e, operation_result);
             report(&shared, &pulse, OperationKind::AnalyzeQueuedMail, &result);
             record_current_operation(&journal, &shared);
-            if result.is_ok() {
-                process_failures = 0;
-                process_due = Instant::now() + Duration::from_secs(1);
+            let transition = if result.is_ok() {
+                local_ai_gate.success(Instant::now())
             } else {
-                process_failures = process_failures.saturating_add(1);
-                process_due = Instant::now() + bounded_backoff(30, process_failures, 5 * 60);
-            }
+                local_ai_gate.failure(Instant::now(), None).1
+            };
+            record_circuit_transition(
+                &journal,
+                transition,
+                RuntimeEvent::LocalAiCircuitOpened,
+                RuntimeEvent::LocalAiCircuitClosed,
+            );
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
         if Instant::now() >= auto_due {

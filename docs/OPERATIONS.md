@@ -30,6 +30,8 @@ Privacy-safe monitoring is available as JSON or OpenMetrics:
 
 When the authenticated read-only integration API is enabled, use its versioned live/health/readiness/metrics endpoints. Metrics are intentionally label-free for mailbox, employer and candidate values. Runtime operation durations are retained locally as aggregate supportability evidence; they are **not** a product SLA.
 
+Scheduled Gmail synchronization and queued local-AI analysis use bounded exponential backoff with jitter and open a half-open circuit after repeated failures. Gmail `Retry-After` is honored (bounded to one hour). This protects Google/Ollama during outages and avoids synchronized retry storms. Explicit operator actions such as **Check email now** bypass the scheduled circuit and act as deliberate probes; a successful manual Gmail check closes the Gmail circuit.
+
 For a local support report:
 
 ```powershell
