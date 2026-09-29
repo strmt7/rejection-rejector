@@ -611,11 +611,11 @@ fn run(
     let api_disabled = Arc::new(AtomicBool::new(false));
     if e.settings.api_enabled && !e.demo {
         let material = api_auth::load_or_create(&mut e.db)?;
-        if let Some(token) = material.plaintext_once {
-            if let Ok(mut snapshot) = shared.lock() {
-                snapshot.api_token = Some(token);
-                snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
-            }
+        if let Some(token) = material.plaintext_once
+            && let Ok(mut snapshot) = shared.lock()
+        {
+            snapshot.api_token = Some(token);
+            snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
         }
         match crate::api::start_with_verifier(
             e.settings.api_port,

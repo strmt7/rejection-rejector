@@ -35,7 +35,7 @@ impl ApiTokenVerifier {
             "Stored API token verifier is invalid"
         );
         let mut digest = [0u8; 32];
-        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        for (index, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let part = std::str::from_utf8(chunk)?;
             digest[index] =
                 u8::from_str_radix(part, 16).context("Stored API token verifier is invalid")?;
