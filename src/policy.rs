@@ -22,7 +22,6 @@ pub fn schema_sha256() -> String {
     format!("{:x}", Sha256::digest(schema_text().as_bytes()))
 }
 
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnterprisePolicy {
@@ -650,9 +649,15 @@ mod tests {
     #[test]
     fn machine_policy_schema_matches_runtime_field_surface() {
         let schema: serde_json::Value = serde_json::from_str(schema_text()).unwrap();
-        assert_eq!(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        assert_eq!(
+            schema["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
         assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(schema["properties"]["version"]["enum"], serde_json::json!([1, 2, 3]));
+        assert_eq!(
+            schema["properties"]["version"]["enum"],
+            serde_json::json!([1, 2, 3])
+        );
 
         let schema_fields: std::collections::BTreeSet<_> = schema["properties"]
             .as_object()
@@ -673,10 +678,8 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
 
-        let example: EnterprisePolicy = serde_json::from_str(include_str!(
-            "../config/enterprise-policy.example.json"
-        ))
-        .unwrap();
+        let example: EnterprisePolicy =
+            serde_json::from_str(include_str!("../config/enterprise-policy.example.json")).unwrap();
         example.validate().unwrap();
     }
 

@@ -8,9 +8,7 @@ use rejection_rejector::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
         settings_context_hash,
     },
-    policy::{
-        EnterprisePolicy, LoadedPolicy, PolicyRevisionFloor,
-    },
+    policy::{EnterprisePolicy, LoadedPolicy, PolicyRevisionFloor},
     readiness,
 };
 
@@ -74,15 +72,9 @@ fn enterprise_policy_is_monotone_and_idempotent_across_generated_settings() {
             prohibit_recovery_key_export: rng.gen_bool(0.25),
             require_external_audit_anchor: rng.gen_bool(0.25),
             require_independent_verifier,
-            max_daily_send_limit: rng
-                .gen_bool(0.75)
-                .then(|| rng.gen_range(1..=100)),
-            min_cooldown_minutes: rng
-                .gen_bool(0.75)
-                .then(|| rng.gen_range(1..=1440)),
-            min_retention_days: rng
-                .gen_bool(0.75)
-                .then(|| rng.gen_range(30..=3650)),
+            max_daily_send_limit: rng.gen_bool(0.75).then(|| rng.gen_range(1..=100)),
+            min_cooldown_minutes: rng.gen_bool(0.75).then(|| rng.gen_range(1..=1440)),
+            min_retention_days: rng.gen_bool(0.75).then(|| rng.gen_range(30..=3650)),
             allowed_models: if restrict_primary {
                 vec!["granite4.2:8b-q8_0".into()]
             } else {
@@ -152,7 +144,10 @@ fn enterprise_policy_is_monotone_and_idempotent_across_generated_settings() {
             .enforce(&mut settings, true)
             .unwrap_or_else(|error| panic!("case {case} second enforcement failed: {error:#}"));
         assert_eq!(settings, once, "case {case}: policy is not idempotent");
-        assert!(!second_changed, "case {case}: second enforcement reported drift");
+        assert!(
+            !second_changed,
+            "case {case}: second enforcement reported drift"
+        );
         assert_eq!(first_changed, before != once);
     }
 }
@@ -181,7 +176,11 @@ fn revision_floor_never_rolls_back_or_accepts_same_revision_drift() {
         let advance = rng.gen_range(1..=10_000u64);
         let mut floor = PolicyRevisionFloor::default();
 
-        assert!(floor.observe(&loaded(base, digest('a'))).expect("initial observe"));
+        assert!(
+            floor
+                .observe(&loaded(base, digest('a')))
+                .expect("initial observe")
+        );
         assert!(
             !floor
                 .observe(&loaded(base, digest('a')))
