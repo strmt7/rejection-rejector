@@ -90,7 +90,13 @@ Managed policy is bounded, schema-strict and non-symlinked. Deployments can enfo
 
 Security consequence: invalid managed policy fails closed rather than silently falling back to user-controlled settings.
 
-### TB10 — Source repository → release binary
+### TB10 — Signed-in Windows user → scheduled worker
+
+Optional Windows autostart uses Task Scheduler with an `InteractiveToken`, `LeastPrivilege` principal and the same workspace/data directory as the user. The task is single-instance and its exported definition is checked for drift. It is not a LocalSystem service.
+
+Security consequence: the worker preserves access to the user's Credential Manager-protected vault key and does not broaden privileges. Logoff ends this availability model; organization Task Scheduler policy is respected rather than bypassed.
+
+### TB11 — Source repository → release binary
 
 CI pins source/toolchain/actions, runs format/test/clippy/security/supply-chain/deep-quality gates, embeds auditable dependency metadata, emits an SBOM and can create GitHub artifact/SBOM attestations. Manual packaging verifies exact-main gates and deep-quality evidence lineage.
 

@@ -164,3 +164,21 @@ The source provides native Windows artifacts, checksums, embedded build identity
 - Never bypass an at-most-once delivery reservation.
 - Never copy secrets into diagnostics, tickets or chat.
 - Never treat "no error observed" as proof of delivery, backup recoverability, GPU residency or model quality.
+
+
+## Windows background worker
+
+For a workstation deployment where the user remains signed in but the GUI should not stay open, prefer the built-in per-user Task Scheduler registration over a Windows service:
+
+```powershell
+.\rr.exe autostart install
+.\rr.exe autostart status
+```
+
+The registered task triggers 30 seconds after the current user logs on, uses `InteractiveToken` + `LeastPrivilege`, runs the same workspace through `rr.exe --data-dir <workspace> run`, sets `MultipleInstancesPolicy=IgnoreNew`, does not stop on battery transition, has no execution-time limit, and retries failure after one minute up to three times.
+
+`autostart status` checks the exported task XML for the expected executable, workspace arguments, least-privilege principal, single-instance rule and restart policy. A task that exists but has drifted is reported as mismatched; reinstall rather than silently trusting it.
+
+Remove it with `.\rr.exe autostart remove`.
+
+This is intentionally not a LocalSystem service. The vault key is protected in the signed-in user's Credential Manager, so changing to a service identity would change the secret-access boundary. Logoff ends this availability model. Domain policy can prohibit scheduled-task creation, and the application does not attempt to bypass such policy.
