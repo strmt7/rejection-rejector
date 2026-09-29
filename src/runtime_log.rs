@@ -4,17 +4,17 @@ use crate::{
 };
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 pub const DEFAULT_MAX_CURRENT_BYTES: u64 = 2 * 1024 * 1024;
 pub const DEFAULT_MAX_ARCHIVES: usize = 3;
-const LOG_SCHEMA_VERSION: u32 = 2;
+const LOG_SCHEMA_VERSION: u32 = 3;
 const CURRENT_FILE: &str = "runtime.jsonl";
 
 #[derive(Clone, Copy, Debug)]
@@ -47,6 +47,18 @@ impl RuntimeEvent {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct RuntimePerformanceSummary {
+    pub schema_version: u32,
+    pub retained_operation_records: u64,
+    pub succeeded_operations: u64,
+    pub failed_operations: u64,
+    pub timed_operations: u64,
+    pub mean_duration_ms: Option<u64>,
+    pub max_duration_ms: Option<u64>,
+    pub parse_errors: u64,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeLogStatus {
     pub schema_version: u32,
@@ -70,6 +82,15 @@ struct RuntimeRecord {
     state: Option<OperationState>,
     code: Option<String>,
     retryable: bool,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RuntimeRecordView {
+    event: String,
+    state: Option<OperationState>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
 }
 
 struct Inner {
@@ -120,6 +141,7 @@ impl RuntimeJournal {
             state: None,
             code: None,
             retryable: false,
+            duration_ms: None,
         })
     }
 
@@ -155,6 +177,7 @@ impl RuntimeJournal {
             state: Some(status.state),
             code: status.code.clone(),
             retryable: status.retryable,
+            duration_ms: operation_duration_ms(status),
         })
     }
 
@@ -182,6 +205,85 @@ impl RuntimeJournal {
             .map_err(|_| anyhow::anyhow!("Runtime log lock is poisoned"))?;
         status_for(&inner.directory, inner.max_bytes, inner.max_archives)
     }
+}
+
+fn operation_duration_ms(status: &OperationStatus) -> Option<u64> {
+    let (Some(started), Some(finished)) = (status.started_at, status.finished_at) else {
+        return None;
+    };
+    let milliseconds = finished.signed_duration_since(started).num_milliseconds();
+    (milliseconds >= 0).then_some(milliseconds as u64)
+}
+
+pub fn performance_summary(data_dir: &Path) -> Result<RuntimePerformanceSummary> {
+    let directory = data_dir.join("logs");
+    if !directory.exists() {
+        return Ok(RuntimePerformanceSummary {
+            schema_version: LOG_SCHEMA_VERSION,
+            ..RuntimePerformanceSummary::default()
+        });
+    }
+    ensure!(
+        !fs::symlink_metadata(&directory)?.file_type().is_symlink(),
+        "Runtime log directory must not be a symlink"
+    );
+
+    let mut summary = RuntimePerformanceSummary {
+        schema_version: LOG_SCHEMA_VERSION,
+        ..RuntimePerformanceSummary::default()
+    };
+    let mut duration_sum = 0u128;
+
+    for path in std::iter::once(directory.join(CURRENT_FILE))
+        .chain((1..=DEFAULT_MAX_ARCHIVES).map(|index| archive_path(&directory, index)))
+    {
+        reject_symlink_if_present(&path)?;
+        if !path.is_file() {
+            continue;
+        }
+        for line in BufReader::new(fs::File::open(&path)?).lines() {
+            let line = line?;
+            if line.len() > 16 * 1024 {
+                summary.parse_errors = summary.parse_errors.saturating_add(1);
+                continue;
+            }
+            let record: RuntimeRecordView = match serde_json::from_str(&line) {
+                Ok(record) => record,
+                Err(_) => {
+                    summary.parse_errors = summary.parse_errors.saturating_add(1);
+                    continue;
+                }
+            };
+            if record.event != "operation" {
+                continue;
+            }
+            summary.retained_operation_records =
+                summary.retained_operation_records.saturating_add(1);
+            match record.state {
+                Some(OperationState::Succeeded) => {
+                    summary.succeeded_operations = summary.succeeded_operations.saturating_add(1);
+                }
+                Some(OperationState::Failed) => {
+                    summary.failed_operations = summary.failed_operations.saturating_add(1);
+                }
+                _ => {}
+            }
+            if let Some(duration_ms) = record.duration_ms {
+                summary.timed_operations = summary.timed_operations.saturating_add(1);
+                duration_sum = duration_sum.saturating_add(u128::from(duration_ms));
+                summary.max_duration_ms = Some(
+                    summary
+                        .max_duration_ms
+                        .map_or(duration_ms, |current| current.max(duration_ms)),
+                );
+            }
+        }
+    }
+    if summary.timed_operations > 0 {
+        summary.mean_duration_ms =
+            Some((duration_sum / u128::from(summary.timed_operations)) as u64);
+    }
+    Ok(summary)
 }
 
 pub fn status(data_dir: &Path) -> Result<RuntimeLogStatus> {
@@ -335,6 +437,37 @@ mod tests {
         assert_eq!(value["operation_id"], operation_id);
         assert!(uuid::Uuid::parse_str(value["operation_id"].as_str().unwrap()).is_ok());
         assert!(!line.contains("PRIVATE_MESSAGE_MUST_NOT_BE_LOGGED"));
+    }
+
+    #[test]
+    fn runtime_journal_records_and_summarizes_operation_durations() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let started = Utc::now();
+        let status = OperationStatus {
+            operation_id: Some(uuid::Uuid::new_v4().to_string()),
+            kind: OperationKind::Backup,
+            state: OperationState::Succeeded,
+            code: None,
+            retryable: false,
+            message: "PRIVATE_MESSAGE_MUST_NOT_BE_LOGGED".into(),
+            started_at: Some(started),
+            finished_at: Some(started + chrono::Duration::milliseconds(1250)),
+        };
+        journal.record_operation_status(&status).unwrap();
+
+        let summary = performance_summary(root.path()).unwrap();
+        assert_eq!(summary.retained_operation_records, 1);
+        assert_eq!(summary.succeeded_operations, 1);
+        assert_eq!(summary.failed_operations, 0);
+        assert_eq!(summary.timed_operations, 1);
+        assert_eq!(summary.mean_duration_ms, Some(1250));
+        assert_eq!(summary.max_duration_ms, Some(1250));
+        assert_eq!(summary.parse_errors, 0);
+
+        let text = fs::read_to_string(root.path().join("logs").join(CURRENT_FILE)).unwrap();
+        assert!(text.contains("\"duration_ms\":1250"));
+        assert!(!text.contains("PRIVATE_MESSAGE_MUST_NOT_BE_LOGGED"));
     }
 
     #[test]
