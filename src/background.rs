@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -231,7 +231,9 @@ pub fn install(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
 
 #[cfg(not(windows))]
 pub fn install(_executable: &Path, _data_dir: &Path) -> Result<AutostartStatus> {
-    bail!("Windows Task Scheduler autostart is supported only on Windows")
+    Err(anyhow::anyhow!(
+        "Windows Task Scheduler autostart is supported only on Windows"
+    ))
 }
 
 #[cfg(windows)]
@@ -343,6 +345,6 @@ mod tests {
         assert!(xml.contains("<Delay>PT30S</Delay>"));
         assert!(xml.contains("<Interval>PT1M</Interval>"));
         assert!(xml.contains("<Count>3</Count>"));
-        assert!(xml.contains("--data-dir &quot;C:\Users\Test User\RR&quot; run"));
+        assert!(xml.contains(r"--data-dir &quot;C:\Users\Test User\RR&quot; run"));
     }
 }
