@@ -66,7 +66,7 @@ pub struct PolicyStatus {
 impl EnterprisePolicy {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            matches!(self.version, 1 | 2 | 3),
+            matches!(self.version, 1..=3),
             "Unsupported enterprise policy version"
         );
         match self.version {
