@@ -26,33 +26,46 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn quote_windows_argument(value: &str) -> String {
+    const QUOTE: char = '\u{22}';
+    const BACKSLASH: char = '\u{5c}';
+
     if !value.is_empty()
         && !value
             .chars()
-            .any(|ch| ch.is_whitespace() || ch == '"' || ch == '\t' || ch == '\n')
+            .any(|ch| ch.is_whitespace() || ch == QUOTE || ch.is_control())
     {
         return value.to_owned();
     }
 
-    let mut out = String::from("\\\"");
+    // Windows CreateProcess receives one command-line string. Quote using the
+    // CommandLineToArgvW-compatible rule: backslashes preceding a quote are
+    // doubled, and trailing backslashes are doubled before the closing quote.
+    let mut out = String::with_capacity(value.len().saturating_add(2));
+    out.push(QUOTE);
     let mut backslashes = 0usize;
     for ch in value.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                out.push_str(&"\\".repeat(backslashes * 2 + 1));
-                out.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                out.push_str(&"\\".repeat(backslashes));
-                backslashes = 0;
-                out.push(ch);
-            }
+        if ch == BACKSLASH {
+            backslashes = backslashes.saturating_add(1);
+            continue;
         }
+        if ch == QUOTE {
+            for _ in 0..backslashes.saturating_mul(2).saturating_add(1) {
+                out.push(BACKSLASH);
+            }
+            out.push(QUOTE);
+            backslashes = 0;
+            continue;
+        }
+        for _ in 0..backslashes {
+            out.push(BACKSLASH);
+        }
+        backslashes = 0;
+        out.push(ch);
     }
-    out.push_str(&"\\".repeat(backslashes * 2));
-    out.push('"');
+    for _ in 0..backslashes.saturating_mul(2) {
+        out.push(BACKSLASH);
+    }
+    out.push(QUOTE);
     out
 }
 
