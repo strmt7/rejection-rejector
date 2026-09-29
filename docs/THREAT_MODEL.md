@@ -101,7 +101,7 @@ Security consequence: the worker preserves access to the user's Credential Manag
 
 CI pins source/toolchain/actions, runs format/test/clippy/security/supply-chain/deep-quality gates, embeds auditable dependency metadata, emits an SBOM and can create GitHub artifact/SBOM attestations. Manual packaging verifies exact-main gates and deep-quality evidence lineage.
 
-Security consequence: SHA-256 alone is not treated as publisher identity; Authenticode/MSI/MSIX signing remains a separate open control.
+Security consequence: SHA-256 alone is not treated as publisher identity. The manual release workflow has an optional fail-closed Azure Artifact Signing/OIDC path and verifies Authenticode on both executables, but a signed release is claimed only for an artifact produced by that successfully configured path. MSI/MSIX/Intune packaging remains a separate control.
 
 ## Threats, abuse cases and mitigations
 
@@ -109,7 +109,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity; Authen
 |---|---|---|
 | Email prompt injection asks model to ignore rules/send elsewhere | controls message text | content remains inert; structured parsing + deterministic Rust gates; no model tool authority |
 | Interview/offer contains quoted historical rejection | controls thread text | current-message quote stripping + positive/conflict guards block Automatic |
-| Same model misclassifies and self-verifies | correlated model error | independent deterministic clear-rejection requirement + critical fixture qualification |
+| Model misclassifies and verifier agrees | correlated semantic/model error | deterministic clear-rejection requirement + critical fixture qualification; optional sequential independent pinned verifier, policy-requirable in v3 |
 | HTML/MIME/header ambiguity | crafted email | bounded parsing; duplicate sensitive headers/hard blocks; Human Review on uncertainty |
 | No-reply/list/auto-reply loop | crafted/system sender | mailbox/auto-submitted/list suppression guards |
 | UI edits after review | user/UI race | revision + exact draft hash binding; changed draft invalidates verification |
@@ -160,10 +160,10 @@ The following are release-level invariants. A change that invalidates one requir
 
 - Same-user malware, administrator compromise, process-memory extraction, OS paging, clipboard compromise and a malicious kernel are outside the application cryptographic boundary.
 - Full local rollback detection requires an audit anchor stored outside the rolled-back workspace. The built-in API exposes anchors, but independently protected automatic anchoring is not yet implemented.
-- The model verifier is not independent because the same selected model performs the second pass. Deterministic Rust policy reduces but cannot eliminate semantic model error.
+- Verification can be configured to use a distinct sequential pinned local model and enterprise policy can require it. This improves model diversity but does not prove statistical independence or eliminate shared semantic failure modes.
 - Physical GPU peak-memory certification is external to Ollama-reported residency.
 - Gmail/provider semantics can change; live controlled acceptance remains required.
-- Authenticode-signed Windows binaries, MSI/MSIX/Intune packaging and a signed update channel are not implemented.
+- A fail-closed Azure Artifact Signing path for the two Windows executables is implemented, but no signed artifact is trusted unless that exact workflow path completed and Authenticode verification passed. MSI/MSIX/Intune packaging and a signed update channel remain open.
 - No external penetration test or compliance certification is claimed.
 
 ## Review checklist for future changes

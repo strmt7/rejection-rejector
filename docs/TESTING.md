@@ -17,6 +17,8 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo run --locked --no-default-features --bin rr -- demo
 ```
 
+Deterministic generated state-machine invariants use fixed seeded randomness to exercise thousands of enterprise-policy, anti-rollback and Automatic-readiness combinations on every all-feature suite run. They are reproducible regressions, not probabilistic fuzz claims. Production builds additionally deny `unwrap`, `expect`, `panic!` and `unreachable!` through clippy outside `#[cfg(test)]`; explicit error propagation is the required runtime behavior.
+
 Both Windows and Ubuntu run these checks. Windows additionally builds optimized GUI/CLI executables and packages them with documentation, COMMIT.txt, toolchain evidence, Cargo.lock and per-file SHA-256 sums. A separate SHA256.txt covers the complete Windows ZIP. Checksums detect file changes; these are unsigned builds, not publisher-identity attestations.
 
 ## Change-aware deep verification
