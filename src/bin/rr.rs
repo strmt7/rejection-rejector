@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    api_auth, audit_anchor, build_info, config, engine::Engine, ollama::Ollama, policy, recovery,
-    worker::Worker,
+    api_auth, audit_anchor, background, build_info, config, engine::Engine, ollama::Ollama, policy,
+    recovery, worker::Worker,
 };
 use std::{
     path::PathBuf,
@@ -41,9 +41,24 @@ impl ReadinessRequirement {
 }
 
 #[derive(Subcommand)]
+enum AutostartAction {
+    /// Register/update a least-privilege per-user worker at Windows logon.
+    Install,
+    /// Inspect whether the registered task matches the expected worker contract.
+    Status,
+    /// Remove the Rejection Rejector scheduled worker task.
+    Remove,
+}
+
+#[derive(Subcommand)]
 enum Action {
     /// Run the scheduler using settings previously configured in the desktop application.
     Run,
+    /// Manage least-privilege Windows per-user background worker registration.
+    Autostart {
+        #[command(subcommand)]
+        action: AutostartAction,
+    },
     /// Print deterministic binary/source/dependency build identity without opening a workspace.
     BuildInfo,
     /// Print local settings and aggregate status, without message bodies or credentials.
@@ -187,6 +202,29 @@ fn main() -> Result<()> {
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
         Action::BuildInfo => unreachable!("BuildInfo is handled before workspace resolution"),
+        Action::Autostart { action } => {
+            let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
+            match action {
+                AutostartAction::Install => {
+                    let result = background::install(&executable, &dir)?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AutostartAction::Status => {
+                    let result = background::status(&executable, &dir)?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                AutostartAction::Remove => {
+                    background::remove()?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "removed": true,
+                            "task_name": background::TASK_NAME
+                        }))?
+                    );
+                }
+            }
+        }
         Action::ValidatePolicy { path } => {
             let absolute = std::fs::canonicalize(&path)?;
             let loaded = policy::load_file(&absolute)?;

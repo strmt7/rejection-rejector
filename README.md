@@ -48,6 +48,17 @@ It reports local Gmail permission/configuration state, the Ollama runtime versio
 
 Real setup: [docs/SETUP.md](docs/SETUP.md). Configure your own Gmail OAuth Desktop client and signature, install/start Ollama, download the model, then **Qualify & pin**. Start in Human review with sending disabled.
 
+Optional Windows background worker:
+
+```powershell
+.\rr.exe autostart install
+.\rr.exe autostart status
+# later, if desired:
+.\rr.exe autostart remove
+```
+
+The task runs only in the signed-in user's session, at least privilege, uses `IgnoreNew` to avoid duplicate workers, and retries failure at one-minute intervals up to three times. Organization policy may prohibit task registration; failure is reported rather than bypassed.
+
 ## Build
 
 Install stable Rust and Microsoft C++ Build Tools with the Windows SDK:
@@ -62,7 +73,7 @@ No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQ
 
 ## Important boundaries
 
-The app or `rr run` must remain running for scheduled checks. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
+The GUI or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether the GUI stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
 
 Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; the LLM classification and same-model verifier cannot authorize unattended sending by themselves. A strongly worded reply does not overturn an employer's decision. The second model pass is performed by the **same** model, not an independent verifier. Scores are not calibrated probabilities.
 

@@ -34,6 +34,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - The attested release gate also requires recent successful Windows byte-for-byte reproducibility evidence in release history, alongside fuzzing, coverage, mutation and enterprise deep-verification evidence.
 - Model evaluation has a composition floor, not only a total-case floor: the 72-case synthetic corpus must preserve strong rejection/opportunity/uncertain/benign balance and repeated multilingual, interview, ambiguity, quoted-history, prompt-injection, assessment and ATS coverage.
 - Privacy-safe runtime operation durations are retained only in the bounded local runtime journal and exposed as label-free aggregate OpenMetrics; no production availability or latency SLO is implied by those measurements.
+- Windows workstations can register the headless worker as a least-privilege per-user Task Scheduler job at logon. The task contract is drift-checked, single-instance, delayed 30 seconds after logon and bounded to three one-minute restart attempts; it deliberately preserves the signed-in user's Credential Manager boundary instead of claiming LocalSystem service semantics.
 
 ## Enterprise gaps still open
 
@@ -42,7 +43,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 3. **Physical GPU certification:** Ollama residency is checked, but whole-device transient peaks and every driver/backend combination are not certified.
 4. **Independent AI verifier:** drafting and verification currently use the same local model; deterministic Rust gates compensate for correlated model errors but do not make the verifier independent.
 5. **Accessibility:** Linux native screenshots and geometry checks exist, but Windows Narrator, keyboard-only navigation, IME and 100/125/150/200% DPI acceptance remain owner-environment work.
-6. **Enterprise deployment:** a local administrator policy overlay exists, but signed MSI/MSIX/Intune packaging and Windows-service operation are not implemented.
+6. **Enterprise deployment:** a local administrator policy overlay and least-privilege per-user Windows Task Scheduler worker are implemented, but signed MSI/MSIX/Intune packaging is not. A LocalSystem-style Windows service is intentionally not used because it would change the user Credential Manager trust boundary.
 7. **Portable-recovery usability:** the recovery-key cryptographic path is implemented, but GUI-first recovery/import and organization-managed key escrow integrations are not yet implemented.
 8. **Security audit:** automated controls exist; no external penetration test or formal security certification is claimed.
 
