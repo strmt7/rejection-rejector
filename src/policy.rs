@@ -12,6 +12,16 @@ use std::{
 
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_POLICY_SIGNATURE_BYTES: u64 = 4 * 1024;
+pub const ENTERPRISE_POLICY_SCHEMA_VERSION: u32 = 1;
+
+pub fn schema_text() -> &'static str {
+    include_str!("../docs/enterprise-policy.schema.json")
+}
+
+pub fn schema_sha256() -> String {
+    format!("{:x}", Sha256::digest(schema_text().as_bytes()))
+}
+
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -636,6 +646,39 @@ fn load_file_with_controls(
 mod tests {
     use super::*;
     use crate::config::{DEFAULT_MODEL, Mode};
+
+    #[test]
+    fn machine_policy_schema_matches_runtime_field_surface() {
+        let schema: serde_json::Value = serde_json::from_str(schema_text()).unwrap();
+        assert_eq!(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["version"]["enum"], serde_json::json!([1, 2, 3]));
+
+        let schema_fields: std::collections::BTreeSet<_> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let runtime_fields: std::collections::BTreeSet<_> =
+            serde_json::to_value(EnterprisePolicy::default())
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+        assert_eq!(schema_fields, runtime_fields);
+        let digest = schema_sha256();
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let example: EnterprisePolicy = serde_json::from_str(include_str!(
+            "../config/enterprise-policy.example.json"
+        ))
+        .unwrap();
+        example.validate().unwrap();
+    }
 
     fn policy() -> EnterprisePolicy {
         EnterprisePolicy {
