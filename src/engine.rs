@@ -283,7 +283,7 @@ impl Engine {
                 "Previous runtime session marker remained after exclusive workspace lock acquisition; unattended delivery is disabled until explicitly re-enabled",
             )?;
         }
-                let creds: Option<Credentials> = db.meta("google_credentials")?;
+        let creds: Option<Credentials> = db.meta("google_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
         if !account.is_empty() {
             let now = Utc::now();
