@@ -45,8 +45,6 @@ pub struct DatabaseCompactionReport {
     pub page_size_bytes: u64,
 }
 
-
-
 pub struct Store {
     conn: Connection,
     vault: Vault,
