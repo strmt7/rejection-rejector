@@ -170,7 +170,7 @@ fn loaded(revision: u64, digest: String) -> LoadedPolicy {
 
 #[test]
 fn revision_floor_never_rolls_back_or_accepts_same_revision_drift() {
-    let mut rng = StdRng::seed_from_u64(SEED ^ 0xA11D_17);
+    let mut rng = StdRng::seed_from_u64(SEED ^ 0x00A1_1D17);
     for case in 0..5_000u32 {
         let base = rng.gen_range(2..=1_000_000u64);
         let advance = rng.gen_range(1..=10_000u64);
