@@ -51,18 +51,32 @@ impl App {
                     });
                     Self::card(&mut cols[1], |ui| {
                         ui.set_min_height(body_height + 125.0);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));
-                            if self.dirty { ui.colored_label(AMBER, "Unsaved"); }
-                        });
+                        let response_label_id = ui.horizontal_wrapped(|ui| {
+                            let label =
+                                ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));
+                            if self.dirty {
+                                ui.colored_label(AMBER, "Unsaved");
+                            }
+                            label.id
+                        }).inner;
                         ui.add(egui::Label::new(RichText::new("Assertive. Specific. Professional.").strong().size(18.0)).wrap());
                         if let Some(email) = &job.email {
                             ui.add(egui::Label::new(RichText::new(format!("To: {}", email.recipient().unwrap_or_else(|_| "Invalid recipient".into()))).color(MUTED)).wrap());
                         }
                         ui.separator();
                         egui::ScrollArea::vertical().id_salt("reply_body").max_height(body_height).show(ui, |ui| {
-                            let response = ui.add_enabled(available, egui::TextEdit::multiline(&mut self.editor).desired_width(f32::INFINITY).desired_rows(10).font(egui::TextStyle::Body));
-                            if response.changed() { self.dirty = true; }
+                            let response = ui
+                                .add_enabled(
+                                    available,
+                                    egui::TextEdit::multiline(&mut self.editor)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(10)
+                                        .font(egui::TextStyle::Body),
+                                )
+                                .labelled_by(response_label_id);
+                            if response.changed() {
+                                self.dirty = true;
+                            }
                         });
                         ui.label(RichText::new(format!("{} words", self.editor.split_whitespace().count())).small().color(MUTED));
                     });

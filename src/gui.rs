@@ -19,13 +19,57 @@ const LINE: Color32 = Color32::from_rgb(47, 59, 74);
 const MINT: Color32 = Color32::from_rgb(103, 225, 186);
 const MUTED: Color32 = Color32::from_rgb(150, 167, 187);
 const AMBER: Color32 = Color32::from_rgb(245, 193, 103);
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
     Overview,
     Review,
     Activity,
     LocalAi,
     Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShortcutAction {
+    Overview,
+    Review,
+    Activity,
+    LocalAi,
+    Settings,
+    CheckNow,
+}
+
+impl ShortcutAction {
+    fn tab(self, mode: Mode) -> Option<Tab> {
+        match self {
+            Self::Overview => Some(Tab::Overview),
+            Self::Review if mode == Mode::HumanReview => Some(Tab::Review),
+            Self::Review => None,
+            Self::Activity => Some(Tab::Activity),
+            Self::LocalAi => Some(Tab::LocalAi),
+            Self::Settings => Some(Tab::Settings),
+            Self::CheckNow => None,
+        }
+    }
+}
+
+fn consume_shortcut(ctx: &egui::Context) -> Option<ShortcutAction> {
+    ctx.input_mut(|input| {
+        for (action, key) in [
+            (ShortcutAction::Overview, egui::Key::Num1),
+            (ShortcutAction::Review, egui::Key::Num2),
+            (ShortcutAction::Activity, egui::Key::Num3),
+            (ShortcutAction::LocalAi, egui::Key::Num4),
+            (ShortcutAction::Settings, egui::Key::Num5),
+        ] {
+            let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key);
+            if input.consume_shortcut(&shortcut) {
+                return Some(action);
+            }
+        }
+        input
+            .consume_key(egui::Modifiers::NONE, egui::Key::F5)
+            .then_some(ShortcutAction::CheckNow)
+    })
 }
 
 pub struct App {
@@ -122,6 +166,37 @@ impl App {
             });
         }
     }
+
+    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context, s: &Snapshot) {
+        if self.modal_open() {
+            if ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            }) {
+                self.pending_select = None;
+                self.send_confirmation = None;
+                self.install_confirmation = false;
+                self.close_confirmation = false;
+            }
+            return;
+        }
+
+        let Some(action) = consume_shortcut(ctx) else {
+            return;
+        };
+        if let Some(tab) = action.tab(s.settings.mode) {
+            self.navigate(tab);
+            return;
+        }
+        if action == ShortcutAction::CheckNow
+            && s.initialized
+            && s.connected
+            && !s.demo
+            && s.busy.is_empty()
+        {
+            self.worker.command(Command::CheckNow);
+        }
+    }
+
     fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
         ui.heading(title);
         ui.label(RichText::new(subtitle).color(MUTED));
@@ -745,19 +820,22 @@ impl App {
         Self::card(ui, |ui| {
             ui.heading("Local model configuration");
             ui.label("Change these values, save, then qualify again. Remote endpoints and cloud tags are rejected.");
-            ui.label("Ollama loopback address");
-            ui.text_edit_singleline(&mut self.settings.ollama_url);
-            ui.label("Installed/downloadable local model tag");
+            let ollama_label = ui.label("Ollama loopback address");
+            ui.text_edit_singleline(&mut self.settings.ollama_url)
+                .labelled_by(ollama_label.id);
+            let model_label = ui.label("Installed/downloadable local model tag");
             if s.enterprise_policy.allowed_models.is_empty() {
-                ui.text_edit_singleline(&mut self.settings.model);
+                ui.text_edit_singleline(&mut self.settings.model)
+                    .labelled_by(model_label.id);
             } else {
-                egui::ComboBox::from_id_salt("enterprise_model_allowlist")
+                let combo = egui::ComboBox::from_id_salt("enterprise_model_allowlist")
                     .selected_text(&self.settings.model)
                     .show_ui(ui, |ui| {
                         for model in &s.enterprise_policy.allowed_models {
                             ui.selectable_value(&mut self.settings.model, model.clone(), model);
                         }
                     });
+                let _ = combo.response.labelled_by(model_label.id);
                 ui.label(
                     RichText::new("Model selection is restricted by enterprise policy.")
                         .small()
@@ -796,11 +874,12 @@ impl App {
                 );
             }
             if self.settings.independent_verifier_enabled {
-                ui.label("Independent verifier model tag");
+                let verifier_label = ui.label("Independent verifier model tag");
                 if s.enterprise_policy.allowed_verifier_models.is_empty() {
-                    ui.text_edit_singleline(&mut self.settings.verifier_model);
+                    ui.text_edit_singleline(&mut self.settings.verifier_model)
+                        .labelled_by(verifier_label.id);
                 } else {
-                    egui::ComboBox::from_id_salt("enterprise_verifier_allowlist")
+                    let combo = egui::ComboBox::from_id_salt("enterprise_verifier_allowlist")
                         .selected_text(&self.settings.verifier_model)
                         .show_ui(ui, |ui| {
                             for model in &s.enterprise_policy.allowed_verifier_models {
@@ -811,6 +890,7 @@ impl App {
                                 );
                             }
                         });
+                    let _ = combo.response.labelled_by(verifier_label.id);
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Verifier quick choices").small().color(MUTED));
@@ -844,10 +924,11 @@ impl App {
                     }
                 });
             ui.horizontal(|ui| {
-                ui.label("Inference timeout, seconds");
+                let label = ui.label("Inference timeout, seconds");
                 ui.add(
                     egui::DragValue::new(&mut self.settings.llm_timeout_seconds).range(30..=1200),
-                );
+                )
+                .labelled_by(label.id);
             });
             if ui
                 .add_enabled(
@@ -1081,24 +1162,27 @@ impl App {
                 );
             }
             ui.horizontal(|ui| {
-                ui.label("Cooldown, minutes");
+                let cooldown_label = ui.label("Cooldown, minutes");
                 let minimum_cooldown = s.enterprise_policy.min_cooldown_minutes.unwrap_or(1);
                 self.settings.cooldown_minutes =
                     self.settings.cooldown_minutes.max(minimum_cooldown);
                 ui.add(
                     egui::DragValue::new(&mut self.settings.cooldown_minutes)
                         .range(minimum_cooldown..=1440),
-                );
-                ui.label("Maximum attempts per 24 hours");
+                )
+                .labelled_by(cooldown_label.id);
+                let attempts_label = ui.label("Maximum attempts per 24 hours");
                 let maximum_daily = s.enterprise_policy.max_daily_send_limit.unwrap_or(100);
                 self.settings.daily_send_limit = self.settings.daily_send_limit.min(maximum_daily);
                 ui.add(
                     egui::DragValue::new(&mut self.settings.daily_send_limit)
                         .range(1..=maximum_daily),
-                );
+                )
+                .labelled_by(attempts_label.id);
             });
-            ui.label("Signature");
-            ui.text_edit_singleline(&mut self.settings.signature);
+            let signature_label = ui.label("Signature");
+            ui.text_edit_singleline(&mut self.settings.signature)
+                .labelled_by(signature_label.id);
             egui::ComboBox::from_id_salt("reply_tone")
                 .selected_text(self.settings.tone.label())
                 .show_ui(ui, |ui| {
@@ -1106,7 +1190,8 @@ impl App {
                         ui.selectable_value(&mut self.settings.tone, t, t.label());
                     }
                 });
-            ui.label("Verified candidate facts (optional, at most 2,500 UTF-8 bytes)");
+            let facts_label =
+                ui.label("Verified candidate facts (optional, at most 2,500 UTF-8 bytes)");
             ui.add(
                 egui::TextEdit::multiline(&mut self.settings.candidate_context)
                     .desired_width(f32::INFINITY)
@@ -1114,20 +1199,22 @@ impl App {
                     .hint_text(
                         "Only facts you can substantiate. Do not add credentials or passwords.",
                     ),
-            );
+            )
+            .labelled_by(facts_label.id);
         });
         ui.add_space(12.0);
         Self::card(ui, |ui| {
             ui.heading("Storage & integration");
             ui.label("SQLite stores authenticated encrypted payloads. Windows Credential Manager holds the master key. State/count/time indexes are not encrypted.");
             ui.horizontal(|ui| {
-                ui.label("Keep completed content, days");
+                let retention_label = ui.label("Keep completed content, days");
                 let minimum_retention = s.enterprise_policy.min_retention_days.unwrap_or(30);
                 self.settings.retention_days = self.settings.retention_days.max(minimum_retention);
                 ui.add(
                     egui::DragValue::new(&mut self.settings.retention_days)
                         .range(minimum_retention..=3650),
-                );
+                )
+                .labelled_by(retention_label.id);
                 if ui
                     .add_enabled(
                         s.busy.is_empty(),
@@ -1277,8 +1364,9 @@ impl App {
                 ),
             );
             ui.horizontal(|ui| {
-                ui.label("API port");
-                ui.add(egui::DragValue::new(&mut self.settings.api_port).range(1024..=65535));
+                let api_port_label = ui.label("API port");
+                ui.add(egui::DragValue::new(&mut self.settings.api_port).range(1024..=65535))
+                    .labelled_by(api_port_label.id);
                 ui.label(if s.api_listening {
                     "Listening on loopback"
                 } else {
@@ -1416,6 +1504,7 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(250));
         let s = self.worker.view();
         self.sync_view(&s);
+        self.handle_keyboard_shortcuts(&ctx, &s);
         if ctx.input(|i| i.viewport().close_requested())
             && !self.close_approved
             && requires_close_confirmation(self.dirty, &s.operation)
@@ -1492,6 +1581,12 @@ impl eframe::App for App {
             let paused=self.worker.paused.load(Ordering::SeqCst);
             if ui.add_sized([170.0,42.0],egui::Button::new(if paused{"Resume worker"}else{"Pause worker"})).clicked(){self.worker.paused.store(!paused,Ordering::SeqCst);}
             ui.label(RichText::new("Pause blocks future dispatch. A request already sent to Gmail cannot be recalled.").small().color(MUTED));
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("Keyboard: Ctrl/Cmd+1–5 views · F5 check mail · Esc cancel dialog")
+                    .small()
+                    .color(MUTED),
+            );
             ui.add_space(18.0);ui.label(RichText::new(format!("v{} · Rust native",env!("CARGO_PKG_VERSION"))).small().color(MUTED));
         });
         egui::CentralPanel::default().frame(egui::Frame::default().fill(BG).inner_margin(24)).show(root_ui,|ui|{
@@ -1591,6 +1686,24 @@ fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shortcut_targets_respect_mode_boundaries() {
+        assert_eq!(
+            ShortcutAction::Overview.tab(Mode::HumanReview),
+            Some(Tab::Overview)
+        );
+        assert_eq!(
+            ShortcutAction::Review.tab(Mode::HumanReview),
+            Some(Tab::Review)
+        );
+        assert_eq!(ShortcutAction::Review.tab(Mode::Automatic), None);
+        assert_eq!(
+            ShortcutAction::Settings.tab(Mode::Automatic),
+            Some(Tab::Settings)
+        );
+        assert_eq!(ShortcutAction::CheckNow.tab(Mode::HumanReview), None);
+    }
+
     #[test]
     fn close_confirmation_covers_unsaved_text_and_sensitive_operations() {
         let mut operation = OperationStatus::default();
