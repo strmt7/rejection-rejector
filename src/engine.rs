@@ -491,12 +491,11 @@ impl Engine {
         let model_configuration_changed = settings.model != self.settings.model
             || settings.num_ctx != self.settings.num_ctx
             || settings.ollama_url != self.settings.ollama_url;
-        let verifier_configuration_changed =
-            settings.verifier_model != self.settings.verifier_model
-                || settings.independent_verifier_enabled
-                    != self.settings.independent_verifier_enabled
-                || settings.num_ctx != self.settings.num_ctx
-                || settings.ollama_url != self.settings.ollama_url;
+        let verifier_configuration_changed = settings.verifier_model
+            != self.settings.verifier_model
+            || settings.independent_verifier_enabled != self.settings.independent_verifier_enabled
+            || settings.num_ctx != self.settings.num_ctx
+            || settings.ollama_url != self.settings.ollama_url;
         if model_configuration_changed {
             settings.model_digest = None;
             self.model = ModelStatus::default();
@@ -579,7 +578,8 @@ impl Engine {
             if expected != actual {
                 status.gpu_resident = false;
                 status.message =
-                    "Installed verifier digest differs from the qualified pin; qualify again".into();
+                    "Installed verifier digest differs from the qualified pin; qualify again"
+                        .into();
             } else {
                 let mut verifier_settings = self.settings.clone();
                 verifier_settings.disarm_delivery();
@@ -1510,8 +1510,7 @@ pub fn automatic_policy(
     }
     if settings.independent_verifier_enabled
         && (analysis.verification_model != settings.verifier_model
-            || settings.verifier_model_digest.as_ref()
-                != Some(&analysis.verification_model_digest))
+            || settings.verifier_model_digest.as_ref() != Some(&analysis.verification_model_digest))
     {
         push_policy_block(
             &mut blocks,

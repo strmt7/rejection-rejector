@@ -216,7 +216,9 @@ impl EnterprisePolicy {
             }
         }
         if !self.allowed_verifier_models.is_empty()
-            && !self.allowed_verifier_models.contains(&settings.verifier_model)
+            && !self
+                .allowed_verifier_models
+                .contains(&settings.verifier_model)
         {
             if startup {
                 settings.verifier_model = self.allowed_verifier_models[0].clone();
@@ -1008,5 +1010,4 @@ mod tests {
         managed.version = 2;
         assert!(managed.validate().is_err());
     }
-
 }

@@ -223,7 +223,10 @@ mod tests {
             "Alex Morgan",
             "recruitment",
         ] {
-            assert!(!text.contains(forbidden), "shadow report leaked {forbidden}");
+            assert!(
+                !text.contains(forbidden),
+                "shadow report leaked {forbidden}"
+            );
         }
     }
 }
