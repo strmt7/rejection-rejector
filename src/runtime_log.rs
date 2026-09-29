@@ -25,6 +25,10 @@ pub enum RuntimeEvent {
     WorkerPanicked,
     ApiListenerStarted,
     ApiListenerFailed,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RuntimeSignal {
     GmailCircuitOpened,
     GmailCircuitClosed,
     LocalAiCircuitOpened,
@@ -40,6 +44,20 @@ impl RuntimeEvent {
             Self::WorkerPanicked => "worker_panicked",
             Self::ApiListenerStarted => "api_listener_started",
             Self::ApiListenerFailed => "api_listener_failed",
+        }
+    }
+
+    fn level(self) -> &'static str {
+        match self {
+            Self::WorkerStartupFailed | Self::WorkerPanicked | Self::ApiListenerFailed => "error",
+            _ => "info",
+        }
+    }
+}
+
+impl RuntimeSignal {
+    fn code(self) -> &'static str {
+        match self {
             Self::GmailCircuitOpened => "gmail_circuit_opened",
             Self::GmailCircuitClosed => "gmail_circuit_closed",
             Self::LocalAiCircuitOpened => "local_ai_circuit_opened",
@@ -49,9 +67,8 @@ impl RuntimeEvent {
 
     fn level(self) -> &'static str {
         match self {
-            Self::WorkerStartupFailed | Self::WorkerPanicked | Self::ApiListenerFailed => "error",
             Self::GmailCircuitOpened | Self::LocalAiCircuitOpened => "warning",
-            _ => "info",
+            Self::GmailCircuitClosed | Self::LocalAiCircuitClosed => "info",
         }
     }
 }
@@ -145,6 +162,21 @@ impl RuntimeJournal {
             at: Utc::now(),
             level: event.level(),
             event: event.code(),
+            operation: None,
+            operation_id: None,
+            state: None,
+            code: None,
+            retryable: false,
+            duration_ms: None,
+        })
+    }
+
+    pub(crate) fn record_signal(&self, signal: RuntimeSignal) -> Result<()> {
+        self.write(RuntimeRecord {
+            schema_version: LOG_SCHEMA_VERSION,
+            at: Utc::now(),
+            level: signal.level(),
+            event: signal.code(),
             operation: None,
             operation_id: None,
             state: None,
