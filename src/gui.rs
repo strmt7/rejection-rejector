@@ -1159,15 +1159,12 @@ impl App {
                 });
             });
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Reveal API token for integration").clicked() {
-                    self.worker.command(Command::RevealApiToken);
-                }
                 if ui
                     .add_enabled(
                         !s.demo && s.busy.is_empty(),
-                        egui::Button::new("Rotate API token"),
+                        egui::Button::new("Rotate / generate API token"),
                     )
-                    .on_hover_text("Immediately revokes the currently listening token by stopping the API listener, stores a new encrypted token, and requires restart before the API can listen again.")
+                    .on_hover_text("Generates a new high-entropy token, persists only its one-way verifier, immediately disables any listener using the previous credential, and shows the new plaintext once for 60 seconds. Restart before integrations reconnect.")
                     .clicked()
                 {
                     self.worker.command(Command::RotateApiToken);
@@ -1184,12 +1181,12 @@ impl App {
                     }
                 });
                 ui.label(
-                    RichText::new("The on-screen token hides automatically after 60 seconds. After rotation, restart the app/worker before integrations reconnect.")
+                    RichText::new("One-time credential display: the plaintext token hides automatically after 60 seconds and cannot be revealed again. Copy it now. After rotation, restart the app/worker before integrations reconnect.")
                         .small()
                         .color(MUTED),
                 );
             }
-            ui.label(RichText::new("A copied token grants access to your local email data. Keep it private; rotate it immediately after suspected exposure and never put it in source control.").small().color(AMBER));
+            ui.label(RichText::new("Only a one-way token verifier is persisted. The plaintext bearer credential still grants access to local email data: store it in the consuming application's OS-protected secret store, rotate it after suspected exposure, and never put it in source control.").small().color(AMBER));
         });
         ui.add_space(12.0);
         let automatic_ready_to_save = self.settings.mode != Mode::Automatic

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    audit_anchor, build_info, config, engine::Engine, ollama::Ollama, policy, recovery,
+    api_auth, audit_anchor, build_info, config, engine::Engine, ollama::Ollama, policy, recovery,
     worker::Worker,
 };
 use std::{
@@ -56,6 +56,8 @@ enum Action {
         #[arg(long, value_enum)]
         require: Option<ReadinessRequirement>,
     },
+    /// Rotate the local integration API bearer credential. GUI/worker must be closed.
+    RotateApiToken,
     /// Print privacy-safe operational metrics for local monitoring.
     Metrics {
         /// Emit OpenMetrics 1.0 text instead of JSON.
@@ -357,6 +359,23 @@ fn main() -> Result<()> {
                     "Requested readiness level {requirement:?} is not satisfied"
                 );
             }
+        }
+        Action::RotateApiToken => {
+            let mut e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let material = api_auth::rotate(&mut e.db)?;
+            e.checkpoint_audit_protection()?;
+            let token = material
+                .plaintext_once
+                .context("Token rotation did not return one-time plaintext")?;
+            println!("{}", token.as_str());
+            eprintln!(
+                "Store this credential in the consuming application's OS-protected secret store. It cannot be revealed again; rotate it if lost."
+            );
         }
         Action::Status | Action::Demo => {
             let demo = matches!(args.command, Action::Demo);

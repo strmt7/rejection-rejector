@@ -6,7 +6,7 @@ The crate exposes typed configuration/messages, encrypted storage, Gmail synchro
 
 ## Read-only loopback API
 
-Enable the API in Settings, save and restart the app or worker. The default origin is http://127.0.0.1:8734. Reveal its random bearer token in Settings. The token is stored encrypted and grants access to private email content; never commit it or embed it in a public frontend.
+Enable the API in Settings, save and restart the app or worker. The default origin is http://127.0.0.1:8734. Rejection Rejector persists only a domain-separated SHA-256 verifier for the random 256-bit bearer credential; the plaintext is displayed only when first generated or explicitly rotated, then disappears after 60 seconds and cannot be recovered. Existing legacy tokens are migrated to verifier-only storage without changing the credential. If a token is lost, rotate it in Settings or, with the GUI/worker closed, run `rr.exe rotate-api-token`. Store the plaintext credential in the consuming application's OS-protected secret store. It grants access to private email content; never commit it or embed it in a public frontend.
 
 The server accepts GET only, an exact literal-loopback Host header and the valid bearer token. Browser Origin headers are refused and no CORS permissions are emitted. Call from the trusted Rust backend of the future desktop application, not arbitrary web content.
 

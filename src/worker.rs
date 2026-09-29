@@ -1,4 +1,5 @@
 use crate::{
+    api_auth,
     config::Settings,
     engine::{Engine, automatic_policy},
     oauth,
@@ -554,13 +555,10 @@ fn rotate_api_token(
     shared: &Arc<Mutex<Snapshot>>,
     api_disabled: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let replacement = Zeroizing::new(oauth::secret());
-    e.db.change_meta(
-        &[("api_token", json!(replacement.as_str()))],
-        &[],
-        "security.api_token_rotated",
-        "Integration API token rotated; active listener disabled until restart",
-    )?;
+    let material = api_auth::rotate(&mut e.db)?;
+    let replacement = material
+        .plaintext_once
+        .context("Rotated API credential did not return one-time plaintext")?;
     api_disabled.store(true, Ordering::SeqCst);
     if let Ok(mut snapshot) = shared.lock() {
         snapshot.api_listening = false;
@@ -613,17 +611,16 @@ fn run(
     refresh(&e, &shared, None, review, page)?;
     let api_disabled = Arc::new(AtomicBool::new(false));
     if e.settings.api_enabled && !e.demo {
-        let token: String = match e.db.meta("api_token")? {
-            Some(t) => t,
-            None => {
-                let t = oauth::secret();
-                e.db.set_meta("api_token", &t)?;
-                t
+        let material = api_auth::load_or_create(&mut e.db)?;
+        if let Some(token) = material.plaintext_once {
+            if let Ok(mut snapshot) = shared.lock() {
+                snapshot.api_token = Some(token);
+                snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
             }
-        };
-        match crate::api::start(
+        }
+        match crate::api::start_with_verifier(
             e.settings.api_port,
-            token,
+            material.verifier,
             sender,
             e.stop.clone(),
             api_disabled.clone(),
@@ -834,17 +831,9 @@ fn run(
                     }
                     Command::Reconcile(id) => e.reconcile(&id),
                     Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
-                    Command::RevealApiToken => {
-                        let t = e.db.meta::<String>("api_token")?.map(Zeroizing::new);
-                        if let Ok(mut s) = shared.lock() {
-                            s.api_token = t;
-                            s.api_token_expires = s
-                                .api_token
-                                .as_ref()
-                                .map(|_| Instant::now() + Duration::from_secs(60));
-                        }
-                        Ok(())
-                    }
+                    Command::RevealApiToken => anyhow::bail!(
+                        "Existing API credentials are intentionally non-recoverable. Rotate the API token to receive a new plaintext credential once."
+                    ),
                     Command::HideApiToken => {
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = None;

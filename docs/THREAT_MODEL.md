@@ -68,7 +68,7 @@ Security consequence: changing model, digest, context, signature, tone or candid
 
 ### TB6 — Native GUI/API → single worker
 
-The native UI and optional local API submit work through a bounded command channel to one worker owning the data directory. Stale UI revisions fail optimistic concurrency checks. The HTTP API is read-only, loopback-only, bearer-authenticated, rejects browser Origin, uses stable request IDs and returns no-store responses.
+The native UI and optional local API submit work through a bounded command channel to one worker owning the data directory. Stale UI revisions fail optimistic concurrency checks. The HTTP API is read-only, loopback-only, bearer-authenticated, rejects browser Origin, uses stable request IDs and returns no-store responses. API bearer plaintext is never persistently recoverable: storage contains only a domain-separated SHA-256 verifier, and new/rotated plaintext credentials are shown once.
 
 Security consequence: integrations must use the API/library contract; SQLite internals are not an external synchronization contract.
 
@@ -112,7 +112,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity; Authen
 | Crash during backup/restore | process/storage failure | staged artifact/rollback path; exclusive workspace lock; recovery drill |
 | Database tampering | local filesystem write without key | AEAD payload auth + audit hash chain + structural checks |
 | Whole-database rollback | attacker/operator restores older internally valid DB | detectable when a prior sequence/hash audit point is retained outside that rollback. Use an external anchor file under another trust domain or the Windows/macOS OS credential-store monotonic anchor; protected anchors are verified before runtime recovery mutates state |
-| Stolen local API token | same-user/local compromise | read-only API, loopback/Host/Origin checks, token rotation; token still grants private read access |
+| Stolen local API token | same-user/local compromise | read-only API, loopback/Host/Origin checks, bounded rate limit, verifier-only persistence and explicit token rotation; plaintext token still grants private read access |
 | Local malicious process talks to Ollama/API | same OS user | loopback is not authentication; API bearer token protects API, Ollama is assumed under user's local trust boundary |
 | Malicious/compromised model package | model supply-chain compromise | explicit download, local-only use, digest pin, task evaluation; model weights are still third-party trust |
 | Enterprise policy rollback | local admin/user replaces policy | revision/digest floor + optional external digest/signature trust anchors |
