@@ -21,7 +21,6 @@ pub struct MetricsSnapshot {
     pub backup_isolation: BackupIsolationStatus,
     pub audit_sequence: i64,
     pub audit_head_present: bool,
-    pub runtime_performance: crate::runtime_log::RuntimePerformanceSummary,
     pub stored_items: u64,
     pub queued_items: u64,
     pub review_items: u64,
@@ -43,7 +42,6 @@ pub struct MetricsSnapshot {
 
 pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let counts = engine.db.counts(&engine.account)?;
-    let runtime_performance = crate::runtime_log::performance_summary(&engine.directory)?;
     let integrity_ok = engine.db.readiness_check().is_ok();
     let storage = crate::storage::inspect(&engine.directory)?;
     let scheduled_backup =
@@ -82,7 +80,6 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         backup_isolation,
         audit_sequence: engine.db.latest_event_seq()?,
         audit_head_present: engine.db.audit_head().is_ok(),
-        runtime_performance,
         stored_items: counts.stored,
         queued_items: counts.queued,
         review_items: counts.review,
@@ -264,56 +261,6 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
         None,
         metric_bool(snapshot.audit_head_present),
     );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_operations_retained",
-        "Number of typed worker operation records retained in the bounded local runtime journal.",
-        None,
-        snapshot.runtime_performance.retained_operation_records,
-    );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_operations_failed",
-        "Number of failed typed worker operations retained in the bounded local runtime journal.",
-        None,
-        snapshot.runtime_performance.failed_operations,
-    );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_operations_timed",
-        "Number of retained operations with a measured start-to-finish duration.",
-        None,
-        snapshot.runtime_performance.timed_operations,
-    );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_operation_mean_duration_milliseconds",
-        "Mean duration in milliseconds across retained timed operations, or -1 when unavailable.",
-        Some("milliseconds"),
-        snapshot
-            .runtime_performance
-            .mean_duration_ms
-            .map(|value| value as i128)
-            .unwrap_or(-1),
-    );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_operation_max_duration_milliseconds",
-        "Maximum duration in milliseconds across retained timed operations, or -1 when unavailable.",
-        Some("milliseconds"),
-        snapshot
-            .runtime_performance
-            .max_duration_ms
-            .map(|value| value as i128)
-            .unwrap_or(-1),
-    );
-    push_gauge(
-        &mut out,
-        "rejection_rejector_runtime_log_parse_errors",
-        "Malformed or oversized runtime-journal lines encountered while building aggregate performance evidence.",
-        None,
-        snapshot.runtime_performance.parse_errors,
-    );
     for (name, help, value) in [
         (
             "rejection_rejector_items_stored",
@@ -413,6 +360,66 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
     out
 }
 
+pub fn render_openmetrics_with_runtime(
+    snapshot: &MetricsSnapshot,
+    runtime: &crate::runtime_log::RuntimePerformanceSummary,
+) -> String {
+    let mut out = render_openmetrics(snapshot);
+    if out.ends_with("# EOF\n") {
+        out.truncate(out.len() - "# EOF\n".len());
+    }
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_operations_retained",
+        "Number of typed worker operation records retained in the bounded local runtime journal.",
+        None,
+        runtime.retained_operation_records,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_operations_failed",
+        "Number of failed typed worker operations retained in the bounded local runtime journal.",
+        None,
+        runtime.failed_operations,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_operations_timed",
+        "Number of retained operations with a measured start-to-finish duration.",
+        None,
+        runtime.timed_operations,
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_operation_mean_duration_milliseconds",
+        "Mean duration in milliseconds across retained timed operations, or -1 when unavailable.",
+        Some("milliseconds"),
+        runtime
+            .mean_duration_ms
+            .map(|value| value as i128)
+            .unwrap_or(-1),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_operation_max_duration_milliseconds",
+        "Maximum duration in milliseconds across retained timed operations, or -1 when unavailable.",
+        Some("milliseconds"),
+        runtime
+            .max_duration_ms
+            .map(|value| value as i128)
+            .unwrap_or(-1),
+    );
+    push_gauge(
+        &mut out,
+        "rejection_rejector_runtime_log_parse_errors",
+        "Malformed or oversized runtime-journal lines encountered while building aggregate performance evidence.",
+        None,
+        runtime.parse_errors,
+    );
+    out.push_str("# EOF\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +443,11 @@ mod tests {
         assert!(text.contains("# UNIT rejection_rejector_storage_available_bytes bytes\n"));
         assert!(text.contains("rejection_rejector_storage_runtime_write_safe "));
         assert!(text.contains("rejection_rejector_operational_degraded "));
+        let runtime = crate::runtime_log::performance_summary(&engine.directory).unwrap();
+        let enriched = render_openmetrics_with_runtime(&snapshot, &runtime);
+        assert!(enriched.ends_with("# EOF\n"));
+        assert!(enriched.contains("rejection_rejector_runtime_operations_retained "));
+        assert!(enriched.contains("rejection_rejector_runtime_log_parse_errors "));
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",
