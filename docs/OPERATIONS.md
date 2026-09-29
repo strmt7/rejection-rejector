@@ -163,7 +163,15 @@ A signature, hash or revision failure is fail-closed. Fix the policy artifact/de
 
 A release candidate is built only from the exact current `main` commit. The attested package workflow checks exact-commit CI, Rust public-API compatibility and security evidence plus recent deep-quality evidence before packaging.
 
-The source provides native Windows artifacts, checksums, embedded build identity, binary RustSec audit, CycloneDX SBOM and GitHub attestations. Authenticode/MSIX/Intune/service deployment remain separate release-engineering items until implemented and verified; do not describe an unsigned package as publisher-signed.
+The source provides native Windows artifacts, checksums, embedded build identity, embedded compatibility-contract identity, binary RustSec audit, CycloneDX SBOM and GitHub attestations. The manual package workflow has two explicit flavors: `unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging stops. The package records `signing.json`, `build-info.json` and `contract-info.json`. MSI/MSIX/Intune packaging remains separate release-engineering work.
+
+### Azure publisher-signing provisioning
+
+Use the signed flavor only after an administrator has created an Azure Artifact Signing account/certificate profile and a GitHub OIDC federated identity for this repository/workflow. Configure repository variables `AZURE_ARTIFACT_SIGNING_ENDPOINT`, `AZURE_ARTIFACT_SIGNING_ACCOUNT`, and `AZURE_ARTIFACT_SIGNING_PROFILE`; configure `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` in the repository's protected secret channel. No long-lived Azure client secret is required by the workflow.
+
+From GitHub Actions, run **Attested Windows package**, type `PACKAGE`, and choose `azure-artifact-signing`. The workflow rechecks exact-main CI/security/deep evidence, builds auditable binaries, validates `build-info` and `contract-info`, signs both executables, verifies Authenticode, emits `signing.json`, then creates and attests the signed ZIP. Choosing `unsigned` creates a separately named unsigned ZIP and explicitly refuses to relabel an already publisher-signed binary as unsigned.
+
+Microsoft's newer WinApp CLI is intentionally not a production dependency here while it remains public preview; stable Windows SDK/Artifact Signing primitives remain the release foundation.
 
 ## Escalation principles
 

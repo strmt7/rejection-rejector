@@ -11,8 +11,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
     api_auth, audit_anchor, background, build_info, config, contracts, engine::Engine,
-    ollama::Ollama, policy,
-    recovery, shadow, worker::Worker,
+    ollama::Ollama, policy, recovery, shadow, worker::Worker,
 };
 use std::{
     path::PathBuf,

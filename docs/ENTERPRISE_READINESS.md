@@ -35,11 +35,14 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - The attested release gate also requires recent successful Windows byte-for-byte reproducibility evidence in release history, alongside fuzzing, coverage, mutation and enterprise deep-verification evidence.
 - Model evaluation has a composition floor, not only a total-case floor: the 72-case synthetic corpus must preserve strong rejection/opportunity/uncertain/benign balance and repeated multilingual, interview, ambiguity, quoted-history, prompt-injection, assessment and ATS coverage.
 - Privacy-safe runtime operation durations are retained only in the bounded local runtime journal and exposed as label-free aggregate OpenMetrics; no production availability or latency SLO is implied by those measurements.
+- Production Rust library/binary builds deny panic-capable convenience macros (`unwrap`, `expect`, `panic!`, `unreachable!`) outside test builds; impossible-state branches return explicit errors/fail closed instead.
+- Deterministic generated invariant tests exercise thousands of enterprise-policy/readiness/anti-rollback state combinations and verify monotonic restrictions, idempotence and fail-closed readiness.
+- Binaries expose `contract-info` with exact OpenAPI, enterprise-policy-schema, settings/database, evaluation-suite and prompt-contract identities; release packaging verifies source files against those embedded fingerprints.
 - Windows workstations can register the headless worker as a least-privilege per-user Task Scheduler job at logon. The task contract is drift-checked, single-instance, delayed 30 seconds after logon and bounded to three one-minute restart attempts; it deliberately preserves the signed-in user's Credential Manager boundary instead of claiming LocalSystem service semantics.
 
 ## Enterprise gaps still open
 
-1. **Publisher trust:** release ZIPs can be provenance/SBOM-attested and shipped binaries can embed dependency provenance, but Windows binaries are not Authenticode-signed and there is no signed MSIX/MSI/update channel.
+1. **Publisher trust:** the release workflow implements optional Azure Artifact Signing/OIDC for both Windows executables and fails unless Authenticode verifies as `Valid`. This closes the workflow path but not deployment acceptance by itself: no signed production artifact is claimed until that configured path has run successfully, and there is still no signed MSIX/MSI/update channel.
 2. **Live acceptance:** CI does not authorize a real Gmail account, send a real reply, or certify provider-side behavior.
 3. **Physical GPU certification:** Ollama residency is checked, but whole-device transient peaks and every driver/backend combination are not certified.
 4. **Independent-verifier acceptance:** the sequential dual-model path is implemented and can be policy-required, but each chosen primary/verifier pair still requires target-GPU and independently labelled private-mailbox acceptance; model diversity reduces but does not eliminate correlated errors.
@@ -54,7 +57,8 @@ A release candidate should not be described as enterprise-ready until, at minimu
 
 - main CI and supply-chain workflows are green on the exact release commit;
 - for fuzzing, coverage, mutation and deep verification, the **latest** main-branch run is successful, recent, and its commit is an ancestor of the exact release commit; a newer failed/cancelled/in-progress run cannot be masked by older green evidence;
-- the SBOM and SHA-256 evidence correspond to that commit;
+- the SBOM, build identity, compatibility-contract identity and SHA-256 evidence correspond to that commit;
+- if the artifact is described as publisher-signed, the signed release mode completed and its packaged `signing.json` reports valid signatures for both executables;
 - backup/restore has a tested recovery path;
 - one controlled Gmail end-to-end acceptance run has been completed;
 - the chosen local model has passed the task-specific bake-off on the target GPU and an independently labelled private mailbox sample;

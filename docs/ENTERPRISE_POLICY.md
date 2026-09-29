@@ -79,10 +79,13 @@ Policy can only make the user configuration more restrictive. It never grants ca
 
 1. Start from `config/enterprise-policy.example.json`.
 2. For v2, increment `revision` whenever the policy bytes/meaning change. Keep `policy_id` stable for the same deployment lineage.
-3. Validate before deployment:
+3. Export the exact machine-readable policy contract from the binary and validate before deployment:
    ```powershell
+   rr.exe policy-schema > enterprise-policy.schema.json
+   rr.exe contract-info
    rr.exe validate-policy C:\staging\policy.json
    ```
+   The JSON Schema is also tracked as `docs/enterprise-policy.schema.json`; `contract-info` exposes its SHA-256 fingerprint so fleet tooling can detect schema drift before rollout.
 4. Compute the exact policy digest from the bytes that will be deployed:
    ```powershell
    (Get-FileHash C:\staging\policy.json -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -112,7 +115,7 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - Files larger than 64 KiB are rejected.
 - Unknown JSON fields are rejected.
 - Model tags are validated with the same local-model restrictions as user settings.
-- A disallowed persisted model is replaced by the first approved model at startup, and model/task qualification is invalidated.
+- A disallowed persisted model is replaced by the first approved model at startup, and model/task qualification is invalidated. If policy also requires independent verification and the resulting primary tag collides with the verifier tag, managed startup deterministically selects a different permitted verifier and disarms delivery; a policy whose constrained allow-lists make a distinct primary/verifier pair impossible is rejected.
 - Interactive selection of a disallowed model fails instead of being silently rewritten.
 - Invalid policy is a startup failure.
 - If `RR_ENTERPRISE_POLICY_SHA256` is configured, missing or modified policy bytes fail closed.
@@ -124,4 +127,4 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - Policy application is re-run on every settings mutation and hot-reload.
 - Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by avoiding the desktop UI.
 
-This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Ed25519 signatures authenticate policy provenance when the public-key provisioning channel is independently protected; the optional SHA-256 pin can additionally lock a machine to one exact byte representation. Policy v2's encrypted revision floor adds local rollback resistance. Enterprise packaging and signed application deployment remain separate release concerns.
+This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Ed25519 signatures authenticate policy provenance when the public-key provisioning channel is independently protected; the optional SHA-256 pin can additionally lock a machine to one exact byte representation. Policy v2's encrypted revision floor adds local rollback resistance. The release workflow now has an optional fail-closed Azure Artifact Signing path for the executables, while signed MSI/MSIX/Intune deployment remains a separate enterprise packaging concern.
