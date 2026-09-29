@@ -1,4 +1,4 @@
-use crate::worker::{Command, WorkerPulse};
+use crate::{api_auth::ApiTokenVerifier, worker::{Command, WorkerPulse}};
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use crossbeam_channel::{Sender, bounded};
@@ -11,9 +11,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use subtle::ConstantTimeEq;
 use tiny_http::{Header, Method, Response, Server};
-use zeroize::Zeroizing;
 
 pub const API_VERSION: u32 = 1;
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
@@ -98,26 +96,19 @@ fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a
     Some(value)
 }
 
-fn authorized(value: Option<&str>, token: &str) -> bool {
-    let expected = format!("Bearer {token}");
-    value
-        .unwrap_or("")
-        .as_bytes()
-        .ct_eq(expected.as_bytes())
-        .unwrap_u8()
-        == 1
+fn authorized(value: Option<&str>, verifier: &ApiTokenVerifier) -> bool {
+    verifier.authorize_header(value)
 }
+
 /// Explicitly read-only. No CORS, literal loopback Host, bearer token, no browser Origin.
-pub fn start(
+pub fn start_with_verifier(
     port: u16,
-    token: String,
+    verifier: ApiTokenVerifier,
     commands: Sender<Command>,
     stop: Arc<AtomicBool>,
     disabled: Arc<AtomicBool>,
     pulse: WorkerPulse,
 ) -> Result<()> {
-    ensure!(token.len() >= 40, "API token lacks required entropy");
-    let token = Zeroizing::new(token);
     let contract_sha256 = openapi_sha256();
     let build_identity_sha256 = crate::build_info::identity_sha256();
     let server = Server::http(format!("127.0.0.1:{port}"))
@@ -146,7 +137,7 @@ pub fn start(
                     .to_string(),
                     JSON_CONTENT_TYPE,
                 )
-            } else if !authorized(auth, token.as_str())
+            } else if !authorized(auth, &verifier)
                 || host != Some(format!("127.0.0.1:{port}").as_str())
                 || origin
             {
@@ -295,6 +286,21 @@ pub fn start(
     });
     Ok(())
 }
+
+/// Backwards-compatible library entry point. The supplied plaintext token is
+/// immediately reduced to an in-memory verifier; application persistence uses
+/// only verifier material.
+pub fn start(
+    port: u16,
+    token: String,
+    commands: Sender<Command>,
+    stop: Arc<AtomicBool>,
+    disabled: Arc<AtomicBool>,
+    pulse: WorkerPulse,
+) -> Result<()> {
+    let verifier = ApiTokenVerifier::from_token(&token)?;
+    start_with_verifier(port, verifier, commands, stop, disabled, pulse)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,14 +439,16 @@ mod tests {
 
     #[test]
     fn exact_bearer_required() {
-        assert!(authorized(Some("Bearer correct"), "correct"));
-        for v in [
+        let verifier = ApiTokenVerifier::from_token(&"correct".repeat(8)).unwrap();
+        let token = "correct".repeat(8);
+        assert!(authorized(Some(&format!("Bearer {token}")), &verifier));
+        for value in [
             None,
-            Some("correct"),
-            Some("Bearer wrong"),
-            Some("Bearer correct "),
+            Some(token.as_str()),
+            Some("Bearer wrongwrongwrongwrongwrongwrongwrongwrongwrong"),
+            Some("Bearer correctcorrectcorrectcorrectcorrectcorrectcorrectcorrect "),
         ] {
-            assert!(!authorized(v, "correct"));
+            assert!(!authorized(value, &verifier));
         }
     }
 }
