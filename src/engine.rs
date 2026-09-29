@@ -113,7 +113,7 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
-    fn reconcile(message: impl Into<String>) -> Self {
+    pub(crate) fn reconcile(message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::ReconcileRequired,
             code: "reconcile_required_delivery_uncertain",
@@ -1167,13 +1167,12 @@ impl Engine {
             )?;
         }
 
-        let gmail = self
-            .gmail
-            .as_mut()
-            .ok_or_else(|| DispatchFailure::review_code(
+        let gmail = self.gmail.as_mut().ok_or_else(|| {
+            DispatchFailure::review_code(
                 "review_required_gmail_disconnected",
                 "Gmail is not connected",
-            ))?;
+            )
+        })?;
         dispatch_require(
             gmail.can_send(),
             DispatchFailureKind::ReviewRequired,
