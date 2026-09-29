@@ -282,11 +282,7 @@ fn randomized_unsafe_combinations_never_authorize_automatic_delivery() {
                 0 => settings.automatic_confirmed = false,
                 1 => settings.model_digest = Some("b".repeat(64)),
                 2 => {
-                    settings
-                        .task_qualification
-                        .as_mut()
-                        .unwrap()
-                        .context_hash = "c".repeat(64);
+                    settings.task_qualification.as_mut().unwrap().context_hash = "c".repeat(64);
                 }
                 3 => job.email.as_mut().unwrap().stub.source = Source::Demo,
                 4 => job.email.as_mut().unwrap().from = "no-reply@example.com".into(),
