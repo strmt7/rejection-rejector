@@ -10,7 +10,8 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    api_auth, audit_anchor, background, build_info, config, engine::Engine, ollama::Ollama, policy,
+    api_auth, audit_anchor, background, build_info, config, contracts, engine::Engine,
+    ollama::Ollama, policy,
     recovery, shadow, worker::Worker,
 };
 use std::{
@@ -70,6 +71,8 @@ enum Action {
     },
     /// Print deterministic binary/source/dependency build identity without opening a workspace.
     BuildInfo,
+    /// Print machine-readable compatibility-contract identities without opening a workspace.
+    ContractInfo,
     /// Print local settings and aggregate status, without message bodies or credentials.
     Status,
     /// Print a synthetic offline status; never connects to Gmail.
@@ -215,13 +218,17 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&build_info::current())?);
         return Ok(());
     }
+    if matches!(&args.command, Action::ContractInfo) {
+        println!("{}", serde_json::to_string_pretty(&contracts::current())?);
+        return Ok(());
+    }
     if matches!(&args.command, Action::PolicySchema) {
         print!("{}", policy::schema_text());
         return Ok(());
     }
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
-        Action::BuildInfo | Action::PolicySchema => {
+        Action::BuildInfo | Action::ContractInfo | Action::PolicySchema => {
             anyhow::bail!("Internal command routing error before workspace resolution")
         }
         Action::Autostart { action } => {

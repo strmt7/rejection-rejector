@@ -183,6 +183,186 @@ jobs:
           if ($info.identity_sha256.Length -ne 64 -or $info.identity_sha256 -notmatch '^[0-9a-f]+$') {
             throw "Invalid embedded build identity"
           }
+      - name: Verify embedded compatibility-contract identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          target/release/rr.exe contract-info | Set-Content artifacts/contract-info.json -Encoding utf8
+          $contracts = Get-Content artifacts/contract-info.json -Raw | ConvertFrom-Json
+          if ($contracts.schema_version -ne 1) { throw "Unsupported contract-info schema" }
+          $openapiHash = (Get-FileHash docs/openapi-v1.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($contracts.api_contract_sha256 -ne $openapiHash) {
+            throw "Embedded API contract hash does not match docs/openapi-v1.json"
+          }
+          $policyHash = (Get-FileHash docs/enterprise-policy.schema.json -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($contracts.enterprise_policy_schema_sha256 -ne $policyHash) {
+            throw "Embedded enterprise policy schema hash does not match docs/enterprise-policy.schema.json"
+          }
+          if ($contracts.settings_format_version -lt 1 -or $contracts.database_schema_version -lt 1) {
+            throw "Invalid embedded persistence compatibility versions"
+          }
+          if ($contracts.evaluation_suite_sha256.Length -ne 64 -or $contracts.evaluation_suite_sha256 -notmatch '^[0-9a-f]+
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          cargo audit bin target/release/rejection-rejector.exe | Tee-Object -FilePath artifacts/rejection-rejector-binary-audit.txt
+          cargo audit bin target/release/rr.exe | Tee-Object -FilePath artifacts/rr-binary-audit.txt
+          if ($LASTEXITCODE -ne 0) { throw "Binary RustSec audit failed" }
+          cargo auditable --version | Set-Content artifacts/cargo-auditable-version.txt -Encoding ascii
+          cargo audit --version | Set-Content artifacts/cargo-audit-version.txt -Encoding ascii
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo cyclonedx --format json --spec-version 1.5 --all-features --target all --override-filename rejection-rejector.cdx
+          mkdir -p artifacts
+          find . -maxdepth 2 -name 'rejection-rejector.cdx.json' -exec cp {} artifacts/rejection-rejector.cdx.json \;
+          test -s artifacts/rejection-rejector.cdx.json
+
+      - name: Validate Azure Artifact Signing configuration
+        if: inputs.signing == 'azure-artifact-signing'
+        shell: pwsh
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @(
+            'ARTIFACT_SIGNING_ENDPOINT',
+            'ARTIFACT_SIGNING_ACCOUNT',
+            'ARTIFACT_SIGNING_PROFILE',
+            'AZURE_CLIENT_ID',
+            'AZURE_TENANT_ID',
+            'AZURE_SUBSCRIPTION_ID'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) {
+              throw "Signed packaging requested but $name is not configured"
+            }
+          }
+
+      - name: Azure login with GitHub OIDC
+        if: inputs.signing == 'azure-artifact-signing'
+        uses: Azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Authenticode-sign release executables with Azure Artifact Signing
+        if: inputs.signing == 'azure-artifact-signing'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\target\release\rejection-rejector.exe
+            ${{ github.workspace }}\target\release\rr.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          trace: false
+
+      - name: Verify publisher signature state and record evidence
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $records = @()
+          foreach ($path in @(
+            'target/release/rejection-rejector.exe',
+            'target/release/rr.exe'
+          )) {
+            $signature = Get-AuthenticodeSignature -FilePath $path
+            if ($env:SIGNING_MODE -eq 'azure-artifact-signing' -and $signature.Status -ne 'Valid') {
+              throw "Authenticode verification failed for $path: $($signature.Status) $($signature.StatusMessage)"
+            }
+            if ($env:SIGNING_MODE -eq 'unsigned' -and $signature.Status -eq 'Valid') {
+              throw "Unsigned packaging mode unexpectedly produced a publisher-signed executable: $path"
+            }
+            $records += [ordered]@{
+              file = [IO.Path]::GetFileName($path)
+              requested_mode = $env:SIGNING_MODE
+              status = [string]$signature.Status
+              signer_subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
+              signer_thumbprint = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { $null }
+              timestamper_subject = if ($signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Subject } else { $null }
+            }
+          }
+          [ordered]@{
+            schema_version = 1
+            requested_mode = $env:SIGNING_MODE
+            verified_signed = ($env:SIGNING_MODE -eq 'azure-artifact-signing')
+            files = $records
+          } | ConvertTo-Json -Depth 6 | Set-Content artifacts/signing.json -Encoding utf8
+
+      - name: Assemble release evidence package
+        id: package
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ inputs.signing }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
+          Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
+          Copy-Item -Recurse docs artifacts/windows/docs
+          Copy-Item Cargo.lock artifacts/windows/
+          Copy-Item artifacts/build-info.json,artifacts/contract-info.json,artifacts/signing.json,artifacts/rejection-rejector.cdx.json artifacts/windows/
+          git rev-parse HEAD | Set-Content artifacts/windows/COMMIT.txt -Encoding ascii
+          rustc --version | Set-Content artifacts/windows/toolchain.txt -Encoding ascii
+          cargo --version | Add-Content artifacts/windows/toolchain.txt -Encoding ascii
+          $root = (Resolve-Path artifacts/windows).Path
+          Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\','/')
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $relative"
+          } | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
+          $flavor = if ($env:SIGNING_MODE -eq 'azure-artifact-signing') { 'signed' } else { 'unsigned' }
+          $packageName = "rejection-rejector-windows-x64-$flavor.zip"
+          $packagePath = Join-Path 'artifacts' $packageName
+          Compress-Archive -Path artifacts/windows/* -DestinationPath $packagePath
+          $packageHash = (Get-FileHash $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$packageHash  $packageName" | Set-Content artifacts/SHA256.txt -Encoding ascii
+          "package_path=$packagePath" | Add-Content $env:GITHUB_OUTPUT
+          "package_name=$packageName" | Add-Content $env:GITHUB_OUTPUT
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.package_path }}
+      - name: Attest package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.package_path }}
+          sbom-path: artifacts/rejection-rejector.cdx.json
+      - name: Upload package and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-attested-windows-${{ inputs.signing }}-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+) {
+            throw "Invalid embedded evaluation-suite fingerprint"
+          }
+
       - name: Audit the shipped executables themselves
         shell: pwsh
         run: |
