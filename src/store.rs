@@ -330,7 +330,7 @@ fn verify_application_invariants_connection(
                     JobState::Sending => "reserved",
                     JobState::Uncertain => "uncertain",
                     JobState::Sent => "sent",
-                    _ => unreachable!("matched delivery states above"),
+                    _ => anyhow::bail!("Internal delivery-state validation mismatch"),
                 };
                 ensure!(
                     status == expected_status,
@@ -357,7 +357,7 @@ fn verify_application_invariants_connection(
                         );
                         active_delivery_records += 1;
                     }
-                    _ => unreachable!("matched delivery states above"),
+                    _ => anyhow::bail!("Internal delivery-state validation mismatch"),
                 }
             }
             _ => {

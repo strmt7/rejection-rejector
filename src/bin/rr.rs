@@ -1,3 +1,12 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable
+    )
+)]
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
@@ -212,8 +221,9 @@ fn main() -> Result<()> {
     }
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
-        Action::BuildInfo => unreachable!("BuildInfo is handled before workspace resolution"),
-        Action::PolicySchema => unreachable!("PolicySchema is handled before workspace resolution"),
+        Action::BuildInfo | Action::PolicySchema => {
+            anyhow::bail!("Internal command routing error before workspace resolution")
+        }
         Action::Autostart { action } => {
             let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
             match action {

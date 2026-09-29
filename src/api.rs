@@ -257,33 +257,28 @@ pub fn start_with_verifier(
                     }
                 }
             };
-            let response = Response::from_string(body)
-                .with_status_code(status)
-                .with_header(
-                    Header::from_bytes("Content-Type", content_type).expect("constant header"),
-                )
-                .with_header(
-                    Header::from_bytes("Cache-Control", "no-store").expect("constant header"),
-                )
-                .with_header(
-                    Header::from_bytes("X-Content-Type-Options", "nosniff")
-                        .expect("constant header"),
-                )
-                .with_header(
-                    Header::from_bytes("X-Request-ID", request_id.as_bytes())
-                        .expect("UUID request ID is valid header content"),
-                )
-                .with_header(
-                    Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256.as_bytes())
-                        .expect("SHA-256 contract fingerprint is valid header content"),
-                )
-                .with_header(
-                    Header::from_bytes(
-                        "X-RR-Build-Identity-SHA256",
-                        build_identity_sha256.as_bytes(),
-                    )
-                    .expect("SHA-256 build fingerprint is valid header content"),
+            let headers = [
+                Header::from_bytes("Content-Type", content_type),
+                Header::from_bytes("Cache-Control", "no-store"),
+                Header::from_bytes("X-Content-Type-Options", "nosniff"),
+                Header::from_bytes("X-Request-ID", request_id.as_bytes()),
+                Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256.as_bytes()),
+                Header::from_bytes(
+                    "X-RR-Build-Identity-SHA256",
+                    build_identity_sha256.as_bytes(),
+                ),
+            ];
+            if headers.iter().any(Result::is_err) {
+                let _ = request.respond(
+                    Response::from_string("Internal response construction failure")
+                        .with_status_code(500),
                 );
+                continue;
+            }
+            let mut response = Response::from_string(body).with_status_code(status);
+            for header in headers.into_iter().filter_map(Result::ok) {
+                response = response.with_header(header);
+            }
             let _ = request.respond(response);
         }
     });
