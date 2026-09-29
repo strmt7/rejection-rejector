@@ -248,10 +248,7 @@ impl Gmail {
         if response.status().as_u16() == 404 {
             return Ok(HistoryResult::Expired);
         }
-        Ok(HistoryResult::Page(gmail_json(
-            response,
-            8 * 1024 * 1024,
-        )?))
+        Ok(HistoryResult::Page(gmail_json(response, 8 * 1024 * 1024)?))
     }
     pub fn email(&mut self, stub: &Stub) -> std::result::Result<Option<Email>, FetchFailure> {
         validate_id(&stub.provider_id).map_err(|error| FetchFailure {
@@ -545,14 +542,26 @@ mod tests {
     use super::*;
     #[test]
     fn retry_after_header_supports_seconds_and_clamps() {
-        let server = mockito::Server::new();
-        let mock = server
-            .mock("GET", "/")
-            .with_status(429)
-            .with_header("retry-after", "7200")
-            .create();
-        let response = reqwest::blocking::get(server.url()).unwrap();
-        mock.assert();
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let responder = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7200\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let response = reqwest::blocking::get(format!("http://{address}/")).unwrap();
+        responder.join().unwrap();
         assert_eq!(
             retry_after_header(&response),
             Some(Duration::from_secs(60 * 60))
