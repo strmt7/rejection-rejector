@@ -2,7 +2,6 @@ use crate::{
     api_auth,
     config::Settings,
     engine::{Engine, automatic_policy},
-    oauth,
     ollama::{self, ModelStatus, Ollama},
     runtime_log::{RuntimeEvent, RuntimeJournal},
     types::*,

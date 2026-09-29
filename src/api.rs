@@ -1,5 +1,8 @@
-use crate::{api_auth::ApiTokenVerifier, worker::{Command, WorkerPulse}};
-use anyhow::{Result, ensure};
+use crate::{
+    api_auth::ApiTokenVerifier,
+    worker::{Command, WorkerPulse},
+};
+use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{Sender, bounded};
 use serde_json::json;
