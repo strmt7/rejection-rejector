@@ -1,4 +1,4 @@
-use crate::config::{Settings, validate_model_name};
+use crate::config::{Settings, VERIFIER_CANDIDATES, validate_model_name};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
@@ -116,6 +116,19 @@ impl EnterprisePolicy {
             ensure!(
                 !self.require_independent_verifier && self.allowed_verifier_models.is_empty(),
                 "Independent-verifier policy controls require policy version 3"
+            );
+        }
+        if self.require_independent_verifier
+            && !self.allowed_models.is_empty()
+            && !self.allowed_verifier_models.is_empty()
+        {
+            ensure!(
+                self.allowed_models.iter().any(|primary| {
+                    self.allowed_verifier_models
+                        .iter()
+                        .any(|verifier| verifier != primary)
+                }),
+                "Enterprise policy cannot require an independent verifier when every allowed primary/verifier pairing uses the same model tag"
             );
         }
         if let Some(limit) = self.max_daily_send_limit {
@@ -239,6 +252,33 @@ impl EnterprisePolicy {
                     "Selected independent verifier model is not approved by enterprise policy"
                 );
             }
+        }
+
+        if self.require_independent_verifier && settings.verifier_model == settings.model {
+            if !startup {
+                anyhow::bail!(
+                    "Enterprise policy requires the independent verifier to use a different model tag from the primary model"
+                );
+            }
+            let replacement = if self.allowed_verifier_models.is_empty() {
+                VERIFIER_CANDIDATES
+                    .iter()
+                    .map(|(_, tag)| *tag)
+                    .find(|tag| *tag != settings.model)
+                    .map(str::to_owned)
+            } else {
+                self.allowed_verifier_models
+                    .iter()
+                    .find(|tag| tag.as_str() != settings.model)
+                    .cloned()
+            }
+            .context(
+                "Enterprise policy requires independent verification but no distinct permitted verifier model is available",
+            )?;
+            settings.verifier_model = replacement;
+            settings.verifier_model_digest = None;
+            settings.task_qualification = None;
+            settings.disarm_delivery();
         }
 
         settings.validate()?;
@@ -744,6 +784,36 @@ mod tests {
         };
         assert!(loaded.status().require_external_audit_anchor);
         assert!(!inactive_status().require_external_audit_anchor);
+    }
+
+    #[test]
+    fn managed_startup_resolves_primary_verifier_collision_fail_closed() {
+        let mut managed = EnterprisePolicy {
+            version: 3,
+            policy_id: Some("collision-policy".into()),
+            revision: Some(1),
+            require_independent_verifier: true,
+            allowed_models: vec!["granite4.2:8b-q8_0".into()],
+            ..EnterprisePolicy::default()
+        };
+        managed.validate().unwrap();
+
+        let mut settings = Settings {
+            model: "qwen3.5:9b-q8_0".into(),
+            verifier_model: "granite4.2:8b-q8_0".into(),
+            verifier_model_digest: Some("a".repeat(64)),
+            sending_enabled: true,
+            ..Settings::default()
+        };
+        managed.enforce(&mut settings, true).unwrap();
+        assert_eq!(settings.model, "granite4.2:8b-q8_0");
+        assert_ne!(settings.verifier_model, settings.model);
+        assert!(settings.verifier_model_digest.is_none());
+        assert!(settings.task_qualification.is_none());
+        assert!(!settings.sending_enabled);
+
+        managed.allowed_verifier_models = vec!["granite4.2:8b-q8_0".into()];
+        assert!(managed.validate().is_err());
     }
 
     #[test]
