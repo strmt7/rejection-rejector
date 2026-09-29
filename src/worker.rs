@@ -1330,8 +1330,8 @@ fn api_query_with_operation(
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
             let emergency_stop = crate::emergency::status_fail_closed();
-            let readiness = crate::readiness::assess_context(
-                crate::readiness::RuntimeReadinessContext {
+            let readiness =
+                crate::readiness::assess_context(crate::readiness::RuntimeReadinessContext {
                     settings: &e.settings,
                     database_integrity_ok: integrity_ok,
                     storage_write_safe: storage.runtime_write_safe,
@@ -1340,8 +1340,7 @@ fn api_query_with_operation(
                     paused,
                     stopping,
                     emergency_stop_active: emergency_stop.active,
-                },
-            );
+                });
             let counts = e.db.counts(&e.account)?;
             let policy_status = e.enterprise_policy_status();
             let external_audit_anchor_configured =
