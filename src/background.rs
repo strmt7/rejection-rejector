@@ -34,7 +34,7 @@ fn quote_windows_argument(value: &str) -> String {
         return value.to_owned();
     }
 
-    let mut out = String::from(""");
+    let mut out = String::from("\\\"");
     let mut backslashes = 0usize;
     for ch in value.chars() {
         match ch {
@@ -314,10 +314,7 @@ mod tests {
             quote_windows_argument("C:\\Program Files\\RR\\"),
             "\"C:\\Program Files\\RR\\\\\""
         );
-        assert_eq!(
-            quote_windows_argument("a\\\"b"),
-            "\"a\\\\\\\"b\""
-        );
+        assert_eq!(quote_windows_argument("a\\\"b"), "\"a\\\\\\\"b\"");
     }
 
     #[test]
