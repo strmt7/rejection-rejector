@@ -17,6 +17,7 @@ pub mod build_info;
 pub mod config;
 pub mod contracts;
 pub mod diagnostics;
+pub mod emergency;
 pub mod engine;
 pub mod evaluation;
 pub mod gmail;

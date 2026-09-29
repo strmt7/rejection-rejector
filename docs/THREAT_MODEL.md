@@ -14,6 +14,7 @@ This document defines Rejection Rejector's security model for engineering and re
 8. **Verifiable release provenance.** Shipped artifacts must be tied to a specific source commit, audited dependencies, SBOM and release workflow evidence.
 9. **Supportability without surveillance.** Health, metrics, operation correlation and runtime journaling must remain local and privacy-minimal by construction.
 10. **Crash-loop fail safety.** An unclean prior process lifetime must not silently resume unattended delivery on the next exclusive workspace session.
+11. **Out-of-band incident containment.** An independently managed filesystem sentinel must be able to block every outbound Gmail write without depending on the GUI, model, encrypted settings or Automatic policy state.
 
 ## Data classification and storage map
 
@@ -128,6 +129,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity. The ma
 | Logs leak mailbox data | developer/operator mistake | runtime log schema has no arbitrary message/error fields; secret-canary tests; semantic details remain encrypted |
 | Resource exhaustion / poison queue | malformed messages/model failures | bounded input/response sizes, timeouts, bounded command queue, per-message retry cap then Human Review |
 | Crash/power loss leaves Automatic armed | process terminates before normal teardown | private runtime-session marker survives; next exclusive startup audits the condition and disarms sending/Automatic until explicit user action |
+| Incident requires immediate outbound-email containment | operator/security team needs a control independent of UI/model/settings | absolute-path emergency sentinel is checked at dispatch entry and again immediately before the Gmail write; malformed sentinel configuration fails closed; health surfaces never disclose the path |
 
 ## Security invariants — must remain testable
 
@@ -155,6 +157,7 @@ The following are release-level invariants. A change that invalidates one requir
 20. Security/dependency scans and SBOM generation run from pinned tools/actions and locked Rust dependencies.
 21. Deep-quality gates (coverage/mutation/fuzz/recovery) must fail or become stale when relevant source changes invalidate their evidence.
 22. Demo/synthetic fixtures can never be delivered to Gmail.
+23. When the enterprise emergency stop is active or cannot be inspected safely, no Gmail send request may cross the network boundary.
 
 ## Residual risks and explicit non-goals
 

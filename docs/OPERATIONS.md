@@ -8,6 +8,32 @@ The native GUI and `rr run` use the same exclusive workspace lock. Run **one** o
 
 Use the CLI with the GUI/worker closed for maintenance operations that open the workspace exclusively.
 
+## Enterprise emergency stop
+
+For incident response, deployments can configure an **out-of-band outbound-email stop** with the `RR_EMERGENCY_STOP_FILE` environment variable. Configure it to an absolute path before starting the GUI/headless worker. The path itself is never exposed through health or doctor output.
+
+Once configured, creating a regular file at that path blocks both Human Review and Automatic Gmail dispatch. The sentinel is checked at dispatch entry and **again after the durable send reservation/audit checkpoint immediately before the Gmail network request**. If it appears in that interval, the unsent reservation is released and no Gmail request is made. A symlink, directory, unreadable metadata state, relative path, or otherwise malformed configuration fails closed.
+
+Example for a managed Windows workstation:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "RR_EMERGENCY_STOP_FILE",
+  "C:\\ProgramData\\RejectionRejector\\EMERGENCY_STOP",
+  "Machine"
+)
+New-Item -ItemType Directory -Force "C:\\ProgramData\\RejectionRejector"
+# Restart the worker once so it inherits the configured environment variable.
+
+# INCIDENT: stop outbound email immediately.
+New-Item -ItemType File -Force "C:\\ProgramData\\RejectionRejector\\EMERGENCY_STOP"
+
+# AFTER operator investigation: remove the sentinel to permit dispatch again.
+Remove-Item "C:\\ProgramData\\RejectionRejector\\EMERGENCY_STOP"
+```
+
+Creating or removing the already-configured sentinel is observed by a running process; changing the environment variable itself requires a process restart. The emergency stop cannot recall a request already accepted by Gmail. `rr doctor --require automatic`, `/v1/health`, the GUI status bar and OpenMetrics expose only the privacy-safe active/configured state.
+
 ## Readiness and monitoring
 
 Use the strictest readiness level appropriate to the deployment:

@@ -39,6 +39,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Deterministic generated invariant tests exercise thousands of enterprise-policy/readiness/anti-rollback state combinations and verify monotonic restrictions, idempotence and fail-closed readiness.
 - Binaries expose `contract-info` with exact OpenAPI, enterprise-policy-schema, settings/database, evaluation-suite and prompt-contract identities; release packaging verifies source files against those embedded fingerprints.
 - Windows workstations can register the headless worker as a least-privilege per-user Task Scheduler job at logon. The task contract is drift-checked, single-instance, delayed 30 seconds after logon and bounded to three one-minute restart attempts; it deliberately preserves the signed-in user's Credential Manager boundary instead of claiming LocalSystem service semantics.
+- Managed deployments can configure an out-of-band emergency-stop sentinel. It blocks manual and Automatic Gmail writes, is rechecked after reservation immediately before provider dispatch, fails closed on malformed configuration, and exposes only privacy-safe state through doctor/health/OpenMetrics.
 
 ## Enterprise gaps still open
 

@@ -360,6 +360,26 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
     out
 }
 
+pub fn render_openmetrics_with_runtime_and_emergency(
+    snapshot: &MetricsSnapshot,
+    runtime: &crate::runtime_log::RuntimePerformanceSummary,
+    emergency_stop_active: bool,
+) -> String {
+    let mut out = render_openmetrics_with_runtime(snapshot, runtime);
+    if out.ends_with("# EOF\n") {
+        out.truncate(out.len() - "# EOF\n".len());
+    }
+    push_gauge(
+        &mut out,
+        "rejection_rejector_emergency_stop_active",
+        "Whether the externally managed enterprise emergency-stop sentinel currently blocks outbound email.",
+        None,
+        metric_bool(emergency_stop_active),
+    );
+    out.push_str("# EOF\n");
+    out
+}
+
 pub fn render_openmetrics_with_runtime(
     snapshot: &MetricsSnapshot,
     runtime: &crate::runtime_log::RuntimePerformanceSummary,
@@ -448,6 +468,9 @@ mod tests {
         assert!(enriched.ends_with("# EOF\n"));
         assert!(enriched.contains("rejection_rejector_runtime_operations_retained "));
         assert!(enriched.contains("rejection_rejector_runtime_log_parse_errors "));
+        let emergency = render_openmetrics_with_runtime_and_emergency(&snapshot, &runtime, true);
+        assert!(emergency.ends_with("# EOF\n"));
+        assert!(emergency.contains("rejection_rejector_emergency_stop_active 1\n"));
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",

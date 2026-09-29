@@ -1,7 +1,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
@@ -22,6 +22,20 @@ pub struct EmergencyStopStatus {
 /// can contain usernames or deployment topology and do not belong in health output.
 pub fn status() -> Result<EmergencyStopStatus> {
     evaluate(std::env::var_os(EMERGENCY_STOP_FILE_ENV))
+}
+
+/// Privacy-safe status for health/readiness surfaces. A malformed or unreadable
+/// configured sentinel is treated as active so monitoring agrees with the
+/// fail-closed dispatch boundary without disclosing the configured path.
+pub fn status_fail_closed() -> EmergencyStopStatus {
+    match status() {
+        Ok(status) => status,
+        Err(_) => EmergencyStopStatus {
+            configured: true,
+            active: true,
+            reason: "configuration_error".into(),
+        },
+    }
 }
 
 pub fn ensure_dispatch_allowed() -> Result<()> {
@@ -132,6 +146,20 @@ mod tests {
         let sensitive = root.path().join("sensitive-user-path-stop");
         let status = evaluate(Some(sensitive.as_os_str().to_os_string())).unwrap();
         let serialized = serde_json::to_string(&status).unwrap();
-        assert!(!serialized.contains(OsStr::new("sensitive-user-path-stop").to_str().unwrap()));
+        assert!(!serialized.contains("sensitive-user-path-stop"));
+    }
+
+    #[test]
+    fn malformed_configuration_maps_to_fail_closed_health_state() {
+        let status = match evaluate(Some(OsString::from("relative.stop"))) {
+            Ok(value) => value,
+            Err(_) => EmergencyStopStatus {
+                configured: true,
+                active: true,
+                reason: "configuration_error".into(),
+            },
+        };
+        assert!(status.active);
+        assert_eq!(status.reason, "configuration_error");
     }
 }

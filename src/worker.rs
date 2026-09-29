@@ -727,8 +727,10 @@ fn run(
             Ok(Command::OpenMetrics { reply }) => {
                 let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
                     let runtime = crate::runtime_log::performance_summary(&e.directory)?;
-                    Ok(crate::metrics::render_openmetrics_with_runtime(
-                        &snapshot, &runtime,
+                    Ok(crate::metrics::render_openmetrics_with_runtime_and_emergency(
+                        &snapshot,
+                        &runtime,
+                        crate::emergency::status_fail_closed().active,
                     ))
                 });
                 if let Ok(text) = data {
@@ -1305,7 +1307,8 @@ fn api_query_with_operation(
                     "snapshot_cursor_item_feed": true,
                     "enterprise_policy": true,
                     "enterprise_policy_digest_pin": true,
-                    "enterprise_policy_ed25519_signature": true
+                    "enterprise_policy_ed25519_signature": true,
+                    "enterprise_emergency_stop": true
                 },
                 "poll_hours": crate::config::POLL_HOURS,
                 "lookback_days": crate::config::LOOKBACK_DAYS
@@ -1324,7 +1327,8 @@ fn api_query_with_operation(
                 crate::recovery::backup_isolation_status(&e.directory, &e.settings)?;
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
-            let readiness = crate::readiness::assess(
+            let emergency_stop = crate::emergency::status_fail_closed();
+            let readiness = crate::readiness::assess_with_emergency(
                 &e.settings,
                 integrity_ok,
                 storage.runtime_write_safe,
@@ -1332,6 +1336,7 @@ fn api_query_with_operation(
                 e.send_scope(),
                 paused,
                 stopping,
+                emergency_stop.active,
             );
             let counts = e.db.counts(&e.account)?;
             let policy_status = e.enterprise_policy_status();
@@ -1376,6 +1381,7 @@ fn api_query_with_operation(
                     "stopping": stopping,
                     "operation": operation
                 },
+                "emergency_stop": emergency_stop,
                 "enterprise_policy": policy_status,
                 "audit_protection": {
                     "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
@@ -1567,6 +1573,8 @@ mod tests {
         assert!(health["runtime_log"].is_object());
         assert_eq!(health["database"]["integrity_ok"], true);
         assert_eq!(health["enterprise_policy"]["active"], false);
+        assert_eq!(health["emergency_stop"]["active"], false);
+        assert_eq!(health["emergency_stop"]["configured"], false);
         assert_eq!(
             health["audit_protection"]["independent_anchor_configured"],
             false

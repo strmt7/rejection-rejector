@@ -4,6 +4,7 @@ use crate::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
         settings_context_hash,
     },
+    emergency,
     evaluation,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
     mail,
@@ -1077,6 +1078,9 @@ impl Engine {
             DispatchFailureKind::ReviewRequired,
             "Demo messages cannot be sent",
         )?;
+        emergency::ensure_dispatch_allowed().map_err(|error| {
+            DispatchFailure::retryable_code("retryable_emergency_stop", error.to_string())
+        })?;
         dispatch_require(
             !self.paused.load(Ordering::SeqCst) && !self.stop.load(Ordering::SeqCst),
             DispatchFailureKind::Retryable,
@@ -1263,6 +1267,26 @@ impl Engine {
             )));
         }
 
+        if let Err(error) = emergency::ensure_dispatch_allowed() {
+            self.db
+                .release_unsent_reservation(
+                    id,
+                    "Enterprise emergency stop blocked dispatch before the Gmail network request; no email was sent",
+                )
+                .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
+            if let Err(anchor_error) = self.checkpoint_audit_protection() {
+                return Err(DispatchFailure::handled_code(
+                    "nonretryable_audit_checkpoint_failed",
+                    format!(
+                        "Emergency stop blocked Gmail dispatch, but the protected audit checkpoint failed: {anchor_error}. No email was sent."
+                    ),
+                ));
+            }
+            return Err(DispatchFailure::retryable_code(
+                "retryable_emergency_stop",
+                error.to_string(),
+            ));
+        }
         if self.paused.load(Ordering::SeqCst) || self.stop.load(Ordering::SeqCst) {
             self.db
                 .release_unsent_reservation(
@@ -1336,6 +1360,8 @@ impl Engine {
         {
             return Ok(false);
         }
+        emergency::ensure_dispatch_allowed()
+            .context("Automatic dispatch is blocked by the enterprise emergency stop")?;
         if self.db.counts(&self.account)?.attempts_24h >= u64::from(self.settings.daily_send_limit)
         {
             return Ok(false);

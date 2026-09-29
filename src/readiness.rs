@@ -116,6 +116,30 @@ pub fn assess(
     paused: bool,
     stopping: bool,
 ) -> RuntimeReadiness {
+    assess_with_emergency(
+        settings,
+        database_integrity_ok,
+        storage_write_safe,
+        connected,
+        send_scope,
+        paused,
+        stopping,
+        false,
+    )
+}
+
+/// Additive readiness entry point for deployments with an out-of-band
+/// emergency-stop sentinel. The original assess() contract remains stable.
+pub fn assess_with_emergency(
+    settings: &Settings,
+    database_integrity_ok: bool,
+    storage_write_safe: bool,
+    connected: bool,
+    send_scope: bool,
+    paused: bool,
+    stopping: bool,
+    emergency_stop_active: bool,
+) -> RuntimeReadiness {
     let live = !stopping;
     let workspace_ready = live && database_integrity_ok && storage_write_safe;
     let mailbox_sync_ready = workspace_ready && connected;
@@ -154,6 +178,9 @@ pub fn assess(
     }
     if paused {
         reasons.push("worker_paused");
+    }
+    if emergency_stop_active {
+        reasons.push("emergency_stop_active");
     }
 
     RuntimeReadiness {
@@ -196,6 +223,23 @@ mod tests {
             qualified_at: Utc::now(),
         });
         settings
+    }
+
+    #[test]
+    fn emergency_stop_blocks_only_automatic_dispatch_readiness() {
+        let settings = automatic_settings();
+        let readiness =
+            assess_with_emergency(&settings, true, true, true, true, false, false, true);
+        assert!(readiness.live);
+        assert!(readiness.workspace_ready);
+        assert!(readiness.mailbox_sync_ready);
+        assert!(readiness.analysis_ready);
+        assert!(!readiness.automatic_dispatch_ready);
+        assert!(
+            readiness
+                .automatic_block_reasons
+                .contains(&"emergency_stop_active")
+        );
     }
 
     #[test]
