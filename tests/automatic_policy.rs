@@ -1,5 +1,6 @@
 //! Pure-policy regression tests: no network, credentials, live model or email sending.
 use chrono::{DateTime, Duration, Utc};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use rejection_rejector::{
     config::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
@@ -266,4 +267,72 @@ fn automatic_reply_loop_marker_requires_human_review() {
 fn spam_and_trashed_mail_hold() {
     held(|j, _, _| j.email.as_mut().unwrap().labels.push("SPAM".into()));
     held(|j, _, _| j.email.as_mut().unwrap().labels.push("TRASH".into()));
+}
+
+#[test]
+fn randomized_unsafe_combinations_never_authorize_automatic_delivery() {
+    let mut rng = StdRng::seed_from_u64(0x5252_2026_0929);
+
+    for case_index in 0..512u32 {
+        let (mut job, mut settings, now) = eligible();
+        let mutation_count = rng.gen_range(1..=6);
+
+        for _ in 0..mutation_count {
+            match rng.gen_range(0..12) {
+                0 => settings.automatic_confirmed = false,
+                1 => settings.model_digest = Some("b".repeat(64)),
+                2 => {
+                    settings
+                        .task_qualification
+                        .as_mut()
+                        .unwrap()
+                        .context_hash = "c".repeat(64);
+                }
+                3 => job.email.as_mut().unwrap().stub.source = Source::Demo,
+                4 => job.email.as_mut().unwrap().from = "no-reply@example.com".into(),
+                5 => {
+                    job.email.as_mut().unwrap().reply_to =
+                        Some("different-recipient@example.com".into());
+                }
+                6 => job.email.as_mut().unwrap().labels.push("SPAM".into()),
+                7 => {
+                    job.analysis
+                        .as_mut()
+                        .unwrap()
+                        .verification
+                        .as_mut()
+                        .unwrap()
+                        .purpose_aligned = false;
+                }
+                8 => job.analysis.as_mut().unwrap().gpu_resident = false,
+                9 => job.draft.as_mut().unwrap().origin = "human".into(),
+                10 => job.drafted_at = Some(now),
+                _ => {
+                    job.email.as_mut().unwrap().received_at =
+                        now - Duration::days(i64::from(settings.lookback_days) + 2);
+                }
+            }
+        }
+
+        let decision = automatic_policy(&job, &settings, "candidate@example.com", now);
+        assert!(
+            !decision.eligible,
+            "randomized unsafe case {case_index} unexpectedly became eligible"
+        );
+        assert!(
+            !decision.blocks.is_empty(),
+            "randomized unsafe case {case_index} had no machine-readable blockers"
+        );
+
+        let unique_codes = decision
+            .blocks
+            .iter()
+            .map(|block| block.code)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            unique_codes.len(),
+            decision.blocks.len(),
+            "randomized unsafe case {case_index} emitted duplicate blocker codes"
+        );
+    }
 }
