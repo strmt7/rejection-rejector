@@ -19,7 +19,7 @@ The signature file is bounded to 4 KiB, rejects symlinks and unknown JSON fields
 
 ## Policy formats
 
-Policy v1 remains readable for backward compatibility, but it has no local anti-rollback identity. New managed deployments should use **policy v2**.
+Policy v1 remains readable for backward compatibility, but it has no local anti-rollback identity. Policy v2 adds lifecycle/rollback controls. **Policy v3** adds managed independent-verifier enforcement and is recommended for new high-assurance deployments.
 
 ### Policy v2
 
@@ -47,6 +47,17 @@ For v2, `version`, `policy_id`, and `revision` are required. `policy_id` is a st
 The encrypted workspace remembers the highest accepted revision **and exact digest** for every v2 `policy_id`. A lower revision is rejected as rollback, and different bytes reusing the same revision are rejected. A higher revision advances the floor atomically with any settings restrictions that policy applies. Use a stable `policy_id`; deliberately changing it starts a new revision namespace.
 
 Policy v1 is still supported, but the revision-floor mechanism does not apply to v1.
+
+### Policy v3 independent verification
+
+Policy v3 keeps all v2 lifecycle semantics and adds:
+
+- `require_independent_verifier`: forces verification to use a different pinned local Ollama model from the primary classification/drafting model.
+- `allowed_verifier_models`: exact verifier-model allow-list. Empty means unrestricted local verifier tags.
+
+The verifier runs sequentially: the primary model is checked for full GPU residency, unloaded, then the verifier is loaded and audits the current rejection evidence and proposed reply. Only one model is intentionally GPU-resident at a time. If verifier loading, transport, structured output, verification, or residency fails, unattended action is held; the system never falls back to same-model verification.
+
+Task qualification binds verifier enablement, verifier model tag and verifier digest. Changing any of them invalidates the evaluation and disarms Automatic mode.
 
 - `policy_id`: stable identifier for the managed policy lineage. ASCII letters, digits, `.`, `_`, `:`, and `-` only.
 - `revision`: monotonic revision within that `policy_id`; increment it for every changed policy payload.

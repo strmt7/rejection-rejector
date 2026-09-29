@@ -164,6 +164,62 @@ impl Ollama {
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.settings.ollama_url.trim_end_matches('/'))
     }
+
+    fn verifier_client(&self, pinned: bool) -> Result<Self> {
+        let mut settings = self.settings.clone();
+        settings.disarm_delivery();
+        settings.task_qualification = None;
+        settings.model = settings.verifier_model.clone();
+        settings.model_digest = if pinned {
+            settings.verifier_model_digest.clone()
+        } else {
+            None
+        };
+        settings.independent_verifier_enabled = false;
+        Self::new(&settings)
+    }
+
+    pub fn inspect_verifier(&self) -> Result<ModelStatus> {
+        self.verifier_client(false)?.inspect()
+    }
+
+    pub fn pull_verifier(
+        &self,
+        cancelled: &AtomicBool,
+        progress: impl FnMut(String),
+    ) -> Result<()> {
+        self.verifier_client(false)?.pull(cancelled, progress)
+    }
+
+    pub fn qualify_verifier(&self) -> Result<ModelStatus> {
+        ensure!(
+            self.settings.verifier_model != self.settings.model,
+            "Independent verifier must use a different model tag from the primary model"
+        );
+        self.unload_and_wait()?;
+        let unpinned = self.verifier_client(false)?;
+        let info = unpinned.inspect()?;
+        let mut settings = unpinned.settings.clone();
+        settings.model_digest = Some(info.digest.clone());
+        let verifier = Self::new(&settings)?;
+        let status = verifier.preflight_private_inference()?;
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let body = format!(
+            "Dear Recruitment Team,\n\nI would appreciate an individualized explanation of the specific criteria behind this decision and how my relevant experience was assessed against the advertised requirements.\n\nRegards,\n{}",
+            settings.signature.trim()
+        );
+        let (verification, complete) = verifier.verify(&email, &body)?;
+        ensure!(
+            complete && verification.passed(),
+            "Independent verifier failed the synthetic verification qualification"
+        );
+        let resident = verifier.residency(&status.digest)?;
+        ensure!(resident.gpu_resident, "{}", resident.message);
+        Ok(resident)
+    }
     fn counter_snapshot(&self) -> InferenceCounters {
         self.counters.lock().map(|value| *value).unwrap_or_default()
     }
@@ -359,6 +415,17 @@ impl Ollama {
     }
 
     fn unload_and_wait(&self) -> Result<()> {
+        let ps: Ps = net::json(
+            net::client(10, true)?.get(self.url("/api/ps")).send()?,
+            2 * 1024 * 1024,
+        )?;
+        if !ps
+            .models
+            .iter()
+            .any(|model| model_name_matches(&self.settings.model, &model.name))
+        {
+            return Ok(());
+        }
         self.unload_for_transport_recovery()?;
         for _ in 0..50 {
             let ps: Ps = net::json(
@@ -401,7 +468,12 @@ impl Ollama {
         let (analysis, draft, flags) = self.analyze(email)?;
         let elapsed_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let after = self.counter_snapshot();
-        let status = self.residency(&analysis.model_digest)?;
+        let status = if self.settings.independent_verifier_enabled {
+            self.verifier_client(true)?
+                .residency(&analysis.verification_model_digest)?
+        } else {
+            self.residency(&analysis.model_digest)?
+        };
         Ok(PipelineProfile {
             elapsed_millis,
             request_count: after.requests.saturating_sub(before.requests),
@@ -485,6 +557,7 @@ impl Ollama {
         let info = self.inspect()?;
         let mut pinned = self.settings.clone();
         pinned.model_digest = Some(info.digest.clone());
+        pinned.independent_verifier_enabled = false;
         let candidate = Self::new(&pinned)?;
         let email = sample_email(
             "Your application",
@@ -579,11 +652,18 @@ impl Ollama {
             self.settings.model_digest.is_some(),
             "Qualify and pin the local model before processing email"
         );
+        if self.settings.independent_verifier_enabled
+            && self.settings.verifier_model_digest.is_some()
+        {
+            self.verifier_client(true)?.unload_and_wait()?;
+        }
         let preflight = self.preflight_private_inference()?;
         let (verdict, mut complete) = self.classify(email)?;
         let mut flags = Vec::new();
         let mut draft = None;
         let mut verification = None;
+        let mut verification_model = self.settings.model.clone();
+        let mut verification_model_digest = preflight.digest.clone();
         if verdict.category == Category::Rejection {
             let current = mail::current_text(&email.text);
             let extra = self.settings.candidate_context.len() + self.settings.signature.len();
@@ -611,22 +691,58 @@ impl Ollama {
                 body: output.body,
                 origin: "ollama-v1".into(),
             };
-            match self.verify(email, &d.body) {
-                Ok((v, full)) => {
-                    complete &= full;
-                    if !v.passed() {
-                        flags.push("Local model verification did not pass".into());
+            if self.settings.independent_verifier_enabled {
+                let primary_resident = self.residency(&preflight.digest)?;
+                ensure!(
+                    primary_resident.gpu_resident,
+                    "Primary model lost full GPU residency before independent verification"
+                );
+                self.unload_and_wait()?;
+                let verifier = self.verifier_client(true)?;
+                let verifier_preflight = verifier.preflight_private_inference()?;
+                verification_model = verifier.settings.model.clone();
+                verification_model_digest = verifier_preflight.digest.clone();
+                match verifier.verify(email, &d.body) {
+                    Ok((v, full)) => {
+                        complete &= full;
+                        if !v.passed() {
+                            flags.push("Independent verifier did not pass".into());
+                        }
+                        verification = Some(v);
                     }
-                    verification = Some(v);
+                    Err(_) => {
+                        flags.push("Independent verification failed; human review required".into())
+                    }
                 }
-                Err(_) => flags.push("Verification failed; human review required".into()),
+                let verifier_resident = verifier.residency(&verifier_preflight.digest)?;
+                if !verifier_resident.gpu_resident {
+                    flags.push("Independent verifier lost full GPU residency".into());
+                }
+            } else {
+                match self.verify(email, &d.body) {
+                    Ok((v, full)) => {
+                        complete &= full;
+                        if !v.passed() {
+                            flags.push("Local model verification did not pass".into());
+                        }
+                        verification = Some(v);
+                    }
+                    Err(_) => flags.push("Verification failed; human review required".into()),
+                }
             }
             draft = Some(d);
         }
-        let gpu = self
-            .residency(&preflight.digest)
-            .map(|s| s.gpu_resident)
-            .unwrap_or(false);
+        let gpu = if self.settings.independent_verifier_enabled
+            && verdict.category == Category::Rejection
+        {
+            self.verifier_client(true)
+                .and_then(|verifier| verifier.residency(&verification_model_digest))
+                .is_ok_and(|status| status.gpu_resident)
+        } else {
+            self.residency(&preflight.digest)
+                .map(|s| s.gpu_resident)
+                .unwrap_or(false)
+        };
         if !gpu {
             flags.push("Full GPU residency was lost during analysis".into());
         }
@@ -655,6 +771,8 @@ impl Ollama {
                 verification,
                 model: self.settings.model.clone(),
                 model_digest: preflight.digest,
+                verification_model,
+                verification_model_digest,
                 prompt_version: PROMPT_VERSION.into(),
                 email_fingerprint: email.fingerprint(),
                 verified_draft_hash: verified_hash,
@@ -963,4 +1081,23 @@ mod tests {
         let e = sample_email("Test", "A synthetic rejection.");
         assert!(!mail::hard_blocks(&e, "demo@example.invalid").is_empty());
     }
+
+    #[test]
+    fn verifier_client_is_distinct_disarmed_and_uses_verifier_pin() {
+        let settings = Settings {
+            independent_verifier_enabled: true,
+            verifier_model: crate::config::DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some("b".repeat(64)),
+            model_digest: Some("a".repeat(64)),
+            ..Settings::default()
+        };
+        let primary = Ollama::new(&settings).unwrap();
+        let verifier = primary.verifier_client(true).unwrap();
+        assert_eq!(verifier.settings.model, crate::config::DEFAULT_VERIFIER_MODEL);
+        assert_eq!(verifier.settings.model_digest, Some("b".repeat(64)));
+        assert!(!verifier.settings.independent_verifier_enabled);
+        assert_eq!(verifier.settings.mode, crate::config::Mode::HumanReview);
+        assert!(!verifier.settings.sending_enabled);
+    }
+
 }

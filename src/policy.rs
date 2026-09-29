@@ -26,10 +26,12 @@ pub struct EnterprisePolicy {
     pub prohibit_integration_api: bool,
     pub prohibit_recovery_key_export: bool,
     pub require_external_audit_anchor: bool,
+    pub require_independent_verifier: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
     pub allowed_models: Vec<String>,
+    pub allowed_verifier_models: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
@@ -51,17 +53,20 @@ pub struct PolicyStatus {
     pub prohibit_integration_api: bool,
     pub prohibit_recovery_key_export: bool,
     pub require_external_audit_anchor: bool,
+    pub require_independent_verifier: bool,
     pub max_daily_send_limit: Option<u16>,
     pub min_cooldown_minutes: Option<u16>,
     pub min_retention_days: Option<u16>,
     pub allowed_model_count: usize,
     pub allowed_models: Vec<String>,
+    pub allowed_verifier_model_count: usize,
+    pub allowed_verifier_models: Vec<String>,
 }
 
 impl EnterprisePolicy {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            matches!(self.version, 1 | 2),
+            matches!(self.version, 1 | 2 | 3),
             "Unsupported enterprise policy version"
         );
         match self.version {
@@ -72,7 +77,7 @@ impl EnterprisePolicy {
                     && self.expires_at.is_none(),
                 "Policy v1 cannot contain v2 lifecycle fields"
             ),
-            2 => {
+            2 | 3 => {
                 let policy_id = self
                     .policy_id
                     .as_deref()
@@ -97,6 +102,12 @@ impl EnterprisePolicy {
                 }
             }
             _ => unreachable!("version was validated above"),
+        }
+        if self.version < 3 {
+            ensure!(
+                !self.require_independent_verifier && self.allowed_verifier_models.is_empty(),
+                "Independent-verifier policy controls require policy version 3"
+            );
         }
         if let Some(limit) = self.max_daily_send_limit {
             ensure!(
@@ -126,6 +137,18 @@ impl EnterprisePolicy {
             ensure!(
                 unique.insert(model),
                 "Enterprise model allow-list contains duplicates"
+            );
+        }
+        ensure!(
+            self.allowed_verifier_models.len() <= 64,
+            "Enterprise verifier-model allow-list is too large"
+        );
+        let mut verifier_unique = std::collections::BTreeSet::new();
+        for model in &self.allowed_verifier_models {
+            validate_model_name(model)?;
+            ensure!(
+                verifier_unique.insert(model),
+                "Enterprise verifier-model allow-list contains duplicates"
             );
         }
         Ok(())
@@ -166,6 +189,12 @@ impl EnterprisePolicy {
             settings.api_enabled = false;
             settings.api_allow_writes = false;
         }
+        if self.require_independent_verifier {
+            settings.independent_verifier_enabled = true;
+            if settings.verifier_model_digest.is_none() {
+                settings.disarm_delivery();
+            }
+        }
         if let Some(limit) = self.max_daily_send_limit {
             settings.daily_send_limit = settings.daily_send_limit.min(limit);
         }
@@ -184,6 +213,20 @@ impl EnterprisePolicy {
                 settings.disarm_delivery();
             } else {
                 anyhow::bail!("Selected model is not approved by enterprise policy");
+            }
+        }
+        if !self.allowed_verifier_models.is_empty()
+            && !self.allowed_verifier_models.contains(&settings.verifier_model)
+        {
+            if startup {
+                settings.verifier_model = self.allowed_verifier_models[0].clone();
+                settings.verifier_model_digest = None;
+                settings.task_qualification = None;
+                settings.disarm_delivery();
+            } else {
+                anyhow::bail!(
+                    "Selected independent verifier model is not approved by enterprise policy"
+                );
             }
         }
 
@@ -297,11 +340,14 @@ impl LoadedPolicy {
             prohibit_integration_api: self.policy.prohibit_integration_api,
             prohibit_recovery_key_export: self.policy.prohibit_recovery_key_export,
             require_external_audit_anchor: self.policy.require_external_audit_anchor,
+            require_independent_verifier: self.policy.require_independent_verifier,
             max_daily_send_limit: self.policy.max_daily_send_limit,
             min_cooldown_minutes: self.policy.min_cooldown_minutes,
             min_retention_days: self.policy.min_retention_days,
             allowed_model_count: self.policy.allowed_models.len(),
             allowed_models: self.policy.allowed_models.clone(),
+            allowed_verifier_model_count: self.policy.allowed_verifier_models.len(),
+            allowed_verifier_models: self.policy.allowed_verifier_models.clone(),
         }
     }
 }
@@ -325,11 +371,14 @@ pub fn inactive_status() -> PolicyStatus {
         prohibit_integration_api: false,
         prohibit_recovery_key_export: false,
         require_external_audit_anchor: false,
+        require_independent_verifier: false,
         max_daily_send_limit: None,
         min_cooldown_minutes: None,
         min_retention_days: None,
         allowed_model_count: 0,
         allowed_models: vec![],
+        allowed_verifier_model_count: 0,
+        allowed_verifier_models: vec![],
     }
 }
 
@@ -598,10 +647,12 @@ mod tests {
             prohibit_integration_api: true,
             prohibit_recovery_key_export: true,
             require_external_audit_anchor: false,
+            require_independent_verifier: false,
             max_daily_send_limit: Some(3),
             min_cooldown_minutes: Some(90),
             min_retention_days: Some(365),
             allowed_models: vec!["granite4.2:8b-q8_0".into()],
+            allowed_verifier_models: vec![],
         }
     }
 
@@ -933,4 +984,29 @@ mod tests {
         assert!(loaded.policy.prohibit_sending);
         assert!(loaded.status().active);
     }
+
+    #[test]
+    fn v3_policy_can_require_and_restrict_independent_verification() {
+        let mut managed = EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp-independent-verifier".into()),
+            revision: Some(1),
+            require_independent_verifier: true,
+            allowed_models: vec!["qwen3.5:9b-q8_0".into()],
+            allowed_verifier_models: vec!["granite4.2:8b-q8_0".into()],
+            ..EnterprisePolicy::default()
+        };
+        managed.validate().unwrap();
+        let mut settings = Settings {
+            verifier_model: "qwen3.5:4b".into(),
+            ..Settings::default()
+        };
+        managed.enforce(&mut settings, true).unwrap();
+        assert!(settings.independent_verifier_enabled);
+        assert_eq!(settings.verifier_model, "granite4.2:8b-q8_0");
+        assert_eq!(settings.mode, Mode::HumanReview);
+        managed.version = 2;
+        assert!(managed.validate().is_err());
+    }
+
 }

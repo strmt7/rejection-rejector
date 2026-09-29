@@ -1,6 +1,8 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
-    config::{LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS, Settings, Tone},
+    config::{
+        LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS, Settings, Tone, VERIFIER_CANDIDATES,
+    },
     types::{Job, JobState, OperationState, OperationStatus, hash},
     worker::{Command, Snapshot, Worker},
 };
@@ -535,13 +537,16 @@ impl App {
     }
     fn local_ai(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         let model_config_dirty = self.settings.model != s.settings.model
+            || self.settings.independent_verifier_enabled
+                != s.settings.independent_verifier_enabled
+            || self.settings.verifier_model != s.settings.verifier_model
             || self.settings.num_ctx != s.settings.num_ctx
             || self.settings.ollama_url != s.settings.ollama_url
             || self.settings.llm_timeout_seconds != s.settings.llm_timeout_seconds;
         Self::heading(
             ui,
             "Intelligence that stays local",
-            "One Ollama model for detection, drafting and a separate verification pass. No hosted inference fallback.",
+            "Primary local model for classification/drafting, with optional sequential independent verification. No hosted inference fallback.",
         );
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
@@ -576,6 +581,30 @@ impl App {
                         &s.model.message
                     });
                     ui.end_row();
+                    ui.label("Independent verifier");
+                    ui.label(if s.settings.independent_verifier_enabled {
+                        format!(
+                            "{} · {}",
+                            s.settings.verifier_model,
+                            s.settings
+                                .verifier_model_digest
+                                .as_deref()
+                                .map(|digest| format!("pinned {}", &digest[..digest.len().min(12)]))
+                                .unwrap_or_else(|| "not qualified".into())
+                        )
+                    } else {
+                        "Disabled".into()
+                    });
+                    ui.end_row();
+                    if s.settings.independent_verifier_enabled {
+                        ui.label("Verifier GPU status");
+                        ui.label(if s.verifier_model.message.is_empty() {
+                            "Not yet run"
+                        } else {
+                            &s.verifier_model.message
+                        });
+                        ui.end_row();
+                    }
                     ui.label("Task qualification");
                     if let Some(qualification) = &s.settings.task_qualification {
                         ui.label(format!(
@@ -638,12 +667,43 @@ impl App {
                 {
                     self.worker.command(Command::QualifyModel);
                 }
+                if s.settings.independent_verifier_enabled {
+                    if ui
+                        .add_enabled(
+                            s.busy.is_empty() && !s.demo && !model_config_dirty,
+                            egui::Button::new("Download verifier"),
+                        )
+                        .clicked()
+                    {
+                        self.worker.command(Command::PullVerifierModel);
+                    }
+                    if ui
+                        .add_enabled(
+                            s.busy.is_empty() && !s.demo && !model_config_dirty,
+                            egui::Button::new("Refresh verifier"),
+                        )
+                        .clicked()
+                    {
+                        self.worker.command(Command::InspectVerifierModel);
+                    }
+                    if ui
+                        .add_enabled(
+                            s.busy.is_empty() && !s.demo && !model_config_dirty,
+                            egui::Button::new("Qualify verifier"),
+                        )
+                        .clicked()
+                    {
+                        self.worker.command(Command::QualifyVerifierModel);
+                    }
+                }
                 if ui
                     .add_enabled(
                         s.busy.is_empty()
                             && !s.demo
                             && !model_config_dirty
-                            && s.settings.model_digest.is_some(),
+                            && s.settings.model_digest.is_some()
+                            && (!s.settings.independent_verifier_enabled
+                                || s.settings.verifier_model_digest.is_some()),
                         egui::Button::new("Evaluate current model"),
                     )
                     .clicked()
@@ -720,6 +780,62 @@ impl App {
                     }
                 }
             });
+            ui.separator();
+            ui.add_enabled_ui(!s.enterprise_policy.require_independent_verifier, |ui| {
+                ui.checkbox(
+                    &mut self.settings.independent_verifier_enabled,
+                    "Use a different local model for the verification pass",
+                );
+            });
+            if s.enterprise_policy.require_independent_verifier {
+                self.settings.independent_verifier_enabled = true;
+                ui.label(
+                    RichText::new("Independent verification is required by enterprise policy.")
+                        .small()
+                        .color(AMBER),
+                );
+            }
+            if self.settings.independent_verifier_enabled {
+                ui.label("Independent verifier model tag");
+                if s.enterprise_policy.allowed_verifier_models.is_empty() {
+                    ui.text_edit_singleline(&mut self.settings.verifier_model);
+                } else {
+                    egui::ComboBox::from_id_salt("enterprise_verifier_allowlist")
+                        .selected_text(&self.settings.verifier_model)
+                        .show_ui(ui, |ui| {
+                            for model in &s.enterprise_policy.allowed_verifier_models {
+                                ui.selectable_value(
+                                    &mut self.settings.verifier_model,
+                                    model.clone(),
+                                    model,
+                                );
+                            }
+                        });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Verifier quick choices").small().color(MUTED));
+                    for (label, tag) in VERIFIER_CANDIDATES {
+                        let allowed = s.enterprise_policy.allowed_verifier_models.is_empty()
+                            || s.enterprise_policy
+                                .allowed_verifier_models
+                                .iter()
+                                .any(|model| model == tag);
+                        if ui
+                            .add_enabled(allowed, egui::Button::new(label).small())
+                            .clicked()
+                        {
+                            self.settings.verifier_model = tag.into();
+                        }
+                    }
+                });
+                ui.label(
+                    RichText::new(
+                        "Sequential mode unloads the primary before verifier inference, so only one model must fit VRAM at a time. When enabled, verifier failure never falls back to same-model verification.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+            }
             egui::ComboBox::from_id_salt("model_context")
                 .selected_text(format!("{} tokens", self.settings.num_ctx))
                 .show_ui(ui, |ui| {
@@ -751,12 +867,15 @@ impl App {
             && self.settings.model == s.settings.model
             && self.settings.num_ctx == s.settings.num_ctx
             && self.settings.ollama_url == s.settings.ollama_url;
+        let verifier_ready = !self.settings.independent_verifier_enabled
+            || self.settings.verifier_model_digest.is_some();
         let task_qualification_ready = self.settings.task_qualification_current();
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
         let automatic_prerequisites = s.connected
             && s.send_scope
             && qualified_model_matches_draft
+            && verifier_ready
             && task_qualification_ready
             && signature_ready;
         Self::heading(
@@ -928,6 +1047,10 @@ impl App {
                     (
                         "Current model smoke-qualified & pinned",
                         qualified_model_matches_draft,
+                    ),
+                    (
+                        "Independent verifier qualified when enabled",
+                        verifier_ready,
                     ),
                     (
                         "Task-specific evaluation passed for this exact configuration",

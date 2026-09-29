@@ -66,6 +66,8 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
         }),
         model: settings.model.clone(),
         model_digest: settings.model_digest.clone().unwrap(),
+        verification_model: settings.model.clone(),
+        verification_model_digest: settings.model_digest.clone().unwrap(),
         prompt_version: PROMPT_VERSION.into(),
         email_fingerprint: email.fingerprint(),
         verified_draft_hash: Some(hash(&draft.body)),

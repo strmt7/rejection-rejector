@@ -139,6 +139,7 @@ pub struct Engine {
     pub settings: Settings,
     pub account: String,
     pub model: ModelStatus,
+    pub verifier_model: ModelStatus,
     pub demo: bool,
     pub paused: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
@@ -224,6 +225,7 @@ impl Engine {
         }
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
+        let settings_migrated = settings.migrate_format()?;
         let repaired = settings.repair_legacy_automatic_state();
         let crash_disarmed =
             disarm_after_unclean_session(&mut settings, previous_unclean_session && !demo);
@@ -234,7 +236,12 @@ impl Engine {
             None => false,
         };
         settings.validate()?;
-        if repaired || crash_disarmed || policy_changed || revision_floor_changed {
+        if settings_migrated
+            || repaired
+            || crash_disarmed
+            || policy_changed
+            || revision_floor_changed
+        {
             let mut upserts = vec![("settings", serde_json::to_value(&settings)?)];
             if revision_floor_changed {
                 upserts.push((
@@ -256,6 +263,8 @@ impl Engine {
                     loaded.policy.revision.unwrap_or_default(),
                     loaded.digest
                 )
+            } else if settings_migrated {
+                "Encrypted settings migrated from format v1 to v2; prior task qualification was invalidated and unattended delivery was disabled".into()
             } else if crash_disarmed {
                 "Previous runtime session ended uncleanly; unattended delivery was disabled fail-closed"
                     .into()
@@ -270,6 +279,8 @@ impl Engine {
                 &[],
                 if revision_floor_changed {
                     "policy.accepted"
+                } else if settings_migrated {
+                    "settings.migrated"
                 } else {
                     "settings.repaired"
                 },
@@ -294,6 +305,7 @@ impl Engine {
             settings,
             account,
             model: ModelStatus::default(),
+            verifier_model: ModelStatus::default(),
             demo,
             paused,
             stop,
@@ -406,6 +418,7 @@ impl Engine {
         if settings_changed {
             self.settings = settings;
             self.model = ModelStatus::default();
+            self.verifier_model = ModelStatus::default();
         }
         self.enterprise_policy = loaded;
         Ok(true)
@@ -478,21 +491,31 @@ impl Engine {
         let model_configuration_changed = settings.model != self.settings.model
             || settings.num_ctx != self.settings.num_ctx
             || settings.ollama_url != self.settings.ollama_url;
-        let task_context_changed =
-            settings_context_hash(&settings) != settings_context_hash(&self.settings);
+        let verifier_configuration_changed =
+            settings.verifier_model != self.settings.verifier_model
+                || settings.independent_verifier_enabled
+                    != self.settings.independent_verifier_enabled
+                || settings.num_ctx != self.settings.num_ctx
+                || settings.ollama_url != self.settings.ollama_url;
         if model_configuration_changed {
             settings.model_digest = None;
-            settings.task_qualification = None;
-            settings.disarm_delivery();
             self.model = ModelStatus::default();
         } else {
             settings.model_digest = self.settings.model_digest.clone();
-            if task_context_changed {
-                settings.task_qualification = None;
-                settings.disarm_delivery();
-            } else {
-                settings.task_qualification = self.settings.task_qualification.clone();
-            }
+        }
+        if verifier_configuration_changed {
+            settings.verifier_model_digest = None;
+            self.verifier_model = ModelStatus::default();
+        } else {
+            settings.verifier_model_digest = self.settings.verifier_model_digest.clone();
+        }
+        let task_context_changed =
+            settings_context_hash(&settings) != settings_context_hash(&self.settings);
+        if model_configuration_changed || verifier_configuration_changed || task_context_changed {
+            settings.task_qualification = None;
+            settings.disarm_delivery();
+        } else {
+            settings.task_qualification = self.settings.task_qualification.clone();
         }
         settings.validate()?;
         ensure!(
@@ -532,6 +555,53 @@ impl Engine {
         )?;
         Ok(())
     }
+    pub fn qualify_verifier(&mut self) -> Result<()> {
+        let status = Ollama::new(&self.settings)?.qualify_verifier()?;
+        self.settings.disarm_delivery();
+        self.settings.verifier_model_digest = Some(status.digest.clone());
+        self.settings.task_qualification = None;
+        self.db.set_meta("settings", &self.settings)?;
+        self.verifier_model = status;
+        self.db.log(
+            "model.verifier_qualified",
+            None,
+            "Independent verifier smoke test and GPU residency passed; verifier digest pinned. Automatic mode remains disarmed until the full task evaluation passes.",
+        )?;
+        Ok(())
+    }
+
+    pub fn inspect_verifier_model_status(&mut self) -> Result<()> {
+        let local = Ollama::new(&self.settings)?;
+        let mut status = local.inspect_verifier()?;
+        if let Some(pin) = &self.settings.verifier_model_digest {
+            let expected = pin.trim_start_matches("sha256:");
+            let actual = status.digest.trim_start_matches("sha256:");
+            if expected != actual {
+                status.gpu_resident = false;
+                status.message =
+                    "Installed verifier digest differs from the qualified pin; qualify again".into();
+            } else {
+                let mut verifier_settings = self.settings.clone();
+                verifier_settings.disarm_delivery();
+                verifier_settings.task_qualification = None;
+                verifier_settings.model = verifier_settings.verifier_model.clone();
+                verifier_settings.model_digest = Some(pin.clone());
+                verifier_settings.independent_verifier_enabled = false;
+                match Ollama::new(&verifier_settings)?.residency(&status.digest) {
+                    Ok(resident) => status = resident,
+                    Err(error) => {
+                        status.gpu_resident = false;
+                        status.message = format!(
+                            "Pinned verifier is installed but not currently confirmed GPU-resident: {error}"
+                        );
+                    }
+                }
+            }
+        }
+        self.verifier_model = status;
+        Ok(())
+    }
+
     pub fn compact_database(&mut self) -> Result<crate::store::DatabaseCompactionReport> {
         ensure!(
             !self.demo,
@@ -1436,6 +1506,17 @@ pub fn automatic_policy(
             &mut blocks,
             AutomaticPolicyCode::AnalysisIdentityStale,
             "Analysis identity is stale",
+        );
+    }
+    if settings.independent_verifier_enabled
+        && (analysis.verification_model != settings.verifier_model
+            || settings.verifier_model_digest.as_ref()
+                != Some(&analysis.verification_model_digest))
+    {
+        push_policy_block(
+            &mut blocks,
+            AutomaticPolicyCode::AnalysisIdentityStale,
+            "Independent-verifier provenance is stale",
         );
     }
     if !settings.task_qualification_current() {
