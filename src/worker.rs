@@ -1690,11 +1690,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let stored_verifier: String = engine
-            .db
-            .meta(api_auth::TOKEN_HASH_META)
-            .unwrap()
-            .unwrap();
+        let stored_verifier: String = engine.db.meta(api_auth::TOKEN_HASH_META).unwrap().unwrap();
         assert_eq!(stored_verifier.len(), 64);
 
         let snapshot = shared.lock().unwrap();
