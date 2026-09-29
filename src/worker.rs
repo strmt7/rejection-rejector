@@ -674,8 +674,7 @@ fn run(
                 let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
                     let runtime = crate::runtime_log::performance_summary(&e.directory)?;
                     Ok(crate::metrics::render_openmetrics_with_runtime(
-                        &snapshot,
-                        &runtime,
+                        &snapshot, &runtime,
                     ))
                 });
                 if let Ok(text) = data {
