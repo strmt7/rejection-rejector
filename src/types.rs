@@ -124,6 +124,10 @@ pub struct Analysis {
     pub verification: Option<Verification>,
     pub model: String,
     pub model_digest: String,
+    #[serde(default)]
+    pub verification_model: String,
+    #[serde(default)]
+    pub verification_model_digest: String,
     pub prompt_version: String,
     pub email_fingerprint: String,
     pub verified_draft_hash: Option<String>,

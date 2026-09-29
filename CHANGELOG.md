@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+Enterprise AI-verification hardening.
+
+- Adds opt-in sequential independent verification with a separately pinned local model while keeping one model intentionally GPU-resident at a time.
+- Adds Granite 4.2 8B Q8 as the default verifier candidate plus smaller verifier choices.
+- Persists verifier provenance on each analysis and binds verifier enablement/tag/digest into task qualification.
+- Adds enterprise policy v3 controls to require independent verification and restrict verifier tags.
+- Migrates encrypted settings format v1 to v2 fail-closed, invalidating prior task qualification and unattended delivery.
+- Bumps the pre-1.0 Rust library version because public configuration/policy/status/analysis structs gain verifier fields.
+
+
 ## 0.1.0
 
 Standalone Rust library, native Windows-oriented desktop application and CLI.

@@ -8,7 +8,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Gmail OAuth tokens and mailbox payloads are encrypted locally. Windows Credential Manager/macOS Keychain hold the application master key; no plaintext key fallback exists.
 - Local inference is restricted to a literal loopback Ollama origin. Remote/cloud model markers are rejected.
 - Human Review is the default and sending is disabled by default.
-- Automatic dispatch requires model/digest/context/source/draft identity, complete input, model verification, full reported GPU residency, deterministic current-message rejection evidence, cooldown, rolling send cap and a fresh Gmail conversation preflight.
+- Automatic dispatch requires model/digest/context/source/draft identity, complete input, model verification, full reported GPU residency, deterministic current-message rejection evidence, cooldown, rolling send cap and a fresh Gmail conversation preflight. Optional sequential independent verification can use a different pinned local model; policy v3 can require it and restrict verifier tags.
 - Ambiguous network delivery is never blindly retried. Delivery enters an Uncertain state and requires reconciliation.
 - SQLite uses WAL, FULL synchronization, foreign keys, secure-delete and authenticated encrypted payloads. Database migrations authenticate the existing vault marker before mutating old schemas.
 - CI builds/tests Windows and Linux, treats clippy warnings as errors, runs native GUI smoke captures, and checks that validation does not modify tracked source.
@@ -42,7 +42,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 1. **Publisher trust:** release ZIPs can be provenance/SBOM-attested and shipped binaries can embed dependency provenance, but Windows binaries are not Authenticode-signed and there is no signed MSIX/MSI/update channel.
 2. **Live acceptance:** CI does not authorize a real Gmail account, send a real reply, or certify provider-side behavior.
 3. **Physical GPU certification:** Ollama residency is checked, but whole-device transient peaks and every driver/backend combination are not certified.
-4. **Independent AI verifier:** drafting and verification currently use the same local model; deterministic Rust gates compensate for correlated model errors but do not make the verifier independent.
+4. **Independent-verifier acceptance:** the sequential dual-model path is implemented and can be policy-required, but each chosen primary/verifier pair still requires target-GPU and independently labelled private-mailbox acceptance; model diversity reduces but does not eliminate correlated errors.
 5. **Accessibility:** Linux native screenshots and geometry checks exist, but Windows Narrator, keyboard-only navigation, IME and 100/125/150/200% DPI acceptance remain owner-environment work.
 6. **Enterprise deployment:** a local administrator policy overlay and least-privilege per-user Windows Task Scheduler worker are implemented, but signed MSI/MSIX/Intune packaging is not. A LocalSystem-style Windows service is intentionally not used because it would change the user Credential Manager trust boundary.
 7. **Portable-recovery usability:** the recovery-key cryptographic path is implemented, but GUI-first recovery/import and organization-managed key escrow integrations are not yet implemented.

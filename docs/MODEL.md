@@ -33,6 +33,19 @@ Explicit tags are used for presets. The app pins the exact installed digest afte
 
 The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic seeding and low temperature. Email text is untrusted data. Input budgets and incomplete generations fail closed for Automatic mode.
 
+## Independent enterprise verifier
+
+High-assurance Automatic mode can use a second local model only for the verification pass. The default candidate is **`granite4.2:8b-q8_0`**. Ollama lists this Q8 build at about **9.3 GB** with 128K context, and IBM positions Granite 4.2 for enterprise text classification, extraction, multilingual dialogue and structured JSON. The primary and verifier run sequentially, never intentionally resident together.
+
+Smaller **`granite4.2:3b-q8_0`** (~3.9 GB) and **`qwen3.5:4b`** (~3.4 GB default quantization) remain lower-latency verifier candidates. Every primary/verifier pair must still pass the repository's task-specific evaluation on the target machine.
+
+Independent verification reduces correlated model error but does not make model failures mathematically independent or replace deterministic Rust gates. If enabled, verifier failure blocks unattended action rather than falling back to the primary model.
+
+Sources checked 2026-09-29:
+- https://ollama.com/library/granite4.2
+- https://ollama.com/library/granite4.2/tags
+- https://ollama.com/library/qwen3.5:4b
+
 ## Qualification
 
 **Qualify & pin** is an end-to-end application test, not a download check. It:

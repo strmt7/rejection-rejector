@@ -41,6 +41,7 @@ pub struct Snapshot {
     pub scheduled_backup: Option<crate::recovery::ScheduledBackupStatus>,
     pub backup_isolation: Option<crate::recovery::BackupIsolationStatus>,
     pub model: ModelStatus,
+    pub verifier_model: ModelStatus,
     pub last_poll: Option<DateTime<Utc>>,
     pub next_poll: Option<DateTime<Utc>>,
     pub items: Vec<Job>,
@@ -160,6 +161,9 @@ pub enum Command {
     PullModel,
     InspectModel,
     QualifyModel,
+    PullVerifierModel,
+    InspectVerifierModel,
+    QualifyVerifierModel,
     EvaluateModel,
     ProfileModel,
     CompareModels,
@@ -221,9 +225,9 @@ impl Command {
             Self::Settings(_) => OperationKind::UpdateSettings,
             Self::InstallOllama => OperationKind::InstallOllama,
             Self::StartOllama => OperationKind::StartOllama,
-            Self::PullModel => OperationKind::PullModel,
-            Self::InspectModel => OperationKind::InspectModel,
-            Self::QualifyModel => OperationKind::QualifyModel,
+            Self::PullModel | Self::PullVerifierModel => OperationKind::PullModel,
+            Self::InspectModel | Self::InspectVerifierModel => OperationKind::InspectModel,
+            Self::QualifyModel | Self::QualifyVerifierModel => OperationKind::QualifyModel,
             Self::EvaluateModel => OperationKind::EvaluateModel,
             Self::ProfileModel => OperationKind::ProfileModel,
             Self::CompareModels => OperationKind::CompareModels,
@@ -432,6 +436,7 @@ fn refresh(
         crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now()).ok();
     s.backup_isolation = crate::recovery::backup_isolation_status(&e.directory, &e.settings).ok();
     s.model = e.model.clone();
+    s.verifier_model = e.verifier_model.clone();
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
     s.items = items;
@@ -722,9 +727,19 @@ fn run(
                         Ollama::new(&e.settings)
                             .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &pulse, &p)))
                     }
+                    Command::PullVerifierModel => {
+                        busy(&shared, &pulse, "Downloading the independent verifier model…");
+                        Ollama::new(&e.settings).and_then(|o| {
+                            o.pull_verifier(&e.stop, |p| busy(&shared, &pulse, &p))
+                        })
+                    }
                     Command::InspectModel => {
                         busy(&shared, &pulse, "Refreshing local model status…");
                         e.inspect_model_status()
+                    }
+                    Command::InspectVerifierModel => {
+                        busy(&shared, &pulse, "Refreshing independent verifier status…");
+                        e.inspect_verifier_model_status()
                     }
                     Command::QualifyModel => {
                         busy(
@@ -733,6 +748,16 @@ fn run(
                             "Running a local model smoke test and checking GPU residency…",
                         );
                         let r = e.qualify();
+                        settings_changed = r.is_ok();
+                        r
+                    }
+                    Command::QualifyVerifierModel => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Qualifying the independent verifier and checking sequential GPU residency…",
+                        );
+                        let r = e.qualify_verifier();
                         settings_changed = r.is_ok();
                         r
                     }

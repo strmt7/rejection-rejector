@@ -8,6 +8,12 @@ pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
 pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
 pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
 pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
+pub const DEFAULT_VERIFIER_MODEL: &str = "granite4.2:8b-q8_0";
+pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
+    ("Granite 4.2 8B Q8 · enterprise default", "granite4.2:8b-q8_0"),
+    ("Granite 4.2 3B Q8 · lower latency", "granite4.2:3b-q8_0"),
+    ("Qwen3.5 4B · compact independent check", "qwen3.5:4b"),
+];
 /// Old runtimes are rejected because structured-output and newer model support
 /// are part of the application's correctness boundary.
 pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 34, 4);
@@ -32,8 +38,8 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
 ];
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
-pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v4";
-pub const SETTINGS_FORMAT_VERSION: u32 = 1;
+pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v5";
+pub const SETTINGS_FORMAT_VERSION: u32 = 2;
 
 fn default_settings_format_version() -> u32 {
     SETTINGS_FORMAT_VERSION
@@ -122,6 +128,9 @@ pub struct Settings {
     pub model: String,
     pub model_digest: Option<String>,
     pub task_qualification: Option<TaskQualification>,
+    pub independent_verifier_enabled: bool,
+    pub verifier_model: String,
+    pub verifier_model_digest: Option<String>,
     pub ollama_url: String,
     pub num_ctx: u32,
     pub llm_timeout_seconds: u64,
@@ -153,6 +162,9 @@ impl Default for Settings {
             model: DEFAULT_MODEL.into(),
             model_digest: None,
             task_qualification: None,
+            independent_verifier_enabled: false,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: None,
             ollama_url: "http://127.0.0.1:11434".into(),
             num_ctx: 8192,
             llm_timeout_seconds: 600,
@@ -251,11 +263,25 @@ impl Settings {
         }
         validate_local_url(&self.ollama_url)?;
         validate_model_name(&self.model)?;
+        validate_model_name(&self.verifier_model)?;
+        if self.independent_verifier_enabled {
+            ensure!(
+                self.verifier_model != self.model,
+                "Independent verifier must use a different model tag from the primary model"
+            );
+        }
         if let Some(digest) = &self.model_digest {
             let d = digest.strip_prefix("sha256:").unwrap_or(digest);
             ensure!(
                 d.len() == 64 && d.bytes().all(|c| c.is_ascii_hexdigit()),
                 "Invalid model digest"
+            );
+        }
+        if let Some(digest) = &self.verifier_model_digest {
+            let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
+            ensure!(
+                digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
+                "Invalid independent-verifier model digest"
             );
         }
         if let Some(qualification) = &self.task_qualification {
@@ -319,6 +345,12 @@ impl Settings {
                 self.model_digest.is_some(),
                 "Qualify and pin the local model before enabling Automatic mode"
             );
+            if self.independent_verifier_enabled {
+                ensure!(
+                    self.verifier_model_digest.is_some(),
+                    "Qualify and pin the independent verifier before enabling Automatic mode"
+                );
+            }
             let qualification = self.task_qualification.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "Run the task-specific model evaluation before enabling Automatic mode"
@@ -340,6 +372,26 @@ impl Settings {
         }
         Ok(())
     }
+    pub fn migrate_format(&mut self) -> Result<bool> {
+        match self.settings_format_version {
+            SETTINGS_FORMAT_VERSION => Ok(false),
+            1 => {
+                self.settings_format_version = SETTINGS_FORMAT_VERSION;
+                self.independent_verifier_enabled = false;
+                self.verifier_model = DEFAULT_VERIFIER_MODEL.into();
+                self.verifier_model_digest = None;
+                self.task_qualification = None;
+                self.disarm_delivery();
+                Ok(true)
+            }
+            version if version > SETTINGS_FORMAT_VERSION => anyhow::bail!(
+                "Settings were written by a newer application format version {version}; current version is {}",
+                SETTINGS_FORMAT_VERSION
+            ),
+            version => anyhow::bail!("Unsupported legacy settings format version {version}"),
+        }
+    }
+
     pub fn disarm_delivery(&mut self) {
         self.mode = Mode::HumanReview;
         self.sending_enabled = false;
@@ -402,6 +454,19 @@ pub fn settings_context_hash(settings: &Settings) -> String {
         digest.update([0]);
     }
     digest.update(settings.num_ctx.to_le_bytes());
+    digest.update([u8::from(settings.independent_verifier_enabled)]);
+    if settings.independent_verifier_enabled {
+        digest.update(settings.verifier_model.as_bytes());
+        digest.update([0]);
+        digest.update(
+            settings
+                .verifier_model_digest
+                .as_deref()
+                .unwrap_or("<unqualified>")
+                .as_bytes(),
+        );
+        digest.update([0]);
+    }
     format!("{:x}", digest.finalize())
 }
 
@@ -650,4 +715,39 @@ mod tests {
     fn cloud_tag_denied() {
         assert!(validate_model_name("gemma4:31b-cloud").is_err());
     }
+
+    #[test]
+    fn explicit_v1_settings_migrate_fail_closed_to_v2() {
+        let mut settings = Settings {
+            settings_format_version: 1,
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            model_digest: Some("a".repeat(64)),
+            ..Settings::default()
+        };
+        assert!(settings.migrate_format().unwrap());
+        assert_eq!(settings.settings_format_version, SETTINGS_FORMAT_VERSION);
+        assert_eq!(settings.mode, Mode::HumanReview);
+        assert!(!settings.sending_enabled);
+        assert!(settings.task_qualification.is_none());
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn independent_verifier_is_distinct_pinned_and_task_bound() {
+        let mut settings = Settings {
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_MODEL.into(),
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.verifier_model = DEFAULT_VERIFIER_MODEL.into();
+        settings.validate().unwrap();
+        let base_hash = settings_context_hash(&settings);
+        settings.verifier_model_digest = Some("b".repeat(64));
+        assert_ne!(base_hash, settings_context_hash(&settings));
+    }
+
 }

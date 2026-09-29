@@ -1,16 +1,21 @@
 {
-  "version": 2,
+  "version": 3,
   "force_human_review": false,
   "prohibit_sending": false,
   "prohibit_integration_api": false,
   "prohibit_recovery_key_export": false,
   "require_external_audit_anchor": false,
+  "require_independent_verifier": true,
   "max_daily_send_limit": 5,
   "min_cooldown_minutes": 60,
   "min_retention_days": 365,
   "allowed_models": [
     "qwen3.5:9b-q8_0",
     "granite4.2:8b-q8_0"
+  ],
+  "allowed_verifier_models": [
+    "granite4.2:8b-q8_0",
+    "granite4.2:3b-q8_0"
   ],
   "policy_id": "example-org-production",
   "revision": 1

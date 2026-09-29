@@ -10,7 +10,7 @@
 |---|---|
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
-| AI | Local Ollama classification, drafting and a separate same-model audit; structured outputs and exact evidence checks |
+| AI | Local Ollama classification/drafting plus same-model or optional sequential independent-model verification; structured outputs and deterministic safety gates |
 | Model | `qwen3.5:9b-q8_0` provisional default; Granite 4.2 8B Q8, Gemma 4 12B Q8, Ministral 3 14B and other curated challengers can be compared locally on the full task pipeline |
 | GPU target | 16 GiB; conservative 14 GiB reported-residency budget, not physical peak certification |
 | Check interval | **1 / 2 / 4 / 8 / 24 hours** |
