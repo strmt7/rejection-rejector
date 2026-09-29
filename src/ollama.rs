@@ -447,7 +447,7 @@ impl Ollama {
         let cold_pipeline = candidate.profile_pipeline(&baseline)?;
         let warm_repeat_pipeline = candidate.profile_pipeline(&baseline)?;
 
-        let target_bytes = if pinned.num_ctx <= 8192 { 3_000 } else { 8_500 };
+        let target_bytes: usize = if pinned.num_ctx <= 8192 { 3_000 } else { 8_500 };
         let sentence = "Synthetic neutral application context for local runtime profiling only. ";
         let mut filler = sentence.repeat(target_bytes.div_ceil(sentence.len()));
         filler.truncate(target_bytes);
