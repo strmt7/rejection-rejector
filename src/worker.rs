@@ -1330,15 +1330,17 @@ fn api_query_with_operation(
             let paused = e.paused.load(Ordering::SeqCst);
             let stopping = e.stop.load(Ordering::SeqCst);
             let emergency_stop = crate::emergency::status_fail_closed();
-            let readiness = crate::readiness::assess_with_emergency(
-                &e.settings,
-                integrity_ok,
-                storage.runtime_write_safe,
-                e.connected(),
-                e.send_scope(),
-                paused,
-                stopping,
-                emergency_stop.active,
+            let readiness = crate::readiness::assess_context(
+                crate::readiness::RuntimeReadinessContext {
+                    settings: &e.settings,
+                    database_integrity_ok: integrity_ok,
+                    storage_write_safe: storage.runtime_write_safe,
+                    connected: e.connected(),
+                    send_scope: e.send_scope(),
+                    paused,
+                    stopping,
+                    emergency_stop_active: emergency_stop.active,
+                },
             );
             let counts = e.db.counts(&e.account)?;
             let policy_status = e.enterprise_policy_status();

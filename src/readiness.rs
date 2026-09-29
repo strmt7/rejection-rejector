@@ -107,6 +107,18 @@ pub struct RuntimeReadiness {
     pub automatic_block_reasons: Vec<&'static str>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeReadinessContext<'a> {
+    pub settings: &'a Settings,
+    pub database_integrity_ok: bool,
+    pub storage_write_safe: bool,
+    pub connected: bool,
+    pub send_scope: bool,
+    pub paused: bool,
+    pub stopping: bool,
+    pub emergency_stop_active: bool,
+}
+
 pub fn assess(
     settings: &Settings,
     database_integrity_ok: bool,
@@ -116,7 +128,7 @@ pub fn assess(
     paused: bool,
     stopping: bool,
 ) -> RuntimeReadiness {
-    assess_with_emergency(
+    assess_context(RuntimeReadinessContext {
         settings,
         database_integrity_ok,
         storage_write_safe,
@@ -124,12 +136,14 @@ pub fn assess(
         send_scope,
         paused,
         stopping,
-        false,
-    )
+        emergency_stop_active: false,
+    })
 }
 
-/// Additive readiness entry point for deployments with an out-of-band
-/// emergency-stop sentinel. The original assess() contract remains stable.
+/// Compatibility wrapper retained because it was published as an additive v0.2 API.
+/// New code should prefer assess_context so readiness inputs remain named and
+/// auditable as the enterprise gate evolves.
+#[allow(clippy::too_many_arguments)]
 pub fn assess_with_emergency(
     settings: &Settings,
     database_integrity_ok: bool,
@@ -140,6 +154,30 @@ pub fn assess_with_emergency(
     stopping: bool,
     emergency_stop_active: bool,
 ) -> RuntimeReadiness {
+    assess_context(RuntimeReadinessContext {
+        settings,
+        database_integrity_ok,
+        storage_write_safe,
+        connected,
+        send_scope,
+        paused,
+        stopping,
+        emergency_stop_active,
+    })
+}
+
+pub fn assess_context(context: RuntimeReadinessContext<'_>) -> RuntimeReadiness {
+    let RuntimeReadinessContext {
+        settings,
+        database_integrity_ok,
+        storage_write_safe,
+        connected,
+        send_scope,
+        paused,
+        stopping,
+        emergency_stop_active,
+    } = context;
+
     let live = !stopping;
     let workspace_ready = live && database_integrity_ok && storage_write_safe;
     let mailbox_sync_ready = workspace_ready && connected;

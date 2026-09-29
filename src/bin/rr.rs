@@ -336,15 +336,17 @@ fn main() -> Result<()> {
             let backup_isolation =
                 rejection_rejector::recovery::backup_isolation_status(&e.directory, &e.settings)?;
             let emergency_stop = rejection_rejector::emergency::status_fail_closed();
-            let readiness = rejection_rejector::readiness::assess_with_emergency(
-                &e.settings,
-                database_integrity_ok,
-                storage.runtime_write_safe,
-                e.connected(),
-                e.send_scope(),
-                false,
-                false,
-                emergency_stop.active,
+            let readiness = rejection_rejector::readiness::assess_context(
+                rejection_rejector::readiness::RuntimeReadinessContext {
+                    settings: &e.settings,
+                    database_integrity_ok,
+                    storage_write_safe: storage.runtime_write_safe,
+                    connected: e.connected(),
+                    send_scope: e.send_scope(),
+                    paused: false,
+                    stopping: false,
+                    emergency_stop_active: emergency_stop.active,
+                },
             );
             let local_ai = Ollama::new(&e.settings)?;
             let runtime_version = local_ai.runtime_version().ok();
