@@ -13,6 +13,7 @@ This document defines Rejection Rejector's security model for engineering and re
 7. **Managed-policy integrity.** Enterprise policy must not be silently weakened, rolled back or replaced with unauthenticated bytes where pin/signature enforcement is configured.
 8. **Verifiable release provenance.** Shipped artifacts must be tied to a specific source commit, audited dependencies, SBOM and release workflow evidence.
 9. **Supportability without surveillance.** Health, metrics, operation correlation and runtime journaling must remain local and privacy-minimal by construction.
+10. **Crash-loop fail safety.** An unclean prior process lifetime must not silently resume unattended delivery on the next exclusive workspace session.
 
 ## Data classification and storage map
 
@@ -126,6 +127,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity; Authen
 | GitHub dependency/action compromise | upstream supply-chain attack | pinned actions, Cargo.lock, RustSec/deny/machete, CodeQL, SBOM, attestations, release lineage gates |
 | Logs leak mailbox data | developer/operator mistake | runtime log schema has no arbitrary message/error fields; secret-canary tests; semantic details remain encrypted |
 | Resource exhaustion / poison queue | malformed messages/model failures | bounded input/response sizes, timeouts, bounded command queue, per-message retry cap then Human Review |
+| Crash/power loss leaves Automatic armed | process terminates before normal teardown | private runtime-session marker survives; next exclusive startup audits the condition and disarms sending/Automatic until explicit user action |
 
 ## Security invariants — must remain testable
 
