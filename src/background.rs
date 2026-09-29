@@ -249,7 +249,9 @@ pub fn remove() -> Result<()> {
 
 #[cfg(not(windows))]
 pub fn remove() -> Result<()> {
-    bail!("Windows Task Scheduler autostart is supported only on Windows")
+    Err(anyhow::anyhow!(
+        "Windows Task Scheduler autostart is supported only on Windows"
+    ))
 }
 
 #[cfg(windows)]
