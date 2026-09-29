@@ -251,13 +251,10 @@ mod tests {
             assert!(report["runtime_log"]["total_bytes"].is_u64());
         }
         assert!(
-            report["runtime_performance"].is_object()
-                || report["runtime_performance"].is_null()
+            report["runtime_performance"].is_object() || report["runtime_performance"].is_null()
         );
         if report["runtime_performance"].is_object() {
-            assert!(
-                report["runtime_performance"]["retained_operation_records"].is_u64()
-            );
+            assert!(report["runtime_performance"]["retained_operation_records"].is_u64());
         }
         assert!(report["operational"]["queue_depth"].is_number());
         assert!(report["operational"]["degradation_reasons"].is_array());
