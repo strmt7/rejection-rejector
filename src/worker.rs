@@ -728,10 +728,13 @@ fn run(
                             .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &pulse, &p)))
                     }
                     Command::PullVerifierModel => {
-                        busy(&shared, &pulse, "Downloading the independent verifier model…");
-                        Ollama::new(&e.settings).and_then(|o| {
-                            o.pull_verifier(&e.stop, |p| busy(&shared, &pulse, &p))
-                        })
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Downloading the independent verifier model…",
+                        );
+                        Ollama::new(&e.settings)
+                            .and_then(|o| o.pull_verifier(&e.stop, |p| busy(&shared, &pulse, &p)))
                     }
                     Command::InspectModel => {
                         busy(&shared, &pulse, "Refreshing local model status…");

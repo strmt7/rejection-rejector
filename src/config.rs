@@ -10,7 +10,10 @@ pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
 pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
 pub const DEFAULT_VERIFIER_MODEL: &str = "granite4.2:8b-q8_0";
 pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
-    ("Granite 4.2 8B Q8 · enterprise default", "granite4.2:8b-q8_0"),
+    (
+        "Granite 4.2 8B Q8 · enterprise default",
+        "granite4.2:8b-q8_0",
+    ),
     ("Granite 4.2 3B Q8 · lower latency", "granite4.2:3b-q8_0"),
     ("Qwen3.5 4B · compact independent check", "qwen3.5:4b"),
 ];
@@ -749,5 +752,4 @@ mod tests {
         settings.verifier_model_digest = Some("b".repeat(64));
         assert_ne!(base_hash, settings_context_hash(&settings));
     }
-
 }

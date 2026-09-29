@@ -1093,11 +1093,13 @@ mod tests {
         };
         let primary = Ollama::new(&settings).unwrap();
         let verifier = primary.verifier_client(true).unwrap();
-        assert_eq!(verifier.settings.model, crate::config::DEFAULT_VERIFIER_MODEL);
+        assert_eq!(
+            verifier.settings.model,
+            crate::config::DEFAULT_VERIFIER_MODEL
+        );
         assert_eq!(verifier.settings.model_digest, Some("b".repeat(64)));
         assert!(!verifier.settings.independent_verifier_enabled);
         assert_eq!(verifier.settings.mode, crate::config::Mode::HumanReview);
         assert!(!verifier.settings.sending_enabled);
     }
-
 }
