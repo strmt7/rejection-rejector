@@ -233,7 +233,9 @@ fn main() -> Result<()> {
                 let runtime = rejection_rejector::runtime_log::performance_summary(&e.directory)?;
                 print!(
                     "{}",
-                    rejection_rejector::metrics::render_openmetrics_with_runtime(&metrics, &runtime)
+                    rejection_rejector::metrics::render_openmetrics_with_runtime(
+                        &metrics, &runtime
+                    )
                 );
             } else {
                 println!("{}", serde_json::to_string_pretty(&metrics)?);
