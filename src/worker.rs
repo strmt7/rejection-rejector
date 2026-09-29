@@ -488,10 +488,7 @@ fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
     }
 }
 
-fn classify_operation_failure(
-    kind: OperationKind,
-    error: &anyhow::Error,
-) -> (String, bool) {
+fn classify_operation_failure(kind: OperationKind, error: &anyhow::Error) -> (String, bool) {
     if let Some(dispatch) = error.downcast_ref::<crate::engine::DispatchFailure>() {
         return (
             dispatch.operation_code().to_owned(),
@@ -1817,24 +1814,21 @@ mod tests {
         let uncertain = anyhow::Error::new(crate::engine::DispatchFailure::reconcile(
             "Synthetic uncertain delivery",
         ));
-        let (code, retryable) =
-            classify_operation_failure(OperationKind::SendReply, &uncertain);
+        let (code, retryable) = classify_operation_failure(OperationKind::SendReply, &uncertain);
         assert_eq!(code, "reconcile_required_delivery_uncertain");
         assert!(!retryable);
 
         let rejected = anyhow::Error::new(crate::engine::DispatchFailure::review(
             "Synthetic provider rejection",
         ));
-        let (code, retryable) =
-            classify_operation_failure(OperationKind::SendReply, &rejected);
+        let (code, retryable) = classify_operation_failure(OperationKind::SendReply, &rejected);
         assert!(code.starts_with("review_required_"));
         assert!(!retryable);
 
         let retry = anyhow::Error::new(crate::engine::DispatchFailure::retryable(
             "Synthetic preflight outage",
         ));
-        let (code, retryable) =
-            classify_operation_failure(OperationKind::SendReply, &retry);
+        let (code, retryable) = classify_operation_failure(OperationKind::SendReply, &retry);
         assert_eq!(code, "retryable_dispatch");
         assert!(retryable);
     }
