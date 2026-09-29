@@ -230,9 +230,14 @@ fn main() -> Result<()> {
             )?;
             let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
             if openmetrics {
+                let runtime =
+                    rejection_rejector::runtime_log::performance_summary(&e.directory)?;
                 print!(
                     "{}",
-                    rejection_rejector::metrics::render_openmetrics(&metrics)
+                    rejection_rejector::metrics::render_openmetrics_with_runtime(
+                        &metrics,
+                        &runtime
+                    )
                 );
             } else {
                 println!("{}", serde_json::to_string_pretty(&metrics)?);
