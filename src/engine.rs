@@ -80,34 +80,65 @@ fn push_policy_block(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DispatchFailureKind {
+pub(crate) enum DispatchFailureKind {
     Retryable,
     ReviewRequired,
+    ReconcileRequired,
     StateHandled,
 }
 #[derive(Debug)]
-struct DispatchFailure {
+pub(crate) struct DispatchFailure {
     kind: DispatchFailureKind,
+    code: &'static str,
     message: String,
 }
 impl DispatchFailure {
-    fn retryable(message: impl Into<String>) -> Self {
+    pub(crate) fn retryable(message: impl Into<String>) -> Self {
+        Self::retryable_code("retryable_dispatch", message)
+    }
+    fn retryable_code(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::Retryable,
+            code,
             message: message.into(),
         }
     }
-    fn review(message: impl Into<String>) -> Self {
+    pub(crate) fn review(message: impl Into<String>) -> Self {
+        Self::review_code("review_required_dispatch", message)
+    }
+    fn review_code(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::ReviewRequired,
+            code,
+            message: message.into(),
+        }
+    }
+    fn reconcile(message: impl Into<String>) -> Self {
+        Self {
+            kind: DispatchFailureKind::ReconcileRequired,
+            code: "reconcile_required_delivery_uncertain",
             message: message.into(),
         }
     }
     fn handled(message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::StateHandled,
+            code: "dispatch_state_handled",
             message: message.into(),
         }
+    }
+    fn handled_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            kind: DispatchFailureKind::StateHandled,
+            code,
+            message: message.into(),
+        }
+    }
+    pub(crate) fn operation_code(&self) -> &'static str {
+        self.code
+    }
+    pub(crate) fn retryable_for_operator(&self) -> bool {
+        self.kind == DispatchFailureKind::Retryable
     }
 }
 impl std::fmt::Display for DispatchFailure {
@@ -129,6 +160,7 @@ fn dispatch_require(
         Err(match kind {
             DispatchFailureKind::Retryable => DispatchFailure::retryable(message),
             DispatchFailureKind::ReviewRequired => DispatchFailure::review(message),
+            DispatchFailureKind::ReconcileRequired => DispatchFailure::reconcile(message),
             DispatchFailureKind::StateHandled => DispatchFailure::handled(message),
         })
     }
@@ -1052,7 +1084,7 @@ impl Engine {
         )?;
         dispatch_require(
             self.settings.sending_enabled,
-            DispatchFailureKind::Retryable,
+            DispatchFailureKind::ReviewRequired,
             "Sending is disabled",
         )?;
         dispatch_require(
@@ -1138,10 +1170,13 @@ impl Engine {
         let gmail = self
             .gmail
             .as_mut()
-            .ok_or_else(|| DispatchFailure::retryable("Gmail is not connected"))?;
+            .ok_or_else(|| DispatchFailure::review_code(
+                "review_required_gmail_disconnected",
+                "Gmail is not connected",
+            ))?;
         dispatch_require(
             gmail.can_send(),
-            DispatchFailureKind::Retryable,
+            DispatchFailureKind::ReviewRequired,
             "Google send permission is missing",
         )?;
         let profile = gmail.profile().map_err(|error| {
@@ -1265,11 +1300,17 @@ impl Engine {
                     )
                     .map_err(|db_error| DispatchFailure::handled(db_error.to_string()))?;
                 self.checkpoint_audit_protection().map_err(|anchor_error| {
-                    DispatchFailure::handled(format!(
-                        "Gmail rejected the reply before acceptance, but the required protected audit checkpoint failed: {anchor_error}"
-                    ))
+                    DispatchFailure::handled_code(
+                        "nonretryable_audit_checkpoint_failed",
+                        format!(
+                            "Gmail rejected the reply before acceptance, but the required protected audit checkpoint failed: {anchor_error}"
+                        ),
+                    )
                 })?;
-                Err(DispatchFailure::handled(error.message))
+                Err(DispatchFailure::review_code(
+                    "review_required_gmail_send_rejected",
+                    error.message,
+                ))
             }
             Err(error) => {
                 self.db
@@ -1281,7 +1322,7 @@ impl Engine {
                         error.message
                     )));
                 }
-                Err(DispatchFailure::handled(format!(
+                Err(DispatchFailure::reconcile(format!(
                     "{} Do not resend. Use Reconcile to check Gmail Sent.",
                     error.message
                 )))

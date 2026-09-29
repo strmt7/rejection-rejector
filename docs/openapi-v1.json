@@ -197,10 +197,12 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Stable operation failure code. retryable_* permits bounded retry; review_required_* requires operator/user action; reconcile_required_* means an external write may have crossed the boundary and must not be retried before reconciliation. Other codes are non-retryable unless retryable=true."
           },
           "retryable": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True only when retrying this operation after bounded backoff is safe. External-write ambiguity is false and uses a reconcile_required_* code."
           },
           "message": {
             "type": "string"

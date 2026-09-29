@@ -488,6 +488,29 @@ fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
     }
 }
 
+fn classify_operation_failure(
+    kind: OperationKind,
+    error: &anyhow::Error,
+) -> (String, bool) {
+    if let Some(dispatch) = error.downcast_ref::<crate::engine::DispatchFailure>() {
+        return (
+            dispatch.operation_code().to_owned(),
+            dispatch.retryable_for_operator(),
+        );
+    }
+    if let Some(fetch) = error.downcast_ref::<crate::gmail::FetchFailure>() {
+        return match fetch.kind {
+            crate::gmail::FetchFailureKind::Infrastructure => {
+                ("retryable_gmail_fetch".into(), true)
+            }
+            crate::gmail::FetchFailureKind::MalformedMessage => {
+                ("review_required_malformed_message".into(), false)
+            }
+        };
+    }
+    (kind.failure_code().into(), kind.retryable())
+}
+
 fn report(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
@@ -515,14 +538,15 @@ fn report(
             }
             Err(e) => {
                 let message = format!("{e:#}");
+                let (code, retryable) = classify_operation_failure(kind, e);
                 s.error = message.clone();
                 s.notice.clear();
                 s.operation = OperationStatus {
                     operation_id: s.operation.operation_id.clone(),
                     kind,
                     state: OperationState::Failed,
-                    code: Some(kind.failure_code().into()),
-                    retryable: kind.retryable(),
+                    code: Some(code),
+                    retryable,
                     message,
                     started_at: s.operation.started_at,
                     finished_at,
@@ -1786,6 +1810,33 @@ mod tests {
         assert!(recovered.worker_responsive);
         assert_eq!(recovered.current_operation, OperationKind::Idle);
         assert!(recovered.operation_started_at.is_none());
+    }
+
+    #[test]
+    fn delivery_failure_semantics_never_recommend_blind_retry() {
+        let uncertain = anyhow::Error::new(crate::engine::DispatchFailure::reconcile(
+            "Synthetic uncertain delivery",
+        ));
+        let (code, retryable) =
+            classify_operation_failure(OperationKind::SendReply, &uncertain);
+        assert_eq!(code, "reconcile_required_delivery_uncertain");
+        assert!(!retryable);
+
+        let rejected = anyhow::Error::new(crate::engine::DispatchFailure::review(
+            "Synthetic provider rejection",
+        ));
+        let (code, retryable) =
+            classify_operation_failure(OperationKind::SendReply, &rejected);
+        assert!(code.starts_with("review_required_"));
+        assert!(!retryable);
+
+        let retry = anyhow::Error::new(crate::engine::DispatchFailure::retryable(
+            "Synthetic preflight outage",
+        ));
+        let (code, retryable) =
+            classify_operation_failure(OperationKind::SendReply, &retry);
+        assert_eq!(code, "retryable_dispatch");
+        assert!(retryable);
     }
 
     #[test]

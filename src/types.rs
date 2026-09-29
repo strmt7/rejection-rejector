@@ -394,12 +394,10 @@ impl OperationKind {
                 | Self::Backup
                 | Self::RecoveryDrill
                 | Self::Diagnostics
-                | Self::SendReply
                 | Self::ReconcileDelivery
                 | Self::ApiRequest
                 | Self::EnterprisePolicyReload
                 | Self::AnalyzeQueuedMail
-                | Self::AutomaticDispatch
         )
     }
 
@@ -437,7 +435,7 @@ impl OperationKind {
 
 #[cfg(test)]
 mod operation_kind_tests {
-    use super::OperationKind;
+    use super::{FailureDisposition, OperationKind, OperationState, OperationStatus};
 
     #[test]
     fn stall_budgets_are_explicit_and_sane() {
@@ -455,6 +453,35 @@ mod operation_kind_tests {
             OperationKind::CompareModels.stall_budget_seconds()
                 >= OperationKind::EvaluateModel.stall_budget_seconds()
         );
+    }
+
+    #[test]
+    fn failure_disposition_is_derived_from_stable_codes() {
+        let mut status = OperationStatus {
+            state: OperationState::Failed,
+            code: Some("reconcile_required_delivery_uncertain".into()),
+            retryable: false,
+            ..OperationStatus::default()
+        };
+        assert_eq!(
+            status.failure_disposition(),
+            FailureDisposition::ReconcileRequired
+        );
+        status.code = Some("review_required_gmail_send_rejected".into());
+        assert_eq!(
+            status.failure_disposition(),
+            FailureDisposition::ReviewRequired
+        );
+        status.code = Some("mailbox_sync_failed".into());
+        status.retryable = true;
+        assert_eq!(status.failure_disposition(), FailureDisposition::Retryable);
+        status.retryable = false;
+        assert_eq!(
+            status.failure_disposition(),
+            FailureDisposition::NonRetryable
+        );
+        status.state = OperationState::Succeeded;
+        assert_eq!(status.failure_disposition(), FailureDisposition::None);
     }
 
     #[test]
@@ -489,6 +516,17 @@ pub enum OperationState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureDisposition {
+    #[default]
+    None,
+    Retryable,
+    ReviewRequired,
+    ReconcileRequired,
+    NonRetryable,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationStatus {
     /// Locally generated correlation UUID for one worker operation lifecycle.
@@ -500,6 +538,26 @@ pub struct OperationStatus {
     pub message: String,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+impl OperationStatus {
+    /// Interpret the stable failure-code contract without changing the serialized
+    /// OperationStatus layout used by existing integrations.
+    pub fn failure_disposition(&self) -> FailureDisposition {
+        if self.state != OperationState::Failed {
+            return FailureDisposition::None;
+        }
+        match self.code.as_deref() {
+            Some(code) if code.starts_with("reconcile_required_") => {
+                FailureDisposition::ReconcileRequired
+            }
+            Some(code) if code.starts_with("review_required_") => {
+                FailureDisposition::ReviewRequired
+            }
+            _ if self.retryable => FailureDisposition::Retryable,
+            _ => FailureDisposition::NonRetryable,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
