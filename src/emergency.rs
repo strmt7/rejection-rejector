@@ -55,7 +55,10 @@ fn evaluate(value: Option<OsString>) -> Result<EmergencyStopStatus> {
             reason: "not_configured".into(),
         });
     };
-    ensure!(!value.is_empty(), "{EMERGENCY_STOP_FILE_ENV} must not be empty");
+    ensure!(
+        !value.is_empty(),
+        "{EMERGENCY_STOP_FILE_ENV} must not be empty"
+    );
     let path = PathBuf::from(value);
     ensure!(
         path.is_absolute(),
