@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
     api_auth, audit_anchor, background, build_info, config, engine::Engine, ollama::Ollama, policy,
-    recovery, worker::Worker,
+    recovery, shadow, worker::Worker,
 };
 use std::{
     path::PathBuf,
@@ -144,6 +144,11 @@ enum Action {
     },
     /// Export a privacy-safe local diagnostics JSON report. Nothing is uploaded.
     Diagnostics {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Simulate local Automatic eligibility without Gmail preflight, reservations or sends.
+    ShadowAutomatic {
         #[arg(long)]
         out: PathBuf,
     },
@@ -616,6 +621,19 @@ fn main() -> Result<()> {
             rejection_rejector::diagnostics::write_report(&e, &out)?;
             println!(
                 "Privacy-safe diagnostics written locally to {}. Review before sharing.",
+                out.display()
+            );
+        }
+        Action::ShadowAutomatic { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            shadow::write_report(&e, &out)?;
+            println!(
+                "Read-only Automatic shadow audit written to {}. No provider preflight or external write occurred.",
                 out.display()
             );
         }

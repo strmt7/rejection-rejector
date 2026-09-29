@@ -38,6 +38,14 @@ For a local support report:
 
 The app never uploads this report automatically. Review it before sharing.
 
+Before enabling unattended delivery, generate a read-only shadow audit:
+
+```powershell
+.\rr.exe shadow-automatic --out .\automatic-shadow.json
+```
+
+The shadow audit temporarily simulates the Automatic arm state **in memory only** and includes existing reviewable backlog inside the selected age window. It reports aggregate stable policy-block codes, active/uncertain thread blocking, daily-capacity remaining, Gmail/send-scope readiness, task qualification, enterprise-policy permission, storage headroom and pause state. It does **not** run the fresh Gmail conversation preflight and therefore cannot prove that any candidate would actually be sent. It performs no reservation, send or other external write and omits mailbox/employer/message/draft content.
+
 ## Gmail incident
 
 If Gmail becomes unavailable or authorization expires:
