@@ -870,9 +870,11 @@ impl App {
         let verifier_ready = !self.settings.independent_verifier_enabled
             || self.settings.verifier_model_digest.is_some();
         let task_qualification_ready = self.settings.task_qualification_current();
+        let emergency_stop = crate::emergency::status_fail_closed();
+        let emergency_stop_clear = !emergency_stop.active;
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
-        let automatic_prerequisites = s.connected
+        let automatic_prerequisites = emergency_stop_clear && s.connected
             && s.send_scope
             && qualified_model_matches_draft
             && verifier_ready
@@ -1042,6 +1044,7 @@ impl App {
                 ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
                 ui.label(RichText::new("Automatic prerequisites").strong());
                 for (label, ready) in [
+                    ("Enterprise emergency stop cleared", emergency_stop_clear),
                     ("Gmail connected", s.connected),
                     ("Gmail send permission granted", s.send_scope),
                     (
@@ -1459,6 +1462,13 @@ impl eframe::App for App {
                             MINT,
                         );
                         ui.label(&s.notice);
+                    }
+                    let emergency_stop = crate::emergency::status_fail_closed();
+                    if emergency_stop.active {
+                        ui.colored_label(
+                            Color32::LIGHT_RED,
+                            "ENTERPRISE EMERGENCY STOP · OUTBOUND EMAIL BLOCKED",
+                        );
                     }
                     if s.demo {
                         ui.colored_label(AMBER, "SYNTHETIC DEMO · NO LIVE EMAIL");

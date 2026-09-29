@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.14.0",
+    "version": "1.15.0",
     "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket."
   },
   "servers": [
@@ -262,6 +262,9 @@
           },
           "backup_isolation": {
             "$ref": "#/components/schemas/BackupIsolationStatus"
+          },
+          "emergency_stop": {
+            "$ref": "#/components/schemas/EmergencyStopStatus"
           }
         }
       },
@@ -839,6 +842,33 @@
               "windows_volume_prefix",
               "unsupported_platform"
             ]
+          }
+        }
+      },
+      "EmergencyStopStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "configured",
+          "active",
+          "reason"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "sentinel_absent",
+              "sentinel_present",
+              "configuration_error"
+            ],
+            "description": "Privacy-safe emergency-stop state. The configured filesystem path is never returned."
           }
         }
       }

@@ -301,8 +301,10 @@ fn main() -> Result<()> {
                 let runtime = rejection_rejector::runtime_log::performance_summary(&e.directory)?;
                 print!(
                     "{}",
-                    rejection_rejector::metrics::render_openmetrics_with_runtime(
-                        &metrics, &runtime
+                    rejection_rejector::metrics::render_openmetrics_with_runtime_and_emergency(
+                        &metrics,
+                        &runtime,
+                        rejection_rejector::emergency::status_fail_closed().active,
                     )
                 );
             } else {
@@ -333,7 +335,8 @@ fn main() -> Result<()> {
             )?;
             let backup_isolation =
                 rejection_rejector::recovery::backup_isolation_status(&e.directory, &e.settings)?;
-            let readiness = rejection_rejector::readiness::assess(
+            let emergency_stop = rejection_rejector::emergency::status_fail_closed();
+            let readiness = rejection_rejector::readiness::assess_with_emergency(
                 &e.settings,
                 database_integrity_ok,
                 storage.runtime_write_safe,
@@ -341,6 +344,7 @@ fn main() -> Result<()> {
                 e.send_scope(),
                 false,
                 false,
+                emergency_stop.active,
             );
             let local_ai = Ollama::new(&e.settings)?;
             let runtime_version = local_ai.runtime_version().ok();
@@ -387,6 +391,7 @@ fn main() -> Result<()> {
                     "version": env!("CARGO_PKG_VERSION"),
                     "build": build_info::current(),
                     "configuration_readiness": readiness.clone(),
+                    "emergency_stop": emergency_stop,
                     "enterprise_policy": e.enterprise_policy_status(),
                     "storage": storage,
                     "scheduled_backup": scheduled_backup,
