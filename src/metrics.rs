@@ -100,7 +100,6 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     })
 }
 
-
 fn metric_bool(value: bool) -> u8 {
     u8::from(value)
 }
