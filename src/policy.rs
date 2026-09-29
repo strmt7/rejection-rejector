@@ -110,7 +110,7 @@ impl EnterprisePolicy {
                     );
                 }
             }
-            _ => unreachable!("version was validated above"),
+            _ => anyhow::bail!("Unsupported enterprise policy version"),
         }
         if self.version < 3 {
             ensure!(
