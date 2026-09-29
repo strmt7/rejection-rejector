@@ -163,6 +163,8 @@ enum Action {
     PolicyStatus,
     /// Validate and summarize an enterprise policy file without applying it.
     ValidatePolicy { path: PathBuf },
+    /// Print the machine-readable JSON Schema for enterprise policy files.
+    PolicySchema,
 }
 fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(path.is_file(), "Recovery passphrase file is missing");
@@ -204,9 +206,14 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&build_info::current())?);
         return Ok(());
     }
+    if matches!(&args.command, Action::PolicySchema) {
+        print!("{}", policy::schema_text());
+        return Ok(());
+    }
     let dir = args.data_dir.unwrap_or(config::data_dir()?);
     match args.command {
         Action::BuildInfo => unreachable!("BuildInfo is handled before workspace resolution"),
+        Action::PolicySchema => unreachable!("PolicySchema is handled before workspace resolution"),
         Action::Autostart { action } => {
             let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
             match action {
