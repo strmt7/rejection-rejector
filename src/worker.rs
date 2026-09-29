@@ -1683,17 +1683,34 @@ mod tests {
         rotate_api_token(&mut engine, &shared, &disabled).unwrap();
 
         assert!(disabled.load(Ordering::SeqCst));
-        let stored: String = engine.db.meta("api_token").unwrap().unwrap();
-        assert_ne!(stored, old);
-        assert!(stored.len() >= 40);
+        assert!(
+            engine
+                .db
+                .meta::<String>(api_auth::LEGACY_TOKEN_META)
+                .unwrap()
+                .is_none()
+        );
+        let stored_verifier: String = engine
+            .db
+            .meta(api_auth::TOKEN_HASH_META)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored_verifier.len(), 64);
 
         let snapshot = shared.lock().unwrap();
         assert!(!snapshot.api_listening);
-        assert_eq!(
-            snapshot.api_token.as_ref().map(|token| token.as_str()),
-            Some(stored.as_str())
-        );
+        let displayed = snapshot
+            .api_token
+            .as_ref()
+            .map(|token| token.as_str().to_owned())
+            .unwrap();
         drop(snapshot);
+
+        assert_ne!(displayed, old);
+        assert!(displayed.len() >= 40);
+        let verifier = api_auth::ApiTokenVerifier::from_hex(&stored_verifier).unwrap();
+        assert!(verifier.verify_token(&displayed));
+        assert!(!verifier.verify_token(&old));
 
         let events = engine.db.events(0, 100).unwrap();
         let event = events
@@ -1703,7 +1720,7 @@ mod tests {
         assert_eq!(event.domain, AuditDomain::Security);
         assert_eq!(event.severity, AuditSeverity::Security);
         assert!(!event.detail.contains(&old));
-        assert!(!event.detail.contains(&stored));
+        assert!(!event.detail.contains(&displayed));
     }
 
     #[test]
