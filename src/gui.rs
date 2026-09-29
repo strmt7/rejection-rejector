@@ -874,7 +874,8 @@ impl App {
         let emergency_stop_clear = !emergency_stop.active;
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
-        let automatic_prerequisites = emergency_stop_clear && s.connected
+        let automatic_prerequisites = emergency_stop_clear
+            && s.connected
             && s.send_scope
             && qualified_model_matches_draft
             && verifier_ready

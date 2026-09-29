@@ -727,11 +727,13 @@ fn run(
             Ok(Command::OpenMetrics { reply }) => {
                 let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
                     let runtime = crate::runtime_log::performance_summary(&e.directory)?;
-                    Ok(crate::metrics::render_openmetrics_with_runtime_and_emergency(
-                        &snapshot,
-                        &runtime,
-                        crate::emergency::status_fail_closed().active,
-                    ))
+                    Ok(
+                        crate::metrics::render_openmetrics_with_runtime_and_emergency(
+                            &snapshot,
+                            &runtime,
+                            crate::emergency::status_fail_closed().active,
+                        ),
+                    )
                 });
                 if let Ok(text) = data {
                     let _ = reply.try_send(text);
