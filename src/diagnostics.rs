@@ -82,7 +82,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         external_audit_anchor_configured || os_protected_audit_anchor_required;
 
     Ok(json!({
-        "report_version": 3,
+        "report_version": 4,
         "generated_at": chrono::Utc::now(),
         "privacy": {
             "contains_account_address": false,
@@ -97,6 +97,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         "readiness": readiness,
         "operational": operational,
         "runtime_log": crate::runtime_log::status(&engine.directory).ok(),
+        "runtime_performance": crate::runtime_log::performance_summary(&engine.directory).ok(),
         "storage": storage,
         "scheduled_backup": scheduled_backup,
         "backup_isolation": backup_isolation,
@@ -231,7 +232,7 @@ mod tests {
         assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
         assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
-        assert_eq!(report["report_version"], 3);
+        assert_eq!(report["report_version"], 4);
         assert_eq!(report["storage"]["schema_version"], 1);
         assert_eq!(report["scheduled_backup"]["schema_version"], 1);
         assert_eq!(report["backup_isolation"]["schema_version"], 1);
@@ -248,6 +249,15 @@ mod tests {
         assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
         if report["runtime_log"].is_object() {
             assert!(report["runtime_log"]["total_bytes"].is_u64());
+        }
+        assert!(
+            report["runtime_performance"].is_object()
+                || report["runtime_performance"].is_null()
+        );
+        if report["runtime_performance"].is_object() {
+            assert!(
+                report["runtime_performance"]["retained_operation_records"].is_u64()
+            );
         }
         assert!(report["operational"]["queue_depth"].is_number());
         assert!(report["operational"]["degradation_reasons"].is_array());
