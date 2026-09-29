@@ -169,9 +169,7 @@ impl App {
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context, s: &Snapshot) {
         if self.modal_open() {
-            if ctx.input_mut(|input| {
-                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-            }) {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 self.pending_select = None;
                 self.send_confirmation = None;
                 self.install_confirmation = false;
