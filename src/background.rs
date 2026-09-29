@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
+#[cfg(any(windows, test))]
+use anyhow::{Context, ensure};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +18,7 @@ pub struct AutostartStatus {
     pub note: String,
 }
 
+#[cfg(any(windows, test))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -25,6 +28,7 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+#[cfg(any(windows, test))]
 fn quote_windows_argument(value: &str) -> String {
     const QUOTE: char = '\u{22}';
     const BACKSLASH: char = '\u{5c}';
@@ -69,6 +73,7 @@ fn quote_windows_argument(value: &str) -> String {
     out
 }
 
+#[cfg(any(windows, test))]
 fn expected_arguments(data_dir: &Path) -> Result<String> {
     let value = data_dir
         .to_str()
@@ -80,6 +85,7 @@ fn expected_arguments(data_dir: &Path) -> Result<String> {
     Ok(format!("--data-dir {} run", quote_windows_argument(value)))
 }
 
+#[cfg(any(windows, test))]
 fn render_task_xml(user: &str, executable: &Path, data_dir: &Path) -> Result<String> {
     ensure!(
         !user.trim().is_empty() && !user.chars().any(char::is_control),
