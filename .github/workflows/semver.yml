@@ -3,12 +3,6 @@ name: Rust public API compatibility
 on:
   push:
     branches: [main]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "src/lib.rs"
-      - "src/**/*.rs"
-      - ".github/workflows/semver.yml"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +10,8 @@ permissions:
 
 concurrency:
   group: rust-semver-${{ github.ref }}
-  cancel-in-progress: true
+  # Release packaging requires exact-commit SemVer evidence.
+  cancel-in-progress: false
 
 jobs:
   semver:

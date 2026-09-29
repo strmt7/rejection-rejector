@@ -26,6 +26,15 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Operational troubleshooting uses a privacy-minimal typed JSONL runtime journal with bounded local rotation. It stores operation/event enums, stable codes and local operation-correlation UUIDs only; arbitrary errors and mailbox/profile/credential fields are structurally absent from the record schema.
 - Safety-critical mutation testing is a hard release-quality gate: surviving mutants and timeouts fail the workflow rather than being treated as advisory evidence, and changes to the guarded policy/recovery/mail files trigger it automatically. Coverage is enforced at the measured baseline ratchet of at least 61% lines and 65% functions (baseline commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` measured 61.48% / 65.13%).
 
+## Development and release governance
+
+- Repository-owner development is **main-only**. Multi-file logical changes are applied as one atomic Git tree/commit so `main` is never intentionally left in a half-applied intermediate state.
+- Critical Rust CI, public-API SemVer validation and supply-chain/SBOM validation preserve evidence for every `main` commit instead of cancelling predecessor runs merely because a newer commit arrived.
+- `cargo-semver-checks` validates the public Rust library surface. The attested Windows release gate requires successful SemVer evidence for the **exact release commit**.
+- The attested release gate also requires recent successful Windows byte-for-byte reproducibility evidence in release history, alongside fuzzing, coverage, mutation and enterprise deep-verification evidence.
+- Model evaluation has a composition floor, not only a total-case floor: the 72-case synthetic corpus must preserve strong rejection/opportunity/uncertain/benign balance and repeated multilingual, interview, ambiguity, quoted-history, prompt-injection, assessment and ATS coverage.
+- Privacy-safe runtime operation durations are retained only in the bounded local runtime journal and exposed as label-free aggregate OpenMetrics; no production availability or latency SLO is implied by those measurements.
+
 ## Enterprise gaps still open
 
 1. **Publisher trust:** release ZIPs can be provenance/SBOM-attested and shipped binaries can embed dependency provenance, but Windows binaries are not Authenticode-signed and there is no signed MSIX/MSI/update channel.

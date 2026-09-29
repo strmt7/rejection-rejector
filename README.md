@@ -76,6 +76,8 @@ Enterprise policy can be independently authenticated with SHA-256 pinning, Ed255
 - [Integration API](docs/INTEGRATION.md)
 - [Enterprise policy](docs/ENTERPRISE_POLICY.md)
 - [Enterprise readiness](docs/ENTERPRISE_READINESS.md)
+- [Operations and incident runbook](docs/OPERATIONS.md)
+- [Contribution and main-only development policy](CONTRIBUTING.md)
 - [Tests and acceptance checks](docs/TESTING.md)
 - [Security](SECURITY.md)
 - [Threat model and data-flow invariants](docs/THREAT_MODEL.md)

@@ -47,6 +47,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $required = @(
             'Rust CI',
+            'Rust public API compatibility',
             'Supply-chain security',
             'CodeQL Rust security',
             'OpenSSF Scorecard',
@@ -94,7 +95,8 @@ jobs:
             @{ Name = 'Rust fuzzing'; MaxAgeDays = 8 },
             @{ Name = 'Rust coverage'; MaxAgeDays = 8 },
             @{ Name = 'Mutation testing'; MaxAgeDays = 8 },
-            @{ Name = 'Enterprise deep verification'; MaxAgeDays = 8 }
+            @{ Name = 'Enterprise deep verification'; MaxAgeDays = 8 },
+            @{ Name = 'Windows reproducibility'; MaxAgeDays = 8 }
           )
           $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&per_page=100" | ConvertFrom-Json
           $now = [DateTimeOffset]::UtcNow

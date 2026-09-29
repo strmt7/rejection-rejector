@@ -483,38 +483,38 @@ mod tests {
         let unique: std::collections::HashSet<_> = rows.iter().map(|c| &c.id).collect();
         assert_eq!(rows.len(), unique.len());
         assert!(rows.len() >= 72);
-        for category in [
-            Category::Rejection,
-            Category::Opportunity,
-            Category::Other,
-            Category::Uncertain,
+        for (category, minimum) in [
+            (Category::Rejection, 20),
+            (Category::Opportunity, 20),
+            (Category::Other, 10),
+            (Category::Uncertain, 15),
         ] {
             assert!(
-                rows.iter().filter(|row| row.expected == category).count() >= 5,
-                "Synthetic corpus needs at least five cases for {category:?}"
+                rows.iter().filter(|row| row.expected == category).count() >= minimum,
+                "Synthetic corpus needs at least {minimum} cases for {category:?}"
             );
         }
-        for required in [
-            CaseTag::Interview,
-            CaseTag::Offer,
-            CaseTag::RecruiterCorrection,
-            CaseTag::QuotedHistory,
-            CaseTag::PromptInjection,
-            CaseTag::Ambiguous,
-            CaseTag::Multilingual,
-            CaseTag::AtsAutomation,
-            CaseTag::Assessment,
-            CaseTag::TalentPool,
-            CaseTag::RoleClosure,
-            CaseTag::ApplicationActionRequired,
-            CaseTag::Survey,
+        for (required, minimum) in [
+            (CaseTag::Multilingual, 24),
+            (CaseTag::AtsAutomation, 8),
+            (CaseTag::Interview, 15),
+            (CaseTag::Offer, 5),
+            (CaseTag::RecruiterCorrection, 3),
+            (CaseTag::QuotedHistory, 5),
+            (CaseTag::PromptInjection, 3),
+            (CaseTag::Ambiguous, 14),
+            (CaseTag::Assessment, 4),
+            (CaseTag::TalentPool, 3),
+            (CaseTag::RoleClosure, 2),
+            (CaseTag::ApplicationActionRequired, 2),
+            (CaseTag::Survey, 2),
         ] {
             assert!(
                 rows.iter()
                     .filter(|row| row.tags.contains(&required))
                     .count()
-                    >= 2,
-                "Synthetic corpus needs repeated coverage for {required:?}"
+                    >= minimum,
+                "Synthetic corpus needs at least {minimum} cases for {required:?}"
             );
         }
         assert!(

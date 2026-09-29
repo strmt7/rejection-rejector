@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: supply-chain-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve dependency/SBOM evidence for every main commit.
+  cancel-in-progress: false
 
 jobs:
   rust-policy:
