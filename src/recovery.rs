@@ -294,9 +294,9 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        return Ok(Some(
+        Ok(Some(
             fs::metadata(workspace)?.dev() == fs::metadata(backup)?.dev(),
-        ));
+        ))
     }
     #[cfg(windows)]
     {
@@ -314,10 +314,10 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
         }
         let workspace_prefix = volume_prefix(workspace)?;
         let backup_prefix = volume_prefix(backup)?;
-        return Ok(match (workspace_prefix, backup_prefix) {
+        Ok(match (workspace_prefix, backup_prefix) {
             (Some(workspace), Some(backup)) => Some(workspace == backup),
             _ => None,
-        });
+        })
     }
     #[cfg(not(any(unix, windows)))]
     {
