@@ -69,6 +69,9 @@ fn push_policy_block(
     code: AutomaticPolicyCode,
     message: impl Into<String>,
 ) {
+    if blocks.iter().any(|block| block.code == code) {
+        return;
+    }
     blocks.push(AutomaticPolicyBlock {
         code,
         message: message.into(),
