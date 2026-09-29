@@ -15,7 +15,8 @@ permissions:
   contents: read
 concurrency:
   group: rust-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Main-only development uses each commit as an auditable evidence point.
+  cancel-in-progress: false
 jobs:
   test:
     name: Verify (${{ matrix.os }})
