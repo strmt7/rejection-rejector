@@ -21,6 +21,7 @@ pub mod policy;
 pub mod readiness;
 pub mod recovery;
 pub mod runtime_log;
+mod session;
 pub mod storage;
 pub mod store;
 pub mod sync;

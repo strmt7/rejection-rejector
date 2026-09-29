@@ -10,6 +10,7 @@ use crate::{
     oauth::{self, Credentials},
     ollama::{self, ModelStatus, Ollama},
     policy::{self, LoadedPolicy, PolicyRevisionFloor, PolicyStatus},
+    session::SessionLease,
     store::Store,
     sync,
     types::*,
@@ -144,9 +145,19 @@ pub struct Engine {
     pub enterprise_policy: Option<LoadedPolicy>,
     gmail: Option<Gmail>,
     _lock: InstanceLock,
+    _session: SessionLease,
     _temporary: Option<tempfile::TempDir>,
     pub directory: PathBuf,
 }
+fn disarm_after_unclean_session(settings: &mut Settings, unclean: bool) -> bool {
+    if !unclean {
+        return false;
+    }
+    let before = settings.clone();
+    settings.disarm_delivery();
+    *settings != before
+}
+
 fn staged_policy_revision_floor(
     db: &Store,
     loaded: Option<&LoadedPolicy>,
@@ -181,6 +192,8 @@ impl Engine {
             .map(|p| p.path().to_path_buf())
             .unwrap_or(directory);
         let lock = InstanceLock::acquire(&directory)?;
+        let session = SessionLease::begin(&directory)?;
+        let previous_unclean_session = session.previous_unclean();
         let vault = if demo {
             write_new_private(
                 &directory.join("vault-id"),
@@ -212,6 +225,8 @@ impl Engine {
         db.recover_interrupted_sends()?;
         let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
         let repaired = settings.repair_legacy_automatic_state();
+        let crash_disarmed =
+            disarm_after_unclean_session(&mut settings, previous_unclean_session && !demo);
         let (revision_floor, revision_floor_changed) =
             staged_policy_revision_floor(&db, enterprise_policy.as_ref())?;
         let policy_changed = match &enterprise_policy {
@@ -219,7 +234,7 @@ impl Engine {
             None => false,
         };
         settings.validate()?;
-        if repaired || policy_changed || revision_floor_changed {
+        if repaired || crash_disarmed || policy_changed || revision_floor_changed {
             let mut upserts = vec![("settings", serde_json::to_value(&settings)?)];
             if revision_floor_changed {
                 upserts.push((
@@ -241,6 +256,9 @@ impl Engine {
                     loaded.policy.revision.unwrap_or_default(),
                     loaded.digest
                 )
+            } else if crash_disarmed {
+                "Previous runtime session ended uncleanly; unattended delivery was disabled fail-closed"
+                    .into()
             } else if policy_changed {
                 "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed".into()
             } else {
@@ -258,7 +276,14 @@ impl Engine {
                 &detail,
             )?;
         }
-        let creds: Option<Credentials> = db.meta("google_credentials")?;
+        if previous_unclean_session && !demo {
+            db.log(
+                "security.unclean_shutdown_detected",
+                None,
+                "Previous runtime session marker remained after exclusive workspace lock acquisition; unattended delivery is disabled until explicitly re-enabled",
+            )?;
+        }
+                let creds: Option<Credentials> = db.meta("google_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
         if !account.is_empty() {
             let now = Utc::now();
@@ -275,6 +300,7 @@ impl Engine {
             enterprise_policy,
             gmail: creds.map(Gmail::new),
             _lock: lock,
+            _session: session,
             _temporary: temporary,
             directory,
         };
@@ -1524,6 +1550,26 @@ pub fn auto_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unclean_session_disarms_unattended_delivery_without_erasing_model_evidence() {
+        let mut settings = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            model_digest: Some("a".repeat(64)),
+            ..Settings::default()
+        };
+        let qualification = settings.task_qualification.clone();
+        assert!(disarm_after_unclean_session(&mut settings, true));
+        assert_eq!(settings.mode, Mode::HumanReview);
+        assert!(!settings.sending_enabled);
+        assert!(!settings.automatic_confirmed);
+        assert!(settings.automatic_since.is_none());
+        assert_eq!(settings.task_qualification, qualification);
+        assert!(!disarm_after_unclean_session(&mut settings, false));
+    }
+
     #[test]
     fn demo_is_disarmed_and_editable() {
         let d = tempfile::tempdir().unwrap();
