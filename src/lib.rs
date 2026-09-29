@@ -30,6 +30,7 @@ pub mod ollama;
 pub mod policy;
 pub mod readiness;
 pub mod recovery;
+pub mod retry;
 pub mod runtime_log;
 mod session;
 pub mod shadow;

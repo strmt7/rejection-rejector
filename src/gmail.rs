@@ -86,6 +86,62 @@ pub struct Sent {
     pub id: String,
 }
 
+#[derive(Debug)]
+pub struct GmailApiError {
+    status: u16,
+    retry_after: Option<Duration>,
+}
+impl GmailApiError {
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+}
+impl std::fmt::Display for GmailApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Gmail API returned HTTP {}", self.status)
+    }
+}
+impl std::error::Error for GmailApiError {}
+
+pub fn retry_after_hint(error: &anyhow::Error) -> Option<Duration> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<GmailApiError>())
+        .and_then(GmailApiError::retry_after)
+}
+
+fn retry_after_header(response: &reqwest::blocking::Response) -> Option<Duration> {
+    let value = response.headers().get(reqwest::header::RETRY_AFTER)?;
+    let raw = value.to_str().ok()?.trim();
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(Duration::from_secs(seconds.min(60 * 60)));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(raw).ok()?;
+    let seconds = at
+        .with_timezone(&Utc)
+        .signed_duration_since(Utc::now())
+        .num_seconds()
+        .max(0) as u64;
+    Some(Duration::from_secs(seconds.min(60 * 60)))
+}
+
+fn gmail_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::blocking::Response,
+    limit: usize,
+) -> Result<T> {
+    if !response.status().is_success() {
+        return Err(GmailApiError {
+            status: response.status().as_u16(),
+            retry_after: retry_after_header(&response),
+        }
+        .into());
+    }
+    net::json(response, limit)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FetchFailureKind {
     Infrastructure,
@@ -170,14 +226,14 @@ impl Gmail {
             .context("Gmail request failed")
     }
     pub fn profile(&mut self) -> Result<Profile> {
-        net::json(self.get("/profile", &[])?, 32768)
+        gmail_json(self.get("/profile", &[])?, 32768)
     }
     pub fn list(&mut self, query: &str, page: Option<&str>) -> Result<MessagePage> {
         let mut params = vec![("q", query.into()), ("maxResults", "500".into())];
         if let Some(p) = page {
             params.push(("pageToken", p.into()));
         }
-        net::json(self.get("/messages", &params)?, 2 * 1024 * 1024)
+        gmail_json(self.get("/messages", &params)?, 2 * 1024 * 1024)
     }
     pub fn history(&mut self, start: &str, page: Option<&str>) -> Result<HistoryResult> {
         let mut params = vec![
@@ -192,7 +248,10 @@ impl Gmail {
         if response.status().as_u16() == 404 {
             return Ok(HistoryResult::Expired);
         }
-        Ok(HistoryResult::Page(net::json(response, 8 * 1024 * 1024)?))
+        Ok(HistoryResult::Page(gmail_json(
+            response,
+            8 * 1024 * 1024,
+        )?))
     }
     pub fn email(&mut self, stub: &Stub) -> std::result::Result<Option<Email>, FetchFailure> {
         validate_id(&stub.provider_id).map_err(|error| FetchFailure {
@@ -300,7 +359,7 @@ impl Gmail {
     }
     pub fn thread(&mut self, id: &str) -> Result<Thread> {
         validate_id(id)?;
-        net::json(
+        gmail_json(
             self.get(&format!("/threads/{id}"), &[("format", "minimal".into())])?,
             4 * 1024 * 1024,
         )
@@ -484,6 +543,22 @@ pub fn stub(account: &str, m: MessageRef) -> Result<Stub> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_after_header_supports_seconds_and_clamps() {
+        let server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/")
+            .with_status(429)
+            .with_header("retry-after", "7200")
+            .create();
+        let response = reqwest::blocking::get(server.url()).unwrap();
+        mock.assert();
+        assert_eq!(
+            retry_after_header(&response),
+            Some(Duration::from_secs(60 * 60))
+        );
+    }
+
     #[test]
     fn public_mime_parser_is_bounded_and_inert() {
         let raw = b"Content-Type: text/html\r\n\r\n<script>alert(1)</script><p>Rejected</p>";
