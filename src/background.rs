@@ -271,7 +271,11 @@ pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
     let actual = String::from_utf8(output.stdout)?;
     let expected_command = format!(
         "<Command>{}</Command>",
-        xml_escape(executable.to_str().context("Executable path is invalid Unicode")?)
+        xml_escape(
+            executable
+                .to_str()
+                .context("Executable path is invalid Unicode")?
+        )
     );
     let expected_arguments = format!(
         "<Arguments>{}</Arguments>",

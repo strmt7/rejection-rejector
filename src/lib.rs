@@ -3,8 +3,8 @@
 pub mod api;
 pub mod api_auth;
 pub mod audit_anchor;
-pub mod build_info;
 pub mod background;
+pub mod build_info;
 pub mod config;
 pub mod diagnostics;
 pub mod engine;
