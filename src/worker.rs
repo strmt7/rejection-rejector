@@ -4,7 +4,7 @@ use crate::{
     engine::{Engine, automatic_policy},
     ollama::{self, ModelStatus, Ollama},
     retry::{CircuitTransition, RetryGate},
-    runtime_log::{RuntimeEvent, RuntimeJournal},
+    runtime_log::{RuntimeEvent, RuntimeJournal, RuntimeSignal},
     types::*,
 };
 use anyhow::{Context, Result, ensure};
@@ -626,8 +626,8 @@ fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Durati
 fn record_circuit_transition(
     journal: &Option<RuntimeJournal>,
     transition: CircuitTransition,
-    opened: RuntimeEvent,
-    closed: RuntimeEvent,
+    opened: RuntimeSignal,
+    closed: RuntimeSignal,
 ) {
     let Some(journal) = journal else {
         return;
@@ -638,7 +638,7 @@ fn record_circuit_transition(
         CircuitTransition::None => None,
     };
     if let Some(event) = event {
-        let _ = journal.record_event(event);
+        let _ = journal.record_signal(event);
     }
 }
 
@@ -750,8 +750,8 @@ fn run(
                             record_circuit_transition(
                                 &journal,
                                 transition,
-                                RuntimeEvent::GmailCircuitOpened,
-                                RuntimeEvent::GmailCircuitClosed,
+                                RuntimeSignal::GmailCircuitOpened,
+                                RuntimeSignal::GmailCircuitClosed,
                             );
                         }
                         result
@@ -1109,8 +1109,8 @@ fn run(
             record_circuit_transition(
                 &journal,
                 transition,
-                RuntimeEvent::GmailCircuitOpened,
-                RuntimeEvent::GmailCircuitClosed,
+                RuntimeSignal::GmailCircuitOpened,
+                RuntimeSignal::GmailCircuitClosed,
             );
             report(&shared, &pulse, OperationKind::SyncMailbox, &result);
             record_current_operation(&journal, &shared);
@@ -1139,8 +1139,8 @@ fn run(
             record_circuit_transition(
                 &journal,
                 transition,
-                RuntimeEvent::LocalAiCircuitOpened,
-                RuntimeEvent::LocalAiCircuitClosed,
+                RuntimeSignal::LocalAiCircuitOpened,
+                RuntimeSignal::LocalAiCircuitClosed,
             );
             refresh(&e, &shared, selected.as_deref(), review, page)?;
         }
