@@ -1122,6 +1122,14 @@ impl App {
             );
             if self.settings.mode == Mode::Automatic {
                 ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
+                ui.label(
+                    RichText::new(format!(
+                        "Hard unattended safety ceiling: at most {} reply attempts to the same normalized recipient mailbox in any rolling 24 hours. Human Review is the only override path.",
+                        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
                 ui.label(RichText::new("Automatic prerequisites").strong());
                 for (label, ready) in [
                     ("Enterprise emergency stop cleared", emergency_stop_clear),
