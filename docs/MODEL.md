@@ -33,6 +33,28 @@ Explicit tags are used for presets. The app pins the exact installed digest afte
 
 The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic seeding and low temperature. Email text is untrusted data. Input budgets and incomplete generations fail closed for Automatic mode.
 
+## Typed decision-model R&D lane (Ollama 0.35+)
+
+Ollama 0.35 introduced the local `/v1/systemone` typed-decision API. Rejection Rejector keeps this capability **outside the production authorization path** until it earns task-specific evidence.
+
+The first candidate is **`nimble:9b-q8_0`**, a roughly 9.5 GB Q8 decision model from Bespoke Labs fine-tuned from Qwen3.5-9B. It returns a closed choice plus per-choice scores rather than free-form prose. **`tev1:4b`** is retained as a smaller experimental baseline. This architecture is attractive for the first-stage rejection/opportunity/other/uncertain decision because constrained outputs and contrastive decision training map directly to the problem, but generic decision benchmarks do not prove multilingual recruiting-email safety.
+
+Evaluate an explicitly installed decision model with:
+
+```powershell
+.\rr.exe evaluate-decision --model nimble:9b-q8_0 --out .\decision-evaluation.json
+```
+
+The evaluator uses the same 72 synthetic recruiting fixtures, sends only de-quoted synthetic subject/current-message data to the local loopback endpoint, and records no fixture text in its result rows. Recommendation eligibility requires every case to complete, a valid four-category probability contract, **zero rejection false positives**, **zero critical-negative rejection false positives**, at least **90% rejection recall**, and full Ollama-reported GPU residency after the suite.
+
+This is an R&D recommendation only. It does not write `task_qualification`, change the configured production classifier, enable sending, connect Gmail, or create a delivery reservation. Promotion into the Automatic pipeline requires a separate architecture change, target-GPU profiling and independently labelled private multilingual mailbox acceptance.
+
+Current upstream references checked 2026-10-01:
+- https://github.com/ollama/ollama/releases/tag/v0.35.0
+- https://ollama.com/library/nimble
+- https://ollama.com/library/nimble:9b-q8_0
+- https://ollama.com/library/tev1
+
 ## Independent enterprise verifier
 
 High-assurance Automatic mode can use a second local model only for the verification pass. The default candidate is **`granite4.2:8b-q8_0`**. Ollama lists this Q8 build at about **9.3 GB** with 128K context, and IBM positions Granite 4.2 for enterprise text classification, extraction, multilingual dialogue and structured JSON. The primary and verifier run sequentially, never intentionally resident together.
