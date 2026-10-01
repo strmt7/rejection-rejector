@@ -95,6 +95,14 @@ enum Action {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Evaluate an installed Ollama 0.35+ typed decision model on recruiting fixtures.
+    /// R&D only: this never authorizes or sends email.
+    EvaluateDecision {
+        #[arg(long, default_value = "nimble:9b-q8_0")]
+        model: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Profile the configured local model with cold, warm-repeat and near-context synthetic passes.
     ProfileModel {
         #[arg(long)]
@@ -476,6 +484,27 @@ fn main() -> Result<()> {
             println!(
                 "Task-specific evaluation passed and qualification was stored: {}",
                 out.display()
+            );
+        }
+        Action::EvaluateDecision { model, out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let report = rejection_rejector::decision::evaluate(&e.settings, &model, &out)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "model": model,
+                    "report": out,
+                    "recommendation_eligible": report
+                        .pointer("/summary/recommendation_eligible")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                    "note": "R&D-only decision-model evidence; no delivery authorization was changed."
+                }))?
             );
         }
         Action::ProfileModel { out } => {
