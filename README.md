@@ -38,13 +38,13 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.34.4 or newer so the current single-pass structured-output behavior for thinking models is part of the supported runtime contract:
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.35.0 or newer. In addition to the existing structured-output fixes, 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
 
 ```powershell
 .\rr.exe doctor
 ```
 
-It reports local Gmail permission/configuration state, the Ollama runtime version, model pin/install state and current GPU-residency status without printing message bodies or credentials. To compare curated models that you explicitly installed, run `rr compare-models --out model-bakeoff.json` or use **Compare installed candidates** in Local AI.
+It reports local Gmail permission/configuration state, the Ollama runtime version, model pin/install state and current GPU-residency status without printing message bodies or credentials. To compare curated generative models that you explicitly installed, run `rr compare-models --out model-bakeoff.json` or use **Compare installed candidates** in Local AI. For the new Ollama 0.35 typed-classification lane, `rr evaluate-decision --model nimble:9b-q8_0 --out decision-evaluation.json` benchmarks synthetic recruiting mail only; it does not alter delivery authorization.
 
 Fleet/deployment tooling can inspect compatibility without opening a workspace:
 
