@@ -2,7 +2,7 @@
 
 ## Reproducible source selection
 
-The final CI pipeline has read-only repository permissions. It checks out and verifies the exact triggering commit, uses the tracked Cargo.lock, pins Rust 1.98.1 and pins all workflow actions to commit SHAs. It does not edit source, run a finalization script, commit formatting changes or push to main. It fails if tracked source changes during validation.
+The final CI pipeline has read-only repository permissions. It checks out and verifies the exact triggering commit, uses the tracked Cargo.lock, pins Rust 1.99.0 and pins all workflow actions to commit SHAs. It does not edit source, run a finalization script, commit formatting changes or push to main. It fails if tracked source changes during validation.
 
 This fixes source/dependency/toolchain selection. It is not a claim of bit-for-bit binary reproducibility: hosted runner images, OS packages and some external build inputs are not immutable snapshots.
 
