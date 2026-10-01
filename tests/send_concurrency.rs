@@ -45,11 +45,11 @@ fn race(same_thread: bool, cap: u16) -> usize {
     let gate = barrier.clone();
     let first = thread::spawn(move || {
         gate.wait();
-        left.reserve_send(&a, cap, None, Utc::now()).is_ok()
+        left.reserve_send(&a, cap, Utc::now()).is_ok()
     });
     let second = thread::spawn(move || {
         barrier.wait();
-        right.reserve_send(&b, cap, None, Utc::now()).is_ok()
+        right.reserve_send(&b, cap, Utc::now()).is_ok()
     });
     usize::from(first.join().unwrap()) + usize::from(second.join().unwrap())
 }
