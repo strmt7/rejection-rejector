@@ -1264,7 +1264,7 @@ impl Engine {
             "Storage headroom is too low for durable send state",
         )?;
         self.db
-            .reserve_send(
+            .reserve_send_with_recipient_limit(
                 &job,
                 self.settings.daily_send_limit,
                 automatic.then_some(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
