@@ -29,7 +29,7 @@ A recommendation is emitted only when a model completes every case, has **zero r
 
 The task score still weights global non-rejection false-positive avoidance most heavily, but recommendation eligibility now adds explicit hard gates for the critical-negative cohort. This prevents a superficially high average from masking a catastrophic reply to an interview, offer, corrected rejection, quoted historical decision or injected message.
 
-Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It also requires **Ollama 0.34.4 or newer**. This release improves structured outputs for thinking models, which is directly relevant to the schema-constrained classification/drafting pipeline. Local transport timeout/connect failures trigger one explicit unload-and-retry recovery; semantic/model/policy failures are never retried until they pass.
+Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It requires **Ollama 0.35.0 or newer**. The production generative pipeline still uses local `/api/chat`; 0.35 additionally provides `/v1/systemone`, which the repository uses only in a separate non-sending typed decision-model evaluation lane until task-specific evidence justifies any production promotion. Local transport timeout/connect failures trigger one explicit unload-and-retry recovery; semantic/model/policy failures are never retried until they pass.
 
 The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic seeding and low temperature. Email text is untrusted data. Input budgets and incomplete generations fail closed for Automatic mode.
 
