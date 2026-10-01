@@ -35,6 +35,7 @@ on:
       - "docs/openapi-v1.json"
       - "docs/openapi-v1-baseline.json"
       - "tests/automatic_policy.rs"
+      - "tests/decision_protocol.rs"
       - "tests/fixtures/classification.json"
       - "tests/http_boundaries.rs"
       - "tests/mail_integrity.rs"
