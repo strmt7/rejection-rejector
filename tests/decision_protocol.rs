@@ -2,6 +2,7 @@
 use rejection_rejector::{config::Settings, decision};
 use serde_json::{Value, json};
 use std::{
+    io::Read,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
