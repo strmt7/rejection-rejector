@@ -224,6 +224,11 @@ mod tests {
         assert_eq!(value["queue"]["reviewable_items"], 3);
         assert_eq!(value["assumptions"]["provider_preflight_performed"], false);
         assert_eq!(value["assumptions"]["external_write_performed"], false);
+        assert_eq!(
+            value["global"]["automatic_recipient_attempt_limit_24h"],
+            AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
+        );
+        assert!(value["queue"]["eligible_but_recipient_limited"].is_u64());
         let text = value.to_string();
         for forbidden in [
             "demo@example.invalid",
