@@ -1,5 +1,5 @@
 use crate::{
-    config::Mode,
+    config::{AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H, Mode},
     engine::{AutomaticPolicyCode, Engine, automatic_policy},
     storage,
     vault::write_new_private,
@@ -52,6 +52,7 @@ struct ShadowGlobal {
     daily_send_limit: u16,
     attempts_24h: u64,
     daily_capacity_remaining: u64,
+    automatic_recipient_attempt_limit_24h: u16,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,6 +60,7 @@ struct ShadowQueue {
     reviewable_items: u64,
     semantic_policy_eligible: u64,
     eligible_but_thread_blocked: u64,
+    eligible_but_recipient_limited: u64,
     locally_dispatchable_before_provider_preflight: u64,
     dispatchable_now_by_local_gates_and_daily_capacity: u64,
 }
@@ -94,6 +96,7 @@ pub fn report(engine: &Engine) -> Result<serde_json::Value> {
     let mut reviewable_items = 0u64;
     let mut semantic_policy_eligible = 0u64;
     let mut eligible_but_thread_blocked = 0u64;
+    let mut eligible_but_recipient_limited = 0u64;
     let mut locally_dispatchable = 0u64;
     let mut block_code_counts = BTreeMap::<String, u64>::new();
 
@@ -118,6 +121,10 @@ pub fn report(engine: &Engine) -> Result<serde_json::Value> {
             semantic_policy_eligible += 1;
             if engine.db.thread_blocked(&job.stub.thread_key())? {
                 eligible_but_thread_blocked += 1;
+            } else if engine.db.recipient_attempts_24h(&job, now)?
+                >= u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H)
+            {
+                eligible_but_recipient_limited += 1;
             } else {
                 locally_dispatchable += 1;
             }
@@ -165,11 +172,13 @@ pub fn report(engine: &Engine) -> Result<serde_json::Value> {
             daily_send_limit: engine.settings.daily_send_limit,
             attempts_24h: counts.attempts_24h,
             daily_capacity_remaining,
+            automatic_recipient_attempt_limit_24h: AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
         },
         queue: ShadowQueue {
             reviewable_items,
             semantic_policy_eligible,
             eligible_but_thread_blocked,
+            eligible_but_recipient_limited,
             locally_dispatchable_before_provider_preflight: locally_dispatchable,
             dispatchable_now_by_local_gates_and_daily_capacity: dispatchable_now,
         },
