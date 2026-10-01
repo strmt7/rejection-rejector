@@ -39,6 +39,9 @@ pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
     ("Qwen3.5 9B Q4 · lower-VRAM fallback", "qwen3.5:9b"),
     ("gpt-oss 20B · reasoning / very tight VRAM", "gpt-oss:20b"),
 ];
+/// Hard safety ceiling for unattended replies to one normalized recipient mailbox.
+/// This is intentionally not user-raiseable; Human Review remains the override path.
+pub const AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H: u16 = 2;
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
 pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v5";
