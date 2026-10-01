@@ -476,11 +476,6 @@
             "type": "integer",
             "minimum": 0
           },
-          "automatic_recipient_attempt_limit_24h": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Hard unattended-send ceiling for attempts to one normalized recipient mailbox in a rolling 24-hour window."
-          },
           "gmail_connected": {
             "type": "boolean"
           },
