@@ -1297,7 +1297,21 @@ impl Store {
         )
     }
 
+    /// Backward-compatible manual/global-cap reservation API.
     pub fn reserve_send(
+        &mut self,
+        snapshot: &Job,
+        limit: u16,
+        now: DateTime<Utc>,
+    ) -> Result<Job> {
+        self.reserve_send_with_recipient_limit(snapshot, limit, None, now)
+    }
+
+    /// Reserve a send with an optional additional rolling recipient ceiling.
+    ///
+    /// Automatic dispatch uses this stronger path; the legacy public API above
+    /// remains source-compatible for explicit Human Review/integrations.
+    pub fn reserve_send_with_recipient_limit(
         &mut self,
         snapshot: &Job,
         limit: u16,
@@ -2184,13 +2198,13 @@ mod tests {
         let mut db = Store::open(&p, v.clone()).unwrap();
         let a = ready(&mut db, "a", "same");
         let b = ready(&mut db, "b", "same");
-        db.reserve_send(&a, 10, None, Utc::now()).unwrap();
-        assert!(db.reserve_send(&b, 10, None, Utc::now()).is_err());
+        db.reserve_send(&a, 10, Utc::now()).unwrap();
+        assert!(db.reserve_send(&b, 10, Utc::now()).is_err());
         drop(db);
         let mut db = Store::open(&p, v).unwrap();
         assert_eq!(db.recover_interrupted_sends().unwrap(), 1);
         assert_eq!(db.get(&a.id).unwrap().state, JobState::Uncertain);
-        assert!(db.reserve_send(&b, 10, None, Utc::now()).is_err());
+        assert!(db.reserve_send(&b, 10, Utc::now()).is_err());
     }
     #[test]
     fn definite_provider_rejection_releases_reservation_for_review() {
@@ -2198,13 +2212,13 @@ mod tests {
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let first = ready(&mut db, "first", "same-thread");
         let second = ready(&mut db, "second", "same-thread");
-        db.reserve_send(&first, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&first, 10, Utc::now()).unwrap();
         let restored = db
             .release_unsent_reservation(&first.id, "Synthetic HTTP 403")
             .unwrap();
         assert_eq!(restored.state, JobState::Attention);
         assert!(!db.thread_blocked(&first.stub.thread_key()).unwrap());
-        db.reserve_send(&second, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&second, 10, Utc::now()).unwrap();
     }
 
     #[test]
@@ -2212,7 +2226,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let candidate = ready(&mut db, "cancelled", "cancelled-thread");
-        db.reserve_send(&candidate, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
         let restored = db
             .release_unsent_reservation(&candidate.id, "Synthetic pause before network dispatch")
             .unwrap();
@@ -2227,11 +2241,11 @@ mod tests {
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let first = ready(&mut db, "first-rejection", "same-thread");
         let later = ready(&mut db, "later-rejection", "same-thread");
-        db.reserve_send(&first, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&first, 10, Utc::now()).unwrap();
         db.finish_send(&first.id, Some("gmail-sent-id".into()))
             .unwrap();
         assert!(!db.thread_blocked(&first.stub.thread_key()).unwrap());
-        db.reserve_send(&later, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&later, 10, Utc::now()).unwrap();
     }
 
     #[test]
@@ -2255,17 +2269,17 @@ mod tests {
         }
 
         assert_eq!(db.recipient_attempts_24h(&first, now).unwrap(), 0);
-        db.reserve_send(&first, 10, Some(2), now).unwrap();
+        db.reserve_send_with_recipient_limit(&first, 10, Some(2), now).unwrap();
         assert_eq!(db.recipient_attempts_24h(&second, now).unwrap(), 1);
         db.finish_send(&first.id, Some("provider-a".into())).unwrap();
 
-        db.reserve_send(&second, 10, Some(2), now).unwrap();
+        db.reserve_send_with_recipient_limit(&second, 10, Some(2), now).unwrap();
         db.finish_send(&second.id, Some("provider-b".into())).unwrap();
         assert_eq!(db.recipient_attempts_24h(&third, now).unwrap(), 2);
-        assert!(db.reserve_send(&third, 10, Some(2), now).is_err());
+        assert!(db.reserve_send_with_recipient_limit(&third, 10, Some(2), now).is_err());
 
         // Human Review can still make an explicit operator decision.
-        db.reserve_send(&third, 10, None, now).unwrap();
+        db.reserve_send(&third, 10, now).unwrap();
     }
 
     #[test]
@@ -2274,9 +2288,9 @@ mod tests {
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let a = ready(&mut db, "a", "a");
         let b = ready(&mut db, "b", "b");
-        db.reserve_send(&a, 1, None, Utc::now()).unwrap();
+        db.reserve_send(&a, 1, Utc::now()).unwrap();
         db.finish_send(&a.id, None).unwrap();
-        assert!(db.reserve_send(&b, 1, None, Utc::now()).is_err());
+        assert!(db.reserve_send(&b, 1, Utc::now()).is_err());
     }
     #[test]
     fn retention_prunes_private_processing_state_but_keeps_identity() {
@@ -2346,7 +2360,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let candidate = ready(&mut db, "semantic", "semantic-thread");
-        db.reserve_send(&candidate, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
         db.integrity_check().unwrap();
 
         db.conn
@@ -2364,7 +2378,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
         let candidate = ready(&mut db, "semantic-thread", "real-thread");
-        db.reserve_send(&candidate, 10, None, Utc::now()).unwrap();
+        db.reserve_send(&candidate, 10, Utc::now()).unwrap();
         db.conn
             .execute(
                 "UPDATE deliveries SET thread_key='forged-thread' WHERE item_id=?1",
