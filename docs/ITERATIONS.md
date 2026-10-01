@@ -28,7 +28,7 @@ Source 720143c842d27711a833480da680fadfbb5585e2, workflow 36258976422: the Linux
 
 ## Build pipeline cleanup
 
-The final workflow removes the temporary source-finalization and auto-commit job. It has read-only repository access, checks the exact triggering commit, uses the tracked lockfile, pins Rust 1.98.1 and action commit SHAs, and rejects changes to tracked files during validation. Windows artifacts contain commit/toolchain evidence and SHA-256 manifests. Hosted runner/OS inputs are not immutable, so bit-identical rebuilds are not claimed.
+The final workflow removes the temporary source-finalization and auto-commit job. It has read-only repository access, checks the exact triggering commit, uses the tracked lockfile, pins Rust 1.99.0 and action commit SHAs, and rejects changes to tracked files during validation. Windows artifacts contain commit/toolchain evidence and SHA-256 manifests. Hosted runner/OS inputs are not immutable, so bit-identical rebuilds are not claimed.
 
 ## Evidence boundary
 
