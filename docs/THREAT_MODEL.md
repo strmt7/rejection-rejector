@@ -115,6 +115,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity. The ma
 | No-reply/list/auto-reply loop | crafted/system sender | mailbox/auto-submitted/list suppression guards |
 | UI edits after review | user/UI race | revision + exact draft hash binding; changed draft invalidates verification |
 | Duplicate click/concurrent sends | UI/API concurrency | immediate SQLite reservation and unique per-message delivery record |
+| Multiple rejections target the same recruiter mailbox | ATS/employer burst or correlated classification burst | Automatic mode has a hard two-attempt rolling 24-hour recipient ceiling, prechecked for Human Review and rechecked inside the SQLite reservation transaction; explicit Human Review is the override |
 | Gmail timeout after write | provider/network ambiguity | keep reservation, mark Uncertain, reconcile Sent; never retry blindly |
 | Crash during send | process failure | startup converts unresolved Sending to Uncertain; reservation remains authoritative |
 | Crash during backup/restore | process/storage failure | staged artifact/rollback path; exclusive workspace lock; recovery drill |
@@ -158,11 +159,12 @@ The following are release-level invariants. A change that invalidates one requir
 21. Deep-quality gates (coverage/mutation/fuzz/recovery) must fail or become stale when relevant source changes invalidate their evidence.
 22. Demo/synthetic fixtures can never be delivered to Gmail.
 23. When the enterprise emergency stop is active or cannot be inspected safely, no Gmail send request may cross the network boundary.
+24. Automatic mode cannot reserve more than two delivery attempts to the same normalized recipient mailbox in a rolling 24-hour window; the race-safe check occurs inside the durable reservation transaction.
 
 ## Residual risks and explicit non-goals
 
 - Same-user malware, administrator compromise, process-memory extraction, OS paging, clipboard compromise and a malicious kernel are outside the application cryptographic boundary.
-- Full local rollback detection requires an audit anchor stored outside the rolled-back workspace. The built-in API exposes anchors, but independently protected automatic anchoring is not yet implemented.
+- Whole-workspace rollback detection requires an audit anchor outside the rolled-back SQLite workspace. The repository implements both externally managed anchor files and an optional monotonic Windows/macOS OS credential-store anchor; neither protects against compromise of the corresponding external/OS trust domain, and no centralized cross-host transparency service is provided.
 - Verification can be configured to use a distinct sequential pinned local model and enterprise policy can require it. This improves model diversity but does not prove statistical independence or eliminate shared semantic failure modes.
 - Physical GPU peak-memory certification is external to Ollama-reported residency.
 - Gmail/provider semantics can change; live controlled acceptance remains required.
