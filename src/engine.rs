@@ -1,8 +1,8 @@
 use crate::{
     audit_anchor,
     config::{
-        Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
-        settings_context_hash,
+        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H, Mode, PROMPT_VERSION, Settings,
+        TaskQualification, evaluation_suite_hash, settings_context_hash,
     },
     emergency, evaluation,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
@@ -1136,6 +1136,19 @@ impl Engine {
                 DispatchFailureKind::ReviewRequired,
                 "Automatic send conditions were not satisfied",
             )?;
+            let recipient_attempts = self
+                .db
+                .recipient_attempts_24h(&job, Utc::now())
+                .map_err(|error| {
+                    DispatchFailure::review(format!(
+                        "Automatic recipient burst safety could not be established: {error}"
+                    ))
+                })?;
+            dispatch_require(
+                recipient_attempts < u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
+                DispatchFailureKind::ReviewRequired,
+                "Automatic recipient 24-hour reply limit reached; Human Review is required",
+            )?;
             let local_ai = Ollama::new(&self.settings)
                 .map_err(|error| DispatchFailure::review(error.to_string()))?;
             let runtime_version = local_ai.runtime_version().map_err(|error| {
@@ -1251,7 +1264,12 @@ impl Engine {
             "Storage headroom is too low for durable send state",
         )?;
         self.db
-            .reserve_send(&job, self.settings.daily_send_limit, Utc::now())
+            .reserve_send(
+                &job,
+                self.settings.daily_send_limit,
+                automatic.then_some(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
+                Utc::now(),
+            )
             .map_err(|error| DispatchFailure::retryable(error.to_string()))?;
 
         if let Err(error) = self.checkpoint_audit_protection() {
