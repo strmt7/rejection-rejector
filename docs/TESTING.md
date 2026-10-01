@@ -79,6 +79,14 @@ To compare curated candidate models that you have **explicitly installed** in Ol
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
+To evaluate a new Ollama 0.35+ typed decision model without changing production authorization:
+
+```powershell
+.\rr.exe evaluate-decision --model nimble:9b-q8_0 --out .\decision-evaluation.json
+```
+
+The decision-model evaluator is deliberately R&D-only. It reuses the recruiting classification corpus, requires a closed four-category score contract, records only fixture IDs/labels/scores/latency, and never writes Automatic-mode task qualification or sends email.
+
 The comparison never downloads multiple large models implicitly. It skips absent candidates.
 
 Each evaluated model first runs the same local qualification used by the app, then processes **72 stratified synthetic fixtures** through the complete classification/draft/verification pipeline. The corpus has explicit risk tags for ATS automation, interviews, offers, recruiter corrections, quoted history, prompt injection, ambiguity, pending-status wording and multilingual cases. The report tracks classification accuracy, rejection false positives/false negatives, verified rejection-draft success, unsafe drafts on non-rejections, latency, residency and per-tag metrics. The application-specific score weights non-rejection false-positive avoidance most heavily, and recommendation eligibility separately requires all critical hard negatives to complete with zero rejection false positives and zero generated drafts. The report includes exact digest/context, accuracy, rejection true/false positives and false negatives, precision, recall and mean per-case latency. No model score is prefilled. The corpus is still a regression aid, not representative production accuracy or a best-model ranking.
