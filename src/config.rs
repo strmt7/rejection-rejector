@@ -9,6 +9,13 @@ pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
 pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
 pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
 pub const DEFAULT_VERIFIER_MODEL: &str = "granite4.2:8b-q8_0";
+pub const DECISION_MODEL_CANDIDATES: [(&str, &str); 2] = [
+    (
+        "Nimble 9B Q8 · typed classification R&D default",
+        "nimble:9b-q8_0",
+    ),
+    ("Tev1 4B · compact experimental baseline", "tev1:4b"),
+];
 pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
     (
         "Granite 4.2 8B Q8 · enterprise default",
@@ -19,7 +26,7 @@ pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
 ];
 /// Old runtimes are rejected because structured-output and newer model support
 /// are part of the application's correctness boundary.
-pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 34, 4);
+pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 35, 0);
 /// Curated challengers for this application's text-classification/drafting task.
 /// They are not ranked until evaluated locally on the task-specific suite.
 pub const MODEL_CANDIDATES: [(&str, &str); 6] = [
