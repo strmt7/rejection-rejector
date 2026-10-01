@@ -28,7 +28,6 @@ pub struct MetricsSnapshot {
     pub sent_items: u64,
     pub uncertain_deliveries: u64,
     pub send_attempts_24h: u64,
-    pub automatic_recipient_attempt_limit_24h: u16,
     pub gmail_connected: bool,
     pub gmail_send_scope: bool,
     pub model_digest_pinned: bool,
@@ -88,7 +87,6 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         sent_items: counts.sent,
         uncertain_deliveries: counts.uncertain,
         send_attempts_24h: counts.attempts_24h,
-        automatic_recipient_attempt_limit_24h: AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
         gmail_connected: engine.connected(),
         gmail_send_scope: engine.send_scope(),
         model_digest_pinned: engine.settings.model_digest.is_some(),
@@ -303,7 +301,7 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
         "rejection_rejector_automatic_recipient_attempt_limit_24h",
         "Hard unattended-send ceiling for attempts to one normalized recipient mailbox in a rolling 24-hour window.",
         None,
-        snapshot.automatic_recipient_attempt_limit_24h,
+        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
     );
     for (name, help, value) in [
         (
@@ -524,10 +522,6 @@ mod tests {
         assert!(!metrics.external_audit_anchor_configured);
         assert!(!metrics.os_protected_audit_anchor_required);
         assert!(!metrics.independent_audit_anchor_configured);
-        assert_eq!(
-            metrics.automatic_recipient_attempt_limit_24h,
-            AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
-        );
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",
