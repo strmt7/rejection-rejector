@@ -1000,12 +1000,12 @@ mod tests {
 
     #[test]
     fn runtime_version_parser_orders_stable_releases() {
-        assert_eq!(parse_version("0.34.0"), Some((0, 34, 0)));
-        assert_eq!(parse_version("v0.34.4"), Some((0, 34, 4)));
-        assert_eq!(parse_version("0.34.4-rc1"), Some((0, 34, 4)));
+        assert_eq!(parse_version("0.35.0"), Some((0, 35, 0)));
+        assert_eq!(parse_version("v0.35.1"), Some((0, 35, 1)));
+        assert_eq!(parse_version("0.35.0-rc1"), Some((0, 35, 0)));
         assert!(parse_version("not-a-version").is_none());
-        assert!((0, 34, 4) >= MIN_OLLAMA_VERSION);
-        assert!((0, 34, 3) < MIN_OLLAMA_VERSION);
+        assert!((0, 35, 0) >= MIN_OLLAMA_VERSION);
+        assert!((0, 34, 4) < MIN_OLLAMA_VERSION);
     }
 
     #[test]
