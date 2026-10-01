@@ -178,6 +178,12 @@ jobs:
           if (-not $info.source_commit_verified) { throw "Release binary does not report a verified source commit" }
           if ($info.source_commit -ne $env:GITHUB_SHA) { throw "Embedded source commit does not match release commit" }
           if ($info.profile -ne 'release') { throw "Embedded build profile is not release" }
+          if ($info.rustc_version -notmatch '^rustc 1\.99\.0(?:\s|$)') {
+            throw "Release binary was not built with pinned Rust 1.99.0: $($info.rustc_version)"
+          }
+          if ($info.target -ne 'x86_64-pc-windows-msvc') {
+            throw "Release binary target is not x86_64-pc-windows-msvc: $($info.target)"
+          }
           $lockHash = (Get-FileHash Cargo.lock -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($info.cargo_lock_sha256 -ne $lockHash) { throw "Embedded Cargo.lock hash does not match packaged lockfile" }
           if ($info.identity_sha256.Length -ne 64 -or $info.identity_sha256 -notmatch '^[0-9a-f]+$') {
