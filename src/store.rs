@@ -415,9 +415,10 @@ fn recipient_attempts_since(
     for row in rows {
         let (id, payload, revision, state) = row?;
         let job = decode(vault, &id, &payload, revision, &state)?;
-        if let Some(email) = &job.email
-            && email.recipient()? == recipient
-        {
+        let email = job.email.as_ref().context(
+            "Recent delivery is missing source email required for recipient burst safety",
+        )?;
+        if email.recipient()? == recipient {
             count = count.saturating_add(1);
         }
     }
