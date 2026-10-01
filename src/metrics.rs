@@ -1,4 +1,5 @@
 use crate::{
+    config::AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
     engine::Engine,
     readiness::{OperationalContext, OperationalIndicators, operational_indicators},
     recovery::{BackupIsolationStatus, ScheduledBackupStatus},
@@ -27,6 +28,7 @@ pub struct MetricsSnapshot {
     pub sent_items: u64,
     pub uncertain_deliveries: u64,
     pub send_attempts_24h: u64,
+    pub automatic_recipient_attempt_limit_24h: u16,
     pub gmail_connected: bool,
     pub gmail_send_scope: bool,
     pub model_digest_pinned: bool,
@@ -86,6 +88,7 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
         sent_items: counts.sent,
         uncertain_deliveries: counts.uncertain,
         send_attempts_24h: counts.attempts_24h,
+        automatic_recipient_attempt_limit_24h: AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
         gmail_connected: engine.connected(),
         gmail_send_scope: engine.send_scope(),
         model_digest_pinned: engine.settings.model_digest.is_some(),
@@ -295,6 +298,13 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
     ] {
         push_gauge(&mut out, name, help, None, value);
     }
+    push_gauge(
+        &mut out,
+        "rejection_rejector_automatic_recipient_attempt_limit_24h",
+        "Hard unattended-send ceiling for attempts to one normalized recipient mailbox in a rolling 24-hour window.",
+        None,
+        snapshot.automatic_recipient_attempt_limit_24h,
+    );
     for (name, help, value) in [
         (
             "rejection_rejector_gmail_connected",
