@@ -144,6 +144,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "include_backlog": engine.settings.include_backlog,
             "cooldown_minutes": engine.settings.cooldown_minutes,
             "daily_send_limit": engine.settings.daily_send_limit,
+            "automatic_recipient_attempt_limit_24h": crate::config::AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H,
             "retention_days": engine.settings.retention_days
         },
         "local_ai": {
