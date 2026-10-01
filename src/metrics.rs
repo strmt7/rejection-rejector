@@ -473,6 +473,10 @@ mod tests {
         assert!(text.contains("# UNIT rejection_rejector_storage_available_bytes bytes\n"));
         assert!(text.contains("rejection_rejector_storage_runtime_write_safe "));
         assert!(text.contains("rejection_rejector_operational_degraded "));
+        assert!(text.contains(&format!(
+            "rejection_rejector_automatic_recipient_attempt_limit_24h {}\n",
+            AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
+        )));
         let runtime = crate::runtime_log::performance_summary(&engine.directory).unwrap();
         let enriched = render_openmetrics_with_runtime(&snapshot, &runtime);
         assert!(enriched.ends_with("# EOF\n"));
@@ -520,6 +524,10 @@ mod tests {
         assert!(!metrics.external_audit_anchor_configured);
         assert!(!metrics.os_protected_audit_anchor_required);
         assert!(!metrics.independent_audit_anchor_configured);
+        assert_eq!(
+            metrics.automatic_recipient_attempt_limit_24h,
+            AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
+        );
         for forbidden in [
             "demo@example.invalid",
             "Northstar Materials",
