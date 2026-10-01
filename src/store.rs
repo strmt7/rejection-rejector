@@ -2243,9 +2243,12 @@ mod tests {
         let mut second = ready(&mut db, "recipient-b", "thread-b");
         let mut third = ready(&mut db, "recipient-c", "thread-c");
         for job in [&mut first, &mut second, &mut third] {
-            let email = job.email.as_mut().expect("ready fixture email");
+            let mut email =
+                crate::ollama::sample_email("Synthetic rejection", "We are not moving forward.");
+            email.stub = job.stub.clone();
             email.from = "recruiter@example.com".into();
             email.reply_to = None;
+            job.email = Some(email);
             db.save(job, "test", "Normalize recipient for burst-limit test")
                 .unwrap();
         }
