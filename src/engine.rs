@@ -11,7 +11,7 @@ use crate::{
     ollama::{self, ModelStatus, Ollama},
     policy::{self, LoadedPolicy, PolicyRevisionFloor, PolicyStatus},
     session::SessionLease,
-    store::Store,
+    store::{ProcessingFailureRecord, Store},
     sync,
     types::*,
     vault::{InstanceLock, Vault, write_new_private},
@@ -893,8 +893,15 @@ impl Engine {
                 Err(error) => {
                     job.state = JobState::Attention;
                     job.flags = vec![error.message];
-                    self.db.save(
+                    let failure = ProcessingFailureRecord {
+                        code: ProcessingFailureCode::MessageMalformed,
+                        attempts: 1,
+                        retry_exhausted: true,
+                        occurred_at: Utc::now(),
+                    };
+                    self.db.save_processing_failure(
                         &mut job,
+                        &failure,
                         "email.malformed",
                         "Message parsing failed safely; Human review required",
                     )?;
@@ -904,19 +911,40 @@ impl Engine {
         }
         let result = self.analyze_job(&mut job);
         if let Err(error) = result {
+            let now = Utc::now();
             job.attempts = job.attempts.saturating_add(1);
-            job.flags = vec![format!("Analysis unavailable: {error}")];
-            if job.attempts >= 3 {
+            let retry_exhausted = job.attempts >= 3;
+            let code = ollama::processing_failure_code(&error);
+            job.flags = vec![format!(
+                "Analysis unavailable [{}]: {error}",
+                code.as_str()
+            )];
+            if retry_exhausted {
                 job.state = JobState::Attention;
+                job.retry_at = 0;
             } else {
-                job.retry_at = Utc::now().timestamp() + 60 * (1i64 << job.attempts.min(6));
+                job.retry_at = now.timestamp() + 60 * (1i64 << job.attempts.min(6));
             }
-            self.db.save(
+            let failure = ProcessingFailureRecord {
+                code,
+                attempts: job.attempts,
+                retry_exhausted,
+                occurred_at: now,
+            };
+            self.db.save_processing_failure(
                 &mut job,
-                "analysis.failed",
-                "Failure recorded; bounded retries, no send authorized",
+                &failure,
+                if retry_exhausted {
+                    "analysis.retry_exhausted"
+                } else {
+                    "analysis.retry_scheduled"
+                },
+                "Per-message analysis failure isolated; no send authorized",
             )?;
-            return Err(error);
+            // This failure is isolated to one item. Global Ollama/provider failures
+            // are detected before dequeue and still return Err, opening the worker
+            // circuit. A poison message therefore cannot stall unrelated queued mail.
+            return Ok(true);
         }
         Ok(true)
     }
@@ -927,7 +955,7 @@ impl Engine {
         if email.received_at < self.settings.cutoff(Utc::now()) || email.received_at > Utc::now() {
             job.state = JobState::Deferred;
             job.email = None;
-            self.db.save(
+            self.db.save_clearing_processing_failure(
                 job,
                 "email.outside_window",
                 "Identity retained; body not kept outside requested age range",
@@ -941,8 +969,11 @@ impl Engine {
         {
             job.state = JobState::Other;
             job.email = None;
-            self.db
-                .save(job, "email.excluded", "Provider folder excluded")?;
+            self.db.save_clearing_processing_failure(
+                job,
+                "email.excluded",
+                "Provider folder excluded",
+            )?;
             return Ok(());
         }
         let (analysis, draft, mut flags) = Ollama::new(&self.settings)?.analyze(email)?;
@@ -972,7 +1003,7 @@ impl Engine {
             job.email = None;
             job.analysis = None;
         }
-        self.db.save(
+        self.db.save_clearing_processing_failure(
             job,
             "email.analyzed",
             "Local structured classification and reply verification completed",
@@ -1001,7 +1032,7 @@ impl Engine {
             a.verification = None;
         }
         job.flags = vec!["User-edited reply; previous automatic verification invalidated".into()];
-        self.db.save(
+        self.db.save_clearing_processing_failure(
             &mut job,
             "draft.edited",
             "Human edit; explicit review required before send",
@@ -1025,7 +1056,7 @@ impl Engine {
         job.analysis = None;
         job.flags.clear();
         job.retry_at = 0;
-        self.db.save(
+        self.db.save_clearing_processing_failure(
             &mut job,
             "analysis.requested",
             "User requested a fresh local analysis",
@@ -1039,7 +1070,7 @@ impl Engine {
             "Message changed; reload before dismissing"
         );
         job.state = JobState::Dismissed;
-        self.db.save(
+        self.db.save_clearing_processing_failure(
             &mut job,
             "email.dismissed",
             "Dismissed by user; no mail sent",

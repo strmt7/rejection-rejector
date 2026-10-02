@@ -98,6 +98,8 @@ If Ollama is unavailable, obsolete, the digest changed, or GPU residency no long
 
 Queued messages remain durable. A global inference-runtime outage must not consume per-message retries.
 
+A message-specific model/structured-output failure is isolated from the global Ollama circuit. Rejection Rejector records a stable processing-failure class, schedules a bounded retry, and continues with other due queue items. After three failed attempts the item is moved to **Needs attention** with Automatic sending unavailable. The redacted diagnostics report aggregates active failure classes and retry exhaustion without exposing message/error text.
+
 ## Uncertain Gmail delivery
 
 If a send may have crossed Gmail's write boundary, Rejection Rejector records **Uncertain** and retains the durable reservation.

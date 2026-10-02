@@ -140,6 +140,42 @@ pub struct Draft {
     pub body: String,
     pub origin: String,
 }
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingFailureCode {
+    MessageMalformed,
+    ModelPreflight,
+    Classification,
+    DraftGeneration,
+    VerificationRuntime,
+    AnalysisUnknown,
+}
+impl ProcessingFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MessageMalformed => "message_malformed",
+            Self::ModelPreflight => "model_preflight",
+            Self::Classification => "classification",
+            Self::DraftGeneration => "draft_generation",
+            Self::VerificationRuntime => "verification_runtime",
+            Self::AnalysisUnknown => "analysis_unknown",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Option<Self> {
+        Some(match value {
+            "message_malformed" => Self::MessageMalformed,
+            "model_preflight" => Self::ModelPreflight,
+            "classification" => Self::Classification,
+            "draft_generation" => Self::DraftGeneration,
+            "verification_runtime" => Self::VerificationRuntime,
+            "analysis_unknown" => Self::AnalysisUnknown,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {

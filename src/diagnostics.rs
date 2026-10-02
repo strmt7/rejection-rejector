@@ -9,6 +9,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         .ok()
         .map(|metadata| metadata.len());
     let counts = engine.db.counts(&engine.account)?;
+    let processing_failures = engine.db.processing_failure_summary(&engine.account)?;
     let storage = crate::storage::inspect(&engine.directory)?;
     let scheduled_backup =
         crate::recovery::scheduled_backup_status(&engine.db, &engine.settings, chrono::Utc::now())?;
@@ -82,7 +83,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
         external_audit_anchor_configured || os_protected_audit_anchor_required;
 
     Ok(json!({
-        "report_version": 4,
+        "report_version": 5,
         "generated_at": chrono::Utc::now(),
         "privacy": {
             "contains_account_address": false,
@@ -120,6 +121,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "bytes": database_bytes,
             "counts": counts
         },
+        "processing_failures": processing_failures,
         "gmail": {
             "connected": engine.connected(),
             "send_scope": engine.send_scope()
@@ -233,7 +235,10 @@ mod tests {
         assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
         assert_eq!(report["privacy"]["contains_candidate_facts"], false);
         assert_eq!(report["privacy"]["automatic_upload"], false);
-        assert_eq!(report["report_version"], 4);
+        assert_eq!(report["report_version"], 5);
+        assert_eq!(report["processing_failures"]["active_records"], 0);
+        assert_eq!(report["processing_failures"]["retry_exhausted"], 0);
+        assert!(report["processing_failures"]["by_code"].is_object());
         assert_eq!(report["storage"]["schema_version"], 1);
         assert_eq!(report["scheduled_backup"]["schema_version"], 1);
         assert_eq!(report["backup_isolation"]["schema_version"], 1);
