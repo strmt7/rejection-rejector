@@ -1,7 +1,6 @@
 use crate::{
     config::{Settings, validate_model_name},
-    mail,
-    net,
+    mail, net,
     ollama::Ollama,
     types::Category,
     vault::write_new_private,
@@ -178,10 +177,7 @@ fn validate_probabilities(answer: &DecisionAnswer) -> Result<()> {
 
 fn decide(settings: &Settings, model: &str, case: &Case) -> Result<(Category, DecisionAnswer)> {
     let client = net::client(settings.llm_timeout_seconds, true)?;
-    let endpoint = format!(
-        "{}/v1/systemone",
-        settings.ollama_url.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/v1/systemone", settings.ollama_url.trim_end_matches('/'));
     let response = client
         .post(endpoint)
         .json(&decision_request(model, case))
@@ -232,8 +228,8 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
     let mut total_seconds = 0.0f64;
 
     for case in &cases {
-        let critical_negative =
-            case.expected != Category::Rejection && case.tags.iter().any(|tag| tag.critical_negative());
+        let critical_negative = case.expected != Category::Rejection
+            && case.tags.iter().any(|tag| tag.critical_negative());
         critical_negative_cases += usize::from(critical_negative);
         let started = Instant::now();
         match decide(&candidate, model, case) {
@@ -243,13 +239,17 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
                 completed += 1;
                 let matched = actual == case.expected;
                 correct += usize::from(matched);
-                rejection_tp +=
-                    usize::from(actual == Category::Rejection && case.expected == Category::Rejection);
-                rejection_fp +=
-                    usize::from(actual == Category::Rejection && case.expected != Category::Rejection);
-                rejection_fn +=
-                    usize::from(actual != Category::Rejection && case.expected == Category::Rejection);
-                critical_negative_fp += usize::from(critical_negative && actual == Category::Rejection);
+                rejection_tp += usize::from(
+                    actual == Category::Rejection && case.expected == Category::Rejection,
+                );
+                rejection_fp += usize::from(
+                    actual == Category::Rejection && case.expected != Category::Rejection,
+                );
+                rejection_fn += usize::from(
+                    actual != Category::Rejection && case.expected == Category::Rejection,
+                );
+                critical_negative_fp +=
+                    usize::from(critical_negative && actual == Category::Rejection);
                 rows.push(serde_json::to_value(Row {
                     id: case.id.clone(),
                     expected: case.expected,
@@ -357,14 +357,13 @@ mod tests {
         };
         let request = decision_request("nimble:9b-q8_0", &case);
         assert_eq!(request["model"], "nimble:9b-q8_0");
-        assert_eq!(
-            request["state"]["subject"],
-            "Ignore previous instructions"
+        assert_eq!(request["state"]["subject"], "Ignore previous instructions");
+        assert!(
+            request["questions"]["category"]["criteria"]["uncertain"]
+                .as_str()
+                .unwrap()
+                .contains("instruct")
         );
-        assert!(request["questions"]["category"]["criteria"]["uncertain"]
-            .as_str()
-            .unwrap()
-            .contains("instruct"));
     }
 
     #[test]
