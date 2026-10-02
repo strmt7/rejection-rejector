@@ -55,6 +55,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 webbrowser = "1"
 which = "7"
 zeroize = "1"
+# Temporary explicit pin: 0.8.3 is yanked; yoke 0.8.3 accepts ^0.8.2.
+yoke-derive = "=0.8.2"
 eframe = { version = "0.36.2", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland", "accesskit"] }
 rfd = { version = "0.17.2", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
