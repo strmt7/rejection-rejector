@@ -1942,7 +1942,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
         let markers: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM meta WHERE name='vault_check'",
@@ -2226,7 +2226,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
         let row: (String, String) = db
             .conn
             .query_row(
@@ -2286,7 +2286,7 @@ mod tests {
         }
 
         let db = Store::open(&path, vault).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 4);
+        assert_eq!(db.schema_version().unwrap(), DATABASE_SCHEMA_VERSION);
         db.verify_audit_chain().unwrap();
         let events = db.events(0, 10).unwrap();
         assert_eq!(events.len(), 2);
