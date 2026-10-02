@@ -7,14 +7,15 @@ use chrono::{DateTime, Utc};
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, backup::Backup, params,
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-pub const DATABASE_SCHEMA_VERSION: i64 = 4;
+pub const DATABASE_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BackupVerificationSummary {
@@ -35,6 +36,22 @@ pub struct ApplicationIntegritySummary {
     pub active_delivery_records: u64,
     pub sent_delivery_records: u64,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessingFailureRecord {
+    pub code: ProcessingFailureCode,
+    pub attempts: u32,
+    pub retry_exhausted: bool,
+    pub occurred_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ProcessingFailureSummary {
+    pub active_records: u64,
+    pub retry_exhausted: u64,
+    pub by_code: BTreeMap<String, u64>,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct DatabaseCompactionReport {
     pub schema_version: u32,
@@ -49,6 +66,13 @@ pub struct Store {
     conn: Connection,
     vault: Vault,
 }
+
+enum ProcessingFailureMutation<'a> {
+    Keep,
+    Set(&'a ProcessingFailureRecord),
+    Clear,
+}
+
 fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> Result<Job> {
     let job: Job = vault.open_value(&format!("item/{id}"), bytes)?;
     ensure!(
@@ -115,6 +139,25 @@ fn event(
          ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
         [vault.seal("meta/audit_head", &event_hash)?],
     )?;
+    Ok(())
+}
+
+fn migrate_processing_failures(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS processing_failures(
+            item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+            code TEXT NOT NULL,
+            attempts INTEGER NOT NULL,
+            retry_exhausted INTEGER NOT NULL CHECK(retry_exhausted IN (0,1)),
+            occurred_at INTEGER NOT NULL,
+            payload BLOB NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS processing_failures_code
+             ON processing_failures(code,retry_exhausted);
+         PRAGMA user_version=5;",
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -373,6 +416,51 @@ fn verify_application_invariants_connection(
         }
     }
 
+    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if schema_version >= 5 {
+        let mut failures = conn.prepare(
+            "SELECT item_id,code,attempts,retry_exhausted,occurred_at,payload
+             FROM processing_failures ORDER BY item_id",
+        )?;
+        let rows = failures.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, bool>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        })?;
+        for row in rows {
+            let (item_id, code, attempts, retry_exhausted, occurred_at, payload) = row?;
+            ensure!(
+                ProcessingFailureCode::from_db(&code).is_some(),
+                "Processing-failure record has an unknown stable code"
+            );
+            ensure!(attempts > 0, "Processing-failure attempt count is invalid");
+            ensure!(occurred_at > 0, "Processing-failure timestamp is invalid");
+            let record: ProcessingFailureRecord =
+                vault.open_value(&format!("processing_failure/{item_id}"), &payload)?;
+            ensure!(
+                record.code.as_str() == code
+                    && record.attempts == attempts
+                    && record.retry_exhausted == retry_exhausted
+                    && record.occurred_at.timestamp() == occurred_at,
+                "Processing-failure clear metadata does not match authenticated payload"
+            );
+            let item_exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
+                [&item_id],
+                |row| row.get(0),
+            )?;
+            ensure!(
+                item_exists,
+                "Processing-failure record references a missing item"
+            );
+        }
+    }
+
     let delivery_records: u64 =
         conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| row.get(0))?;
     ensure!(
@@ -472,6 +560,15 @@ impl Store {
                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
                 CREATE INDEX items_review_order ON items(account_key,state,received_at,created_at);
+                CREATE TABLE processing_failures(
+                    item_id TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+                    code TEXT NOT NULL,
+                    attempts INTEGER NOT NULL,
+                    retry_exhausted INTEGER NOT NULL CHECK(retry_exhausted IN (0,1)),
+                    occurred_at INTEGER NOT NULL,
+                    payload BLOB NOT NULL
+                );
+                CREATE INDEX processing_failures_code ON processing_failures(code,retry_exhausted);
                 CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
@@ -487,7 +584,7 @@ impl Store {
                 "INSERT INTO meta(name,payload) VALUES('audit_head',?1)",
                 [audit_head],
             )?;
-            conn.execute_batch("PRAGMA user_version=4; COMMIT;")?;
+            conn.execute_batch("PRAGMA user_version=5; COMMIT;")?;
         } else if version == 1 {
             conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE items ADD COLUMN received_at INTEGER;
@@ -519,6 +616,10 @@ impl Store {
         let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if current_version == 3 {
             migrate_audit_chain(&conn, &vault)?;
+        }
+        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version == 4 {
+            migrate_processing_failures(&conn)?;
         }
         let mut db = Self { conn, vault };
         let check = db
@@ -1005,6 +1106,40 @@ impl Store {
         decode(&self.vault, id, &b, r, &s)
     }
     pub fn save(&mut self, job: &mut Job, kind: &str, detail: &str) -> Result<()> {
+        self.save_internal(job, kind, detail, ProcessingFailureMutation::Keep)
+    }
+
+    pub fn save_processing_failure(
+        &mut self,
+        job: &mut Job,
+        failure: &ProcessingFailureRecord,
+        kind: &str,
+        detail: &str,
+    ) -> Result<()> {
+        self.save_internal(
+            job,
+            kind,
+            detail,
+            ProcessingFailureMutation::Set(failure),
+        )
+    }
+
+    pub fn save_clearing_processing_failure(
+        &mut self,
+        job: &mut Job,
+        kind: &str,
+        detail: &str,
+    ) -> Result<()> {
+        self.save_internal(job, kind, detail, ProcessingFailureMutation::Clear)
+    }
+
+    fn save_internal(
+        &mut self,
+        job: &mut Job,
+        kind: &str,
+        detail: &str,
+        failure: ProcessingFailureMutation<'_>,
+    ) -> Result<()> {
         let old = job.revision;
         let mut next = job.clone();
         next.revision += 1;
@@ -1037,6 +1172,45 @@ impl Store {
             changed == 1,
             "Stale revision: reload the message before acting"
         );
+
+        match failure {
+            ProcessingFailureMutation::Keep => {}
+            ProcessingFailureMutation::Clear => {
+                tx.execute(
+                    "DELETE FROM processing_failures WHERE item_id=?1",
+                    [&next.id],
+                )?;
+            }
+            ProcessingFailureMutation::Set(record) => {
+                ensure!(record.attempts > 0, "Processing-failure attempts must be positive");
+                ensure!(
+                    record.occurred_at.timestamp() > 0,
+                    "Processing-failure timestamp is invalid"
+                );
+                let payload = self
+                    .vault
+                    .seal(&format!("processing_failure/{}", next.id), record)?;
+                tx.execute(
+                    "INSERT INTO processing_failures(item_id,code,attempts,retry_exhausted,occurred_at,payload)
+                     VALUES(?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(item_id) DO UPDATE SET
+                        code=excluded.code,
+                        attempts=excluded.attempts,
+                        retry_exhausted=excluded.retry_exhausted,
+                        occurred_at=excluded.occurred_at,
+                        payload=excluded.payload",
+                    params![
+                        next.id,
+                        record.code.as_str(),
+                        record.attempts,
+                        record.retry_exhausted,
+                        record.occurred_at.timestamp(),
+                        payload
+                    ],
+                )?;
+            }
+        }
+
         event(
             &tx,
             &self.vault,
@@ -1233,7 +1407,7 @@ impl Store {
                 job.drafted_at = None;
                 job.retry_at = 0;
                 job.flags = vec!["Outside selected age window; private content removed".into()];
-                self.save(
+                self.save_clearing_processing_failure(
                     &mut job,
                     "email.outside_window",
                     "Age window tightened; identity retained and private content removed",
@@ -1242,6 +1416,69 @@ impl Store {
             }
         }
         Ok(deferred)
+    }
+
+    pub fn processing_failure(&self, item_id: &str) -> Result<Option<ProcessingFailureRecord>> {
+        let row: Option<(String, u32, bool, i64, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT code,attempts,retry_exhausted,occurred_at,payload
+                 FROM processing_failures WHERE item_id=?1",
+                [item_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(code, attempts, retry_exhausted, occurred_at, payload)| {
+            let record: ProcessingFailureRecord = self
+                .vault
+                .open_value(&format!("processing_failure/{item_id}"), &payload)?;
+            ensure!(
+                record.code.as_str() == code
+                    && record.attempts == attempts
+                    && record.retry_exhausted == retry_exhausted
+                    && record.occurred_at.timestamp() == occurred_at,
+                "Processing-failure metadata does not match authenticated payload"
+            );
+            Ok(record)
+        })
+        .transpose()
+    }
+
+    pub fn processing_failure_summary(&self, account: &str) -> Result<ProcessingFailureSummary> {
+        let mut summary = ProcessingFailureSummary::default();
+        let mut query = self.conn.prepare(
+            "SELECT f.code,COUNT(*),SUM(f.retry_exhausted)
+             FROM processing_failures f
+             JOIN items i ON i.id=f.item_id
+             WHERE i.account_key=?1 AND i.state IN ('queued','attention')
+             GROUP BY f.code ORDER BY f.code",
+        )?;
+        let rows = query.query_map([hash(account)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (code, count, exhausted) = row?;
+            ensure!(
+                ProcessingFailureCode::from_db(&code).is_some(),
+                "Processing-failure summary encountered an unknown code"
+            );
+            summary.active_records = summary.active_records.saturating_add(count);
+            summary.retry_exhausted = summary.retry_exhausted.saturating_add(exhausted);
+            summary.by_code.insert(code, count);
+        }
+        Ok(summary)
     }
 
     pub fn counts(&self, account: &str) -> Result<Counts> {
@@ -2141,6 +2378,84 @@ mod tests {
                 .iter()
                 .any(|event| event.kind == "meta.test")
         );
+    }
+
+    #[test]
+    fn schema_v4_migrates_processing_failure_metadata() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let vault = Vault::random();
+        {
+            let db = Store::open(&path, vault.clone()).unwrap();
+            db.conn
+                .execute_batch("DROP TABLE processing_failures; PRAGMA user_version=4;")
+                .unwrap();
+        }
+        let db = Store::open(&path, vault).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 5);
+        let exists: bool = db
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='processing_failures')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists);
+    }
+
+    #[test]
+    fn processing_failure_metadata_is_authenticated_and_does_not_block_later_mail() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let first_stub = stub("poison", "poison-thread");
+        let first_id = first_stub.id();
+        db.insert_stub(first_stub, now - chrono::Duration::seconds(2))
+            .unwrap();
+        let second_stub = stub("healthy", "healthy-thread");
+        let second_id = second_stub.id();
+        db.insert_stub(second_stub, now - chrono::Duration::seconds(1))
+            .unwrap();
+
+        let mut first = db.get(&first_id).unwrap();
+        first.attempts = 1;
+        first.retry_at = now.timestamp() + 3600;
+        let failure = ProcessingFailureRecord {
+            code: ProcessingFailureCode::Classification,
+            attempts: 1,
+            retry_exhausted: false,
+            occurred_at: now,
+        };
+        db.save_processing_failure(
+            &mut first,
+            &failure,
+            "analysis.retry_scheduled",
+            "Synthetic poison-message isolation",
+        )
+        .unwrap();
+
+        assert_eq!(db.processing_failure(&first_id).unwrap(), Some(failure));
+        let summary = db.processing_failure_summary("me@example.com").unwrap();
+        assert_eq!(summary.active_records, 1);
+        assert_eq!(summary.retry_exhausted, 0);
+        assert_eq!(summary.by_code.get("classification"), Some(&1));
+        assert_eq!(
+            db.next_queued("me@example.com", now)
+                .unwrap()
+                .unwrap()
+                .id,
+            second_id
+        );
+        db.integrity_check().unwrap();
+
+        db.conn
+            .execute(
+                "UPDATE processing_failures SET code='draft_generation' WHERE item_id=?1",
+                [&first_id],
+            )
+            .unwrap();
+        assert!(db.integrity_check().is_err());
     }
 
     #[test]
