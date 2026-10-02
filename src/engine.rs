@@ -915,10 +915,7 @@ impl Engine {
             job.attempts = job.attempts.saturating_add(1);
             let retry_exhausted = job.attempts >= 3;
             let code = ollama::processing_failure_code(&error);
-            job.flags = vec![format!(
-                "Analysis unavailable [{}]: {error}",
-                code.as_str()
-            )];
+            job.flags = vec![format!("Analysis unavailable [{}]: {error}", code.as_str())];
             if retry_exhausted {
                 job.state = JobState::Attention;
                 job.retry_at = 0;
