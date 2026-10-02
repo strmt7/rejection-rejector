@@ -1116,12 +1116,7 @@ impl Store {
         kind: &str,
         detail: &str,
     ) -> Result<()> {
-        self.save_internal(
-            job,
-            kind,
-            detail,
-            ProcessingFailureMutation::Set(failure),
-        )
+        self.save_internal(job, kind, detail, ProcessingFailureMutation::Set(failure))
     }
 
     pub fn save_clearing_processing_failure(
@@ -1182,7 +1177,10 @@ impl Store {
                 )?;
             }
             ProcessingFailureMutation::Set(record) => {
-                ensure!(record.attempts > 0, "Processing-failure attempts must be positive");
+                ensure!(
+                    record.attempts > 0,
+                    "Processing-failure attempts must be positive"
+                );
                 ensure!(
                     record.occurred_at.timestamp() > 0,
                     "Processing-failure timestamp is invalid"
@@ -2441,10 +2439,7 @@ mod tests {
         assert_eq!(summary.retry_exhausted, 0);
         assert_eq!(summary.by_code.get("classification"), Some(&1));
         assert_eq!(
-            db.next_queued("me@example.com", now)
-                .unwrap()
-                .unwrap()
-                .id,
+            db.next_queued("me@example.com", now).unwrap().unwrap().id,
             second_id
         );
         db.integrity_check().unwrap();

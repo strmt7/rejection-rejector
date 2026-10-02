@@ -1,7 +1,8 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
 use crate::{
     config::{
-        LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS, Settings, Tone, VERIFIER_CANDIDATES,
+        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H, LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS,
+        Settings, Tone, VERIFIER_CANDIDATES,
     },
     types::{Job, JobState, OperationState, OperationStatus, hash},
     worker::{Command, Snapshot, Worker},
