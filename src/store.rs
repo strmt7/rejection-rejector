@@ -1298,12 +1298,7 @@ impl Store {
     }
 
     /// Backward-compatible manual/global-cap reservation API.
-    pub fn reserve_send(
-        &mut self,
-        snapshot: &Job,
-        limit: u16,
-        now: DateTime<Utc>,
-    ) -> Result<Job> {
+    pub fn reserve_send(&mut self, snapshot: &Job, limit: u16, now: DateTime<Utc>) -> Result<Job> {
         self.reserve_send_with_recipient_limit(snapshot, limit, None, now)
     }
 
@@ -1351,12 +1346,8 @@ impl Store {
                 .as_ref()
                 .context("Original message is required for recipient rate limiting")?
                 .recipient()?;
-            let recipient_attempts = recipient_attempts_since(
-                &tx,
-                &self.vault,
-                &recipient,
-                now.timestamp() - 86_400,
-            )?;
+            let recipient_attempts =
+                recipient_attempts_since(&tx, &self.vault, &recipient, now.timestamp() - 86_400)?;
             ensure!(
                 recipient_attempts < u64::from(recipient_limit),
                 "Automatic recipient 24-hour attempt limit reached"
@@ -2269,12 +2260,16 @@ mod tests {
         }
 
         assert_eq!(db.recipient_attempts_24h(&first, now).unwrap(), 0);
-        db.reserve_send_with_recipient_limit(&first, 10, Some(2), now).unwrap();
+        db.reserve_send_with_recipient_limit(&first, 10, Some(2), now)
+            .unwrap();
         assert_eq!(db.recipient_attempts_24h(&second, now).unwrap(), 1);
-        db.finish_send(&first.id, Some("provider-a".into())).unwrap();
+        db.finish_send(&first.id, Some("provider-a".into()))
+            .unwrap();
 
-        db.reserve_send_with_recipient_limit(&second, 10, Some(2), now).unwrap();
-        db.finish_send(&second.id, Some("provider-b".into())).unwrap();
+        db.reserve_send_with_recipient_limit(&second, 10, Some(2), now)
+            .unwrap();
+        db.finish_send(&second.id, Some("provider-b".into()))
+            .unwrap();
         assert_eq!(db.recipient_attempts_24h(&third, now).unwrap(), 2);
         assert!(db.reserve_send_with_recipient_limit(&third, 10, Some(2), now).is_err());
 
