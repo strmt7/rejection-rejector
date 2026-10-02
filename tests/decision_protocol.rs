@@ -115,14 +115,12 @@ fn decision_evaluation_uses_typed_local_protocol_without_fixture_text_in_report(
     let directory = tempfile::tempdir().unwrap();
     let report_path = directory.path().join("decision-report.json");
 
-    let report = decision::evaluate(
-        &fixture.settings(),
-        "nimble:9b-q8_0",
-        &report_path,
-    )
-    .unwrap();
+    let report = decision::evaluate(&fixture.settings(), "nimble:9b-q8_0", &report_path).unwrap();
 
-    assert_eq!(report["contract_version"], decision::DECISION_EVALUATION_CONTRACT_VERSION);
+    assert_eq!(
+        report["contract_version"],
+        decision::DECISION_EVALUATION_CONTRACT_VERSION
+    );
     assert_eq!(report["model"], "nimble:9b-q8_0");
     assert_eq!(report["summary"]["fixture_count"], 72);
     assert_eq!(report["summary"]["completed"], 72);
