@@ -3437,6 +3437,7 @@ dependencies = [
  "uuid",
  "webbrowser",
  "which",
+ "yoke-derive",
  "zeroize",
 ]
 
