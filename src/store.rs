@@ -2271,7 +2271,10 @@ mod tests {
         db.finish_send(&second.id, Some("provider-b".into()))
             .unwrap();
         assert_eq!(db.recipient_attempts_24h(&third, now).unwrap(), 2);
-        assert!(db.reserve_send_with_recipient_limit(&third, 10, Some(2), now).is_err());
+        assert!(
+            db.reserve_send_with_recipient_limit(&third, 10, Some(2), now)
+                .is_err()
+        );
 
         // Human Review can still make an explicit operator decision.
         db.reserve_send(&third, 10, now).unwrap();
