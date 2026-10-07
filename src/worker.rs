@@ -266,11 +266,7 @@ impl Command {
 
 /// Rejected commands must never mask a running operation. In particular a
 /// queue overflow may not make an in-flight Gmail send appear safe to interrupt.
-fn report_unqueued_command(
-    snapshot: &mut Snapshot,
-    kind: OperationKind,
-    disconnected: bool,
-) {
+fn report_unqueued_command(snapshot: &mut Snapshot, kind: OperationKind, disconnected: bool) {
     let (message, code, retryable) = if disconnected {
         (
             "Background worker is disconnected. Restart the application.",
@@ -1991,12 +1987,18 @@ mod tests {
         let mut snapshot = Snapshot::default();
         report_unqueued_command(&mut snapshot, OperationKind::Refresh, false);
         assert_eq!(snapshot.operation.state, OperationState::Failed);
-        assert_eq!(snapshot.operation.code.as_deref(), Some("worker_queue_busy"));
+        assert_eq!(
+            snapshot.operation.code.as_deref(),
+            Some("worker_queue_busy")
+        );
         assert!(snapshot.operation.retryable);
 
         report_unqueued_command(&mut snapshot, OperationKind::Refresh, true);
         assert_eq!(snapshot.operation.state, OperationState::Failed);
-        assert_eq!(snapshot.operation.code.as_deref(), Some("worker_disconnected"));
+        assert_eq!(
+            snapshot.operation.code.as_deref(),
+            Some("worker_disconnected")
+        );
         assert!(!snapshot.operation.retryable);
     }
 
