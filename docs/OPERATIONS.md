@@ -148,7 +148,7 @@ The desktop **Settings → Storage & integration** card can export a wrapped rec
 .\rejection-rejector.exe --recovery
 ```
 
-Recovery Mode does not start the normal worker or create/open the normal vault. It requires the encrypted backup directory, separately stored wrapped recovery-key JSON, recovery passphrase, and an exact `RESTORE` acknowledgement. The backup/key pair is first authenticated and exercised through the production restore path in an isolated temporary workspace; only then is the target workspace locked and restored. The lower-level `rr import-recovery-key` and `rr restore` commands remain available for scripted administration.
+Recovery Mode does not start the normal worker or create/open the normal vault. It requires the encrypted backup directory, separately stored wrapped recovery-key JSON, recovery passphrase, and an exact `RESTORE` acknowledgement. The backup/key pair is first authenticated and exercised through the production restore path in an isolated temporary workspace; only then is the target workspace locked and restored. Every successful offline restore leaves a small private, fail-closed reauthorization marker. The next normal startup durably switches the restored workspace to Human Review with sending disabled, audits that action and only then removes the marker. Re-enable delivery manually after inspecting the restored state. The lower-level `rr import-recovery-key` and `rr restore` commands remain available for scripted administration.
 
 For portable disaster recovery, store the encrypted recovery-key envelope **separately** from the backup:
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Offline restore now plants a private reauthorization marker before database replacement. On the next normal startup, previously backed-up Automatic/sending permissions are disarmed durably before the marker is cleared; malformed markers fail closed.
+
 - Cleans up partially copied encrypted restore staging files on I/O failure without touching pre-existing destinations, and removes an abandoned candidate on rename failure.
 - Caps desktop recovery passphrases at 4 KiB, matching the CLI safety boundary; oversize input cannot start key derivation or a restore.
 - Rejects Windows Task Scheduler autostart registration when rr.exe is in a versioned MSIX-managed path, which otherwise becomes stale after package updates.

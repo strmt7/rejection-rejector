@@ -17,6 +17,8 @@ const MANIFEST_NAME: &str = "backup-manifest.json";
 const DATABASE_NAME: &str = "state.sqlite3";
 const VAULT_ID_NAME: &str = "vault-id";
 const RECOVERY_KEY_NAME: &str = "recovery-key.json";
+const RESTORE_REARM_NAME: &str = ".restore-rearm-required";
+const RESTORE_REARM_CONTENT: &[u8] = b"restore-rearm:v1\n";
 const SCHEDULED_BACKUP_PREFIX: &str = "rejection-rejector-auto-";
 pub const LAST_SCHEDULED_BACKUP_META: &str = "scheduled_backup_last_success";
 
@@ -121,6 +123,44 @@ fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
         path.display()
     );
     Ok(bytes)
+}
+
+/// An offline restore may bring back an old Automatic/sending permission.
+/// The marker is created before replacing the live database and cleared only
+/// after the next normal startup has durably disarmed delivery.
+pub fn restore_rearm_required(directory: &Path) -> Result<bool> {
+    let path = directory.join(RESTORE_REARM_NAME);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "Restore reauthorization marker must be a regular file"
+            );
+            ensure!(
+                read_small(&path, 64)? == RESTORE_REARM_CONTENT,
+                "Restore reauthorization marker is malformed; refusing unattended startup"
+            );
+            Ok(true)
+        }
+    }
+}
+
+fn mark_restore_rearm_required(directory: &Path) -> Result<()> {
+    if restore_rearm_required(directory)? {
+        return Ok(());
+    }
+    write_new_private(&directory.join(RESTORE_REARM_NAME), RESTORE_REARM_CONTENT)
+}
+
+pub fn clear_restore_rearm_marker(directory: &Path) -> Result<()> {
+    ensure!(
+        restore_rearm_required(directory)?,
+        "Restore reauthorization marker is missing or invalid"
+    );
+    fs::remove_file(directory.join(RESTORE_REARM_NAME))?;
+    Ok(())
 }
 
 fn write_new_private_atomic(path: &Path, data: &[u8]) -> Result<()> {
@@ -897,6 +937,11 @@ fn restore_backup_with_vault(
     ));
     private_dir(&rollback_dir)?;
 
+    // Persist a fail-closed startup marker before touching the live database.
+    // If restoration is interrupted, the next normal startup must still
+    // disarm any restored Automatic/sending authorization.
+    mark_restore_rearm_required(data_dir)?;
+
     let live = data_dir.join(DATABASE_NAME);
     let live_wal = data_dir.join(format!("{DATABASE_NAME}-wal"));
     let live_shm = data_dir.join(format!("{DATABASE_NAME}-shm"));
@@ -1006,6 +1051,24 @@ mod tests {
         vault::Vault,
     };
     use std::io::Write;
+
+    #[test]
+    fn restore_rearm_marker_is_durable_bounded_and_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!restore_rearm_required(dir.path()).unwrap());
+        mark_restore_rearm_required(dir.path()).unwrap();
+        assert!(restore_rearm_required(dir.path()).unwrap());
+        mark_restore_rearm_required(dir.path()).unwrap();
+        assert!(restore_rearm_required(dir.path()).unwrap());
+
+        let marker = dir.path().join(RESTORE_REARM_NAME);
+        fs::write(&marker, b"invalid").unwrap();
+        assert!(restore_rearm_required(dir.path()).is_err());
+        assert!(clear_restore_rearm_marker(dir.path()).is_err());
+        fs::write(&marker, RESTORE_REARM_CONTENT).unwrap();
+        clear_restore_rearm_marker(dir.path()).unwrap();
+        assert!(!restore_rearm_required(dir.path()).unwrap());
+    }
 
     #[test]
     fn backup_isolation_detects_same_failure_domain_for_local_fixture() {
@@ -1302,6 +1365,7 @@ mod tests {
                 restore_backup_with_vault(&data, &backup, &manifest, vault.clone()).unwrap();
             assert_eq!(report.restored_schema_version, manifest.schema_version);
             assert!(report.rollback_directory.is_some());
+            assert!(restore_rearm_required(&data).unwrap());
         }
 
         let restored = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
