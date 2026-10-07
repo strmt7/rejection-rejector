@@ -363,12 +363,10 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
         critical_negative_cases,
         critical_negative_rejection_false_positives: critical_negative_fp,
         probability_contract_failures,
-        mean_multiclass_brier: (completed != 0)
-            .then(|| total_multiclass_brier / completed as f64),
-        mean_rejection_brier: (completed != 0)
-            .then(|| total_rejection_brier / completed as f64),
-        critical_negative_mean_rejection_probability:
-            (critical_negative_probability_samples != 0).then(|| {
+        mean_multiclass_brier: (completed != 0).then(|| total_multiclass_brier / completed as f64),
+        mean_rejection_brier: (completed != 0).then(|| total_rejection_brier / completed as f64),
+        critical_negative_mean_rejection_probability: (critical_negative_probability_samples != 0)
+            .then(|| {
                 critical_negative_rejection_probability_sum
                     / critical_negative_probability_samples as f64
             }),
