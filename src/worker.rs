@@ -176,6 +176,15 @@ pub enum Command {
     RecoveryDrill {
         backup: PathBuf,
     },
+    ExportRecoveryKey {
+        out: PathBuf,
+        passphrase: Zeroizing<String>,
+    },
+    VerifyRecoveryKey {
+        backup: PathBuf,
+        recovery_key: PathBuf,
+        passphrase: Zeroizing<String>,
+    },
     Diagnostics {
         out: PathBuf,
     },
@@ -236,6 +245,8 @@ impl Command {
             Self::CompactDatabase => OperationKind::CompactDatabase,
             Self::Backup { .. } => OperationKind::Backup,
             Self::RecoveryDrill { .. } => OperationKind::RecoveryDrill,
+            Self::ExportRecoveryKey { .. } => OperationKind::RecoveryKeyExport,
+            Self::VerifyRecoveryKey { .. } => OperationKind::RecoveryKeyVerify,
             Self::Diagnostics { .. } => OperationKind::Diagnostics,
             Self::List { .. } => OperationKind::ListItems,
             Self::Select(_) => OperationKind::SelectItem,
@@ -894,6 +905,52 @@ fn run(
                                 report.delivery_records
                             ),
                         )
+                    }
+                    Command::ExportRecoveryKey { out, passphrase } => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Wrapping the vault key for offline disaster recovery…",
+                        );
+                        let result = crate::recovery::export_recovery_key(
+                            &e.directory,
+                            passphrase.as_bytes(),
+                            &out,
+                        )
+                        .map(|_| ());
+                        if result.is_ok() {
+                            e.db.log(
+                                "recovery.key_exported",
+                                None,
+                                "Passphrase-wrapped recovery key exported",
+                            )?;
+                        }
+                        result
+                    }
+                    Command::VerifyRecoveryKey {
+                        backup,
+                        recovery_key,
+                        passphrase,
+                    } => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Authenticating the recovery key against the selected encrypted backup…",
+                        );
+                        let result = crate::recovery::verify_recovery_key_for_backup(
+                            &backup,
+                            &recovery_key,
+                            passphrase.as_bytes(),
+                        )
+                        .map(|_| ());
+                        if result.is_ok() {
+                            e.db.log(
+                                "recovery.key_verified",
+                                None,
+                                "Recovery key authenticated against an encrypted backup",
+                            )?;
+                        }
+                        result
                     }
                     Command::Diagnostics { out } => {
                         busy(&shared, &pulse, "Writing privacy-safe diagnostics locally…");

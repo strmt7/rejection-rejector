@@ -13,6 +13,7 @@ use std::{
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
+use zeroize::Zeroizing;
 
 const BG: Color32 = Color32::from_rgb(15, 20, 28);
 const PANEL: Color32 = Color32::from_rgb(22, 29, 39);
@@ -37,6 +38,21 @@ enum ShortcutAction {
     LocalAi,
     Settings,
     CheckNow,
+}
+
+enum RecoveryDialogKind {
+    Export { out: PathBuf },
+    Verify { backup: PathBuf, recovery_key: PathBuf },
+}
+
+struct RecoveryDialog {
+    kind: RecoveryDialogKind,
+    passphrase: Zeroizing<String>,
+    confirmation: Zeroizing<String>,
+}
+
+fn recovery_passphrase_valid(passphrase: &str, confirmation: Option<&str>) -> bool {
+    passphrase.len() >= 20 && confirmation.is_none_or(|value| value == passphrase)
 }
 
 impl ShortcutAction {
@@ -85,6 +101,7 @@ pub struct App {
     pending_select: Option<String>,
     send_confirmation: Option<Job>,
     install_confirmation: bool,
+    recovery_dialog: Option<RecoveryDialog>,
     oauth_send: bool,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
@@ -147,6 +164,7 @@ impl App {
             pending_select: None,
             send_confirmation: None,
             install_confirmation: false,
+            recovery_dialog: None,
             oauth_send: false,
             screenshot,
             screenshot_requested: false,
@@ -174,6 +192,7 @@ impl App {
                 self.pending_select = None;
                 self.send_confirmation = None;
                 self.install_confirmation = false;
+                self.recovery_dialog = None;
                 self.close_confirmation = false;
             }
             return;
@@ -1283,6 +1302,48 @@ impl App {
                 if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Export recovery key…"),
+                    )
+                    .on_hover_text("Creates a passphrase-wrapped recovery-key envelope for off-machine disaster recovery. The plaintext vault key is never written to disk.")
+                    .clicked()
+                    && let Some(out) = rfd::FileDialog::new()
+                        .set_title("Save wrapped Rejection Rejector recovery key")
+                        .set_file_name("recovery-key.json")
+                        .save_file()
+                {
+                    self.recovery_dialog = Some(RecoveryDialog {
+                        kind: RecoveryDialogKind::Export { out },
+                        passphrase: Zeroizing::new(String::new()),
+                        confirmation: Zeroizing::new(String::new()),
+                    });
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
+                        egui::Button::new("Verify recovery key…"),
+                    )
+                    .on_hover_text("Proves that a wrapped recovery key and passphrase can decrypt the selected backup without installing the recovered key into the OS credential store.")
+                    .clicked()
+                    && let Some(backup) = rfd::FileDialog::new()
+                        .set_title("Choose a Rejection Rejector backup directory")
+                        .pick_folder()
+                    && let Some(recovery_key) = rfd::FileDialog::new()
+                        .set_title("Choose the wrapped recovery key")
+                        .add_filter("Recovery key JSON", &["json"])
+                        .pick_file()
+                {
+                    self.recovery_dialog = Some(RecoveryDialog {
+                        kind: RecoveryDialogKind::Verify {
+                            backup,
+                            recovery_key,
+                        },
+                        passphrase: Zeroizing::new(String::new()),
+                        confirmation: Zeroizing::new(String::new()),
+                    });
+                }
+                if ui
+                    .add_enabled(
+                        s.busy.is_empty() && !s.demo,
                         egui::Button::new("Export diagnostics…"),
                     )
                     .on_hover_text("Writes a redacted JSON report locally. No email content, account address, recipients, OAuth credentials, API token, signature or candidate facts are included.")
@@ -1296,7 +1357,7 @@ impl App {
                 }
             });
             ui.label(
-                RichText::new("Backups preserve the encrypted database and audit chain. Run a recovery drill regularly. Off-machine recovery requires a separately stored wrapped recovery-key envelope and its passphrase; no plaintext master-key export exists.")
+                RichText::new("Backups preserve the encrypted database and audit chain. Run a recovery drill regularly. Off-machine recovery requires a separately stored wrapped recovery-key envelope and its passphrase; no plaintext master-key export exists. The GUI can export and verify that envelope; installing it into a fresh or locked workspace remains an explicit pre-open recovery operation.")
                     .small()
                     .color(MUTED),
             );
@@ -1494,6 +1555,113 @@ impl App {
 if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.command(Command::InstallOllama);}});
         });
         }
+        let mut recovery_cancel = false;
+        let mut recovery_submit = false;
+        if let Some(dialog) = self.recovery_dialog.as_mut() {
+            let exporting = matches!(dialog.kind, RecoveryDialogKind::Export { .. });
+            let title = if exporting {
+                "Export wrapped recovery key"
+            } else {
+                "Verify wrapped recovery key"
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(560.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    match &dialog.kind {
+                        RecoveryDialogKind::Export { out } => {
+                            ui.label("Choose a strong recovery passphrase. It is used only in memory to wrap the local vault key with Argon2id + XChaCha20-Poly1305.");
+                            ui.monospace(out.display().to_string());
+                        }
+                        RecoveryDialogKind::Verify {
+                            backup,
+                            recovery_key,
+                        } => {
+                            ui.label("This performs an offline cryptographic check only. It does not install the recovered vault key or modify the selected backup.");
+                            ui.monospace(format!("Backup: {}", backup.display()));
+                            ui.monospace(format!("Key: {}", recovery_key.display()));
+                        }
+                    }
+                    ui.separator();
+                    let passphrase_label = ui.label("Recovery passphrase");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut *dialog.passphrase)
+                            .password(true)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .labelled_by(passphrase_label.id);
+                    if exporting {
+                        let confirmation_label = ui.label("Confirm recovery passphrase");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut *dialog.confirmation)
+                                .password(true)
+                                .desired_width(f32::INFINITY),
+                        )
+                        .labelled_by(confirmation_label.id);
+                    }
+                    let valid = recovery_passphrase_valid(
+                        dialog.passphrase.as_str(),
+                        exporting.then_some(dialog.confirmation.as_str()),
+                    );
+                    if dialog.passphrase.len() < 20 {
+                        ui.colored_label(AMBER, "Use at least 20 UTF-8 bytes.");
+                    } else if exporting && dialog.passphrase.as_str() != dialog.confirmation.as_str()
+                    {
+                        ui.colored_label(AMBER, "The two passphrases do not match.");
+                    }
+                    ui.label(
+                        RichText::new("The passphrase is never written to settings, audit logs, diagnostics or the recovery-key file.")
+                            .small()
+                            .color(MUTED),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            recovery_cancel = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                valid && s.busy.is_empty(),
+                                egui::Button::new(if exporting {
+                                    "Export wrapped key"
+                                } else {
+                                    "Verify key against backup"
+                                }),
+                            )
+                            .clicked()
+                        {
+                            recovery_submit = true;
+                        }
+                    });
+                });
+        }
+        if recovery_cancel {
+            self.recovery_dialog = None;
+        } else if recovery_submit
+            && let Some(mut dialog) = self.recovery_dialog.take()
+        {
+            let passphrase = std::mem::replace(
+                &mut dialog.passphrase,
+                Zeroizing::new(String::new()),
+            );
+            match dialog.kind {
+                RecoveryDialogKind::Export { out } => {
+                    self.worker
+                        .command(Command::ExportRecoveryKey { out, passphrase });
+                }
+                RecoveryDialogKind::Verify {
+                    backup,
+                    recovery_key,
+                } => {
+                    self.worker.command(Command::VerifyRecoveryKey {
+                        backup,
+                        recovery_key,
+                        passphrase,
+                    });
+                }
+            }
+        }
         if let Some(job) = self.send_confirmation.clone() {
             egui::Window::new("Confirm this exact reply").collapsible(false).resizable(true).default_width(600.0).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0]).show(ctx,|ui|{
             if let Some(e)=&job.email{ui.label(RichText::new(format!("To: {}",e.recipient().unwrap_or_default())).strong());ui.label(format!("Subject: {}",e.subject));}
@@ -1673,6 +1841,7 @@ impl App {
         self.pending_select.is_some()
             || self.send_confirmation.is_some()
             || self.install_confirmation
+            || self.recovery_dialog.is_some()
             || self.close_confirmation
     }
     /// Presentation-only demo navigation; CLI permits this only with --demo.
@@ -1709,6 +1878,23 @@ mod tests {
             Some(Tab::Settings)
         );
         assert_eq!(ShortcutAction::CheckNow.tab(Mode::HumanReview), None);
+    }
+
+    #[test]
+    fn recovery_passphrase_validation_matches_crypto_contract() {
+        assert!(!recovery_passphrase_valid("short", None));
+        assert!(recovery_passphrase_valid(
+            "correct horse battery staple",
+            None
+        ));
+        assert!(!recovery_passphrase_valid(
+            "correct horse battery staple",
+            Some("different passphrase entirely")
+        ));
+        assert!(recovery_passphrase_valid(
+            "correct horse battery staple",
+            Some("correct horse battery staple")
+        ));
     }
 
     #[test]
