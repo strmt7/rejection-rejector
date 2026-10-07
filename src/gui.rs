@@ -1864,7 +1864,7 @@ impl eframe::App for RecoveryApp {
         let ctx = root_ui.ctx().clone();
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(BG).inner_margin(28))
-            .show_inside(root_ui, |ui| {
+            .show(root_ui, |ui| {
                 ui.set_max_width(920.0);
                 ui.heading("Disaster Recovery Mode");
                 ui.label(
