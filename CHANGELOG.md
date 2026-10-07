@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Revalidates the originally approved backup manifest, staged database checksum, schema and audit head throughout offline restore, and rejects symlinked backup databases. Adds anti-swap and symlink regression tests.
+
 - Adds guarded desktop export and offline verification for passphrase-wrapped disaster-recovery keys, plus a pre-open native Recovery Mode that authenticates and exercises the backup/key pair in isolation before restoring a fresh/locked workspace; passphrases remain zeroizing and key-file creation is atomic/no-clobber. Recovery runs off the UI thread, remains intentionally non-cancellable once started, and blocks window close until the transactional operation finishes.
 - Enforces Ollama 0.35.1 capability metadata so decision-only models cannot enter the production chat pipeline and general completion models cannot enter the typed-decision lane.
 - Adds Clef Flash 9B Q8 to the non-sending decision-model bake-off and Gemma 4 12B Q4 as a higher-headroom generative challenger.

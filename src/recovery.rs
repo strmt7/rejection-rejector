@@ -230,6 +230,10 @@ fn validate_bundle_files(directory: &Path) -> Result<(BackupManifest, PathBuf)> 
     );
 
     let database = directory.join(DATABASE_NAME);
+    ensure!(
+        database.is_file() && !fs::symlink_metadata(&database)?.file_type().is_symlink(),
+        "Backup database must be a regular file, not a symlink"
+    );
     let actual_hash = sha256_file(&database)?;
     ensure!(
         actual_hash == manifest.database_sha256,
@@ -811,7 +815,11 @@ fn restore_backup_with_vault(
     vault: Vault,
 ) -> Result<RestoreReport> {
     private_dir(data_dir)?;
-    let (_, backup_database) = validate_bundle_files(backup_dir)?;
+    let (current_manifest, backup_database) = validate_bundle_files(backup_dir)?;
+    ensure!(
+        current_manifest == *manifest,
+        "Backup manifest changed since the restore was authorized"
+    );
     let current_vault_id = std::str::from_utf8(&read_small(&data_dir.join(VAULT_ID_NAME), 256)?)?
         .trim()
         .to_owned();
@@ -826,11 +834,35 @@ fn restore_backup_with_vault(
     copy_private_new(&backup_database, &input_stage)?;
 
     let staging_result = (|| -> Result<i64> {
+        ensure!(
+            sha256_file(&input_stage)? == manifest.database_sha256,
+            "Staged backup checksum changed after manifest verification"
+        );
         let staged = Store::open(&input_stage, vault.clone())?;
         staged.integrity_check()?;
-        staged.verify_backup_file(&input_stage)?;
+        let authenticated = staged.verify_backup_file(&input_stage)?;
+        ensure!(
+            authenticated.schema_version == manifest.schema_version,
+            "Staged backup schema does not match the authorized manifest"
+        );
+        if manifest.format_version >= 2 {
+            ensure!(
+                authenticated.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+                "Staged backup audit head does not match the authorized manifest"
+            );
+        }
         staged.backup_to(&candidate)?;
         let verified = staged.verify_backup_file(&candidate)?;
+        ensure!(
+            verified.schema_version == manifest.schema_version,
+            "Restored candidate schema does not match the authorized manifest"
+        );
+        if manifest.format_version >= 2 {
+            ensure!(
+                verified.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+                "Restored candidate audit head does not match the authorized manifest"
+            );
+        }
         Ok(verified.schema_version)
     })();
     let _ = fs::remove_file(input_stage.with_extension("sqlite3-wal"));
@@ -894,6 +926,12 @@ fn restore_backup_with_vault(
             verification.schema_version == restored_schema_version,
             "Restored schema changed unexpectedly"
         );
+        if manifest.format_version >= 2 {
+            ensure!(
+                verification.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+                "Restored database audit head differs from the authorized manifest"
+            );
+        }
         Ok(())
     })();
 
@@ -1130,6 +1168,55 @@ mod tests {
 
         let live_hash_after = sha256_file(&data.join(DATABASE_NAME)).unwrap();
         assert_eq!(live_hash_before, live_hash_after);
+    }
+
+    #[test]
+    fn restore_rejects_manifest_changes_before_modifying_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        private_dir(&source).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&source.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let store = Store::open(&source.join(DATABASE_NAME), vault.clone()).unwrap();
+        let backup = root.path().join("backup");
+        let manifest = create_backup(&store, &source, &backup).unwrap();
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        write_new_private(&target.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+
+        let mut altered_manifest = manifest.clone();
+        altered_manifest.recovery_note.push_str(" modified");
+        fs::write(
+            backup.join(MANIFEST_NAME),
+            serde_json::to_vec_pretty(&altered_manifest).unwrap(),
+        )
+        .unwrap();
+
+        assert!(restore_backup_with_vault(&target, &backup, &manifest, vault).is_err());
+        assert!(!target.join(DATABASE_NAME).exists());
+        assert!(!target.join("recovery").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_validation_refuses_a_symlinked_database() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        private_dir(&source).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&source.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let store = Store::open(&source.join(DATABASE_NAME), vault).unwrap();
+        let backup = root.path().join("backup");
+        create_backup(&store, &source, &backup).unwrap();
+
+        let database = backup.join(DATABASE_NAME);
+        let moved = root.path().join("outside.sqlite3");
+        fs::rename(&database, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &database).unwrap();
+        assert!(validate_bundle_files(&backup).is_err());
     }
 
     #[test]
