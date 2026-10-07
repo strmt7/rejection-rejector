@@ -1,7 +1,9 @@
 # cargo-mutants configuration for Rejection Rejector.
-# Focus mutation evidence on code that controls unattended actions, parsing,
-# readiness, enterprise policy and recovery. GUI rendering and integration
-# plumbing are covered by other dedicated checks.
+# Focus mutation evidence on compact code that controls unattended actions,
+# parsing, readiness, managed policy, recovery, emergency containment, API
+# credential verification, retry/circuit semantics and crash-session safety.
+# Huge orchestration/store modules remain covered by deterministic/concurrency/
+# recovery tests and other deep gates rather than making this campaign time out.
 
 examine_globs = [
   "src/config.rs",
@@ -9,6 +11,10 @@ examine_globs = [
   "src/readiness.rs",
   "src/policy.rs",
   "src/recovery.rs",
+  "src/emergency.rs",
+  "src/api_auth.rs",
+  "src/retry.rs",
+  "src/session.rs",
 ]
 
 all_features = true
