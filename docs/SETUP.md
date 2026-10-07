@@ -26,9 +26,9 @@ Official references:
 
 ## Ollama and local AI
 
-Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a provisional task-specific default, not a permanent leaderboard choice. The current curated challengers include `granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, `ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. Changing model/context disarms delivery until the new configuration is qualified.
+Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a provisional task-specific default, not a permanent leaderboard choice. The current curated generative challengers include `granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, the higher-headroom `gemma4:12b-it-q4_K_M`, `ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. The separate non-sending typed-decision bake-off includes `nimble:9b-q8_0`, `clef-flash:9b-q8_0` and `tev1:4b`. Changing model/context disarms delivery until the new configuration is qualified.
 
-1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.35.0 or newer** and rejects older runtimes rather than assuming identical structured-output/model behavior. Version 0.35 also supplies the typed local decision-model API used by the optional non-sending R&D evaluator. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
+1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.35.1 or newer**. It fails closed if `/api/show` does not expose capability metadata: production chat models must declare general completion capability and may not be decision-only, while the typed-decision R&D lane requires a decision-only capability. This prevents decision endpoints from being accidentally promoted into the reply-generation pipeline. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
 3. **Download model** retrieves weights through the local Ollama API with progress. No email is sent to the registry.
 4. **Qualify & pin** checks installed local model metadata and cloud/remote markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.
@@ -76,6 +76,14 @@ Select Automatic, enable sending and explicitly authorize automatic replies. The
 Pause blocks future dispatch but cannot recall a request already sent to Gmail. An active model request may run until its timeout. Closing the app stops its scheduler, not necessarily the Ollama daemon. Close the GUI before using `rr.exe run`; one process may own a data directory.
 
 ## Recovery and retention
+
+For a replacement or locked Windows/macOS workspace, the preferred native flow is the pre-open recovery UI:
+
+```powershell
+.\rejection-rejector.exe --recovery
+```
+
+Recovery Mode does **not** start the normal Gmail/model worker and does not open or create the normal vault first. Select the encrypted backup directory and the separately stored wrapped recovery-key JSON, enter the recovery passphrase, then type `RESTORE`. The application authenticates the key against the backup and exercises the production restore path in an isolated temporary workspace before it locks or modifies the target workspace. Close Recovery Mode after success, then launch the application normally.
 
 An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection returns the rejection message to Human Review instead of pretending delivery may have occurred. Completed Sent records are permanent per-message at-most-once tombstones, but they do not block a later distinct rejection in the same thread.
 
