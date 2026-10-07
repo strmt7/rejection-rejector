@@ -7,6 +7,7 @@
 - Adds Clef Flash 9B Q8 to the non-sending decision-model bake-off and Gemma 4 12B Q4 as a higher-headroom generative challenger.
 - Adds explicit Windows application-manifest verification for as-invoker startup, Per-Monitor V2 DPI awareness, UTF-8 code page and long-path opt-in.
 - Extends unattended-send conflict guards with Dutch and Greek interview/offer/non-final-decision language and additional explicit-rejection phrases.
+- Expands the synthetic model-evaluation corpus from 72 to 74 cases with Dutch and Greek mixed-role critical negatives that combine one rejection with an interview invitation for another role; the suite hash changes deliberately so prior task qualification cannot mask the stronger evaluation contract.
 - Binds the outbound `X-Rejection-Rejector` loop-prevention header to the compiled package version instead of a stale hard-coded 0.1.0 value.
 
 ## 0.2.0

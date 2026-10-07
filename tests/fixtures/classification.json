@@ -678,5 +678,27 @@
       "pending_status",
       "ambiguous"
     ]
+  },
+  {
+    "id": "nl_rejection_one_role_interview_another",
+    "subject": "Update over uw sollicitaties",
+    "text": "Voor de functie Procesingenieur bent u niet geselecteerd. Voor de functie R&D Engineer nodigen we u graag uit voor een sollicitatiegesprek.",
+    "expected": "uncertain",
+    "tags": [
+      "multilingual",
+      "interview",
+      "ambiguous"
+    ]
+  },
+  {
+    "id": "el_rejection_one_role_interview_another",
+    "subject": "Ενημέρωση για τις αιτήσεις σας",
+    "text": "Για τη θέση Process Engineer δεν προχωράμε με την υποψηφιότητά σας. Για τη θέση R&D Engineer θα θέλαμε να σας καλέσουμε σε συνέντευξη.",
+    "expected": "uncertain",
+    "tags": [
+      "multilingual",
+      "interview",
+      "ambiguous"
+    ]
   }
 ]
