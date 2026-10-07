@@ -122,8 +122,8 @@ fn decision_evaluation_uses_typed_local_protocol_without_fixture_text_in_report(
         decision::DECISION_EVALUATION_CONTRACT_VERSION
     );
     assert_eq!(report["model"], "nimble:9b-q8_0");
-    assert_eq!(report["summary"]["fixture_count"], 72);
-    assert_eq!(report["summary"]["completed"], 72);
+    assert_eq!(report["summary"]["fixture_count"], 74);
+    assert_eq!(report["summary"]["completed"], 74);
     assert!(
         report["summary"]["mean_multiclass_brier"]
             .as_f64()
@@ -139,7 +139,7 @@ fn decision_evaluation_uses_typed_local_protocol_without_fixture_text_in_report(
             .as_f64()
             .is_some_and(|value| (0.0..=1.0).contains(&value))
     );
-    assert_eq!(fixture.requests.lock().unwrap().len(), 72);
+    assert_eq!(fixture.requests.lock().unwrap().len(), 74);
 
     let calls = fixture.requests.lock().unwrap();
     let first = &calls[0];
