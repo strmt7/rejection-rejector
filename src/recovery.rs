@@ -601,6 +601,98 @@ pub fn import_recovery_key_for_backup(
     Ok(envelope)
 }
 
+
+/// Restore a workspace from a portable recovery envelope without first opening
+/// or creating the normal application vault.
+///
+/// The backup and wrapped key are authenticated in an isolated temporary
+/// workspace before the target directory is touched. Only then is the target
+/// locked, its vault identity checked, and (when needed) the recovered key
+/// installed into the OS credential store before the transactional restore.
+pub fn recover_workspace_from_backup(
+    data_dir: &Path,
+    backup_dir: &Path,
+    recovery_key_file: &Path,
+    passphrase: &[u8],
+) -> Result<RestoreReport> {
+    let (manifest, backup_database) = validate_bundle_files(backup_dir)?;
+    let envelope = read_recovery_envelope(recovery_key_file)?;
+    ensure!(
+        envelope.vault_id == manifest.vault_id,
+        "Recovery key belongs to a different vault"
+    );
+    let recovered = Vault::from_recovery_envelope(&envelope, passphrase)?;
+    verify_vault_marker(&backup_database, &recovered)
+        .context("Recovery key does not authenticate the selected backup")?;
+
+    // Prove the full production restore path before mutating the requested target.
+    let isolated =
+        tempfile::tempdir().context("Cannot create isolated pre-recovery workspace")?;
+    private_dir(isolated.path())?;
+    write_new_private(
+        &isolated.path().join(VAULT_ID_NAME),
+        manifest.vault_id.as_bytes(),
+    )?;
+    restore_backup_with_vault(
+        isolated.path(),
+        backup_dir,
+        &manifest,
+        recovered.clone(),
+    )
+    .context("Portable recovery preflight failed in the isolated workspace")?;
+
+    let _lock = InstanceLock::acquire(data_dir)?;
+    private_dir(data_dir)?;
+    let vault_id_path = data_dir.join(VAULT_ID_NAME);
+    let created_vault_id = !vault_id_path.exists();
+    if created_vault_id {
+        write_new_private(&vault_id_path, manifest.vault_id.as_bytes())?;
+    } else {
+        ensure!(
+            vault_id(data_dir)? == manifest.vault_id,
+            "Target workspace belongs to a different vault"
+        );
+    }
+
+    let live = data_dir.join(DATABASE_NAME);
+    if live.exists() {
+        verify_vault_marker(&live, &recovered).context(
+            "Existing target database does not authenticate under the recovered vault key",
+        )?;
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        match Vault::open(data_dir) {
+            Ok(active) => {
+                verify_vault_marker(&backup_database, &active).context(
+                    "Existing OS credential does not authenticate the selected recovery backup",
+                )?;
+            }
+            Err(_) => {
+                if let Err(error) = recovered.install_os_key_if_missing(data_dir) {
+                    if created_vault_id && !live.exists() {
+                        let _ = fs::remove_file(&vault_id_path);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        // Linux deliberately has no OS-key import path. A matching
+        // RR_VAULT_PASSPHRASE-derived vault must already be available.
+        let active = Vault::open(data_dir)?;
+        verify_vault_marker(&backup_database, &active).context(
+            "Linux recovery requires the original RR_VAULT_PASSPHRASE for this vault",
+        )?;
+    }
+
+    restore_backup_with_vault(data_dir, backup_dir, &manifest, recovered)
+        .context("Portable recovery could not install the validated backup")
+}
+
 /// Verify manifest, checksum, vault identity and SQLite structure without
 /// modifying the backup database.
 pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> {

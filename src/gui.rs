@@ -13,7 +13,7 @@ use std::{
     sync::atomic::Ordering,
     time::{Duration, Instant},
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 const BG: Color32 = Color32::from_rgb(15, 20, 28);
 const PANEL: Color32 = Color32::from_rgb(22, 29, 39);
@@ -21,6 +21,43 @@ const LINE: Color32 = Color32::from_rgb(47, 59, 74);
 const MINT: Color32 = Color32::from_rgb(103, 225, 186);
 const MUTED: Color32 = Color32::from_rgb(150, 167, 187);
 const AMBER: Color32 = Color32::from_rgb(245, 193, 103);
+
+fn configure_theme(ctx: &egui::Context) {
+    ctx.set_theme(egui::Theme::Dark);
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
+    style.visuals = egui::Visuals::dark();
+    style.visuals.override_text_color = Some(Color32::from_rgb(222, 231, 240));
+    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(34, 44, 58);
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(47, 65, 79);
+    style.visuals.panel_fill = BG;
+    style.visuals.window_fill = PANEL;
+    style.visuals.extreme_bg_color = BG;
+    style.visuals.faint_bg_color = PANEL;
+    style.visuals.selection.bg_fill = Color32::from_rgb(29, 81, 72);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, MINT);
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 44, 58);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 65, 79);
+    style.spacing.item_spacing = Vec2::new(12.0, 12.0);
+    style.spacing.button_padding = Vec2::new(14.0, 9.0);
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, egui::FontId::proportional(27.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
+    ctx.set_style_of(egui::Theme::Dark, style);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
     Overview,
@@ -124,39 +161,7 @@ impl App {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
-        let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.override_text_color = Some(Color32::from_rgb(222, 231, 240));
-        style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(34, 44, 58);
-        style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(47, 65, 79);
-        style.visuals.panel_fill = BG;
-        style.visuals.window_fill = PANEL;
-        style.visuals.extreme_bg_color = BG;
-        style.visuals.faint_bg_color = PANEL;
-        style.visuals.selection.bg_fill = Color32::from_rgb(29, 81, 72);
-        style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, MINT);
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 44, 58);
-        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 65, 79);
-        style.spacing.item_spacing = Vec2::new(12.0, 12.0);
-        style.spacing.button_padding = Vec2::new(14.0, 9.0);
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Heading, egui::FontId::proportional(27.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
-        cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
+        configure_theme(&cc.egui_ctx);
         Self {
             worker: Worker::spawn(dir, demo),
             tab: if demo { Tab::Review } else { Tab::Overview },
@@ -1825,6 +1830,197 @@ impl eframe::App for App {
                 }
             }
         }
+    }
+}
+
+
+pub struct RecoveryApp {
+    data_dir: PathBuf,
+    backup: Option<PathBuf>,
+    recovery_key: Option<PathBuf>,
+    passphrase: Zeroizing<String>,
+    acknowledgement: String,
+    report: Option<crate::recovery::RestoreReport>,
+    error: String,
+}
+
+impl RecoveryApp {
+    pub fn new(cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
+        configure_theme(&cc.egui_ctx);
+        Self {
+            data_dir,
+            backup: None,
+            recovery_key: None,
+            passphrase: Zeroizing::new(String::new()),
+            acknowledgement: String::new(),
+            report: None,
+            error: String::new(),
+        }
+    }
+}
+
+impl eframe::App for RecoveryApp {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(BG).inner_margin(28))
+            .show_inside(root_ui, |ui| {
+                ui.set_max_width(920.0);
+                ui.heading("Disaster Recovery Mode");
+                ui.label(
+                    RichText::new(
+                        "This mode never opens or creates the normal application vault before your backup and wrapped recovery key are authenticated.",
+                    )
+                    .color(MUTED),
+                );
+                ui.add_space(12.0);
+                ui.colored_label(
+                    AMBER,
+                    "Recovery can replace the target workspace database. Use only a trusted backup and keep a copy of any existing workspace first.",
+                );
+                ui.separator();
+
+                ui.label(RichText::new("Target workspace").strong());
+                ui.monospace(self.data_dir.display().to_string());
+                ui.add_space(8.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.report.is_none(),
+                            egui::Button::new("Choose backup directory…"),
+                        )
+                        .clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .set_title("Choose Rejection Rejector backup directory")
+                            .pick_folder()
+                    {
+                        self.backup = Some(path);
+                        self.error.clear();
+                    }
+                    ui.monospace(
+                        self.backup
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "No backup selected".into()),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.report.is_none(),
+                            egui::Button::new("Choose wrapped recovery key…"),
+                        )
+                        .clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .set_title("Choose wrapped recovery key")
+                            .add_filter("Recovery key JSON", &["json"])
+                            .pick_file()
+                    {
+                        self.recovery_key = Some(path);
+                        self.error.clear();
+                    }
+                    ui.monospace(
+                        self.recovery_key
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "No recovery key selected".into()),
+                    );
+                });
+
+                let passphrase_label = ui.label("Recovery passphrase");
+                ui.add_enabled(
+                    self.report.is_none(),
+                    egui::TextEdit::singleline(&mut *self.passphrase)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(passphrase_label.id);
+                ui.label(
+                    RichText::new(
+                        "The passphrase remains only in zeroizing process memory and is cleared after every recovery attempt.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+
+                let acknowledgement_label =
+                    ui.label("Type RESTORE to acknowledge the destructive operation");
+                ui.add_enabled(
+                    self.report.is_none(),
+                    egui::TextEdit::singleline(&mut self.acknowledgement)
+                        .desired_width(180.0),
+                )
+                .labelled_by(acknowledgement_label.id);
+
+                let ready = self.report.is_none()
+                    && self.backup.is_some()
+                    && self.recovery_key.is_some()
+                    && self.passphrase.len() >= 20
+                    && self.acknowledgement == "RESTORE";
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(
+                            RichText::new("Authenticate, preflight and restore workspace")
+                                .strong()
+                                .color(BG),
+                        )
+                        .fill(MINT),
+                    )
+                    .clicked()
+                {
+                    let backup = self.backup.clone();
+                    let recovery_key = self.recovery_key.clone();
+                    let result = match (backup, recovery_key) {
+                        (Some(backup), Some(recovery_key)) => {
+                            crate::recovery::recover_workspace_from_backup(
+                                &self.data_dir,
+                                &backup,
+                                &recovery_key,
+                                self.passphrase.as_bytes(),
+                            )
+                        }
+                        _ => Err(anyhow::anyhow!("Recovery selections are incomplete")),
+                    };
+                    self.passphrase.zeroize();
+                    self.acknowledgement.clear();
+                    match result {
+                        Ok(report) => {
+                            self.error.clear();
+                            self.report = Some(report);
+                        }
+                        Err(error) => {
+                            self.error = format!("{error:#}");
+                        }
+                    }
+                }
+
+                if !self.error.is_empty() {
+                    ui.add_space(8.0);
+                    ui.colored_label(Color32::LIGHT_RED, &self.error);
+                }
+                if let Some(report) = &self.report {
+                    ui.add_space(12.0);
+                    ui.colored_label(
+                        MINT,
+                        format!(
+                            "Recovery completed and verified. Restored schema {}.",
+                            report.restored_schema_version
+                        ),
+                    );
+                    ui.label(
+                        "Close Recovery Mode and launch Rejection Rejector normally. The normal worker was never started during recovery.",
+                    );
+                }
+
+                ui.add_space(16.0);
+                if ui.button("Close Recovery Mode").clicked() {
+                    self.passphrase.zeroize();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Adds guarded desktop export and offline verification for passphrase-wrapped disaster-recovery keys, with zeroizing in-memory passphrases and atomic no-clobber key-file creation.
+- Adds guarded desktop export and offline verification for passphrase-wrapped disaster-recovery keys, plus a pre-open native Recovery Mode that authenticates and exercises the backup/key pair in isolation before restoring a fresh/locked workspace; passphrases remain zeroizing and key-file creation is atomic/no-clobber.
 - Enforces Ollama 0.35.1 capability metadata so decision-only models cannot enter the production chat pipeline and general completion models cannot enter the typed-decision lane.
 - Adds Clef Flash 9B Q8 to the non-sending decision-model bake-off and Gemma 4 12B Q4 as a higher-headroom generative challenger.
 - Adds explicit Windows application-manifest verification for as-invoker startup, Per-Monitor V2 DPI awareness, UTF-8 code page and long-path opt-in.
