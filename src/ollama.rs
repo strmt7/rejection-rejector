@@ -118,10 +118,9 @@ enum ModelPurpose {
 }
 
 fn validate_model_capabilities(show: &Value, purpose: ModelPurpose) -> Result<()> {
-    let capabilities = show
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .context("Ollama model capability metadata is missing; upgrade Ollama and re-pull the model")?;
+    let capabilities = show.get("capabilities").and_then(Value::as_array).context(
+        "Ollama model capability metadata is missing; upgrade Ollama and re-pull the model",
+    )?;
     ensure!(
         !capabilities.is_empty(),
         "Ollama model capability metadata is empty; upgrade Ollama and re-pull the model"
