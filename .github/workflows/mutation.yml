@@ -11,6 +11,7 @@ on:
       - "src/readiness.rs"
       - "src/policy.rs"
       - "src/recovery.rs"
+      - "tests/**"
       - ".cargo/mutants.toml"
       - ".github/workflows/mutation.yml"
   schedule:
