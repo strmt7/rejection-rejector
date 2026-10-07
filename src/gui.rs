@@ -1867,15 +1867,16 @@ impl eframe::App for RecoveryApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
 
-        let completed = self.recovery_result.as_ref().and_then(|receiver| {
-            match receiver.try_recv() {
-                Ok(result) => Some(result),
-                Err(crossbeam_channel::TryRecvError::Empty) => None,
-                Err(crossbeam_channel::TryRecvError::Disconnected) => Some(Err(
-                    "Recovery worker terminated unexpectedly before reporting a result".into(),
-                )),
-            }
-        });
+        let completed =
+            self.recovery_result
+                .as_ref()
+                .and_then(|receiver| match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(crossbeam_channel::TryRecvError::Empty) => None,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => Some(Err(
+                        "Recovery worker terminated unexpectedly before reporting a result".into(),
+                    )),
+                });
         if let Some(result) = completed {
             self.recovery_result = None;
             self.recovering = false;
