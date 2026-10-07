@@ -33,7 +33,7 @@ impl Fixture {
                     continue;
                 };
                 let answer = match request.url() {
-                    "/api/version" => json!({"version":"0.35.0"}),
+                    "/api/version" => json!({"version":"0.35.1"}),
                     "/api/tags" => json!({
                         "models":[{
                             "name":"nimble:9b-q8_0",
@@ -43,7 +43,8 @@ impl Fixture {
                     }),
                     "/api/show" => json!({
                         "details":{"format":"gguf"},
-                        "model_info":{"general.architecture":"qwen35"}
+                        "model_info":{"general.architecture":"qwen35"},
+                        "capabilities":["decision"]
                     }),
                     "/v1/systemone" => {
                         let mut body = String::new();
