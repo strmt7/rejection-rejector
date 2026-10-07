@@ -601,7 +601,6 @@ pub fn import_recovery_key_for_backup(
     Ok(envelope)
 }
 
-
 /// Restore a workspace from a portable recovery envelope without first opening
 /// or creating the normal application vault.
 ///
@@ -626,20 +625,14 @@ pub fn recover_workspace_from_backup(
         .context("Recovery key does not authenticate the selected backup")?;
 
     // Prove the full production restore path before mutating the requested target.
-    let isolated =
-        tempfile::tempdir().context("Cannot create isolated pre-recovery workspace")?;
+    let isolated = tempfile::tempdir().context("Cannot create isolated pre-recovery workspace")?;
     private_dir(isolated.path())?;
     write_new_private(
         &isolated.path().join(VAULT_ID_NAME),
         manifest.vault_id.as_bytes(),
     )?;
-    restore_backup_with_vault(
-        isolated.path(),
-        backup_dir,
-        &manifest,
-        recovered.clone(),
-    )
-    .context("Portable recovery preflight failed in the isolated workspace")?;
+    restore_backup_with_vault(isolated.path(), backup_dir, &manifest, recovered.clone())
+        .context("Portable recovery preflight failed in the isolated workspace")?;
 
     let _lock = InstanceLock::acquire(data_dir)?;
     private_dir(data_dir)?;
@@ -684,9 +677,8 @@ pub fn recover_workspace_from_backup(
         // Linux deliberately has no OS-key import path. A matching
         // RR_VAULT_PASSPHRASE-derived vault must already be available.
         let active = Vault::open(data_dir)?;
-        verify_vault_marker(&backup_database, &active).context(
-            "Linux recovery requires the original RR_VAULT_PASSPHRASE for this vault",
-        )?;
+        verify_vault_marker(&backup_database, &active)
+            .context("Linux recovery requires the original RR_VAULT_PASSPHRASE for this vault")?;
     }
 
     restore_backup_with_vault(data_dir, backup_dir, &manifest, recovered)

@@ -53,7 +53,10 @@ fn unicode_reply_roundtrips_with_one_recipient_and_thread_headers() {
     );
     assert!(parsed.headers.get_first_value("Bcc").is_none());
     assert_eq!(
-        parsed.headers.get_first_value("X-Rejection-Rejector").as_deref(),
+        parsed
+            .headers
+            .get_first_value("X-Rejection-Rejector")
+            .as_deref(),
         Some(env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(

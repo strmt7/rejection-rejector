@@ -1833,7 +1833,6 @@ impl eframe::App for App {
     }
 }
 
-
 pub struct RecoveryApp {
     data_dir: PathBuf,
     backup: Option<PathBuf>,
