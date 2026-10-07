@@ -47,7 +47,10 @@ fn main() {
         )
         .join("windows")
         .join("app.manifest");
-        assert!(manifest.is_file(), "Windows application manifest is missing");
+        assert!(
+            manifest.is_file(),
+            "Windows application manifest is missing"
+        );
         println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg-bins=/MANIFESTUAC:NO");
         println!(
