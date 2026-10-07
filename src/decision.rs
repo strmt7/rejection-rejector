@@ -145,7 +145,7 @@ fn probability_scores(answer: &DecisionAnswer, expected: Category) -> Result<(f6
             .get(key)
             .copied()
             .context("Decision response is missing a category probability")?;
-        let target = f64::from(key == expected_key);
+        let target = if key == expected_key { 1.0 } else { 0.0 };
         multiclass_brier += (probability - target).powi(2);
     }
     let rejection_probability = answer
@@ -153,7 +153,11 @@ fn probability_scores(answer: &DecisionAnswer, expected: Category) -> Result<(f6
         .get("rejection")
         .copied()
         .context("Decision response is missing rejection probability")?;
-    let rejection_target = f64::from(expected == Category::Rejection);
+    let rejection_target = if expected == Category::Rejection {
+        1.0
+    } else {
+        0.0
+    };
     let rejection_brier = (rejection_probability - rejection_target).powi(2);
     Ok((multiclass_brier, rejection_brier))
 }
