@@ -94,8 +94,7 @@ struct RecoveryDialog {
 }
 
 fn recovery_passphrase_valid(passphrase: &str, confirmation: Option<&str>) -> bool {
-    (20..=4096).contains(&passphrase.len())
-        && confirmation.is_none_or(|value| value == passphrase)
+    (20..=4096).contains(&passphrase.len()) && confirmation.is_none_or(|value| value == passphrase)
 }
 
 impl ShortcutAction {
