@@ -20,7 +20,7 @@
 | Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
 | Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
-| Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, and separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes for portable disaster recovery |
+| Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes, and a pre-open native Recovery Mode for fresh/locked workspaces |
 | Integration | Reusable Rust library plus authenticated read-only loopback API with versioned OpenAPI, exact contract SHA-256 fingerprint, typed operation status, stable error codes and request IDs |
 | Enterprise control | Optional machine policy with revision rollback protection, model/retention/send constraints, independently protected audit-anchor enforcement, SHA-256 pinning and detached Ed25519 signature verification |
 | Testing | Windows/Linux CI plus scheduled nextest/rustdoc/recovery drills, fuzzing, mutation testing, CodeQL, coverage evidence and task-specific model fixtures |

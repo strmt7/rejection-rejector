@@ -17,8 +17,11 @@ struct Args {
     #[arg(long)]
     data_dir: Option<PathBuf>,
     /// Synthetic offline demo. No account, model or email sending.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "recovery")]
     demo: bool,
+    /// Pre-open disaster-recovery UI. The normal worker/vault is never started.
+    #[arg(long, conflicts_with = "demo")]
+    recovery: bool,
     /// Capture synthetic UI to PNG and exit; never allowed for a real mailbox.
     #[arg(long, requires = "demo")]
     screenshot: Option<PathBuf>,
@@ -52,11 +55,16 @@ fn main() -> eframe::Result<()> {
         "Rejection Rejector",
         options,
         Box::new(move |cc| {
-            let mut app = rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
+            if args.recovery {
+                return Ok(Box::new(rejection_rejector::gui::RecoveryApp::new(cc, dir))
+                    as Box<dyn eframe::App>);
+            }
+            let mut app =
+                rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
             if let Some(view) = &args.demo_view {
                 app.set_demo_view(view);
             }
-            Ok(Box::new(app))
+            Ok(Box::new(app) as Box<dyn eframe::App>)
         }),
     )
 }
@@ -73,6 +81,8 @@ mod tests {
     #[test]
     fn ordinary_start_and_bounded_demo_window_are_valid() {
         assert!(Args::try_parse_from(["rr"]).is_ok());
+        assert!(Args::try_parse_from(["rr", "--recovery"]).is_ok());
+        assert!(Args::try_parse_from(["rr", "--recovery", "--demo"]).is_err());
         assert!(
             Args::try_parse_from([
                 "rr",

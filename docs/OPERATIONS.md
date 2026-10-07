@@ -142,7 +142,13 @@ Restore is destructive and requires explicit acknowledgement:
 
 Prefer a backup destination on a different physical or administrative failure domain. The app reports when a scheduled destination appears to share the workspace filesystem.
 
-The desktop **Settings → Storage & integration** card can export a wrapped recovery key and verify a key/passphrase against a selected backup. The recovery passphrase is held only in zeroizing process memory for the operation and is never written to settings, diagnostics, audit text or the envelope. Fresh-machine key installation remains a pre-open operation through `rr import-recovery-key`; this avoids silently creating or replacing an OS credential after the normal workspace has already opened.
+The desktop **Settings → Storage & integration** card can export a wrapped recovery key and verify a key/passphrase against a selected backup. The recovery passphrase is held only in zeroizing process memory for the operation and is never written to settings, diagnostics, audit text or the envelope. Fresh-machine recovery is available through the native pre-open UI:
+
+```powershell
+.\rejection-rejector.exe --recovery
+```
+
+Recovery Mode does not start the normal worker or create/open the normal vault. It requires the encrypted backup directory, separately stored wrapped recovery-key JSON, recovery passphrase, and an exact `RESTORE` acknowledgement. The backup/key pair is first authenticated and exercised through the production restore path in an isolated temporary workspace; only then is the target workspace locked and restored. The lower-level `rr import-recovery-key` and `rr restore` commands remain available for scripted administration.
 
 For portable disaster recovery, store the encrypted recovery-key envelope **separately** from the backup:
 
