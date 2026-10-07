@@ -67,7 +67,7 @@ Optional Windows background worker:
 .\rr.exe autostart remove
 ```
 
-The task runs only in the signed-in user's session, at least privilege, uses `IgnoreNew` to avoid duplicate workers, and retries failure at one-minute intervals up to three times. Organization policy may prohibit task registration; failure is reported rather than bypassed.
+The task runs only in the signed-in user's session, at least privilege, uses `IgnoreNew` to avoid duplicate workers, and retries failure at one-minute intervals up to three times. Organization policy may prohibit task registration; failure is reported rather than bypassed. For now, register the worker from a stable unpackaged `rr.exe` location: MSIX-managed executable paths are refused because their physical paths change on package updates and would break the scheduled task.
 
 ## Build
 

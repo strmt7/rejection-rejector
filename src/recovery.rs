@@ -159,6 +159,12 @@ fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
         source.display()
     );
     let mut input = fs::File::open(source)?;
+    copy_private_from_reader(&mut input, destination)
+}
+
+/// A read/write error must not leave a partial encrypted SQLite staging file.
+/// Open with create_new before cleanup, so an existing destination is never removed.
+fn copy_private_from_reader(input: &mut impl Read, destination: &Path) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -167,10 +173,17 @@ fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
         options.mode(0o600);
     }
     let mut output = options.open(destination)?;
-    std::io::copy(&mut input, &mut output)?;
-    output.flush()?;
-    output.sync_all()?;
-    Ok(())
+    let result = (|| -> Result<()> {
+        std::io::copy(input, &mut output)?;
+        output.flush()?;
+        output.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        drop(output);
+        let _ = fs::remove_file(destination);
+    }
+    result
 }
 
 fn read_recovery_envelope(path: &Path) -> Result<RecoveryKeyEnvelope> {
@@ -915,6 +928,7 @@ fn restore_backup_with_vault(
         for (original, saved) in moved.iter().rev() {
             let _ = fs::rename(saved, original);
         }
+        let _ = fs::remove_file(&candidate);
         return Err(error.into());
     }
 
@@ -1063,6 +1077,34 @@ mod tests {
         settings.scheduled_backup_enabled = false;
         let status = scheduled_backup_status(&store, &settings, Utc::now()).unwrap();
         assert!(!status.overdue);
+    }
+
+    #[test]
+    fn interrupted_private_copy_removes_partial_file_but_never_an_existing_file() {
+        struct OneChunkThenFailure {
+            sent: bool,
+        }
+        impl std::io::Read for OneChunkThenFailure {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.sent {
+                    return Err(std::io::Error::other("injected I/O failure"));
+                }
+                self.sent = true;
+                buf[0] = b'X';
+                Ok(1)
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("stage.sqlite3");
+        let mut reader = OneChunkThenFailure { sent: false };
+        assert!(copy_private_from_reader(&mut reader, &destination).is_err());
+        assert!(!destination.exists());
+
+        fs::write(&destination, b"do not overwrite").unwrap();
+        let mut reader = OneChunkThenFailure { sent: false };
+        assert!(copy_private_from_reader(&mut reader, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"do not overwrite");
     }
 
     #[test]

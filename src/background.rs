@@ -182,11 +182,30 @@ fn current_user() -> Result<String> {
     Ok(user)
 }
 
+/// MSIX physical paths can change on update; registering them as Task Scheduler
+/// executables would silently break the background worker after installation.
+#[cfg(any(windows, test))]
+fn is_msix_managed_path(executable: &Path) -> bool {
+    executable
+        .to_string_lossy()
+        .replace('\\', "/")
+        .split('/')
+        .any(|part| part.eq_ignore_ascii_case("WindowsApps"))
+}
+
 #[cfg(windows)]
 fn canonical_inputs(executable: &Path, data_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+    ensure!(
+        !is_msix_managed_path(executable),
+        "MSIX-managed executable paths are not supported for Task Scheduler autostart; use an unpackaged, stable rr.exe path"
+    );
     std::fs::create_dir_all(data_dir)?;
     let executable = std::fs::canonicalize(executable)
         .with_context(|| format!("Cannot resolve {}", executable.display()))?;
+    ensure!(
+        !is_msix_managed_path(&executable),
+        "Executable resolves into MSIX-managed WindowsApps; Task Scheduler would break after a package update"
+    );
     let data_dir = std::fs::canonicalize(data_dir)
         .with_context(|| format!("Cannot resolve {}", data_dir.display()))?;
     ensure!(executable.is_file(), "Worker executable is not a file");
@@ -332,6 +351,22 @@ pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msix_managed_paths_are_not_stable_worker_task_targets() {
+        assert!(is_msix_managed_path(Path::new(
+            r"C:\Program Files\WindowsApps\Example_1.0.0.0_x64__abc\rr.exe"
+        )));
+        assert!(is_msix_managed_path(Path::new(
+            r"C:\Users\Tester\AppData\Local\Microsoft\WindowsApps\rr.exe"
+        )));
+        assert!(!is_msix_managed_path(Path::new(
+            r"C:\Program Files\RejectionRejector\rr.exe"
+        )));
+        assert!(!is_msix_managed_path(Path::new(
+            r"C:\Program Files\WindowsAppsBackup\rr.exe"
+        )));
+    }
 
     #[test]
     fn windows_argument_quoting_handles_spaces_quotes_and_trailing_backslashes() {

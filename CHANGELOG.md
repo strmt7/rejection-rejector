@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Cleans up partially copied encrypted restore staging files on I/O failure without touching pre-existing destinations, and removes an abandoned candidate on rename failure.
+- Caps desktop recovery passphrases at 4 KiB, matching the CLI safety boundary; oversize input cannot start key derivation or a restore.
+- Rejects Windows Task Scheduler autostart registration when rr.exe is in a versioned MSIX-managed path, which otherwise becomes stale after package updates.
+
 - Preserves in-flight operation status when a bounded worker command queue is full or disconnected; prevents queue errors from hiding active Gmail sends or backup operations from the desktop close-safety guard, with queue-state regression tests.
 
 - Revalidates the originally approved backup manifest, staged database checksum, schema and audit head throughout offline restore, and rejects symlinked backup databases. Adds anti-swap and symlink regression tests.
