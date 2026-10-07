@@ -4,7 +4,7 @@ use crate::{
         AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H, Mode, PROMPT_VERSION, Settings, TaskQualification,
         evaluation_suite_hash, settings_context_hash,
     },
-    emergency, evaluation,
+    emergency, evaluation, recovery,
     gmail::{FetchFailureKind, Gmail, SendFailureKind},
     mail,
     oauth::{self, Credentials},
@@ -237,6 +237,7 @@ impl Engine {
             Vault::open(&directory)?
         };
         let mut db = Store::open(&directory.join("state.sqlite3"), vault)?;
+        let restored_workspace = !demo && recovery::restore_rearm_required(&directory)?;
         let enterprise_policy = if demo { None } else { policy::load_optional()? };
         // Verify independently persisted rollback evidence before any runtime
         // recovery event mutates the workspace audit journal. Managed policy may
@@ -261,6 +262,7 @@ impl Engine {
         let repaired = settings.repair_legacy_automatic_state();
         let crash_disarmed =
             disarm_after_unclean_session(&mut settings, previous_unclean_session && !demo);
+        let restore_disarmed = disarm_after_unclean_session(&mut settings, restored_workspace);
         let (revision_floor, revision_floor_changed) =
             staged_policy_revision_floor(&db, enterprise_policy.as_ref())?;
         let policy_changed = match &enterprise_policy {
@@ -271,6 +273,7 @@ impl Engine {
         if settings_migrated
             || repaired
             || crash_disarmed
+            || restore_disarmed
             || policy_changed
             || revision_floor_changed
         {
@@ -297,6 +300,8 @@ impl Engine {
                 )
             } else if settings_migrated {
                 "Encrypted settings migrated from format v1 to v2; prior task qualification was invalidated and unattended delivery was disabled".into()
+            } else if restore_disarmed {
+                "Restored workspace was opened with sending and Automatic mode disabled; explicit authorization is required".into()
             } else if crash_disarmed {
                 "Previous runtime session ended uncleanly; unattended delivery was disabled fail-closed"
                     .into()
@@ -318,6 +323,14 @@ impl Engine {
                 },
                 &detail,
             )?;
+        }
+        if restored_workspace {
+            db.log(
+                "security.restore_rearm_required",
+                None,
+                "Offline backup restore detected; sending and Automatic mode disabled until explicitly reauthorized",
+            )?;
+            recovery::clear_restore_rearm_marker(&directory)?;
         }
         if previous_unclean_session && !demo {
             db.log(
