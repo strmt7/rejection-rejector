@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserves in-flight operation status when a bounded worker command queue is full or disconnected; prevents queue errors from hiding active Gmail sends or backup operations from the desktop close-safety guard, with queue-state regression tests.
+
 - Revalidates the originally approved backup manifest, staged database checksum, schema and audit head throughout offline restore, and rejects symlinked backup databases. Adds anti-swap and symlink regression tests.
 
 - Adds guarded desktop export and offline verification for passphrase-wrapped disaster-recovery keys, plus a pre-open native Recovery Mode that authenticates and exercises the backup/key pair in isolation before restoring a fresh/locked workspace; passphrases remain zeroizing and key-file creation is atomic/no-clobber. Recovery runs off the UI thread, remains intentionally non-cancellable once started, and blocks window close until the transactional operation finishes.

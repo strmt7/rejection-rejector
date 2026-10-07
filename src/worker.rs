@@ -264,6 +264,42 @@ impl Command {
     }
 }
 
+/// Rejected commands must never mask a running operation. In particular a
+/// queue overflow may not make an in-flight Gmail send appear safe to interrupt.
+fn report_unqueued_command(
+    snapshot: &mut Snapshot,
+    kind: OperationKind,
+    disconnected: bool,
+) {
+    let (message, code, retryable) = if disconnected {
+        (
+            "Background worker is disconnected. Restart the application.",
+            "worker_disconnected",
+            false,
+        )
+    } else {
+        (
+            "Command queue is full. Wait for the current operation to finish.",
+            "worker_queue_busy",
+            true,
+        )
+    };
+    snapshot.error = message.into();
+    if snapshot.operation.state == OperationState::Running {
+        return;
+    }
+    snapshot.operation = OperationStatus {
+        operation_id: Some(uuid::Uuid::new_v4().to_string()),
+        kind,
+        state: OperationState::Failed,
+        code: Some(code.into()),
+        retryable,
+        message: message.into(),
+        started_at: None,
+        finished_at: Some(Utc::now()),
+    };
+}
+
 pub struct Worker {
     pub tx: Sender<Command>,
     pub snapshot: Arc<Mutex<Snapshot>>,
@@ -341,21 +377,13 @@ impl Worker {
     }
     pub fn command(&self, command: Command) {
         let kind = command.kind();
-        if self.tx.try_send(command).is_err()
-            && let Ok(mut s) = self.snapshot.lock()
-        {
-            let message = "Command queue is busy. Wait for the current operation to finish.";
-            s.error = message.into();
-            s.operation = OperationStatus {
-                operation_id: Some(uuid::Uuid::new_v4().to_string()),
-                kind,
-                state: OperationState::Failed,
-                code: Some("worker_queue_busy".into()),
-                retryable: true,
-                message: message.into(),
-                started_at: None,
-                finished_at: Some(Utc::now()),
-            };
+        let disconnected = match self.tx.try_send(command) {
+            Ok(()) => return,
+            Err(crossbeam_channel::TrySendError::Full(_)) => false,
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => true,
+        };
+        if let Ok(mut snapshot) = self.snapshot.lock() {
+            report_unqueued_command(&mut snapshot, kind, disconnected);
         }
     }
     pub fn view(&self) -> Snapshot {
@@ -1934,6 +1962,42 @@ mod tests {
         assert!(recovered.worker_responsive);
         assert_eq!(recovered.current_operation, OperationKind::Idle);
         assert!(recovered.operation_started_at.is_none());
+    }
+
+    #[test]
+    fn rejected_queue_command_never_masks_an_inflight_send_or_backup() {
+        for active in [OperationKind::SendReply, OperationKind::Backup] {
+            let running = OperationStatus {
+                kind: active,
+                state: OperationState::Running,
+                started_at: Some(Utc::now()),
+                ..OperationStatus::default()
+            };
+            let mut snapshot = Snapshot {
+                operation: running.clone(),
+                ..Snapshot::default()
+            };
+            report_unqueued_command(&mut snapshot, OperationKind::Refresh, false);
+            assert_eq!(snapshot.operation, running);
+            assert!(snapshot.error.contains("full"));
+            report_unqueued_command(&mut snapshot, OperationKind::Refresh, true);
+            assert_eq!(snapshot.operation, running);
+            assert!(snapshot.error.contains("disconnected"));
+        }
+    }
+
+    #[test]
+    fn rejected_idle_command_reports_the_actual_transport_failure() {
+        let mut snapshot = Snapshot::default();
+        report_unqueued_command(&mut snapshot, OperationKind::Refresh, false);
+        assert_eq!(snapshot.operation.state, OperationState::Failed);
+        assert_eq!(snapshot.operation.code.as_deref(), Some("worker_queue_busy"));
+        assert!(snapshot.operation.retryable);
+
+        report_unqueued_command(&mut snapshot, OperationKind::Refresh, true);
+        assert_eq!(snapshot.operation.state, OperationState::Failed);
+        assert_eq!(snapshot.operation.code.as_deref(), Some("worker_disconnected"));
+        assert!(!snapshot.operation.retryable);
     }
 
     #[test]
