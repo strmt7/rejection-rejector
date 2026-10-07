@@ -6,7 +6,7 @@ Native egui desktop / rr CLI → bounded command channel → single Rust worker 
 
 Take a Gmail history baseline before the initial date-bounded listing. Insert each missing account/message identity with an encrypted durable queue record. Save the cursor only after every page succeeds. Later polls consume messageAdded history. Replayed pages are deduplicated. Expired history (404) or a changed lookback triggers reconciliation. The pre-list baseline catches arrivals racing with listing on a subsequent poll.
 
-Actual message dates/folders are checked by the worker. Out-of-window messages become Deferred and their bodies are discarded; expanding the window requeues them. Previously processed mail is not refetched/classified each poll. Non-rejections retain identities, not full bodies. Gmail label-change subscriptions and push/pubsub are outside v0.1.
+Actual message dates/folders are checked by the worker. Out-of-window messages become Deferred and their bodies are discarded; expanding the window requeues them. Previously processed mail is not refetched/classified each poll. Non-rejections retain identities, not full bodies. Gmail label-change subscriptions and push/pubsub are outside v0.1. Each synchronization operation has a hard resource ceiling of 512 provider pages and 250,000 observed message identities. Exceeding either budget fails closed without advancing the durable Gmail cursor; already inserted identities are replay-safe because provider IDs are deduplicated.
 
 ## State and delivery
 

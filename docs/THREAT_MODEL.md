@@ -128,7 +128,7 @@ Security consequence: SHA-256 alone is not treated as publisher identity. The ma
 | Recovery envelope theft | attacker gets envelope | Argon2id passphrase wrapping; envelope remains sensitive and must be separated from passphrase/backup |
 | GitHub dependency/action compromise | upstream supply-chain attack | pinned actions, Cargo.lock, RustSec/deny/machete, CodeQL, SBOM, attestations, release lineage gates |
 | Logs leak mailbox data | developer/operator mistake | runtime log schema has no arbitrary message/error fields; secret-canary tests; semantic details remain encrypted |
-| Resource exhaustion / poison queue | malformed messages/model failures | bounded input/response sizes, timeouts, bounded command queue, per-message retry cap then Human Review |
+| Resource exhaustion / poison queue | malformed messages/model failures/provider pagination explosion | bounded input/response sizes, 512-page/250,000-identity per-sync ceilings with cursor retention, timeouts, bounded command queue, per-message retry cap then Human Review |
 | Crash/power loss leaves Automatic armed | process terminates before normal teardown | private runtime-session marker survives; next exclusive startup audits the condition and disarms sending/Automatic until explicit user action |
 | Incident requires immediate outbound-email containment | operator/security team needs a control independent of UI/model/settings | absolute-path emergency sentinel is checked at dispatch entry and again immediately before the Gmail write; malformed sentinel configuration fails closed; health surfaces never disclose the path |
 

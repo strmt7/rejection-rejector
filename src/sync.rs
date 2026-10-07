@@ -11,6 +11,31 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+const MAX_SYNC_PAGES: usize = 512;
+const MAX_SYNC_IDENTITIES: usize = 250_000;
+
+fn charge_sync_budget(
+    pages_seen: &mut usize,
+    identities_seen: &mut usize,
+    page_identities: usize,
+) -> Result<()> {
+    *pages_seen = pages_seen
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("Gmail pagination counter overflow; cursor retained"))?;
+    ensure!(
+        *pages_seen <= MAX_SYNC_PAGES,
+        "Gmail synchronization exceeded the {MAX_SYNC_PAGES}-page safety budget; cursor retained"
+    );
+    *identities_seen = identities_seen.checked_add(page_identities).ok_or_else(|| {
+        anyhow::anyhow!("Gmail identity counter overflow; cursor retained")
+    })?;
+    ensure!(
+        *identities_seen <= MAX_SYNC_IDENTITIES,
+        "Gmail synchronization exceeded the {MAX_SYNC_IDENTITIES}-identity safety budget; cursor retained"
+    );
+    Ok(())
+}
+
 pub trait Provider {
     fn profile(&mut self) -> Result<Profile>;
     fn list(&mut self, query: &str, page: Option<&str>) -> Result<MessagePage>;
@@ -62,6 +87,8 @@ pub fn synchronize<P: Provider>(
     let mut page = None;
     let mut tokens = HashSet::new();
     let mut inserted = 0;
+    let mut pages_seen = 0usize;
+    let mut identities_seen = 0usize;
     let latest = loop {
         ensure!(
             !cancelled.load(Ordering::SeqCst),
@@ -88,11 +115,12 @@ pub fn synchronize<P: Provider>(
                 stubs.push(gmail::stub(account, added.message)?);
             }
         }
+        charge_sync_budget(&mut pages_seen, &mut identities_seen, stubs.len())?;
         inserted += db.insert_stubs(stubs, now)?;
         if let Some(next) = p.next_page_token {
             ensure!(
-                tokens.insert(next.clone()) && tokens.len() <= 10000,
-                "Invalid or excessive Gmail pagination; cursor retained"
+                tokens.insert(next.clone()),
+                "Repeated Gmail pagination token; cursor retained"
             );
             page = Some(next);
         } else {
@@ -128,6 +156,8 @@ fn full_sync<P: Provider>(
     let mut page = None;
     let mut tokens = HashSet::new();
     let mut n = 0;
+    let mut pages_seen = 0usize;
+    let mut identities_seen = 0usize;
     loop {
         ensure!(
             !cancelled.load(Ordering::SeqCst),
@@ -138,11 +168,12 @@ fn full_sync<P: Provider>(
         for message in p.messages {
             stubs.push(gmail::stub(account, message)?);
         }
+        charge_sync_budget(&mut pages_seen, &mut identities_seen, stubs.len())?;
         n += db.insert_stubs(stubs, now)?;
         if let Some(next) = p.next_page_token {
             ensure!(
-                tokens.insert(next.clone()) && tokens.len() <= 10000,
-                "Invalid or excessive Gmail pagination; cursor retained"
+                tokens.insert(next.clone()),
+                "Repeated Gmail pagination token; cursor retained"
             );
             page = Some(next);
         } else {
@@ -209,6 +240,20 @@ mod tests {
             }))
         }
     }
+    #[test]
+    fn synchronization_resource_budgets_are_bounded_and_fail_closed() {
+        let mut pages = 0usize;
+        let mut identities = 0usize;
+        charge_sync_budget(&mut pages, &mut identities, MAX_SYNC_IDENTITIES).unwrap();
+        assert_eq!(pages, 1);
+        assert_eq!(identities, MAX_SYNC_IDENTITIES);
+        assert!(charge_sync_budget(&mut pages, &mut identities, 1).is_err());
+
+        let mut pages = MAX_SYNC_PAGES;
+        let mut identities = 0usize;
+        assert!(charge_sync_budget(&mut pages, &mut identities, 0).is_err());
+    }
+
     #[test]
     fn failed_pagination_never_advances_cursor_and_replay_deduplicates() {
         let d = tempfile::tempdir().unwrap();
