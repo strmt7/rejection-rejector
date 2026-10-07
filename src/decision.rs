@@ -253,8 +253,8 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
     let ollama = Ollama::new(&candidate)?;
     let runtime_version = ollama.runtime_version()?;
     let installed = ollama
-        .inspect()
-        .context("Decision model is not installed or cannot be inspected")?;
+        .inspect_decision()
+        .context("Decision model is not installed, decision-capable or inspectable")?;
 
     let cases = fixtures()?;
     let mut rows = Vec::with_capacity(cases.len());

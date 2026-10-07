@@ -111,6 +111,43 @@ struct Generate {
     eval_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelPurpose {
+    Generative,
+    Decision,
+}
+
+fn validate_model_capabilities(show: &Value, purpose: ModelPurpose) -> Result<()> {
+    let capabilities = show
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .context("Ollama model capability metadata is missing; upgrade Ollama and re-pull the model")?;
+    ensure!(
+        !capabilities.is_empty(),
+        "Ollama model capability metadata is empty; upgrade Ollama and re-pull the model"
+    );
+    let has = |name: &str| {
+        capabilities
+            .iter()
+            .any(|value| value.as_str().is_some_and(|value| value == name))
+    };
+    match purpose {
+        ModelPurpose::Generative => {
+            ensure!(
+                has("completion") && !has("decision"),
+                "Selected production model is not a general completion model; decision-only models are restricted to the non-sending R&D lane"
+            );
+        }
+        ModelPurpose::Decision => {
+            ensure!(
+                has("decision") && !has("completion"),
+                "Selected decision model does not declare the decision-only Ollama capability"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct InferenceCounters {
     requests: u64,
@@ -324,7 +361,7 @@ impl Ollama {
         );
         Ok(version)
     }
-    pub fn inspect(&self) -> Result<ModelStatus> {
+    fn inspect_for_purpose(&self, purpose: ModelPurpose) -> Result<ModelStatus> {
         self.runtime_version()?;
         let tags: Tags = net::json(
             net::client(10, true)?.get(self.url("/api/tags")).send()?,
@@ -362,6 +399,7 @@ impl Ollama {
                 .is_some_and(|m| !m.is_empty()),
             "Local model metadata missing; no remote fallback is allowed"
         );
+        validate_model_capabilities(&show, purpose)?;
         if let Some(pin) = &self.settings.model_digest {
             ensure!(
                 pin.trim_start_matches("sha256:") == tag.digest.trim_start_matches("sha256:"),
@@ -372,9 +410,18 @@ impl Ollama {
             installed: true,
             digest: tag.digest,
             size: tag.size,
-            message: "Local model installed; GPU residency not yet measured".into(),
+            message: "Local model installed; capability checked; GPU residency not yet measured"
+                .into(),
             ..Default::default()
         })
+    }
+
+    pub fn inspect(&self) -> Result<ModelStatus> {
+        self.inspect_for_purpose(ModelPurpose::Generative)
+    }
+
+    pub fn inspect_decision(&self) -> Result<ModelStatus> {
+        self.inspect_for_purpose(ModelPurpose::Decision)
     }
     pub fn residency(&self, digest: &str) -> Result<ModelStatus> {
         let ps: Ps = net::json(
@@ -1082,8 +1129,21 @@ mod tests {
         assert_eq!(parse_version("v0.35.1"), Some((0, 35, 1)));
         assert_eq!(parse_version("0.35.0-rc1"), Some((0, 35, 0)));
         assert!(parse_version("not-a-version").is_none());
-        assert!((0, 35, 0) >= MIN_OLLAMA_VERSION);
-        assert!((0, 34, 4) < MIN_OLLAMA_VERSION);
+        assert!((0, 35, 1) >= MIN_OLLAMA_VERSION);
+        assert!((0, 35, 0) < MIN_OLLAMA_VERSION);
+    }
+
+    #[test]
+    fn capability_contract_separates_generative_and_decision_models() {
+        let generative = json!({"capabilities":["completion","thinking"]});
+        let decision = json!({"capabilities":["decision"]});
+        let missing = json!({});
+
+        assert!(validate_model_capabilities(&generative, ModelPurpose::Generative).is_ok());
+        assert!(validate_model_capabilities(&decision, ModelPurpose::Decision).is_ok());
+        assert!(validate_model_capabilities(&decision, ModelPurpose::Generative).is_err());
+        assert!(validate_model_capabilities(&generative, ModelPurpose::Decision).is_err());
+        assert!(validate_model_capabilities(&missing, ModelPurpose::Generative).is_err());
     }
 
     #[test]

@@ -6,11 +6,12 @@ Default candidate for new workspaces: **`qwen3.5:9b-q8_0`** in Ollama, 8,192 con
 
 This selection is intentionally **task-specific**, not a generic leaderboard choice. For Rejection Rejector the useful proxies are strict instruction following, multilingual understanding, structured output, text classification, grounded extraction and concise professional writing—not coding or math scores by themselves.
 
-As of 2026-09-27:
+As of 2026-10-07:
 
-- **`qwen3.5:9b-q8_0`** is about **11 GB** in Ollama with a 256K model context. Qwen's published 9B results include IFEval 91.5, MultiChallenge 54.5, MMMLU 81.2 and MMLU-ProX 76.3. Those are unusually relevant to this app's instruction-following and multilingual classification workload, and Q8 leaves materially more VRAM headroom than 13–14 GB alternatives.
+- **`qwen3.5:9b-q8_0`** is about **10 GB** in Ollama with a 256K model context. Qwen's published 9B results include IFEval 91.5, MultiChallenge 54.5, MMMLU 81.2 and MMLU-ProX 76.3. Those are unusually relevant to this app's instruction-following and multilingual classification workload, and Q8 leaves materially more VRAM headroom than 13–14 GB alternatives.
 - **`granite4.2:8b-q8_0`** is about **9.3 GB** and is a particularly relevant recent challenger: IBM explicitly lists text classification, extraction, multilingual business dialogue, thinking and structured JSON among Granite 4.2's supported capabilities. Its published 8B IFBench score is 79.33.
 - **`gemma4:12b-it-q8_0`** is about **13 GB**. Gemma 4 12B is a newer dense model with strong broad reasoning and multilingual results and native system-prompt support; it has less VRAM headroom, so it must prove both task quality and full residency locally.
+- **`gemma4:12b-it-q4_K_M`** is about **8 GB** and is now included as a separate challenger when VRAM headroom matters more than Q8 precision.
 - **`ministral-3:14b`** is about **9.1 GB** and explicitly targets multilingual use, system-prompt adherence and JSON output. It remains a useful challenger despite being older than Granite 4.2/Gemma 4.
 - **`qwen3.5:9b`** (~6.6 GB Q4) remains the lower-VRAM fallback.
 - **`gpt-oss:20b`** (~14 GB MXFP4) remains a reasoning baseline, but its training mix was mostly English and its memory headroom is tight for a 16 GiB card.
@@ -29,7 +30,7 @@ A recommendation is emitted only when a model completes every case, has **zero r
 
 The task score still weights global non-rejection false-positive avoidance most heavily, but recommendation eligibility now adds explicit hard gates for the critical-negative cohort. This prevents a superficially high average from masking a catastrophic reply to an interview, offer, corrected rejection, quoted historical decision or injected message.
 
-Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It requires **Ollama 0.35.0 or newer**. The production generative pipeline still uses local `/api/chat`; 0.35 additionally provides `/v1/systemone`, which the repository uses only in a separate non-sending typed decision-model evaluation lane until task-specific evidence justifies any production promotion. Local transport timeout/connect failures trigger one explicit unload-and-retry recovery; semantic/model/policy failures are never retried until they pass.
+Explicit tags are used for presets. The app pins the exact installed digest after qualification because registry tags can change. It requires **Ollama 0.35.1 or newer**. That version is the minimum because Ollama 0.35.1 makes model capabilities explicit and reports decision models as decision-only; Rejection Rejector now checks this metadata before either chat or typed-decision inference. The production generative pipeline still uses local `/api/chat`; 0.35 additionally provides `/v1/systemone`, which the repository uses only in a separate non-sending typed decision-model evaluation lane until task-specific evidence justifies any production promotion. Local transport timeout/connect failures trigger one explicit unload-and-retry recovery; semantic/model/policy failures are never retried until they pass.
 
 The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic seeding and low temperature. Email text is untrusted data. Input budgets and incomplete generations fail closed for Automatic mode.
 
@@ -37,7 +38,7 @@ The app uses local `/api/chat`, thinking, schema-constrained JSON, deterministic
 
 Ollama 0.35 introduced the local `/v1/systemone` typed-decision API. Rejection Rejector keeps this capability **outside the production authorization path** until it earns task-specific evidence.
 
-The first candidate is **`nimble:9b-q8_0`**, a roughly 9.5 GB Q8 decision model from Bespoke Labs fine-tuned from Qwen3.5-9B. It returns a closed choice plus per-choice scores rather than free-form prose. **`tev1:4b`** is retained as a smaller experimental baseline. This architecture is attractive for the first-stage rejection/opportunity/other/uncertain decision because constrained outputs and contrastive decision training map directly to the problem, but generic decision benchmarks do not prove multilingual recruiting-email safety.
+The first candidate is **`nimble:9b-q8_0`**, a roughly 9.5 GB Q8 decision model from Bespoke Labs fine-tuned from Qwen3.5-9B. It returns a closed choice plus per-choice scores rather than free-form prose. **`clef-flash:9b-q8_0`** is a newer approximately 10 GB typed-decision challenger that requires Ollama 0.35.1; it is included only in the R&D bake-off. **`tev1:4b`** is retained as a smaller experimental baseline. This architecture is attractive for the first-stage rejection/opportunity/other/uncertain decision because constrained outputs and contrastive decision training map directly to the problem, but generic decision benchmarks do not prove multilingual recruiting-email safety.
 
 Evaluate an explicitly installed decision model with:
 

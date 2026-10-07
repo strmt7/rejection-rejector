@@ -26,6 +26,7 @@ enum Scenario {
     BadSignature,
     BadLength,
     NativeFormat,
+    DecisionOnly,
 }
 struct Fixture {
     url: String,
@@ -51,7 +52,7 @@ impl Fixture {
                     continue;
                 };
                 let answer = match req.url() {
-                    "/api/version" => json!({"version":"0.35.0"}),
+                    "/api/version" => json!({"version":"0.35.1"}),
                     "/api/tags" => {
                         json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":7_200_000_000u64}]})
                     }
@@ -61,7 +62,16 @@ impl Fixture {
                         } else {
                             "gguf"
                         };
-                        let mut data = json!({"details":{"format":format},"model_info":{"general.architecture":"gemma4"}});
+                        let capabilities = if scenario == Scenario::DecisionOnly {
+                            json!(["decision"])
+                        } else {
+                            json!(["completion", "thinking"])
+                        };
+                        let mut data = json!({
+                            "details":{"format":format},
+                            "model_info":{"general.architecture":"gemma4"},
+                            "capabilities":capabilities
+                        });
                         if scenario == Scenario::Remote {
                             data["remote_host"] = json!("https://remote.invalid");
                         }
@@ -255,6 +265,19 @@ fn local_non_gguf_model_formats_are_allowed_when_residency_passes() {
     assert!(analysis.gpu_resident);
     assert!(draft.is_some());
     assert!(flags.is_empty());
+}
+
+#[test]
+fn decision_only_model_is_blocked_before_any_email_inference() {
+    let f = Fixture::new(Scenario::DecisionOnly);
+    assert!(
+        Ollama::new(&f.settings())
+            .unwrap()
+            .analyze(&email())
+            .is_err()
+    );
+    assert!(f.chats.lock().unwrap().is_empty());
+    assert!(f.warms.lock().unwrap().is_empty());
 }
 
 #[test]
