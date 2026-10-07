@@ -94,7 +94,8 @@ struct RecoveryDialog {
 }
 
 fn recovery_passphrase_valid(passphrase: &str, confirmation: Option<&str>) -> bool {
-    passphrase.len() >= 20 && confirmation.is_none_or(|value| value == passphrase)
+    (20..=4096).contains(&passphrase.len())
+        && confirmation.is_none_or(|value| value == passphrase)
 }
 
 impl ShortcutAction {
@@ -1617,6 +1618,8 @@ if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.co
                     );
                     if dialog.passphrase.len() < 20 {
                         ui.colored_label(AMBER, "Use at least 20 UTF-8 bytes.");
+                    } else if dialog.passphrase.len() > 4096 {
+                        ui.colored_label(AMBER, "Recovery passphrase exceeds 4,096 UTF-8 bytes.");
                     } else if exporting && dialog.passphrase.as_str() != dialog.confirmation.as_str()
                     {
                         ui.colored_label(AMBER, "The two passphrases do not match.");
@@ -1977,7 +1980,7 @@ impl eframe::App for RecoveryApp {
                 .labelled_by(passphrase_label.id);
                 ui.label(
                     RichText::new(
-                        "The passphrase remains only in zeroizing process memory and is cleared after every recovery attempt.",
+                        "Use 20–4,096 UTF-8 bytes. The passphrase stays in zeroizing process memory and is cleared after each recovery attempt.",
                     )
                     .small()
                     .color(MUTED),
@@ -1996,7 +1999,7 @@ impl eframe::App for RecoveryApp {
                     && self.report.is_none()
                     && self.backup.is_some()
                     && self.recovery_key.is_some()
-                    && self.passphrase.len() >= 20
+                    && recovery_passphrase_valid(self.passphrase.as_str(), None)
                     && self.acknowledgement == "RESTORE";
                 if ui
                     .add_enabled(
@@ -2150,6 +2153,8 @@ mod tests {
             "correct horse battery staple",
             Some("correct horse battery staple")
         ));
+        assert!(recovery_passphrase_valid(&"a".repeat(4096), None));
+        assert!(!recovery_passphrase_valid(&"a".repeat(4097), None));
     }
 
     #[test]
