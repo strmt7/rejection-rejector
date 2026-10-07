@@ -193,13 +193,32 @@ A signature, hash or revision failure is fail-closed. Fix the policy artifact/de
 
 A release candidate is built only from the exact current `main` commit. The attested package workflow checks exact-commit CI, Rust public-API compatibility and security evidence plus recent deep-quality evidence before packaging.
 
-The source provides native Windows artifacts, checksums, embedded build identity, embedded compatibility-contract identity, binary RustSec audit, CycloneDX SBOM and GitHub attestations. The manual package workflow has two explicit flavors: `unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging stops. The package records `signing.json`, `build-info.json` and `contract-info.json`. MSI/MSIX/Intune packaging remains separate release-engineering work.
+The source provides native Windows artifacts, checksums, embedded build identity, embedded compatibility-contract identity, binary RustSec audit, CycloneDX SBOM and GitHub attestations. The package workflow immediately verifies both its SLSA provenance and CycloneDX SBOM attestation against the exact repository, `.github/workflows/release.yml`, `refs/heads/main`, source commit, and GitHub-hosted runner policy before upload. The manual package workflow has two explicit flavors: `unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging stops. The package records `signing.json`, `build-info.json` and `contract-info.json`. MSI/MSIX/Intune packaging remains separate release-engineering work.
 
 ### Azure publisher-signing provisioning
 
 Use the signed flavor only after an administrator has created an Azure Artifact Signing account/certificate profile and a GitHub OIDC federated identity for this repository/workflow. Configure repository variables `AZURE_ARTIFACT_SIGNING_ENDPOINT`, `AZURE_ARTIFACT_SIGNING_ACCOUNT`, and `AZURE_ARTIFACT_SIGNING_PROFILE`; configure `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` in the repository's protected secret channel. No long-lived Azure client secret is required by the workflow.
 
 From GitHub Actions, run **Attested Windows package**, type `PACKAGE`, and choose `azure-artifact-signing`. The workflow rechecks exact-main CI/security/deep evidence, builds auditable binaries, validates `build-info` and `contract-info`, signs both executables, verifies Authenticode, emits `signing.json`, then creates and attests the signed ZIP. Choosing `unsigned` creates a separately named unsigned ZIP and explicitly refuses to relabel an already publisher-signed binary as unsigned.
+
+Enterprise consumers can independently verify a downloaded ZIP:
+
+```powershell
+gh attestation verify .\rejection-rejector-windows-x64-signed.zip `
+  --repo strmt7/rejection-rejector `
+  --signer-workflow strmt7/rejection-rejector/.github/workflows/release.yml `
+  --source-ref refs/heads/main `
+  --deny-self-hosted-runners
+
+gh attestation verify .\rejection-rejector-windows-x64-signed.zip `
+  --repo strmt7/rejection-rejector `
+  --signer-workflow strmt7/rejection-rejector/.github/workflows/release.yml `
+  --source-ref refs/heads/main `
+  --deny-self-hosted-runners `
+  --predicate-type https://cyclonedx.org/bom
+```
+
+For a specific deployment, also pass `--source-digest <release-commit-sha>` so verification is bound to the exact approved commit. Provenance proves build identity, not that the code is vulnerability-free.
 
 Microsoft's newer WinApp CLI is intentionally not a production dependency here while it remains public preview; stable Windows SDK/Artifact Signing primitives remain the release foundation.
 

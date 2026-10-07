@@ -21,6 +21,7 @@ permissions:
   contents: read
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: attested-windows-package
@@ -156,7 +157,7 @@ jobs:
       - name: Install pinned release-audit tooling
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-cyclonedx@0.5.9,cargo-auditable@0.7.6,cargo-audit@0.22.2
+          tool: cargo-cyclonedx@0.5.9,cargo-auditable@0.7.7,cargo-audit@0.22.2
           checksum: true
           fallback: none
       - name: Verify release source
@@ -362,6 +363,33 @@ jobs:
         with:
           subject-path: ${{ steps.package.outputs.package_path }}
           sbom-path: artifacts/rejection-rejector.cdx.json
+      - name: Verify generated provenance and SBOM attestations
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = "${{ steps.package.outputs.package_path }}"
+          $common = @(
+            '--repo', $env:GITHUB_REPOSITORY,
+            '--signer-workflow', "$env:GITHUB_REPOSITORY/.github/workflows/release.yml",
+            '--source-ref', $env:GITHUB_REF,
+            '--source-digest', $env:GITHUB_SHA,
+            '--deny-self-hosted-runners',
+            '--format', 'json'
+          )
+
+          $provenance = gh attestation verify $package @common
+          if ($LASTEXITCODE -ne 0) {
+            throw "Generated SLSA provenance attestation could not be verified against the exact repository/workflow/ref/commit"
+          }
+          $provenance | Set-Content artifacts/attestation-provenance-verification.json -Encoding utf8
+
+          $sbom = gh attestation verify $package @common --predicate-type 'https://cyclonedx.org/bom'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Generated CycloneDX SBOM attestation could not be verified against the exact repository/workflow/ref/commit"
+          }
+          $sbom | Set-Content artifacts/attestation-sbom-verification.json -Encoding utf8
       - name: Upload package and evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
