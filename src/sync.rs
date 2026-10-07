@@ -26,9 +26,9 @@ fn charge_sync_budget(
         *pages_seen <= MAX_SYNC_PAGES,
         "Gmail synchronization exceeded the {MAX_SYNC_PAGES}-page safety budget; cursor retained"
     );
-    *identities_seen = identities_seen.checked_add(page_identities).ok_or_else(|| {
-        anyhow::anyhow!("Gmail identity counter overflow; cursor retained")
-    })?;
+    *identities_seen = identities_seen
+        .checked_add(page_identities)
+        .ok_or_else(|| anyhow::anyhow!("Gmail identity counter overflow; cursor retained"))?;
     ensure!(
         *identities_seen <= MAX_SYNC_IDENTITIES,
         "Gmail synchronization exceeded the {MAX_SYNC_IDENTITIES}-identity safety budget; cursor retained"
