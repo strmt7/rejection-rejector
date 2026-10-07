@@ -59,8 +59,7 @@ fn main() -> eframe::Result<()> {
                 return Ok(Box::new(rejection_rejector::gui::RecoveryApp::new(cc, dir))
                     as Box<dyn eframe::App>);
             }
-            let mut app =
-                rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
+            let mut app = rejection_rejector::gui::App::new(cc, dir, args.demo, args.screenshot);
             if let Some(view) = &args.demo_view {
                 app.set_demo_view(view);
             }
