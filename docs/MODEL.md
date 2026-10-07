@@ -24,7 +24,7 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use **
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
-The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on **72** stratified synthetic recruiting fixtures. Cases are tagged for multilingual mail, ATS automation, interviews, offers, assessments, recruiter corrections, quoted history, prompt injection, ambiguity, pending-status wording, talent pools, role closure, application-action requests and surveys. Reports include per-tag completion/correctness/false-positive/unsafe-draft counts instead of hiding risky errors inside one aggregate score.
+The bake-off evaluates only candidates that you explicitly installed. It runs the complete classification → draft → verification pipeline on **74** stratified synthetic recruiting fixtures. Cases are tagged for multilingual mail, ATS automation, interviews, offers, assessments, recruiter corrections, quoted history, prompt injection, ambiguity, pending-status wording, talent pools, role closure, application-action requests and surveys. Reports include per-tag completion/correctness/false-positive/unsafe-draft counts instead of hiding risky errors inside one aggregate score.
 
 A recommendation is emitted only when a model completes every case, has **zero rejection false positives**, produces **zero drafts for non-rejections**, completes every critical hard-negative case, has **zero critical hard-negative rejection false positives or drafts**, reaches at least **90% rejection recall**, **90% deterministic rejection-evidence recall**, **90% verified rejection-pipeline success**, at least **85% multilingual rejection recall and verified-pipeline success**, and passes the full-GPU-residency gate. Critical hard negatives include interviews, offers, recruiter corrections, quoted-history cases, prompt-injection cases and ambiguous mixed outcomes. The multilingual cohort now includes Dutch and Greek messages that reject one role while simultaneously inviting the candidate to interview for another, specifically testing whether a rejection cue improperly dominates an active opportunity.
 
@@ -46,7 +46,7 @@ Evaluate an explicitly installed decision model with:
 .\rr.exe evaluate-decision --model nimble:9b-q8_0 --out .\decision-evaluation.json
 ```
 
-The evaluator uses the same 72 synthetic recruiting fixtures, sends only de-quoted synthetic subject/current-message data to the local loopback endpoint, and records no fixture text in its result rows. Recommendation eligibility requires every case to complete, a valid four-category probability contract, **zero rejection false positives**, **zero critical-negative rejection false positives**, at least **90% rejection recall**, and full Ollama-reported GPU residency after the suite.
+The evaluator uses the same 74 synthetic recruiting fixtures, sends only de-quoted synthetic subject/current-message data to the local loopback endpoint, and records no fixture text in its result rows. Recommendation eligibility requires every case to complete, a valid four-category probability contract, **zero rejection false positives**, **zero critical-negative rejection false positives**, at least **90% rejection recall**, and full Ollama-reported GPU residency after the suite.
 
 For model-to-model R&D, run:
 

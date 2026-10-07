@@ -38,7 +38,7 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.35.0 or newer. In addition to the existing structured-output fixes, 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
+After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.35.1 or newer. It enforces the capability boundary between local chat-generation models and decision-only models; Ollama 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
 
 ```powershell
 .\rr.exe doctor
