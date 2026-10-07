@@ -41,8 +41,13 @@ enum ShortcutAction {
 }
 
 enum RecoveryDialogKind {
-    Export { out: PathBuf },
-    Verify { backup: PathBuf, recovery_key: PathBuf },
+    Export {
+        out: PathBuf,
+    },
+    Verify {
+        backup: PathBuf,
+        recovery_key: PathBuf,
+    },
 }
 
 struct RecoveryDialog {
@@ -1638,13 +1643,9 @@ if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.co
         }
         if recovery_cancel {
             self.recovery_dialog = None;
-        } else if recovery_submit
-            && let Some(mut dialog) = self.recovery_dialog.take()
-        {
-            let passphrase = std::mem::replace(
-                &mut dialog.passphrase,
-                Zeroizing::new(String::new()),
-            );
+        } else if recovery_submit && let Some(mut dialog) = self.recovery_dialog.take() {
+            let passphrase =
+                std::mem::replace(&mut dialog.passphrase, Zeroizing::new(String::new()));
             match dialog.kind {
                 RecoveryDialogKind::Export { out } => {
                     self.worker
