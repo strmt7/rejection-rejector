@@ -142,6 +142,8 @@ Restore is destructive and requires explicit acknowledgement:
 
 Prefer a backup destination on a different physical or administrative failure domain. The app reports when a scheduled destination appears to share the workspace filesystem.
 
+The desktop **Settings → Storage & integration** card can export a wrapped recovery key and verify a key/passphrase against a selected backup. The recovery passphrase is held only in zeroizing process memory for the operation and is never written to settings, diagnostics, audit text or the envelope. Fresh-machine key installation remains a pre-open operation through `rr import-recovery-key`; this avoids silently creating or replacing an OS credential after the normal workspace has already opened.
+
 For portable disaster recovery, store the encrypted recovery-key envelope **separately** from the backup:
 
 ```powershell

@@ -346,6 +346,8 @@ pub enum OperationKind {
     CompactDatabase,
     Backup,
     RecoveryDrill,
+    RecoveryKeyExport,
+    RecoveryKeyVerify,
     Diagnostics,
     ListItems,
     SelectItem,
@@ -384,6 +386,8 @@ impl OperationKind {
             Self::CompactDatabase => "database_compaction_failed",
             Self::Backup => "backup_failed",
             Self::RecoveryDrill => "recovery_drill_failed",
+            Self::RecoveryKeyExport => "recovery_key_export_failed",
+            Self::RecoveryKeyVerify => "recovery_key_verification_failed",
             Self::Diagnostics => "diagnostics_export_failed",
             Self::ListItems => "item_listing_failed",
             Self::SelectItem => "item_selection_failed",
@@ -429,6 +433,8 @@ impl OperationKind {
                 | Self::CompactDatabase
                 | Self::Backup
                 | Self::RecoveryDrill
+                | Self::RecoveryKeyExport
+                | Self::RecoveryKeyVerify
                 | Self::Diagnostics
                 | Self::ReconcileDelivery
                 | Self::ApiRequest
@@ -456,9 +462,12 @@ impl OperationKind {
             Self::UpdateSettings | Self::DisconnectGmail => 60,
             Self::StartOllama | Self::InspectModel | Self::EnterprisePolicyReload => 120,
             Self::SendReply | Self::AutomaticDispatch | Self::ReconcileDelivery => 300,
-            Self::ConnectGmail | Self::SyncMailbox | Self::Diagnostics | Self::PurgeRetention => {
-                600
-            }
+            Self::ConnectGmail
+            | Self::SyncMailbox
+            | Self::RecoveryKeyExport
+            | Self::RecoveryKeyVerify
+            | Self::Diagnostics
+            | Self::PurgeRetention => 600,
             Self::QualifyModel | Self::AnalyzeQueuedMail | Self::IntegrityCheck => 1_800,
             Self::InstallOllama | Self::CompactDatabase | Self::Backup | Self::RecoveryDrill => {
                 3_600
@@ -534,6 +543,8 @@ mod operation_kind_tests {
             OperationKind::Refresh,
             OperationKind::SyncMailbox,
             OperationKind::UpdateSettings,
+            OperationKind::RecoveryKeyExport,
+            OperationKind::RecoveryKeyVerify,
             OperationKind::Diagnostics,
             OperationKind::PurgeRetention,
         ] {

@@ -123,6 +123,34 @@ fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn write_new_private_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    ensure!(!path.exists(), "{} already exists", path.display());
+    let parent = path
+        .parent()
+        .filter(|candidate| !candidate.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    ensure!(
+        !fs::symlink_metadata(parent)?.file_type().is_symlink(),
+        "Private-file parent directory must not be a symlink"
+    );
+
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temporary
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    temporary.write_all(data)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| anyhow::Error::from(error.error))?;
+    Ok(())
+}
+
 fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
     ensure!(source.is_file(), "{} is missing", source.display());
     ensure!(
@@ -505,16 +533,7 @@ pub fn export_recovery_key(
         .context("Current workspace does not authenticate under the active vault key")?;
     let id = vault_id(data_dir)?;
     let envelope = vault.recovery_envelope(&id, passphrase)?;
-    if let Some(parent) = destination.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)?;
-        ensure!(
-            !fs::symlink_metadata(parent)?.file_type().is_symlink(),
-            "Recovery-key parent directory must not be a symlink"
-        );
-    }
-    write_new_private(destination, &serde_json::to_vec_pretty(&envelope)?)?;
+    write_new_private_atomic(destination, &serde_json::to_vec_pretty(&envelope)?)?;
     Ok(envelope)
 }
 
@@ -922,6 +941,15 @@ mod tests {
         settings.scheduled_backup_enabled = false;
         let status = scheduled_backup_status(&store, &settings, Utc::now()).unwrap();
         assert!(!status.overdue);
+    }
+
+    #[test]
+    fn atomic_private_write_never_overwrites_an_existing_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("recovery-key.json");
+        write_new_private_atomic(&destination, b"first").unwrap();
+        assert!(write_new_private_atomic(&destination, b"second").is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"first");
     }
 
     #[test]
