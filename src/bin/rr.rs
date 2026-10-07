@@ -10,7 +10,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    api_auth, audit_anchor, background, build_info, config, contracts, engine::Engine,
+    api_auth, audit_anchor, background, build_info, config, contracts, decision, engine::Engine,
     ollama::Ollama, policy, recovery, shadow, worker::Worker,
 };
 use std::{
@@ -100,6 +100,12 @@ enum Action {
     EvaluateDecision {
         #[arg(long, default_value = "nimble:9b-q8_0")]
         model: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Compare already-installed typed decision-model candidates on recruiting fixtures.
+    /// R&D only: this never authorizes or sends email.
+    CompareDecisionModels {
         #[arg(long)]
         out: PathBuf,
     },
@@ -493,7 +499,7 @@ fn main() -> Result<()> {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
             )?;
-            let report = rejection_rejector::decision::evaluate(&e.settings, &model, &out)?;
+            let report = decision::evaluate(&e.settings, &model, &out)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -504,6 +510,23 @@ fn main() -> Result<()> {
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false),
                     "note": "R&D-only decision-model evidence; no delivery authorization was changed."
+                }))?
+            );
+        }
+        Action::CompareDecisionModels { out } => {
+            let e = Engine::open(
+                dir,
+                false,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            let report = decision::compare_installed(&e.settings, &out)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "report": out,
+                    "recommended_model": report.get("recommended_model"),
+                    "note": "R&D-only comparison; no delivery authorization was changed."
                 }))?
             );
         }

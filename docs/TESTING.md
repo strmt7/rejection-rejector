@@ -85,7 +85,15 @@ To evaluate a new Ollama 0.35+ typed decision model without changing production 
 .\rr.exe evaluate-decision --model nimble:9b-q8_0 --out .\decision-evaluation.json
 ```
 
-The decision-model evaluator is deliberately R&D-only. It reuses the recruiting classification corpus, requires a closed four-category score contract, records only fixture IDs/labels/scores/latency, and never writes Automatic-mode task qualification or sends email.
+The decision-model evaluator is deliberately R&D-only. It reuses the recruiting classification corpus, requires a closed four-category score contract, records only fixture IDs/labels/scores/latency, and never writes Automatic-mode task qualification or sends email. It additionally reports multiclass/rejection Brier scores plus mean/max rejection probability across critical negatives, so probability quality can be compared without pretending the scores are calibrated.
+
+To compare curated typed-decision candidates that are already installed:
+
+```powershell
+.\rr.exe compare-decision-models --out .\decision-model-bakeoff.json
+```
+
+No candidate is downloaded implicitly. A comparison winner remains R&D evidence only and does not change production settings or Automatic authorization.
 
 The comparison never downloads multiple large models implicitly. It skips absent candidates.
 

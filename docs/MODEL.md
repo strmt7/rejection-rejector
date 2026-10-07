@@ -47,6 +47,14 @@ Evaluate an explicitly installed decision model with:
 
 The evaluator uses the same 72 synthetic recruiting fixtures, sends only de-quoted synthetic subject/current-message data to the local loopback endpoint, and records no fixture text in its result rows. Recommendation eligibility requires every case to complete, a valid four-category probability contract, **zero rejection false positives**, **zero critical-negative rejection false positives**, at least **90% rejection recall**, and full Ollama-reported GPU residency after the suite.
 
+For model-to-model R&D, run:
+
+```powershell
+.\rr.exe compare-decision-models --out .\decision-model-bakeoff.json
+```
+
+The comparison evaluates only explicitly installed candidates and ranks only models that already pass the hard safety eligibility gates. Ranking is lexicographic: higher rejection recall, then lower rejection Brier score, lower maximum rejection probability on critical-negative cases, and lower latency. Reports also include multiclass Brier score and mean/max critical-negative rejection scores. These are proper-scoring diagnostics for this corpus, **not calibrated real-world probabilities** and not promotion authority.
+
 This is an R&D recommendation only. It does not write `task_qualification`, change the configured production classifier, enable sending, connect Gmail, or create a delivery reservation. Promotion into the Automatic pipeline requires a separate architecture change, target-GPU profiling and independently labelled private multilingual mailbox acceptance.
 
 Current upstream references checked 2026-10-01:
