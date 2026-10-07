@@ -1840,6 +1840,9 @@ pub struct RecoveryApp {
     passphrase: Zeroizing<String>,
     acknowledgement: String,
     report: Option<crate::recovery::RestoreReport>,
+    recovery_result:
+        Option<crossbeam_channel::Receiver<Result<crate::recovery::RestoreReport, String>>>,
+    recovering: bool,
     error: String,
 }
 
@@ -1853,6 +1856,8 @@ impl RecoveryApp {
             passphrase: Zeroizing::new(String::new()),
             acknowledgement: String::new(),
             report: None,
+            recovery_result: None,
+            recovering: false,
             error: String::new(),
         }
     }
@@ -1861,6 +1866,39 @@ impl RecoveryApp {
 impl eframe::App for RecoveryApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
+
+        let completed = self.recovery_result.as_ref().and_then(|receiver| {
+            match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(crossbeam_channel::TryRecvError::Empty) => None,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => Some(Err(
+                    "Recovery worker terminated unexpectedly before reporting a result".into(),
+                )),
+            }
+        });
+        if let Some(result) = completed {
+            self.recovery_result = None;
+            self.recovering = false;
+            match result {
+                Ok(report) => {
+                    self.error.clear();
+                    self.report = Some(report);
+                }
+                Err(error) => {
+                    self.error = error;
+                }
+            }
+        }
+        if self.recovering {
+            ctx.request_repaint_after(Duration::from_millis(150));
+            if ctx.input(|input| input.viewport().close_requested()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.error =
+                    "Recovery is still running. Closing is blocked until the operation finishes."
+                        .into();
+            }
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(BG).inner_margin(28))
             .show(root_ui, |ui| {
@@ -1886,7 +1924,7 @@ impl eframe::App for RecoveryApp {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
-                            self.report.is_none(),
+                            !self.recovering && self.report.is_none(),
                             egui::Button::new("Choose backup directory…"),
                         )
                         .clicked()
@@ -1908,7 +1946,7 @@ impl eframe::App for RecoveryApp {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .add_enabled(
-                            self.report.is_none(),
+                            !self.recovering && self.report.is_none(),
                             egui::Button::new("Choose wrapped recovery key…"),
                         )
                         .clicked()
@@ -1930,7 +1968,7 @@ impl eframe::App for RecoveryApp {
 
                 let passphrase_label = ui.label("Recovery passphrase");
                 ui.add_enabled(
-                    self.report.is_none(),
+                    !self.recovering && self.report.is_none(),
                     egui::TextEdit::singleline(&mut *self.passphrase)
                         .password(true)
                         .desired_width(f32::INFINITY),
@@ -1947,13 +1985,14 @@ impl eframe::App for RecoveryApp {
                 let acknowledgement_label =
                     ui.label("Type RESTORE to acknowledge the destructive operation");
                 ui.add_enabled(
-                    self.report.is_none(),
+                    !self.recovering && self.report.is_none(),
                     egui::TextEdit::singleline(&mut self.acknowledgement)
                         .desired_width(180.0),
                 )
                 .labelled_by(acknowledgement_label.id);
 
-                let ready = self.report.is_none()
+                let ready = !self.recovering
+                    && self.report.is_none()
                     && self.backup.is_some()
                     && self.recovery_key.is_some()
                     && self.passphrase.len() >= 20
@@ -1972,28 +2011,44 @@ impl eframe::App for RecoveryApp {
                 {
                     let backup = self.backup.clone();
                     let recovery_key = self.recovery_key.clone();
-                    let result = match (backup, recovery_key) {
+                    match (backup, recovery_key) {
                         (Some(backup), Some(recovery_key)) => {
-                            crate::recovery::recover_workspace_from_backup(
-                                &self.data_dir,
-                                &backup,
-                                &recovery_key,
-                                self.passphrase.as_bytes(),
-                            )
-                        }
-                        _ => Err(anyhow::anyhow!("Recovery selections are incomplete")),
-                    };
-                    self.passphrase.zeroize();
-                    self.acknowledgement.clear();
-                    match result {
-                        Ok(report) => {
+                            let data_dir = self.data_dir.clone();
+                            let passphrase = std::mem::replace(
+                                &mut self.passphrase,
+                                Zeroizing::new(String::new()),
+                            );
+                            let (sender, receiver) = crossbeam_channel::bounded(1);
+                            self.recovery_result = Some(receiver);
+                            self.recovering = true;
+                            self.acknowledgement.clear();
                             self.error.clear();
-                            self.report = Some(report);
+                            std::thread::spawn(move || {
+                                let result = crate::recovery::recover_workspace_from_backup(
+                                    &data_dir,
+                                    &backup,
+                                    &recovery_key,
+                                    passphrase.as_bytes(),
+                                )
+                                .map_err(|error| format!("{error:#}"));
+                                let _ = sender.send(result);
+                            });
                         }
-                        Err(error) => {
-                            self.error = format!("{error:#}");
+                        _ => {
+                            self.error = "Recovery selections are incomplete".into();
                         }
                     }
+                }
+
+                if self.recovering {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.colored_label(
+                            AMBER,
+                            "Authenticating, preflighting and restoring. Do not terminate this process.",
+                        );
+                    });
                 }
 
                 if !self.error.is_empty() {
@@ -2015,7 +2070,10 @@ impl eframe::App for RecoveryApp {
                 }
 
                 ui.add_space(16.0);
-                if ui.button("Close Recovery Mode").clicked() {
+                if ui
+                    .add_enabled(!self.recovering, egui::Button::new("Close Recovery Mode"))
+                    .clicked()
+                {
                     self.passphrase.zeroize();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
