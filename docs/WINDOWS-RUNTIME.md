@@ -13,3 +13,12 @@ https://aka.ms/vc14/vc_redist.x64.exe
 Run the Microsoft installer, approve its own license/elevation prompt, restart if requested, then launch rejection-rejector.exe. Do not download individual DLLs from third-party sites, copy random DLLs into System32, uninstall other runtimes or disable Windows security globally.
 
 The runtime must be at least as recent as the MSVC toolset used to build the app. Windows 11 is a supported OS for the current Microsoft package. The application ZIP does not silently install or redistribute Microsoft's installer. Ollama installation is a separate, explicitly confirmed action inside the Local AI tab.
+
+
+## Embedded application manifest
+
+Both Windows executables embed a tracked Win32 application manifest at link time; CI extracts the resource from the actual binaries with the Windows SDK manifest tool and checks the required declarations.
+
+The manifest deliberately requests **asInvoker** with `uiAccess=false`: normal application startup must not require administrative elevation. It declares Windows 10/11 compatibility, **Per-Monitor V2 DPI awareness**, UTF-8 as the process active code page, and long-path awareness. The long-path declaration is the application-side opt-in; Windows also requires the machine's `LongPathsEnabled` policy/registry setting before Win32 APIs opt out of `MAX_PATH`.
+
+These declarations improve high-DPI/multi-monitor behavior, Unicode interoperability and deep-path handling, but they do not replace the separate Windows Narrator/IME/DPI acceptance checklist in [ACCESSIBILITY.md](ACCESSIBILITY.md).

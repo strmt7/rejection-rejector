@@ -1,4 +1,4 @@
-use std::{env, process::Command};
+use std::{env, path::PathBuf, process::Command};
 
 const UNVERIFIED_COMMIT: &str = "unverified-local-build";
 
@@ -39,6 +39,22 @@ fn main() {
         .trim()
         .to_owned();
     reject_controls("rustc version", &rustc_version, 256);
+
+    println!("cargo:rerun-if-changed=windows/app.manifest");
+    if target.ends_with("-pc-windows-msvc") {
+        let manifest = PathBuf::from(
+            env::var("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
+        )
+        .join("windows")
+        .join("app.manifest");
+        assert!(manifest.is_file(), "Windows application manifest is missing");
+        println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-bins=/MANIFESTUAC:NO");
+        println!(
+            "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
+    }
 
     println!("cargo:rustc-env=RR_BUILD_COMMIT={commit}");
     println!("cargo:rustc-env=RR_BUILD_TARGET={target}");
