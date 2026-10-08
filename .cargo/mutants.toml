@@ -11,6 +11,7 @@ examine_globs = [
   "src/readiness.rs",
   "src/policy.rs",
   "src/recovery.rs",
+  "src/recovery/**",
   "src/emergency.rs",
   "src/api_auth.rs",
   "src/retry.rs",

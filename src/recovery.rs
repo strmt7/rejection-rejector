@@ -13,6 +13,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod restore;
+use restore::restore_backup_with_vault;
+
 const MANIFEST_NAME: &str = "backup-manifest.json";
 const DATABASE_NAME: &str = "state.sqlite3";
 const VAULT_ID_NAME: &str = "vault-id";
@@ -805,13 +808,13 @@ fn recovery_drill_with_vault(
     restored.integrity_check()?;
     let verification = restored.verify_backup_file(&restored_database)?;
     ensure!(
-        verification.schema_version == manifest.schema_version,
+        verification.schema_version == restore.restored_schema_version,
         "Recovery drill restored an unexpected schema version"
     );
     if manifest.format_version >= 2 {
         ensure!(
-            verification.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-            "Recovery drill audit head differs from the backup manifest"
+            restored.contains_audit_anchor(&manifest.audit_head)?,
+            "Recovery drill no longer contains the original backup audit head"
         );
     }
 
@@ -859,180 +862,6 @@ pub fn restore_backup(data_dir: &Path, backup_dir: &Path) -> Result<RestoreRepor
         }
     };
     restore_backup_with_vault(data_dir, backup_dir, &manifest, vault)
-}
-
-fn restore_backup_with_vault(
-    data_dir: &Path,
-    backup_dir: &Path,
-    manifest: &BackupManifest,
-    vault: Vault,
-) -> Result<RestoreReport> {
-    private_dir(data_dir)?;
-    let (current_manifest, backup_database) = validate_bundle_files(backup_dir)?;
-    ensure!(
-        current_manifest == *manifest,
-        "Backup manifest changed since the restore was authorized"
-    );
-    let current_vault_id = std::str::from_utf8(&read_small(&data_dir.join(VAULT_ID_NAME), 256)?)?
-        .trim()
-        .to_owned();
-    ensure!(
-        current_vault_id == manifest.vault_id,
-        "Backup vault identifier does not match this workspace"
-    );
-
-    let nonce = uuid::Uuid::new_v4();
-    let input_stage = data_dir.join(format!(".restore-input-{nonce}.sqlite3"));
-    let candidate = data_dir.join(format!(".restore-candidate-{nonce}.sqlite3"));
-    copy_private_new(&backup_database, &input_stage)?;
-
-    let staging_result = (|| -> Result<i64> {
-        ensure!(
-            sha256_file(&input_stage)? == manifest.database_sha256,
-            "Staged backup checksum changed after manifest verification"
-        );
-        let staged = Store::open(&input_stage, vault.clone())?;
-        staged.integrity_check()?;
-        let authenticated = staged.verify_backup_file(&input_stage)?;
-        ensure!(
-            authenticated.schema_version == manifest.schema_version,
-            "Staged backup schema does not match the authorized manifest"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                authenticated.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-                "Staged backup audit head does not match the authorized manifest"
-            );
-        }
-        staged.backup_to(&candidate)?;
-        let verified = staged.verify_backup_file(&candidate)?;
-        ensure!(
-            verified.schema_version == manifest.schema_version,
-            "Restored candidate schema does not match the authorized manifest"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                verified.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-                "Restored candidate audit head does not match the authorized manifest"
-            );
-        }
-        Ok(verified.schema_version)
-    })();
-    let _ = fs::remove_file(input_stage.with_extension("sqlite3-wal"));
-    let _ = fs::remove_file(input_stage.with_extension("sqlite3-shm"));
-    let _ = fs::remove_file(&input_stage);
-    let restored_schema_version = match staging_result {
-        Ok(version) => version,
-        Err(error) => {
-            let _ = fs::remove_file(&candidate);
-            return Err(error);
-        }
-    };
-
-    let recovery_root = data_dir.join("recovery");
-    private_dir(&recovery_root)?;
-    let rollback_dir = recovery_root.join(format!(
-        "pre-restore-{}-{nonce}",
-        Utc::now().format("%Y%m%d-%H%M%S")
-    ));
-    private_dir(&rollback_dir)?;
-
-    // Persist a fail-closed startup marker before touching the live database.
-    // If restoration is interrupted, the next normal startup must still
-    // disarm any restored Automatic/sending authorization.
-    mark_restore_rearm_required(data_dir)?;
-
-    let live = data_dir.join(DATABASE_NAME);
-    let live_wal = data_dir.join(format!("{DATABASE_NAME}-wal"));
-    let live_shm = data_dir.join(format!("{DATABASE_NAME}-shm"));
-    let files = [
-        (&live, rollback_dir.join(DATABASE_NAME)),
-        (&live_wal, rollback_dir.join(format!("{DATABASE_NAME}-wal"))),
-        (&live_shm, rollback_dir.join(format!("{DATABASE_NAME}-shm"))),
-    ];
-
-    let mut moved = Vec::<(PathBuf, PathBuf)>::new();
-    for (source, destination) in &files {
-        if source.exists() {
-            ensure!(
-                !fs::symlink_metadata(source)?.file_type().is_symlink(),
-                "Live database files must not be symlinks"
-            );
-            if let Err(error) = fs::rename(source, destination) {
-                for (original, saved) in moved.iter().rev() {
-                    let _ = fs::rename(saved, original);
-                }
-                let _ = fs::remove_file(&candidate);
-                return Err(error.into());
-            }
-            moved.push(((*source).clone(), destination.clone()));
-        }
-    }
-
-    if let Err(error) = fs::rename(&candidate, &live) {
-        for (original, saved) in moved.iter().rev() {
-            let _ = fs::rename(saved, original);
-        }
-        let _ = fs::remove_file(&candidate);
-        return Err(error.into());
-    }
-
-    let final_validation = (|| -> Result<()> {
-        let restored = Store::open(&live, vault.clone())?;
-        restored.integrity_check()?;
-        let verification = restored.verify_backup_file(&live)?;
-        ensure!(
-            verification.schema_version == restored_schema_version,
-            "Restored schema changed unexpectedly"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                verification.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-                "Restored database audit head differs from the authorized manifest"
-            );
-        }
-        Ok(())
-    })();
-
-    if let Err(error) = final_validation {
-        let failed = rollback_dir.join("failed-restored-state.sqlite3");
-        let _ = fs::rename(&live, &failed);
-        let _ = fs::remove_file(data_dir.join(format!("{DATABASE_NAME}-wal")));
-        let _ = fs::remove_file(data_dir.join(format!("{DATABASE_NAME}-shm")));
-        for (original, saved) in moved.iter().rev() {
-            let _ = fs::rename(saved, original);
-        }
-        return Err(
-            error.context("Restore validation failed; previous database files were rolled back")
-        );
-    }
-
-    let mut report = RestoreReport {
-        format_version: 1,
-        restored_at: Utc::now(),
-        source_backup_created_at: manifest.created_at,
-        source_database_sha256: manifest.database_sha256.clone(),
-        source_audit_head: manifest.audit_head.clone(),
-        restored_schema_version,
-        rollback_directory: (!moved.is_empty()).then(|| {
-            rollback_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("pre-restore")
-                .to_owned()
-        }),
-        note: "Restore completed after staged same-vault authentication and post-install verification. Previous database files are retained under the recovery directory when present.".into(),
-    };
-    let report_path = rollback_dir.join("restore-report.json");
-    if let Err(error) = serde_json::to_vec_pretty(&report)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| write_new_private(&report_path, &bytes))
-    {
-        report.note.push_str(&format!(
-            " The optional local restore-report file could not be written: {error}"
-        ));
-    }
-    Ok(report)
 }
 
 pub fn backup_manifest_path(directory: &Path) -> PathBuf {
