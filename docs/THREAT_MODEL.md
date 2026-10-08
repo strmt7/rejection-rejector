@@ -14,7 +14,7 @@ This document defines Rejection Rejector's security model for engineering and re
 8. **Verifiable release provenance.** Shipped artifacts must be tied to a specific source commit, audited dependencies, SBOM and release workflow evidence.
 9. **Supportability without surveillance.** Health, metrics, operation correlation and runtime journaling must remain local and privacy-minimal by construction.
 10. **Crash-loop fail safety.** An unclean prior process lifetime must not silently resume unattended delivery on the next exclusive workspace session.
-11. **Out-of-band incident containment.** An independently managed filesystem sentinel must be able to block every outbound Gmail write without depending on the GUI, model, encrypted settings or Automatic policy state.
+11. **Out-of-band incident containment.** An independently managed filesystem sentinel (the `RR_EMERGENCY_STOP_FILE`) must be able to block every outbound Gmail write without depending on the GUI, model, encrypted settings or Automatic policy state.
 
 ## Data classification and storage map
 
