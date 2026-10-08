@@ -18,18 +18,16 @@ pub fn report(engine: &Engine) -> Result<Value> {
     let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
     let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
     let emergency_stop = crate::emergency::status_fail_closed();
-    let readiness = crate::readiness::assess_context(
-        crate::readiness::RuntimeReadinessContext {
-            settings: &engine.settings,
-            database_integrity_ok: integrity.is_ok(),
-            storage_write_safe: storage.runtime_write_safe,
-            connected: engine.connected(),
-            send_scope: engine.send_scope(),
-            paused,
-            stopping,
-            emergency_stop_active: emergency_stop.active,
-        },
-    );
+    let readiness = crate::readiness::assess_context(crate::readiness::RuntimeReadinessContext {
+        settings: &engine.settings,
+        database_integrity_ok: integrity.is_ok(),
+        storage_write_safe: storage.runtime_write_safe,
+        connected: engine.connected(),
+        send_scope: engine.send_scope(),
+        paused,
+        stopping,
+        emergency_stop_active: emergency_stop.active,
+    });
     let operational =
         crate::readiness::operational_indicators(crate::readiness::OperationalContext {
             settings: &engine.settings,
