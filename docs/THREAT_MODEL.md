@@ -29,6 +29,7 @@ This document defines Rejection Rejector's security model for engineering and re
 | Message/provider/thread identifiers | Sensitive metadata | encrypted payload plus hashed/index metadata where needed | local integration API under bearer auth | store/API |
 | Database counts/timestamps/state indexes | Sensitive metadata | SQLite clear metadata | privacy-safe local metrics/API | store/metrics |
 | Integration API bearer token | Secret | encrypted metadata; may be briefly revealed in GUI | local client explicitly receiving it | worker/API |
+| Emergency stop sentinel path | Administrative security data | Plaintext filesystem path (non-sensitive) | never exported | admin/user |
 | Enterprise policy | Administrative security data | administrator-provisioned file + encrypted revision/digest floor | local process only | policy module |
 | Policy verification key/digest | Trust anchor | independently provisioned machine configuration | local process only | policy module |
 | Ollama model weights | Local third-party code/data asset | Ollama-managed model store | loopback Ollama only | ollama module |
