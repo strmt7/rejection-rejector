@@ -201,6 +201,25 @@ mod tests {
     use crate::engine::Engine;
     use std::sync::{Arc, atomic::AtomicBool};
 
+    /// Test that the diagnostics report omits all sensitive private information.
+    ///
+    /// This test verifies that the JSON diagnostics output does not leak:
+    /// - Email addresses (demo@example.invalid)
+    /// - Employer names (Northstar Materials)
+    /// - Person names (Alex Morgan)
+    /// - Signature (SENSITIVE_SIGNATURE_CANARY)
+    /// - Candidate context (SENSITIVE_PROFILE_CANARY)
+    /// - API token (SENSITIVE_API_TOKEN_CANARY)
+    /// - Refresh token (SENSITIVE_REFRESH_TOKEN_CANARY)
+    ///
+    /// It also verifies that the privacy section correctly reports:
+    /// - contains_api_token: false
+    /// - contains_oauth_credentials: false
+    /// - contains_candidate_facts: false
+    /// - automatic_upload: false
+    ///
+    /// And that the emergency_stop section reflects the sentinel state
+    /// (both active and configured should be false in this test).
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {
         let root = tempfile::tempdir().unwrap();
