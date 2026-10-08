@@ -16,6 +16,8 @@ use std::{
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+mod callback;
+
 pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const READ_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
@@ -43,12 +45,25 @@ struct Installed {
     client_id: String,
     client_secret: String,
 }
+impl Drop for Installed {
+    fn drop(&mut self) {
+        self.client_secret.zeroize();
+    }
+}
 #[derive(Deserialize)]
 pub struct Tokens {
     pub access_token: String,
     pub expires_in: u64,
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
+}
+impl Zeroize for Tokens {
+    fn zeroize(&mut self) {
+        self.access_token.zeroize();
+        if let Some(token) = &mut self.refresh_token {
+            token.zeroize();
+        }
+    }
 }
 pub fn secret() -> String {
     let mut b = [0; 32];
@@ -57,6 +72,13 @@ pub fn secret() -> String {
 }
 
 fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
+    ensure!(
+        target.starts_with('/')
+            && !target.starts_with("//")
+            && !target.contains('#')
+            && !target.chars().any(char::is_control),
+        "Invalid OAuth callback target"
+    );
     let u = url::Url::parse(&format!("http://127.0.0.1{target}"))?;
     if u.path() != "/callback" {
         return Ok(None);
@@ -90,12 +112,21 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
 
 /// Desktop-app OAuth: S256 PKCE, random state, random loopback port, five-minute expiry.
 pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credentials> {
+    let metadata = fs::symlink_metadata(path)?;
     ensure!(
-        fs::metadata(path)?.len() <= 32768,
-        "OAuth client file is too large"
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "OAuth client file must be a regular file, not a symlink"
     );
-    let config: ClientFile = serde_json::from_slice(&fs::read(path)?)
-        .context("Choose a Google Desktop app OAuth JSON file containing an installed object")?;
+    ensure!(metadata.len() <= 32768, "OAuth client file is too large");
+    let mut config_bytes = Zeroizing::new(Vec::new());
+    fs::File::open(path)?
+        .take(32769)
+        .read_to_end(&mut config_bytes)?;
+    ensure!(config_bytes.len() <= 32768, "OAuth client file is too large");
+    let mut config: ClientFile = serde_json::from_slice(&config_bytes).map_err(|_| {
+        anyhow::anyhow!("Choose a Google Desktop app OAuth JSON file containing an installed object")
+    })?;
+    drop(config_bytes);
     ensure!(
         !config.installed.client_id.is_empty() && !config.installed.client_secret.is_empty(),
         "Incomplete OAuth client file"
@@ -128,6 +159,8 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     ]);
     webbrowser::open(url.as_str()).context("Cannot open the system browser for Google sign-in")?;
     let start = Instant::now();
+    let login_deadline = start + Duration::from_secs(300);
+    let local_port = listener.local_addr()?.port();
     let code = Zeroizing::new(loop {
         ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
         ensure!(
@@ -139,26 +172,14 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
                 if !peer.ip().is_loopback() {
                     continue;
                 }
-                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.set_read_timeout(Some(Duration::from_millis(250)))?;
                 stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                let mut bytes = Vec::new();
-                let mut chunk = [0; 1024];
-                while bytes.len() < 8192 && !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match stream.read(&mut chunk) {
-                        Ok(0) => break,
-                        Ok(n) => bytes.extend_from_slice(&chunk[..n]),
-                        Err(_) => break,
-                    }
-                }
-                let input = String::from_utf8_lossy(&bytes);
-                let mut first = input.lines().next().unwrap_or("").split_whitespace();
-                let method = first.next().unwrap_or("");
-                let target = first.next().unwrap_or("");
-                let result = if method == "GET" && target.starts_with('/') {
-                    callback_code(target, &state)
-                } else {
-                    Ok(None)
-                };
+                let deadline = (Instant::now() + Duration::from_secs(2)).min(login_deadline);
+                let result = callback::read_headers(&mut stream, cancelled, deadline)
+                    .and_then(|headers| {
+                        let target = callback::request_target(&headers, local_port)?;
+                        callback_code(target, &state)
+                    });
                 let (status, text) = if matches!(&result, Ok(Some(_))) {
                     (
                         "200 OK",
@@ -185,6 +206,10 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
             Err(e) => return Err(e.into()),
         }
     });
+    // Do not exchange an authorization code after cancellation or expiry.
+    ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
+    ensure!(Instant::now() < login_deadline, "Authorization expired");
+    drop(listener);
     let response = net::client(30, false)?
         .post(TOKEN_URL)
         .form(&[
@@ -197,7 +222,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
         ])
         .send()
         .context("OAuth exchange failed")?;
-    let mut tokens: Tokens = net::json(response, 32768)?;
+    let mut tokens: Zeroizing<Tokens> = Zeroizing::new(net::json(response, 32768)?);
     let granted = tokens.scope.as_deref().unwrap_or("");
     ensure!(
         granted.split_whitespace().any(|s| s == READ_SCOPE),
@@ -213,8 +238,8 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     };
     tokens.access_token.zeroize();
     Ok(Credentials {
-        client_id: config.installed.client_id,
-        client_secret: config.installed.client_secret,
+        client_id: std::mem::take(&mut config.installed.client_id),
+        client_secret: std::mem::take(&mut config.installed.client_secret),
         refresh_token,
         can_send,
     })
@@ -238,6 +263,30 @@ mod tests {
     fn unknown_path_ignored() {
         assert_eq!(callback_code("/favicon.ico", "a").unwrap(), None);
     }
+    #[test]
+    fn token_wiping_clears_both_secrets() {
+        let mut tokens = Tokens {
+            access_token: "private-access-token".into(),
+            expires_in: 3600,
+            refresh_token: Some("private-refresh-token".into()),
+            scope: None,
+        };
+        tokens.zeroize();
+        assert!(tokens.access_token.is_empty());
+        assert_eq!(tokens.refresh_token.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn fragments_and_non_origin_targets_are_rejected() {
+        for target in [
+            "//attacker.invalid/callback?state=s&code=x",
+            "/callback?state=s&code=x#fragment",
+            "/callback?state=s&code=x\r\nInjected: value",
+        ] {
+            assert!(callback_code(target, "s").is_err());
+        }
+    }
+
     #[test]
     fn pkce_entropy() {
         assert_eq!(secret().len(), 43);

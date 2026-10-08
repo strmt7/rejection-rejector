@@ -2,6 +2,7 @@ use anyhow::{Context, Result, ensure};
 use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use std::{io::Read, time::Duration};
+use zeroize::Zeroizing;
 
 pub fn client(timeout: u64, local: bool) -> Result<Client> {
     let mut builder = Client::builder()
@@ -29,7 +30,7 @@ pub fn json<T: DeserializeOwned>(response: Response, limit: usize) -> Result<T> 
         response.content_length().is_none_or(|n| n <= limit as u64),
         "Upstream response exceeds size limit"
     );
-    let mut bytes = Vec::new();
+    let mut bytes = Zeroizing::new(Vec::new());
     response
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
