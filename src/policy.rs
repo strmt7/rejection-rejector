@@ -200,6 +200,10 @@ impl EnterprisePolicy {
     /// At startup an already-persisted disallowed model is replaced by the first
     /// approved tag and its qualification is invalidated. During an explicit user
     /// settings update, attempting to select a non-approved model is rejected.
+    ///
+    /// This function applies enterprise policy constraints to mutable user settings,
+    /// returning true if settings were modified (indicating policy was applied) or
+    /// false if no changes were needed (settings already compliant).
     pub fn enforce(&self, settings: &mut Settings, startup: bool) -> Result<bool> {
         self.validate()?;
         let before = settings.clone();
