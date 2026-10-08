@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Diagnostics (`rr diagnostics`, GUI diagnostics export) now derive operational readiness from the live enterprise emergency-stop sentinel (fail-closed) and expose an `emergency_stop` field, matching `rr doctor`, `/v1/health` and the GUI status bar. Previously the report could report dispatch readiness as healthy while an active emergency stop blocked every automatic send.
+- Replaced the stale "Version 0.1 exposes a read-only integration API" guard text with a version-neutral statement of the current read-only contract.
+- Aligned the mutation-testing workflow trigger paths with the actual `cargo-mutants` examine scope, so a push can no longer imply mutation evidence for modules the campaign deliberately excludes.
+- Corrected the evaluation corpus size in the testing documentation from 72 to the shipped 74-case suite.
+- Documented `scripts/build-windows.ps1` as the full local verification helper (fmt, all-features tests, clippy, release bins).
+- Hardened two test sites that used `Vec::remove(0)` to assert the expected queue length before popping, removing a latent panic on an empty list.
+
 - Offline restore now plants a private reauthorization marker before database replacement. On the next normal startup, previously backed-up Automatic/sending permissions are disarmed durably before the marker is cleared; malformed markers fail closed.
 
 - Cleans up partially copied encrypted restore staging files on I/O failure without touching pre-existing destinations, and removes an abandoned candidate on rename failure.
