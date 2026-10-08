@@ -108,6 +108,17 @@ struct DecisionAnswer {
     confidence: Option<f64>,
 }
 
+/// Load the synthetic classification fixtures for decision model evaluation.
+///
+/// This function loads the 74-case synthetic corpus from tests/fixtures/classification.json,
+/// which contains diverse recruiting emails with expected classifications (rejection,
+/// opportunity, other, uncertain) and various tags for threat modeling (prompt injection,
+/// multilingual content, etc.). The corpus is designed to test the model's ability to
+/// distinguish true rejections from opportunities while being resilient to adversarial
+/// inputs.
+///
+/// Returns a Result containing the vector of test cases, or an error if the JSON
+/// cannot be parsed or is missing required fields.
 fn fixtures() -> Result<Vec<Case>> {
     serde_json::from_str(include_str!("../tests/fixtures/classification.json"))
         .context("Bundled decision-evaluation fixtures are invalid")
