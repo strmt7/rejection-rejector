@@ -697,6 +697,12 @@ impl Store {
     }
 
     /// Return the current tamper-evident audit point after validating the full chain.
+    ///
+    /// This function returns a tuple of (sequence_number, event_hash) representing
+    /// the latest point in the tamper-evident audit chain. The sequence number
+    /// is monotonically increasing and the event_hash is a domain-separated SHA-256
+    /// that commits to the previous hash, event ID, and payload. Before returning,
+    /// the full audit chain is verified to detect any tampering or inconsistency.
     pub fn audit_point(&self) -> Result<(i64, String)> {
         self.verify_audit_chain()?;
         let row: Option<(i64, String)> = self
