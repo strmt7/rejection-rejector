@@ -21,7 +21,10 @@ pub(super) fn read_headers(
     let mut chunk = Zeroizing::new([0u8; 1024]);
     loop {
         ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
-        ensure!(Instant::now() < deadline, "OAuth callback deadline exceeded");
+        ensure!(
+            Instant::now() < deadline,
+            "OAuth callback deadline exceeded"
+        );
         ensure!(
             bytes.len() < MAX_HEADER_BYTES,
             "OAuth callback headers are too large"
@@ -109,7 +112,8 @@ mod tests {
     use std::{io::Cursor, time::Duration};
 
     fn parse(extra: &str) -> bool {
-        let text = format!("GET /callback?code=x&state=s HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n{extra}\r\n");
+        let text =
+            format!("GET /callback?code=x&state=s HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n{extra}\r\n");
         request_target(text.as_bytes(), 1234).is_ok()
     }
 
