@@ -32,5 +32,7 @@ Before a change is treated as release-quality:
 - Monitoring stays privacy-safe and label-bounded; no mailbox, employer or candidate data becomes metrics labels.
 - New externally constructible public Rust structs must be designed for evolution. Prefer additive functions or versioned types over accidental breaking field additions.
 - Runtime/model/tool upgrades are evaluated for this application's task and threat model, not adopted merely because they are newer.
+- Emergency stop documentation: When modifying emergency-stop related code, ensure consistency across `emergency.rs`, `diagnostics.rs`, `/v1/health` endpoint, `rr doctor` command, GUI status bar, and enterprise readiness documentation.
+- Diagnostic JSON stability: The `report_version` field in diagnostics output should be incremented when making breaking changes to the JSON structure, and release notes should document any changes to the diagnostic schema.
 
 See [the operations runbook](docs/OPERATIONS.md), [threat model](docs/THREAT_MODEL.md), and [enterprise readiness gate](docs/ENTERPRISE_READINESS.md).
