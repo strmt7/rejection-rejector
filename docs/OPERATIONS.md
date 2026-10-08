@@ -64,6 +64,8 @@ For a local support report:
 .\rr.exe diagnostics --out .\rejection-rejector-diagnostics.json
 ```
 
+The diagnostics JSON includes an `emergency_stop` field showing the current state of the `RR_EMERGENCY_STOP_FILE` sentinel (fail-closed), matching the `/v1/health` endpoint and `rr doctor` output.
+
 The app never uploads this report automatically. Review it before sharing.
 
 Before enabling unattended delivery, generate a read-only shadow audit:
