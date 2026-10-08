@@ -123,6 +123,7 @@ pub(super) fn restore_backup_with_vault(
     ));
     private_dir(&rollback_dir)?;
     mark_restore_rearm_required(data_dir)?;
+    crate::session::begin_restore_transaction(data_dir)?;
 
     let files = [
         (&live, rollback_dir.join(DATABASE_NAME)),
@@ -144,6 +145,7 @@ pub(super) fn restore_backup_with_vault(
     })();
     if let Err(error) = install {
         rollback_files(&moved).context("Restore installation and rollback both failed")?;
+        crate::session::complete_restore_transaction(data_dir)?;
         return Err(error.context("Restore installation failed; previous files restored"));
     }
 
@@ -181,9 +183,11 @@ pub(super) fn restore_backup_with_vault(
             }
         }
         rollback_files(&moved).context("Restore validation and rollback both failed")?;
+        crate::session::complete_restore_transaction(data_dir)?;
         return Err(error.context("Restore validation failed; previous files restored"));
     }
 
+    crate::session::complete_restore_transaction(data_dir)?;
     let mut report = RestoreReport {
         format_version: 1,
         restored_at: Utc::now(),
@@ -262,8 +266,7 @@ mod tests {
         let (data, backup, vault, mut manifest) = fixture(root.path());
         schema_four_backup(&backup, &mut manifest);
         let before = fs::read(backup.join(DATABASE_NAME)).unwrap();
-        let report =
-            restore_backup_with_vault(&data, &backup, &manifest, vault.clone()).unwrap();
+        let report = restore_backup_with_vault(&data, &backup, &manifest, vault.clone()).unwrap();
         assert_eq!(report.source_database_sha256, manifest.database_sha256);
         assert_eq!(report.source_audit_head, manifest.audit_head);
         assert_eq!(report.restored_schema_version, DATABASE_SCHEMA_VERSION);
@@ -273,9 +276,14 @@ mod tests {
             restored.meta::<String>("sentinel").unwrap().as_deref(),
             Some("preserve me")
         );
-        assert!(restored.contains_audit_anchor(&manifest.audit_head).unwrap());
+        assert!(
+            restored
+                .contains_audit_anchor(&manifest.audit_head)
+                .unwrap()
+        );
         assert_ne!(restored.audit_head().unwrap(), manifest.audit_head);
         assert!(restore_rearm_required(&data).unwrap());
+        crate::session::ensure_restore_complete(&data).unwrap();
         assert_no_staging(&data);
     }
 

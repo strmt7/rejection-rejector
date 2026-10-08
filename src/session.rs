@@ -1,4 +1,4 @@
-use crate::vault::{InstanceLock, private_dir};
+use crate::vault::{InstanceLock, private_dir, write_new_private};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -8,9 +8,63 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const RESTORE_MARKER_NAME: &str = ".restore-in-progress";
+const RESTORE_MARKER: &[u8] = b"restore-in-progress:v1\n";
+
 const MARKER_NAME: &str = ".runtime-session.json";
 const FORMAT_VERSION: u32 = 1;
 const MAX_MARKER_BYTES: u64 = 8 * 1024;
+
+/// Must run under the workspace lock before opening/creating the normal vault.
+/// Any leftover restore marker means the SQLite file set needs explicit recovery.
+pub(crate) fn ensure_restore_complete(directory: &Path) -> Result<()> {
+    match fs::symlink_metadata(directory.join(RESTORE_MARKER_NAME)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(_) => anyhow::bail!(
+            "An offline restore did not finish. Preserve this workspace and its recovery directory, then use explicit Recovery Mode; normal startup is blocked"
+        ),
+    }
+}
+
+fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    fs::File::open(directory)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
+}
+
+/// Called only by the explicitly authorized offline restore while holding its lock.
+/// A valid leftover marker permits a retry, never ordinary application startup.
+pub(crate) fn begin_restore_transaction(directory: &Path) -> Result<()> {
+    let path = directory.join(RESTORE_MARKER_NAME);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_new_private(&path, RESTORE_MARKER)?;
+            sync_directory(directory)?;
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => ensure!(
+            read_bounded(&path)? == RESTORE_MARKER,
+            "Restore transaction marker is invalid; preserve recovery files for inspection"
+        ),
+    }
+    Ok(())
+}
+
+/// Clear only after the installed image or the entire rolled-back file set is valid.
+/// There is intentionally no Drop cleanup: a crash/panic must retain this marker.
+pub(crate) fn complete_restore_transaction(directory: &Path) -> Result<()> {
+    let path = directory.join(RESTORE_MARKER_NAME);
+    ensure!(
+        read_bounded(&path)? == RESTORE_MARKER,
+        "Restore transaction marker is missing or invalid"
+    );
+    fs::remove_file(path)?;
+    sync_directory(directory)?;
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +85,7 @@ pub(crate) struct SessionLease {
 impl SessionLease {
     pub(crate) fn begin(directory: &Path) -> Result<Self> {
         private_dir(directory)?;
+        ensure_restore_complete(directory)?;
         let marker_path = directory.join(MARKER_NAME);
         reject_symlink_if_present(&marker_path)?;
         let previous_unclean = marker_path.exists();
@@ -138,6 +193,38 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_restore_blocks_startup_until_explicit_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        ensure_restore_complete(directory.path()).unwrap();
+        begin_restore_transaction(directory.path()).unwrap();
+        assert!(SessionLease::begin(directory.path()).is_err());
+        assert!(!directory.path().join(MARKER_NAME).exists());
+        assert!(!directory.path().join("state.sqlite3").exists());
+        // Explicit recovery may retry after a crash using the retained marker.
+        begin_restore_transaction(directory.path()).unwrap();
+        complete_restore_transaction(directory.path()).unwrap();
+        ensure_restore_complete(directory.path()).unwrap();
+        let lease = SessionLease::begin(directory.path()).unwrap();
+        drop(lease);
+        assert!(!directory.path().join(MARKER_NAME).exists());
+    }
+
+    #[test]
+    fn malformed_restore_marker_cannot_be_ignored_or_cleared() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join(RESTORE_MARKER_NAME);
+        fs::write(&marker, b"incomplete write").unwrap();
+        assert!(ensure_restore_complete(directory.path()).is_err());
+        assert!(begin_restore_transaction(directory.path()).is_err());
+        assert!(complete_restore_transaction(directory.path()).is_err());
+        assert!(marker.exists());
+        fs::remove_file(&marker).unwrap();
+        fs::create_dir(&marker).unwrap();
+        assert!(ensure_restore_complete(directory.path()).is_err());
+        assert!(begin_restore_transaction(directory.path()).is_err());
+    }
 
     #[test]
     fn clean_session_removes_marker() {

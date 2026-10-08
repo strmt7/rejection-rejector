@@ -14,6 +14,8 @@ Every member of the live SQLite/WAL/SHM set is checked before any file moves. Di
 
 Staging files, sidecars and migration snapshots live in one private temporary directory so ordinary error returns clean up partial staging state. Previous live files remain in the private recovery directory. A failed installed image is quarantined as a complete available SQLite/WAL/SHM set before originals are restored. A rollback failure is reported as incomplete, not as a successful rollback.
 
+A private `.restore-in-progress` marker is synced before the first live-file move. Normal startup checks for any such marker before opening the vault or database and refuses to proceed while it exists. Successful installation or completed rollback removes it; errors, panics and abrupt termination retain it. An explicitly authorized recovery may retry a valid interrupted transaction, while malformed markers fail closed. This prevents a half-replaced or absent live database from silently becoming a new empty workspace. Unix directory entries are synced as well; filesystem and hardware durability still require deployment testing.
+
 These controls do not make multiple filesystem renames power-loss atomic and cannot protect against a fully compromised operating system. If a restore or rollback is interrupted, stop the worker, preserve the complete workspace and recovery directory, and inspect the available images before proceeding. Successful restoration still requires explicit delivery reauthorization on the next normal startup.
 
 ## Regression coverage
