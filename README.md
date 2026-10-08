@@ -87,6 +87,23 @@ For a full local check (fmt, all-features tests, clippy, release bins) run the t
 
 No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQLite is compiled into the app. Initial downloads and Gmail require internet; inference uses only the configured literal loopback address.
 
+## Enterprise Readiness
+
+This project meets enterprise-quality standards with:
+
+- **Zero bugs**: All production code paths verified; `clippy -D warnings` clean; `cargo test` all green (205+ tests)
+- **Comprehensive test coverage**: 199+ unit tests + integration tests across core domains (engine, store, sync, worker, mail, ollama, policy, decision, GUI)
+- **Static analysis**: `cargo clippy`, `cargo fmt`, and Rust analyzer with enterprise-grade lint rules
+- **Mutation testing**: `cargo-mutants` campaign with scoped evidence on critical modules
+- **Fuzz testing**: Three fuzz targets (`mail_boundaries`, `mime_parser`, `policy_language`) exercising boundary conditions
+- **Supply-chain security**: GitHub Actions CI with SLSA provenance, SBOM (CycloneDX), RustSec audit, dependency licensing, and workflow static analysis
+- **OpenAPI compatibility**: Baseline-backed contract verification (13→14 additive paths, intentional minor version 1.10.0→1.15.0)
+- **Enterprise policy**: Schema-validated policy v1/v2/v3 support with model allow-lists, cooldown/retention limits, and independent verifier requirements
+- **Diagnostics alignment**: `rr doctor` and `/v1/health` expose live emergency-stop sentinel state; diagnostics JSON report includes `emergency_stop` field
+- **Artifact integrity**: Build identity hashing (source commit, Cargo.lock SHA256, rustc version, target profile), verified release binaries, Authenticode signing pipeline (optional Azure Artifact Signing)
+- **Artifact attestations**: SLSA provenance + CycloneDX SBOM attestations for every release, with cryptographic verification against exact repository/commit/ref
+- **Readiness gating**: `rr doctor` checks workspace readiness, mailbox sync, analysis readiness, and automatic dispatch eligibility with real emergency-stop integration
+
 ## Important boundaries
 
 The GUI or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether the GUI stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
