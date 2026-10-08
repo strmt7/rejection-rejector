@@ -22,6 +22,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// A snapshot of the current worker state for GUI display, metrics, and diagnostics.
+/// This struct contains only non-sensitive information safe for display and export.
+/// All sensitive fields (credentials, keys, message content) are excluded by design.
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub initialized: bool,
