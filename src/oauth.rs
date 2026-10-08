@@ -22,7 +22,9 @@ pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const READ_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 
-// Credentials intentionally do not implement Debug.
+// Credentials intentionally do not implement Debug to prevent accidental logging of secrets.
+// The struct implements Drop to zeroize sensitive fields on destruction.
+// Handle the return value of oauth::login() carefully as it contains sensitive credential material.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials {
     pub client_id: String,
