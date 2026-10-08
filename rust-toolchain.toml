@@ -2,3 +2,5 @@
 channel = "1.99.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
+
+# This file pins the Rust toolchain to version 1.99.0 for reproducible builds
