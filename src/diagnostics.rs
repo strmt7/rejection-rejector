@@ -135,6 +135,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "paused": paused
         },
         "enterprise_policy": policy_status,
+        // emergency_stop reflects the live state of the RR_EMERGENCY_STOP_FILE sentinel (fail-closed)
         "emergency_stop": emergency_stop,
         "audit_protection": {
             "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
