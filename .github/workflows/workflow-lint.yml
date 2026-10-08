@@ -24,6 +24,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Release-gate regression tests (offline)
+        run: python3 -m unittest discover -s tests/release -v
       - name: Install checksum-pinned actionlint
         shell: bash
         run: |

@@ -4,12 +4,24 @@ on:
   push:
     branches: [main]
     paths:
-      - "build.rs"
       - "src/**"
+      - "tests/**"
+      - "fuzz/**"
+      - "scripts/**"
+      - "config/**"
+      - ".cargo/**"
+      - ".github/**"
+      - "windows/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".cargo/config.toml"
-      - ".github/workflows/reproducibility.yml"
+      - "build.rs"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - ".rustfmt.toml"
+      - "deny.toml"
+      - "docs/openapi-v1.json"
+      - "docs/openapi-v1-baseline.json"
+      - "docs/enterprise-policy.schema.json"
   schedule:
     - cron: "7 3 * * 6"
   workflow_dispatch:
