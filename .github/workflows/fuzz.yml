@@ -4,13 +4,24 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/mail.rs"
-      - "src/gmail.rs"
-      - "src/policy.rs"
+      - "src/**"
+      - "tests/**"
       - "fuzz/**"
+      - "scripts/**"
+      - "config/**"
+      - ".cargo/**"
+      - ".github/**"
+      - "windows/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".github/workflows/fuzz.yml"
+      - "build.rs"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - ".rustfmt.toml"
+      - "deny.toml"
+      - "docs/openapi-v1.json"
+      - "docs/openapi-v1-baseline.json"
+      - "docs/enterprise-policy.schema.json"
   schedule:
     - cron: "17 2 * * 3"
   workflow_dispatch:

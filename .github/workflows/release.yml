@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
           ref: main
       - name: Assert workflow packages the triggering main commit
         shell: bash
@@ -48,105 +49,14 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_REF" = "refs/heads/main"
-      - name: Require green security and verification workflows for this exact commit
+      - name: Require source-bound automated release evidence
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $required = @(
-            'Rust CI',
-            'Rust public API compatibility',
-            'Supply-chain security',
-            'CodeQL Rust security',
-            'OpenSSF Scorecard',
-            'Workflow static analysis'
-          )
-          $deadline = (Get-Date).AddMinutes(15)
-          while ($true) {
-            $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?head_sha=$env:GITHUB_SHA&per_page=100" | ConvertFrom-Json
-            $missing = @()
-            $pending = @()
-            foreach ($name in $required) {
-              $runs = @($payload.workflow_runs | Where-Object {
-                $_.name -eq $name -and $_.head_sha -eq $env:GITHUB_SHA
-              } | Sort-Object run_number -Descending)
-              if ($runs.Count -eq 0) {
-                $missing += $name
-                continue
-              }
-              $run = $runs[0]
-              if ($run.status -ne 'completed') {
-                $pending += "$name ($($run.status))"
-                continue
-              }
-              if ($run.conclusion -ne 'success') {
-                throw "Release gate failed: $name concluded '$($run.conclusion)' for $env:GITHUB_SHA"
-              }
-            }
-            if ($missing.Count -eq 0 -and $pending.Count -eq 0) {
-              Write-Host "All required workflows are green for $env:GITHUB_SHA"
-              break
-            }
-            if ((Get-Date) -ge $deadline) {
-              throw "Release gate timed out. Missing: $($missing -join ', '); pending: $($pending -join ', ')"
-            }
-            Write-Host "Waiting for exact-commit gates. Missing: $($missing -join ', '); pending: $($pending -join ', ')"
-            Start-Sleep -Seconds 15
-          }
-      - name: Require recent deep-quality evidence from main
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $requirements = @(
-            @{ Name = 'Rust fuzzing'; MaxAgeDays = 8 },
-            @{ Name = 'Rust coverage'; MaxAgeDays = 8 },
-            @{ Name = 'Mutation testing'; MaxAgeDays = 8 },
-            @{ Name = 'Enterprise deep verification'; MaxAgeDays = 8 },
-            @{ Name = 'Windows reproducibility'; MaxAgeDays = 8 }
-          )
-          $payload = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs?branch=main&per_page=100" | ConvertFrom-Json
-          $now = [DateTimeOffset]::UtcNow
-          foreach ($requirement in $requirements) {
-            $runs = @($payload.workflow_runs | Where-Object {
-              $_.name -eq $requirement.Name -and
-              $_.head_branch -eq 'main'
-            } | Sort-Object run_number -Descending)
-            if ($runs.Count -eq 0) {
-              throw "Release gate failed: no '$($requirement.Name)' evidence exists on main"
-            }
-            $run = $runs[0]
-            if ($run.status -ne 'completed') {
-              throw "Release gate failed: latest '$($requirement.Name)' run #$($run.run_number) is '$($run.status)'; wait for it to complete and retrigger packaging"
-            }
-            if ($run.conclusion -ne 'success') {
-              throw "Release gate failed: latest '$($requirement.Name)' run #$($run.run_number) concluded '$($run.conclusion)'"
-            }
-            $completed = [DateTimeOffset]::Parse($run.updated_at)
-            $age = $now - $completed
-            if ($age.TotalDays -gt $requirement.MaxAgeDays) {
-              throw "Release gate failed: latest '$($requirement.Name)' evidence is $([Math]::Round($age.TotalDays, 2)) days old; maximum is $($requirement.MaxAgeDays)"
-            }
-            $encodedBase = [Uri]::EscapeDataString($run.head_sha)
-            $encodedHead = [Uri]::EscapeDataString($env:GITHUB_SHA)
-            $comparison = gh api "repos/$env:GITHUB_REPOSITORY/compare/$encodedBase...$encodedHead" | ConvertFrom-Json
-            if ($comparison.status -notin @('ahead', 'identical')) {
-              throw "Release gate failed: '$($requirement.Name)' evidence commit $($run.head_sha) is not an ancestor of release commit $env:GITHUB_SHA (compare status '$($comparison.status)')"
-            }
-            Write-Host "$($requirement.Name): latest run #$($run.run_number), $([Math]::Round($age.TotalHours, 1)) hours old, commit $($run.head_sha) is in release history"
-          }
-
-      - name: Confirm main has not moved during release gate
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $line = git ls-remote origin refs/heads/main
-          $remote = (($line -split '\s+')[0]).Trim()
-          if ($remote -ne $env:GITHUB_SHA) {
-            throw "main moved from $env:GITHUB_SHA to $remote while release validation was running; retrigger from the new head"
-          }
+          python scripts/release_guard.py evidence --repository $env:GITHUB_REPOSITORY --commit $env:GITHUB_SHA --output artifacts/release-evidence.json --wait-seconds 900
+          if ($LASTEXITCODE -ne 0) { throw 'Automated release evidence rejected' }
       - name: Pinned Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -212,16 +122,16 @@ jobs:
             throw "Invalid embedded evaluation-suite fingerprint"
           }
 
-      - name: Audit the shipped executables themselves
+      - name: Audit each shipped executable independently
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          cargo audit bin target/release/rejection-rejector.exe | Tee-Object -FilePath artifacts/rejection-rejector-binary-audit.txt
-          cargo audit bin target/release/rr.exe | Tee-Object -FilePath artifacts/rr-binary-audit.txt
-          if ($LASTEXITCODE -ne 0) { throw "Binary RustSec audit failed" }
+          python scripts/release_guard.py audit --output artifacts target/release/rejection-rejector.exe target/release/rr.exe
+          if ($LASTEXITCODE -ne 0) { throw 'A release executable failed its RustSec audit' }
           cargo auditable --version | Set-Content artifacts/cargo-auditable-version.txt -Encoding ascii
+          if ($LASTEXITCODE -ne 0) { throw 'Could not record cargo-auditable version' }
           cargo audit --version | Set-Content artifacts/cargo-audit-version.txt -Encoding ascii
+          if ($LASTEXITCODE -ne 0) { throw 'Could not record cargo-audit version' }
       - name: Generate CycloneDX SBOM
         shell: bash
         run: |
@@ -303,7 +213,7 @@ jobs:
           )) {
             $signature = Get-AuthenticodeSignature -FilePath $path
             if ($env:SIGNING_MODE -eq 'azure-artifact-signing' -and $signature.Status -ne 'Valid') {
-              throw "Authenticode verification failed for $path: $($signature.Status) $($signature.StatusMessage)"
+              throw "Authenticode verification failed for ${path}: $($signature.Status) $($signature.StatusMessage)"
             }
             if ($env:SIGNING_MODE -eq 'unsigned' -and $signature.Status -eq 'Valid') {
               throw "Unsigned packaging mode unexpectedly produced a publisher-signed executable: $path"
@@ -335,6 +245,8 @@ jobs:
           Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
           Copy-Item -Recurse docs artifacts/windows/docs
+          Copy-Item -Recurse scripts artifacts/windows/scripts
+          Copy-Item artifacts/release-evidence.json artifacts/windows/
           Copy-Item Cargo.lock artifacts/windows/
           Copy-Item artifacts/build-info.json,artifacts/contract-info.json,artifacts/signing.json,artifacts/rejection-rejector.cdx.json artifacts/windows/
           git rev-parse HEAD | Set-Content artifacts/windows/COMMIT.txt -Encoding ascii
@@ -390,6 +302,14 @@ jobs:
             throw "Generated CycloneDX SBOM attestation could not be verified against the exact repository/workflow/ref/commit"
           }
           $sbom | Set-Content artifacts/attestation-sbom-verification.json -Encoding utf8
+      - name: Recheck release evidence immediately before publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/release_guard.py evidence --repository $env:GITHUB_REPOSITORY --commit $env:GITHUB_SHA --output artifacts/release-evidence-final.json
+          if ($LASTEXITCODE -ne 0) { throw 'Release evidence changed while packaging' }
       - name: Upload package and evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
