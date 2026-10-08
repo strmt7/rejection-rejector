@@ -245,7 +245,7 @@ mod tests {
         let text = report.to_string();
         for forbidden in [
             "demo@example.invalid",
-            "Northstar Materials",
+            "Northstar Materials", 
             "Alex Morgan",
             "SENSITIVE_SIGNATURE_CANARY",
             "SENSITIVE_PROFILE_CANARY",
