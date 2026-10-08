@@ -32,6 +32,8 @@ Development CI compiles and tests the Windows desktop/CLI on every `main` commit
 
 Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).
 
+Enterprise readiness: run `.\rr.exe doctor` to verify production readiness including emergency-stop integration, mailbox synchronization, analysis completion, and automatic dispatch eligibility. The diagnostics JSON report (`.\rr.exe diagnostics --out file.json`) includes an `emergency_stop` field showing the current sentinel state for audit and automation purposes.
+
 Safe offline preview:
 
 ```powershell
