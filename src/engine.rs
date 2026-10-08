@@ -526,7 +526,7 @@ impl Engine {
         }
         ensure!(
             !settings.api_allow_writes,
-            "Version 0.1 exposes a read-only integration API"
+            "Current integration API is read-only; write operations are not exposed"
         );
         if settings.mode == Mode::Automatic && self.settings.mode != Mode::Automatic {
             settings.automatic_since = Some(Utc::now());
@@ -1786,7 +1786,9 @@ mod tests {
         )
         .unwrap();
         assert!(!e.settings.sending_enabled);
-        let j = e.db.list(&e.account, true, 0, 25).unwrap().remove(0);
+        let mut items = e.db.list(&e.account, true, 0, 25).unwrap();
+        assert_eq!(items.len(), 3);
+        let j = items.pop().unwrap();
         e.edit(
             &j.id,
             j.revision,

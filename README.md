@@ -79,6 +79,12 @@ cargo build --locked --release --bins
 .\target\release\rejection-rejector.exe --demo
 ```
 
+For a full local check (fmt, all-features tests, clippy, release bins) run the tracked helper script:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
 No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQLite is compiled into the app. Initial downloads and Gmail require internet; inference uses only the configured literal loopback address.
 
 ## Important boundaries
