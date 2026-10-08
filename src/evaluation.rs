@@ -127,9 +127,29 @@ fn fixtures() -> Result<Vec<Case>> {
 
 /// Evaluate the complete configured local pipeline on synthetic recruiting mail.
 ///
-/// This is deliberately application-specific. False rejection replies are weighted
-/// more heavily than missed rejections because an unattended reply to an interview,
-/// offer, quoted history, or adversarial message is the costliest model error here.
+/// Evaluate the configured local model on the full task-specific pipeline.
+///
+/// This function runs the model evaluation that powers the `rr evaluate` command.
+/// It:
+/// 1. Loads the 74-case synthetic corpus from tests/fixtures/classification.json
+/// 2. Creates a disarmed copy of settings (sending disabled) for qualification
+/// 3. Qualifies the model on the disarmed settings
+/// 4. Creates a pinned copy with the qualified model digest
+/// 5. Evaluates the pinned model on each case in the corpus
+/// 6. Tracks various metrics including:
+///    - Overall accuracy and per-category statistics
+///    - Rejection true/false positives and negatives
+///    - Brier scores for probability calibration
+///    - Timing information
+///    - Critical negative cases (those requiring special handling)
+///    - Verified pipeline counts
+///    - Unsafe draft detection
+/// 7. Returns a JSON summary suitable for the `rr evaluate --out` command
+///
+/// The evaluation is designed to be application-specific, weighting false rejection
+/// replies more heavily than missed rejections because an unattended reply to an
+/// interview, offer, quoted history, or adversarial message is the costliest
+/// model error in this context.
 fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let cases = fixtures()?;
     let unpinned = {
