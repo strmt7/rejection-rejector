@@ -17,3 +17,23 @@ The local runtime journal is deliberately **not** a general-purpose application 
 The API is read-only, loopback/token restricted and rejects browser Origin. Its token grants private data access. Portable recovery never exports the raw master key: it uses an Argon2id-derived wrapping key plus XChaCha20-Poly1305, binds the envelope to the vault UUID, validates the recovered key against the backup before credential-store installation, and refuses automatic overwrite of an existing OS credential. Recovery envelopes remain sensitive and must be stored separately from backups with the passphrase protected independently. No signed Windows installer, formal security audit, malware scanning, exactly-once delivery or enterprise compliance certification is claimed.
 
 Never post real emails, OAuth files, tokens or decrypted databases in issues. Revoke exposed credentials and disable sending before investigating.
+
+## Supply Chain Security
+
+This project implements comprehensive supply chain security controls:
+
+- **GitHub Actions SLSA Provenance**: Every release build generates SLSA (Supply-chain Levels for Software Artifacts) provenance attestations, cryptographically binding the binary to the exact source commit, repository, workflow, and build environment.
+
+- **CycloneDX SBOM Attachments**: Each release includes a machine-readable Software Bill of Materials (SBOM) in CycloneDX 1.5 JSON format, with cryptographic attestation verifying the SBOM matches the exact built artifact.
+
+- **RustSec Audit**: `cargo audit` runs in CI against the RustSec advisory database to detect known vulnerabilities in dependencies.
+
+- **Dependency Licensing**: Automated license compliance checking ensures all transitive dependencies comply with the project's MIT license.
+
+- **Workflow Static Analysis**: The `workflow-lint.yml` workflow validates GitHub Actions YAML for security best practices and common misconfigurations.
+
+- **Artifact Signing Pipeline**: Optional Authenticode signing via Azure Artifact Signing provides Windows publisher verification, with fail-closed behavior when signing infrastructure is unavailable.
+
+- **Immutable Release Evidence**: All release artifacts (binaries, SBOMs, provenance attestations, signing records) are permanently archived and tied to the exact git commit via SHA256 hashes.
+
+These controls ensure that consumers can cryptographically verify the integrity and origin of every release artifact, protecting against supply chain attacks and unauthorized tampering.
