@@ -1,5 +1,7 @@
 # Enterprise dependency policy for Rejection Rejector.
 # Keep this aligned with the MIT application license and review any exception explicitly.
+# This file bans dependencies with problematic licenses, known security issues,
+# or maintenance concerns to ensure a secure and maintainable dependency tree.
 
 [graph]
 all-features = true
