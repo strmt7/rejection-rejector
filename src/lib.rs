@@ -9,6 +9,10 @@
     )
 )]
 //! Native local-first core. Constructing this library never sends email.
+//!
+//! All submodules are declared `pub` except `session` (private) to enable
+//! integrated testing and clean separation of concerns while maintaining
+//! encapsulation where appropriate.
 pub mod api;
 pub mod api_auth;
 pub mod audit_anchor;
