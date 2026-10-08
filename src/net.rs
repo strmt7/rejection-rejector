@@ -4,6 +4,13 @@ use serde::de::DeserializeOwned;
 use std::{io::Read, time::Duration};
 use zeroize::Zeroizing;
 
+/// Create an HTTP client with security-hardened settings:
+/// - HTTP/1.1 only (no HTTP/2 to reduce attack surface)
+/// - Never retry requests (prevents replay attacks)
+/// - Short timeouts to prevent resource exhaustion
+/// - No redirects (prevents open redirect vulnerabilities)
+/// - No proxy when local=true (for loopback-only safety)
+/// - User agent includes crate version for debugging
 pub fn client(timeout: u64, local: bool) -> Result<Client> {
     let mut builder = Client::builder()
         .http1_only()
@@ -19,7 +26,12 @@ pub fn client(timeout: u64, local: bool) -> Result<Client> {
     Ok(builder.build()?)
 }
 
-/// Do not include upstream bodies, credentials or echoed private values in errors.
+/// Extract JSON from an HTTP response with security hardening:
+/// - Ensures response status is success (2xx) - prevents processing error responses as data
+/// - Validates content length does not exceed provided limit - prevents resource exhaustion
+/// - Reads response body with strict size limits - prevents denial of service via large payloads
+/// - Omits upstream bodies, credentials, or echoed private values from errors - protects sensitive data
+/// - Returns deserialized JSON or maps parsing errors to generic "invalid JSON" - avoids leaking parsing details
 pub fn json<T: DeserializeOwned>(response: Response, limit: usize) -> Result<T> {
     ensure!(
         response.status().is_success(),
