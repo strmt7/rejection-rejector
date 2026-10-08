@@ -125,6 +125,24 @@ pub fn validate_draft(text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check if an email contains any hard blocks that would prevent sending.
+///
+/// This function implements the first line of defense against unintended email sends.
+/// It checks for various conditions that would make sending inappropriate or unsafe:
+/// - Non-Gmail sources (demo messages)
+/// - Account mismatches
+/// - Missing or invalid Message-ID
+/// - Invalid subject headers
+/// - Duplicate headers (from, reply-to, etc.)
+/// - Non-replyable recipients (noreply, mailerdaemon, etc.)
+/// - Self-replies
+/// - Automatic reply loops
+/// - Own agent messages
+/// - Messages already in sent/draft/trash/spam folders
+///
+/// Returns a vector of reason strings explaining why sending is blocked.
+/// An empty vector means no hard blocks were found and sending may proceed
+/// (subject to soft blocks and policy checks).
 pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
     let mut reasons = Vec::new();
     if email.stub.source != Source::Gmail {
