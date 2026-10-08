@@ -1,10 +1,10 @@
-use crate::vault::private_dir;
+use crate::vault::{InstanceLock, private_dir};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -61,6 +61,16 @@ impl Drop for SessionLease {
         if std::thread::panicking() {
             return;
         }
+        // Successful Engine teardown drops its workspace lock before this lease.
+        // A failed Engine::open unwinds local variables in the reverse order and
+        // still holds that lock: preserve its crash evidence. Taking the lock also
+        // prevents an old lease from racing a newly starting worker's marker.
+        let Some(directory) = self.marker_path.parent() else {
+            return;
+        };
+        let Ok(_cleanup_lock) = InstanceLock::acquire(directory) else {
+            return;
+        };
         let Ok(bytes) = read_bounded(&self.marker_path) else {
             return;
         };
@@ -76,8 +86,8 @@ impl Drop for SessionLease {
 fn reject_symlink_if_present(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => ensure!(
-            !metadata.file_type().is_symlink(),
-            "Runtime session marker must not be a symlink"
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "Runtime session marker must be a regular file, not a symlink"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -114,7 +124,15 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>> {
         metadata.len() <= MAX_MARKER_BYTES,
         "Runtime session marker exceeds size limit"
     );
-    Ok(fs::read(path)?)
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAX_MARKER_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_MARKER_BYTES,
+        "Runtime session marker exceeds size limit"
+    );
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -159,5 +177,62 @@ mod tests {
         assert!(lease.previous_unclean());
         drop(lease);
         assert!(!marker.exists());
+    }
+
+    #[test]
+    fn failed_startup_preserves_the_unclean_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join(MARKER_NAME);
+        let lock = InstanceLock::acquire(directory.path()).unwrap();
+        let lease = SessionLease::begin(directory.path()).unwrap();
+        // An early return from Engine::open drops the lease while holding lock.
+        drop(lease);
+        assert!(marker.is_file());
+        drop(lock);
+        let recovered = SessionLease::begin(directory.path()).unwrap();
+        assert!(recovered.previous_unclean());
+        drop(recovered);
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn normal_engine_field_drop_order_cleans_the_marker() {
+        struct Runtime {
+            _lock: InstanceLock,
+            _session: SessionLease,
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime {
+            _lock: InstanceLock::acquire(directory.path()).unwrap(),
+            _session: SessionLease::begin(directory.path()).unwrap(),
+        };
+        drop(runtime);
+        assert!(!directory.path().join(MARKER_NAME).exists());
+    }
+
+    #[test]
+    fn old_lease_cannot_remove_a_successor_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = SessionLease::begin(directory.path()).unwrap();
+        let successor_lock = InstanceLock::acquire(directory.path()).unwrap();
+        let successor = SessionLease::begin(directory.path()).unwrap();
+        drop(first);
+        let bytes = read_bounded(&directory.path().join(MARKER_NAME)).unwrap();
+        let marker: SessionMarker = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(marker.session_id, successor.session_id);
+        drop(successor_lock);
+        drop(successor);
+        assert!(!directory.path().join(MARKER_NAME).exists());
+    }
+
+    #[test]
+    fn directories_and_oversize_markers_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join(MARKER_NAME);
+        fs::create_dir(&marker).unwrap();
+        assert!(SessionLease::begin(directory.path()).is_err());
+        fs::remove_dir(&marker).unwrap();
+        fs::write(&marker, vec![b'x'; MAX_MARKER_BYTES as usize + 1]).unwrap();
+        assert!(read_bounded(&marker).is_err());
     }
 }
