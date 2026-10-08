@@ -27,6 +27,10 @@ pub fn status() -> Result<EmergencyStopStatus> {
 /// Privacy-safe status for health/readiness surfaces. A malformed or unreadable
 /// configured sentinel is treated as active so monitoring agrees with the
 /// fail-closed dispatch boundary without disclosing the configured path.
+///
+/// This fail-closed approach ensures that any uncertainty about the emergency-stop
+/// sentinel state results in blocking automatic sends, prioritizing safety over
+/// availability in accordance with the system's security objectives.
 pub fn status_fail_closed() -> EmergencyStopStatus {
     match status() {
         Ok(status) => status,
