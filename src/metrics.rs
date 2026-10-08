@@ -41,6 +41,18 @@ pub struct MetricsSnapshot {
     pub operational: OperationalIndicators,
 }
 
+/// Collect a privacy-safe metrics snapshot from the engine.
+///
+/// This function gathers all non-sensitive operational metrics for export
+/// via the authenticated loopback API. It deliberately excludes:
+/// - Mailbox addresses, message content, or recipient information
+/// - OAuth credentials, API tokens, or cryptographic keys
+/// - Personal data like signature, candidate facts, or employer details
+/// - Any field that could be used to identify individuals or infer
+///   sensitive information from metrics alone
+///
+/// The returned MetricsSnapshot contains only aggregate, privacy-minimal
+/// data suitable for external monitoring and alerting systems.
 pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     let counts = engine.db.counts(&engine.account)?;
     let integrity_ok = engine.db.readiness_check().is_ok();
