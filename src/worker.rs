@@ -1736,11 +1736,12 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        let job = engine
+        let mut items = engine
             .db
             .list(&engine.account, true, 0, 25)
-            .unwrap()
-            .remove(0);
+            .unwrap();
+        assert_eq!(items.len(), 3);
+        let job = items.pop().unwrap();
         let value = api_query(&engine, &format!("/v1/items/{}/automatic-policy", job.id)).unwrap();
         assert_eq!(value["eligible"], false);
         let codes = value["blocks"]

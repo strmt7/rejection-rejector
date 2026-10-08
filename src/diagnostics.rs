@@ -17,14 +17,18 @@ pub fn report(engine: &Engine) -> Result<Value> {
         crate::recovery::backup_isolation_status(&engine.directory, &engine.settings)?;
     let paused = engine.paused.load(std::sync::atomic::Ordering::SeqCst);
     let stopping = engine.stop.load(std::sync::atomic::Ordering::SeqCst);
-    let readiness = crate::readiness::assess(
-        &engine.settings,
-        integrity.is_ok(),
-        storage.runtime_write_safe,
-        engine.connected(),
-        engine.send_scope(),
-        paused,
-        stopping,
+    let emergency_stop = crate::emergency::status_fail_closed();
+    let readiness = crate::readiness::assess_context(
+        crate::readiness::RuntimeReadinessContext {
+            settings: &engine.settings,
+            database_integrity_ok: integrity.is_ok(),
+            storage_write_safe: storage.runtime_write_safe,
+            connected: engine.connected(),
+            send_scope: engine.send_scope(),
+            paused,
+            stopping,
+            emergency_stop_active: emergency_stop.active,
+        },
     );
     let operational =
         crate::readiness::operational_indicators(crate::readiness::OperationalContext {
@@ -133,6 +137,7 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "paused": paused
         },
         "enterprise_policy": policy_status,
+        "emergency_stop": emergency_stop,
         "audit_protection": {
             "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
             "external_file_anchor_configured": external_audit_anchor_configured,
@@ -251,6 +256,8 @@ mod tests {
             report["audit_protection"]["independent_anchor_configured"],
             false
         );
+        assert_eq!(report["emergency_stop"]["active"], false);
+        assert_eq!(report["emergency_stop"]["configured"], false);
         assert_eq!(report["database"]["integrity_ok"], true);
         assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
         if report["runtime_log"].is_object() {
