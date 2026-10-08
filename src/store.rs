@@ -1545,8 +1545,28 @@ impl Store {
 
     /// Reserve a send with an optional additional rolling recipient ceiling.
     ///
-    /// Automatic dispatch uses this stronger path; the legacy public API above
-    /// remains source-compatible for explicit Human Review/integrations.
+    /// This function creates a durable reservation for sending a job, preventing
+    /// race conditions and ensuring atomicity of the send operation. It:
+    ///
+    /// 1. Validates the job is in a reviewable state (Ready or Attention)
+    /// 2. Begins an immediate database transaction (acquires write lock)
+    /// 3. Loads the current job payload, revision, and state from storage
+    /// 4. Validates that the job hasn't been modified since the snapshot was taken
+    /// 5. Checks global daily send limit against the job's recipient count
+    /// 6. Checks optional rolling recipient ceiling (for Automatic mode)
+    /// 7. Verifies the job hasn't been sent already (state check)
+    /// 8. Marks the job as Sending state in the database
+    /// 9. Commits the transaction, making the reservation durable
+    ///
+    /// The immediate transaction behavior ensures that:
+    /// - No two processes can reserve the same job simultaneously
+    /// - The reservation is visible to other processes immediately after commit
+    /// - If the transaction fails, no partial state is left behind
+    /// - The reservation is atomic with respect to other database operations
+    ///
+    /// Automatic dispatch uses this stronger path with a recipient_limit;
+    /// the legacy public API above remains source-compatible for explicit
+    /// Human Review/integrations.
     pub fn reserve_send_with_recipient_limit(
         &mut self,
         snapshot: &Job,
