@@ -79,3 +79,5 @@ lto = "thin"
 codegen-units = 1
 strip = true
 overflow-checks = true
+
+# This Cargo.toml follows the 2024 edition and requires Rust 1.99.0 or newer
