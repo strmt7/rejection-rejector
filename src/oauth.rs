@@ -122,9 +122,14 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     fs::File::open(path)?
         .take(32769)
         .read_to_end(&mut config_bytes)?;
-    ensure!(config_bytes.len() <= 32768, "OAuth client file is too large");
+    ensure!(
+        config_bytes.len() <= 32768,
+        "OAuth client file is too large"
+    );
     let mut config: ClientFile = serde_json::from_slice(&config_bytes).map_err(|_| {
-        anyhow::anyhow!("Choose a Google Desktop app OAuth JSON file containing an installed object")
+        anyhow::anyhow!(
+            "Choose a Google Desktop app OAuth JSON file containing an installed object"
+        )
     })?;
     drop(config_bytes);
     ensure!(
@@ -175,8 +180,8 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
                 stream.set_read_timeout(Some(Duration::from_millis(250)))?;
                 stream.set_write_timeout(Some(Duration::from_secs(2)))?;
                 let deadline = (Instant::now() + Duration::from_secs(2)).min(login_deadline);
-                let result = callback::read_headers(&mut stream, cancelled, deadline)
-                    .and_then(|headers| {
+                let result =
+                    callback::read_headers(&mut stream, cancelled, deadline).and_then(|headers| {
                         let target = callback::request_target(&headers, local_port)?;
                         callback_code(target, &state)
                     });
