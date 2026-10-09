@@ -31,7 +31,7 @@ gui = ["dep:eframe", "dep:rfd", "dep:image"]
 anyhow = "1"
 argon2 = "0.5"
 base64 = "0.22"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"
