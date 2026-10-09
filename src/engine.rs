@@ -1357,6 +1357,13 @@ impl Engine {
                 "Dispatch cancelled before Gmail accepted any request",
             ));
         }
+        self.db
+            .log(
+                "delivery.dispatch_attempt",
+                Some(id),
+                "Initiating provider network request",
+            )
+            .map_err(|error| DispatchFailure::handled(error.to_string()))?;
         match self
             .gmail
             .as_mut()

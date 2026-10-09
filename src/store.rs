@@ -1732,6 +1732,29 @@ impl Store {
         tx.commit()?;
         Ok(j)
     }
+    pub fn has_dispatch_attempt_event(&self, item_id: &str) -> Result<bool> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT event_id, payload FROM events ORDER BY seq DESC")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let event_id: String = row.get(0)?;
+            let payload: Vec<u8> = row.get(1)?;
+            let e: AuditEvent = self
+                .vault
+                .open_value(&format!("event/{event_id}"), &payload)?;
+            if e.item_id.as_deref() == Some(item_id) {
+                if e.kind == "delivery.dispatch_attempt" {
+                    return Ok(true);
+                }
+                if e.kind == "delivery.reserved" {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub fn recover_interrupted_sends(&mut self) -> Result<usize> {
         let ids: Vec<String> = {
             let mut q = self
@@ -1741,7 +1764,14 @@ impl Store {
             r.collect::<std::result::Result<Vec<_>, _>>()?
         };
         for id in &ids {
-            self.finish_send(id, None)?;
+            if self.has_dispatch_attempt_event(id)? {
+                self.finish_send(id, None)?;
+            } else {
+                self.release_unsent_reservation(
+                    id,
+                    "Recovered never-dispatched reservation after interruption; released to Attention",
+                )?;
+            }
         }
         Ok(ids.len())
     }
@@ -2505,16 +2535,82 @@ mod tests {
         let v = Vault::random();
         let p = d.path().join("db");
         let mut db = Store::open(&p, v.clone()).unwrap();
-        let a = ready(&mut db, "a", "same");
-        let b = ready(&mut db, "b", "same");
+        let a = ready(&mut db, "a", "same-a");
         db.reserve_send(&a, 10, Utc::now()).unwrap();
-        assert!(db.reserve_send(&b, 10, Utc::now()).is_err());
+        drop(db);
+        let mut db = Store::open(&p, v).unwrap();
+        assert_eq!(db.recover_interrupted_sends().unwrap(), 1);
+        assert_eq!(db.get(&a.id).unwrap().state, JobState::Attention);
+        assert!(!db.thread_blocked(&a.stub.thread_key()).unwrap());
+    }
+
+    #[test]
+    fn never_dispatched_reservation_releases_to_attention_with_audit_and_no_delivery_row() {
+        let d = tempfile::tempdir().unwrap();
+        let v = Vault::random();
+        let p = d.path().join("db");
+        let mut db = Store::open(&p, v.clone()).unwrap();
+        let a = ready(&mut db, "never-dispatched", "nd-thread");
+        db.reserve_send(&a, 10, Utc::now()).unwrap();
+        assert_eq!(
+            db.conn
+                .query_row(
+                    "SELECT status FROM deliveries WHERE item_id=?1",
+                    [&a.id],
+                    |r| r.get::<usize, String>(0),
+                )
+                .unwrap(),
+            "reserved"
+        );
+        drop(db);
+        let mut db = Store::open(&p, v).unwrap();
+        assert_eq!(db.recover_interrupted_sends().unwrap(), 1);
+        let restored = db.get(&a.id).unwrap();
+        assert_eq!(restored.state, JobState::Attention);
+        assert!(
+            restored.flags.iter().any(|f| {
+                f.contains("Recovered never-dispatched reservation after interruption")
+            })
+        );
+        let delivery_row_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM deliveries WHERE item_id=?1",
+                [&a.id],
+                |r| r.get::<usize, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(delivery_row_count, 0);
+        let events = db.events(0, 1000).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "delivery.rejected" && e.item_id.as_deref() == Some(&a.id))
+        );
+        assert!(!db.thread_blocked(&a.stub.thread_key()).unwrap());
+    }
+
+    #[test]
+    fn dispatch_attempt_event_keeps_reservation_uncertain_on_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let v = Vault::random();
+        let p = d.path().join("db");
+        let mut db = Store::open(&p, v.clone()).unwrap();
+        let a = ready(&mut db, "maybe-dispatched", "md-thread");
+        db.reserve_send(&a, 10, Utc::now()).unwrap();
+        db.log(
+            "delivery.dispatch_attempt",
+            Some(&a.id),
+            "Initiating provider network request",
+        )
+        .unwrap();
         drop(db);
         let mut db = Store::open(&p, v).unwrap();
         assert_eq!(db.recover_interrupted_sends().unwrap(), 1);
         assert_eq!(db.get(&a.id).unwrap().state, JobState::Uncertain);
-        assert!(db.reserve_send(&b, 10, Utc::now()).is_err());
+        assert!(db.thread_blocked(&a.stub.thread_key()).unwrap());
     }
+
     #[test]
     fn definite_provider_rejection_releases_reservation_for_review() {
         let d = tempfile::tempdir().unwrap();
