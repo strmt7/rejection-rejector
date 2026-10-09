@@ -1701,11 +1701,15 @@ impl Store {
             .as_ref()
             .map(|p| self.vault.seal(&format!("delivery/{id}"), p))
             .transpose()?;
-        tx.execute(
+let deliveries_changed = tx.execute(
             "UPDATE deliveries SET status=?2,provider_id=?3 WHERE item_id=?1",
             params![id, j.state.db(), encrypted],
         )?;
-        tx.execute(
+        ensure!(
+            deliveries_changed == 1,
+            "Delivery record was not updated; state or item may have changed"
+        );
+        let items_changed = tx.execute(
             "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1 AND state=?6 AND revision=?7",
             params![
                 id,
@@ -1717,6 +1721,10 @@ impl Store {
                 original_revision,
             ],
         )?;
+        ensure!(
+            items_changed == 1,
+            "Item record was not updated; concurrent modification detected"
+        );
         event(
             &tx,
             &self.vault,
