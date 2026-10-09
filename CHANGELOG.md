@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Adds a read-only, bounded Windows ZIP verifier with adversarial package tests; validates exact file/checksum coverage, build/contract/source identities and complete recorded release evidence without extracting or executing the package.
+- Tightens unsigned release verification to require `NotSigned`; error states cannot be labelled unsigned. Binds both signing records to executable SHA-256 values and requires publisher/timestamp evidence in signed mode.
+- Stages only committed docs/scripts, excluding caches and other local artifacts, and verifies the package before attestation and again before upload. Operator-tool tests now run in both Windows and Linux CI.
+
 - Requires successful exact-commit repository integrity before packaging, rejects tracked-source modifications during evidence collection, and invalidates deep evidence after checkout/encoding configuration changes.
 - Checks both the fixed pre-corruption API milestone and the immediate parent with all and no Cargo features; persists compatibility logs rather than treating a broken baseline as a passing comparison.
 
