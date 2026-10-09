@@ -118,4 +118,5 @@ Enterprise policy can be independently authenticated with SHA-256 pinning, Ed255
 CI runs actual builds/tests. A Linux native screenshot is not Windows visual acceptance. Live Gmail authorization/delivery and physical 16 GiB GPU verification require the owner's environment. Application code is MIT; Ollama and model weights retain their own licenses.
 #   C o m m i t   8 1 6  
  #   C o m m i t   8 1 7  
+ #   C o m m i t   8 1 8  
  
