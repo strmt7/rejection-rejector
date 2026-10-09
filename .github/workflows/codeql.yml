@@ -19,6 +19,9 @@ jobs:
   analyze:
     name: CodeQL Rust security-extended
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     timeout-minutes: 25
     steps:
       - name: Checkout
