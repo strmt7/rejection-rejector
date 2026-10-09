@@ -19,15 +19,15 @@ cargo run --locked --no-default-features --bin rr -- demo
 
 Deterministic generated state-machine invariants use fixed seeded randomness to exercise thousands of enterprise-policy, anti-rollback and Automatic-readiness combinations on every all-feature suite run. They are reproducible regressions, not probabilistic fuzz claims. Production builds additionally deny `unwrap`, `expect`, `panic!` and `unreachable!` through clippy outside `#[cfg(test)]`; explicit error propagation is the required runtime behavior.
 
-Both Windows and Ubuntu run these checks. Windows additionally builds optimized GUI/CLI executables and packages them with documentation, COMMIT.txt, toolchain evidence, Cargo.lock and per-file SHA-256 sums. A separate SHA256.txt covers the complete Windows ZIP. Checksums detect file changes; these are unsigned builds, not publisher-identity attestations.
+Both Windows and Ubuntu run these checks and the Python operator-tool regression suite. Rust CI uploads diagnostic logs, source archives and applicable GUI/manifest evidence, not a deployable Windows ZIP. User-facing packages have one CI entry point: the manual Attested Windows package workflow, with explicit PACKAGE confirmation and all release gates. Local build scripts and the separate reproducibility job remain available for development verification; their output is not a certified release.
 
 ## Change-aware deep verification
 
-Expensive workflows are automatically triggered only by the subsystems whose changes can invalidate their evidence. Fuzzing runs when mail/MIME/policy/fuzz code or its dependency graph changes. Enterprise deep verification runs when storage, recovery, vault, API/worker contract, recovery/concurrency tests or their dependency graph changes. Coverage and mutation testing have analogous path-aware triggers. This keeps release evidence causally connected to relevant code changes without running every expensive campaign for documentation-only commits.
+All five deep workflows share a conservative invalidation boundary: source, tests, fuzz targets, operator scripts, build and workflow configuration, checkout/encoding configuration, Windows resources and embedded API/policy documents. Their trigger paths must cover the release guard's exact input set. Ordinary documentation-only changes can reuse recent ancestor evidence only when those inputs are unchanged. See [release gates](RELEASE_GATES.md).
 
 ## Release evidence freshness and lineage
 
-The manual attested-package workflow does not accept an arbitrary recent green run. For fuzzing, coverage, mutation testing and enterprise deep verification it selects the **latest** run on `main`, requires that run itself to be completed successfully and within its age window, and verifies through GitHub's compare API that the evidence commit is an ancestor of the exact release commit. A newer failed, cancelled or still-running deep-quality job blocks packaging rather than allowing an older success to mask it.
+The manual attested-package workflow does not accept an arbitrary recent green run. For all five deep workflows it queries the **latest** run on `main`, checks identity, success and age, and uses the full local Git history to prove ancestry and unchanged build/test inputs. Seven exact-commit workflows, including repository integrity, must also pass. A newer failed, cancelled or still-running job cannot be hidden by an older success. Evidence and the completed ZIP are checked again immediately before upload.
 
 ## Scheduled enterprise deep verification
 

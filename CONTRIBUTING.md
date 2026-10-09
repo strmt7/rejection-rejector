@@ -10,6 +10,15 @@ Each commit should be independently reviewable and preserve the repository's fai
 
 External contributors should open an issue with a patch/diff, reproducible test case, or proposed change. The maintainer can apply accepted changes atomically to `main`. Do not include secrets, real mailbox data, proprietary employer correspondence, model weights, or local recovery material.
 
+## No commit quotas or manufactured progress
+
+Do not add/remove temporary files, append commit-number markers, or split comments
+into commits merely to increase a commit count. Each change must have a reviewable
+purpose and appropriate evidence. Commit counts, comments and test counts are not
+production-readiness certificates. Use explicit UTF-8 writes; Git line-ending
+rules do not repair mixed character encodings. Preserve the failed historical
+record and use forward fixes rather than rewriting history to conceal defects.
+
 ## Quality bar
 
 Before a change is treated as release-quality:

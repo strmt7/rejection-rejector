@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removes the legacy manual Windows-ZIP path from ordinary Rust CI so user-facing packages cannot bypass the attested release gates. Preserves normal Windows/Linux builds, source/debug evidence and manual verification runs.
+- Records the original 100-commit incident scope and reproducible audit procedure, prohibits commit-count padding, and aligns testing documentation with actual source-bound release checks.
+
 - Adds a read-only, bounded Windows ZIP verifier with adversarial package tests; validates exact file/checksum coverage, build/contract/source identities and complete recorded release evidence without extracting or executing the package.
 - Tightens unsigned release verification to require `NotSigned`; error states cannot be labelled unsigned. Binds both signing records to executable SHA-256 values and requires publisher/timestamp evidence in signed mode.
 - Stages only committed docs/scripts, excluding caches and other local artifacts, and verifies the package before attestation and again before upload. Operator-tool tests now run in both Windows and Linux CI.
