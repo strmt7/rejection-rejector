@@ -32,8 +32,6 @@ Development CI compiles and tests the Windows desktop/CLI on every `main` commit
 
 Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).
 
-Enterprise readiness: run `.\rr.exe doctor` to verify production readiness including emergency-stop integration, mailbox synchronization, analysis completion, and automatic dispatch eligibility. The diagnostics JSON report (`.\rr.exe diagnostics --out file.json`) includes an `emergency_stop` field showing the current sentinel state for audit and automation purposes.
-
 Safe offline preview:
 
 ```powershell
@@ -116,7 +114,3 @@ Enterprise policy can be independently authenticated with SHA-256 pinning, Ed255
 - [Original implementation plan](docs/PLAN.md)
 
 CI runs actual builds/tests. A Linux native screenshot is not Windows visual acceptance. Live Gmail authorization/delivery and physical 16 GiB GPU verification require the owner's environment. Application code is MIT; Ollama and model weights retain their own licenses.
-#   C o m m i t   8 1 6  
- #   C o m m i t   8 1 7  
- #   C o m m i t   8 1 8  
- 
