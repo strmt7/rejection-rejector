@@ -1,4 +1,5 @@
 use rand::Rng;
+use rand::rngs::OsRng;
 use std::time::{Duration, Instant};
 
 const MAX_PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -105,7 +106,7 @@ fn jitter(delay: Duration, cap: Duration) -> Duration {
     if spread_seconds == 0 || delay >= cap {
         return delay.min(cap);
     }
-    let extra = rand::thread_rng().gen_range(0..=spread_seconds);
+    let extra = OsRng.gen_range(0..=spread_seconds);
     delay.saturating_add(Duration::from_secs(extra)).min(cap)
 }
 
