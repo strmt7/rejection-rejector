@@ -170,11 +170,13 @@ pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
     }
     match email.recipient() {
         Ok(to) => {
+            // Parse the local part of the recipient email address
+            // Handle edge cases: missing @ sign, empty string, etc.
             let local = to
                 .split('@')
                 .next()
                 .unwrap_or("")
-                .replace(['-', '_', '.'], "");
+                .replace(['-', '_', '."], "");
             if ["noreply", "donotreply", "mailerdaemon", "postmaster"]
                 .iter()
                 .any(|p| local.contains(p))
