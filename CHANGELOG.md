@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Requires successful exact-commit repository integrity before packaging, rejects tracked-source modifications during evidence collection, and invalidates deep evidence after checkout/encoding configuration changes.
+- Checks both the fixed pre-corruption API milestone and the immediate parent with all and no Cargo features; persists compatibility logs rather than treating a broken baseline as a passing comparison.
+
 - Diagnostics (`rr diagnostics`, GUI diagnostics export) now derive operational readiness from the live enterprise emergency-stop sentinel (fail-closed) and expose an `emergency_stop` field, matching `rr doctor`, `/v1/health` and the GUI status bar. Previously the report could report dispatch readiness as healthy while an active emergency stop blocked every automatic send.
 - Replaced the stale "Version 0.1 exposes a read-only integration API" guard text with a version-neutral statement of the current read-only contract.
 - Aligned the mutation-testing workflow trigger paths with the actual `cargo-mutants` examine scope, so a push can no longer imply mutation evidence for modules the campaign deliberately excludes.

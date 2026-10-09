@@ -4,11 +4,11 @@ The manual `Attested Windows package` workflow still requires `PACKAGE`. These c
 
 ## Automated evidence
 
-`scripts/release_guard.py evidence` checks six exact-commit workflows and five deep verification workflows. It queries each workflow separately, never filters out failed or cancelled runs, and validates the workflow file, name, repository, branch, event, run ID, attempt, commit, completion and timestamp. A running or absent result is not success. Evidence older than eight days or with an invalid/future timestamp is rejected.
+`scripts/release_guard.py evidence` checks seven exact-commit workflows and five deep verification workflows. It queries each workflow separately, never filters out failed or cancelled runs, and validates the workflow file, name, repository, branch, event, run ID, attempt, commit, completion and timestamp. A running or absent result is not success. Evidence older than eight days or with an invalid/future timestamp is rejected.
 
-Deep evidence must come from an ancestor of the release commit with unchanged source, tests, fuzz targets, build configuration, workflow configuration, operator scripts, Windows resources and embedded API/policy contracts. An older green run cannot certify subsequently changed program inputs. Documentation-only changes may reuse recent ancestor evidence. Full Git history is required. The five deep workflows have matching invalidation triggers, verified by offline tests.
+Deep evidence must come from an ancestor of the release commit with unchanged source, tests, fuzz targets, build configuration, workflow and checkout/encoding configuration, operator scripts, Windows resources and embedded API/policy contracts. An older green run cannot certify subsequently changed program inputs. Documentation-only changes may reuse recent ancestor evidence. Full Git history is required. The five deep workflows have matching invalidation triggers, verified by offline tests.
 
-The release workflow checks the checkout and remote main before and after collecting evidence. It repeats the check immediately before uploading the package. Initial and final machine-readable reports retain run IDs, attempts and source commits. A moving main blocks publication. There remains an unavoidable interval between the last external-state read and upload; this is not a distributed lock on GitHub.
+The release workflow checks the checkout identity, rejects tracked-file modifications, and checks remote main before and after collecting evidence. The committed-source integrity workflow is a mandatory exact-commit gate, not an advisory badge. It repeats the check immediately before uploading the package. Initial and final machine-readable reports retain run IDs, attempts and source commits. A moving main blocks publication. There remains an unavoidable interval between the last external-state read and upload; this is not a distributed lock on GitHub.
 
 ## Independent executable audits
 
@@ -35,3 +35,20 @@ The report deliberately does not establish owner-environment acceptance. Publish
 - Failed startup retains its runtime-session marker; cleanup takes the workspace lock and cannot erase a successor's marker.
 - OAuth callback requests require complete bounded HTTP headers, a unique literal-loopback Host and no body; absolute deadlines and cancellation checks precede code exchange.
 - Temporary HTTP JSON buffers and OAuth client/token material use explicit zeroizing ownership. This does not claim to wipe all copies inside third-party libraries, operating-system memory or swap.
+
+## Stable public-API reference after the corruption incident
+
+The public Rust API workflow compares both all-feature and no-feature configurations
+against two explicit references: the immediate parent **and** the fixed, pre-corruption
+`8d4ada1527635ced0c04fc27e753e9c3603d2646` milestone recorded in
+`.cargo/semver-baseline.txt`. No failed comparison is ignored and there is no search
+for a conveniently passing baseline. Missing ancestry, invalid baseline identity,
+compilation failure or an API violation blocks the check. Logs retain both references.
+
+On repaired commit `1f244ce`, current code built but its immediate parent `803fb0b`
+still contained the malformed character literal in `mail.rs`; the resulting SemVer
+failure was a **baseline build error**, not a demonstrated incompatibility. That
+historical failure remains in the record. Subsequent commits have a buildable parent
+and must additionally satisfy the fixed baseline, preventing incremental API drift.
+Updating the fixed reference is an explicit, separately reviewed compatibility-policy
+change; it is not a way to dismiss an unexpected failure.
