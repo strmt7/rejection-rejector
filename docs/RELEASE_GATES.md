@@ -52,3 +52,13 @@ historical failure remains in the record. Subsequent commits have a buildable pa
 and must additionally satisfy the fixed baseline, preventing incremental API drift.
 Updating the fixed reference is an explicit, separately reviewed compatibility-policy
 change; it is not a way to dismiss an unexpected failure.
+
+## Package consistency boundary
+
+The final ZIP must pass the read-only verifier before attestation and must retain
+the same checksum through the final pre-upload verification. Each signature record
+is bound to the corresponding packaged executable hash. Only `NotSigned` is
+accepted in unsigned mode; every other non-valid status fails closed. Docs/scripts
+are taken from the committed Git archive, not untracked workspace contents.
+See [Package verification](PACKAGE_VERIFICATION.md) for the independent operator
+procedure and the distinction between internal checksums and publisher trust.

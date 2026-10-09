@@ -206,6 +206,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts | Out-Null
+          Set-StrictMode -Version Latest
+          if ($env:SIGNING_MODE -cnotin @('unsigned', 'azure-artifact-signing')) {
+            throw 'Unknown package signing mode'
+          }
           $records = @()
           foreach ($path in @(
             'target/release/rejection-rejector.exe',
@@ -215,11 +219,20 @@ jobs:
             if ($env:SIGNING_MODE -eq 'azure-artifact-signing' -and $signature.Status -ne 'Valid') {
               throw "Authenticode verification failed for ${path}: $($signature.Status) $($signature.StatusMessage)"
             }
-            if ($env:SIGNING_MODE -eq 'unsigned' -and $signature.Status -eq 'Valid') {
-              throw "Unsigned packaging mode unexpectedly produced a publisher-signed executable: $path"
+            if ($env:SIGNING_MODE -eq 'unsigned' -and $signature.Status -ne 'NotSigned') {
+              throw "Unsigned packaging requires NotSigned, not $($signature.Status): $path"
+            }
+            if ($env:SIGNING_MODE -eq 'azure-artifact-signing' -and
+                (-not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate)) {
+              throw "Signed executable lacks publisher or timestamp evidence: $path"
+            }
+            if ($env:SIGNING_MODE -eq 'unsigned' -and
+                ($signature.SignerCertificate -or $signature.TimeStamperCertificate)) {
+              throw "Unsigned executable has inconsistent certificate evidence: $path"
             }
             $records += [ordered]@{
               file = [IO.Path]::GetFileName($path)
+              sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
               requested_mode = $env:SIGNING_MODE
               status = [string]$signature.Status
               signer_subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
@@ -241,11 +254,17 @@ jobs:
           SIGNING_MODE: ${{ inputs.signing }}
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          if (Test-Path -LiteralPath artifacts/windows) {
+            throw 'Package staging directory must be fresh'
+          }
+          New-Item -ItemType Directory artifacts/windows | Out-Null
           Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
-          Copy-Item -Recurse docs artifacts/windows/docs
-          Copy-Item -Recurse scripts artifacts/windows/scripts
+          # Stage only committed documents/operator scripts, not caches or local files.
+          $sourceArchive = Join-Path $env:RUNNER_TEMP 'rr-package-tracked-sources.zip'
+          git archive --format=zip "--output=$sourceArchive" HEAD -- docs scripts
+          if ($LASTEXITCODE -ne 0) { throw 'Could not archive committed package sources' }
+          Expand-Archive -LiteralPath $sourceArchive -DestinationPath artifacts/windows
           Copy-Item artifacts/release-evidence.json artifacts/windows/
           Copy-Item Cargo.lock artifacts/windows/
           Copy-Item artifacts/build-info.json,artifacts/contract-info.json,artifacts/signing.json,artifacts/rejection-rejector.cdx.json artifacts/windows/
@@ -266,6 +285,16 @@ jobs:
           "$packageHash  $packageName" | Set-Content artifacts/SHA256.txt -Encoding ascii
           "package_path=$packagePath" | Add-Content $env:GITHUB_OUTPUT
           "package_name=$packageName" | Add-Content $env:GITHUB_OUTPUT
+      - name: Verify final package contents without extracting or executing them
+        shell: pwsh
+        env:
+          PACKAGE_PATH: ${{ steps.package.outputs.package_path }}
+          SIGNING_MODE: ${{ inputs.signing }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packageHash = (Get-FileHash -LiteralPath $env:PACKAGE_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+          python scripts/verify_package.py $env:PACKAGE_PATH --expected-commit $env:GITHUB_SHA --signing-mode $env:SIGNING_MODE --expected-sha256 $packageHash --report artifacts/package-verification.json
+          if ($LASTEXITCODE -ne 0) { throw 'Final package consistency verification failed' }
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -310,6 +339,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python scripts/release_guard.py evidence --repository $env:GITHUB_REPOSITORY --commit $env:GITHUB_SHA --output artifacts/release-evidence-final.json
           if ($LASTEXITCODE -ne 0) { throw 'Release evidence changed while packaging' }
+      - name: Verify package bytes are unchanged after attestation
+        shell: pwsh
+        env:
+          PACKAGE_PATH: ${{ steps.package.outputs.package_path }}
+          SIGNING_MODE: ${{ inputs.signing }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $report = Get-Content -LiteralPath artifacts/package-verification.json -Raw | ConvertFrom-Json
+          python scripts/verify_package.py $env:PACKAGE_PATH --expected-commit $env:GITHUB_SHA --signing-mode $env:SIGNING_MODE --expected-sha256 $report.archive_sha256 --report artifacts/package-verification-final.json
+          if ($LASTEXITCODE -ne 0) { throw 'Package bytes changed after attestation' }
       - name: Upload package and evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
