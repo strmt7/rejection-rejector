@@ -1,5 +1,4 @@
-use rand::Rng;
-use rand::rngs::OsRng;
+use rand::{RngCore, rngs::OsRng};
 use std::time::{Duration, Instant};
 
 const MAX_PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -102,17 +101,70 @@ impl RetryGate {
 }
 
 fn jitter(delay: Duration, cap: Duration) -> Duration {
+    jitter_with_rng(delay, cap, &mut OsRng)
+}
+
+fn jitter_with_rng(delay: Duration, cap: Duration, rng: &mut impl RngCore) -> Duration {
     let spread_seconds = delay.as_secs() / 5;
     if spread_seconds == 0 || delay >= cap {
         return delay.min(cap);
     }
-    let extra = OsRng.gen_range(0..=spread_seconds);
+    // Jitter spreads retry load; it is not a cryptographic security boundary.
+    // Preserve the bounded backoff when OS entropy is temporarily unavailable.
+    let mut bytes = [0u8; 8];
+    if rng.try_fill_bytes(&mut bytes).is_err() {
+        return delay.min(cap);
+    }
+    let extra = u64::from_le_bytes(bytes) % (spread_seconds + 1);
     delay.saturating_add(Duration::from_secs(extra)).min(cap)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EntropyFailure;
+
+    impl RngCore for EntropyFailure {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.fill(0);
+        }
+        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), rand::Error> {
+            let error = std::io::Error::other("synthetic entropy outage");
+            Err(rand::Error::new(error))
+        }
+    }
+
+    #[test]
+    fn entropy_failure_preserves_backoff_without_panicking() {
+        let delay = Duration::from_secs(30);
+        let cap = Duration::from_secs(60);
+        assert_eq!(jitter_with_rng(delay, cap, &mut EntropyFailure), delay);
+        assert_eq!(jitter_with_rng(cap, delay, &mut EntropyFailure), delay);
+    }
+
+    #[test]
+    fn seeded_jitter_never_retries_early_or_exceeds_cap() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(0x5252_2026_1009);
+        for seconds in 0..=120 {
+            let delay = Duration::from_secs(seconds);
+            let cap = Duration::from_secs(90);
+            for _ in 0..32 {
+                let jittered = jitter_with_rng(delay, cap, &mut rng);
+                assert!(jittered >= delay.min(cap));
+                assert!(jittered <= cap);
+                let upper = delay.saturating_add(Duration::from_secs(seconds / 5));
+                assert!(jittered <= upper);
+            }
+        }
+    }
 
     #[test]
     fn repeated_failures_open_and_success_closes_circuit() {

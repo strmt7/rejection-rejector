@@ -135,7 +135,6 @@ pub fn report(engine: &Engine) -> Result<Value> {
             "paused": paused
         },
         "enterprise_policy": policy_status,
-        // emergency_stop reflects the live state of the RR_EMERGENCY_STOP_FILE sentinel (fail-closed)
         "emergency_stop": emergency_stop,
         "audit_protection": {
             "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
@@ -201,25 +200,6 @@ mod tests {
     use crate::engine::Engine;
     use std::sync::{Arc, atomic::AtomicBool};
 
-    /// Test that the diagnostics report omits all sensitive private information.
-    ///
-    /// This test verifies that the JSON diagnostics output does not leak:
-    /// - Email addresses (demo@example.invalid)
-    /// - Employer names (Northstar Materials)
-    /// - Person names (Alex Morgan)
-    /// - Signature (SENSITIVE_SIGNATURE_CANARY)
-    /// - Candidate context (SENSITIVE_PROFILE_CANARY)
-    /// - API token (SENSITIVE_API_TOKEN_CANARY)
-    /// - Refresh token (SENSITIVE_REFRESH_TOKEN_CANARY)
-    ///
-    /// It also verifies that the privacy section correctly reports:
-    /// - contains_api_token: false
-    /// - contains_oauth_credentials: false
-    /// - contains_candidate_facts: false
-    /// - automatic_upload: false
-    ///
-    /// And that the emergency_stop section reflects the sentinel state
-    /// (both active and configured should be false in this test).
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {
         let root = tempfile::tempdir().unwrap();
@@ -245,7 +225,7 @@ mod tests {
         let text = report.to_string();
         for forbidden in [
             "demo@example.invalid",
-            "Northstar Materials", 
+            "Northstar Materials",
             "Alex Morgan",
             "SENSITIVE_SIGNATURE_CANARY",
             "SENSITIVE_PROFILE_CANARY",
