@@ -1701,7 +1701,7 @@ impl Store {
             .as_ref()
             .map(|p| self.vault.seal(&format!("delivery/{id}"), p))
             .transpose()?;
-let deliveries_changed = tx.execute(
+        let deliveries_changed = tx.execute(
             "UPDATE deliveries SET status=?2,provider_id=?3 WHERE item_id=?1",
             params![id, j.state.db(), encrypted],
         )?;
