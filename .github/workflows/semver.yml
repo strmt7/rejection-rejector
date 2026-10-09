@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout current main with parent history
+      - name: Checkout exact source and complete compatibility history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
       - name: Pinned Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
@@ -34,9 +34,32 @@ jobs:
           tool: cargo-semver-checks@0.50.0
           checksum: true
           fallback: none
-      - name: Verify public API compatibility with previous main commit
+      - name: Verify stable and previous-commit API baselines
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p artifacts
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          stable="$(cat .cargo/semver-baseline.txt)"
+          [[ "$stable" =~ ^[0-9a-f]{40}$ ]]
           parent="$(git rev-parse HEAD^)"
-          cargo semver-checks --package rejection-rejector --baseline-rev "$parent"
+          test "$stable" != "$GITHUB_SHA"
+          git merge-base --is-ancestor "$stable" "$parent"
+          printf '%s\n' "$GITHUB_SHA" > artifacts/COMMIT.txt
+          printf 'stable %s\nparent %s\n' "$stable" "$parent" > artifacts/api-baselines.txt
+          cargo semver-checks --version > artifacts/tool-version.txt
+          for baseline in "$stable" "$parent"; do
+            for feature_set in all-features only-explicit-features; do
+              cargo semver-checks --package rejection-rejector --baseline-rev "$baseline" "--$feature_set" \
+                2>&1 | tee "artifacts/semver-$baseline-$feature_set.log"
+            done
+          done
+          git diff --exit-code HEAD
+      - name: Retain exact compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rejection-rejector-semver-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

@@ -23,6 +23,7 @@ EXACT = {
     "codeql.yml": "CodeQL Rust security",
     "scorecard.yml": "OpenSSF Scorecard",
     "workflow-lint.yml": "Workflow static analysis",
+    "repository-integrity.yml": "Repository integrity",
 }
 DEEP = {
     "fuzz.yml": "Rust fuzzing",
@@ -36,6 +37,7 @@ INPUT_PREFIXES = ("src/", "tests/", "fuzz/", "scripts/", "config/", ".cargo/", "
 INPUT_FILES = frozenset({
     "Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml",
     "rustfmt.toml", ".rustfmt.toml", "deny.toml",
+    ".gitattributes", ".gitignore", ".editorconfig",
     "docs/openapi-v1.json", "docs/openapi-v1-baseline.json",
     "docs/enterprise-policy.schema.json",
 })
@@ -148,6 +150,8 @@ def check_main(repository: str, commit: str,
                execute: Callable[[list[str]], str] = checked_output) -> None:
     if execute(["git", "rev-parse", "HEAD"]).strip() != commit:
         raise GateError("Checkout does not match the release commit")
+    # A matching HEAD is insufficient if a build or operator changed tracked files.
+    execute(["git", "diff", "--exit-code", "HEAD", "--"])
     remote = execute(["gh", "api", f"repos/{repository}/git/ref/heads/main", "--jq", ".object.sha"])
     if remote.strip() != commit:
         raise GateError("main moved during release validation; use the new head")

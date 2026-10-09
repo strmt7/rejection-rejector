@@ -106,7 +106,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
         with self.assertRaises(gate.GateError):
             gate.check_main(REPO, HEAD, lambda args: HEAD if args[0] == "git" else BASE)
 
-    def test_complete_evidence_is_bound_to_all_eleven_workflows(self):
+    def test_complete_evidence_is_bound_to_all_required_workflows(self):
         def execute(args):
             if args[0] == "git":
                 return HEAD if args[1] == "rev-parse" else ""
@@ -115,7 +115,8 @@ class ReleaseEvidenceTests(unittest.TestCase):
             workflow = args[2].split("/workflows/")[1].split("/")[0]
             return json.dumps([good_run(workflow)])
         report = gate.collect_evidence(REPO, HEAD, NOW, execute)
-        self.assertEqual(len(report["automated_evidence"]), 11)
+        self.assertEqual(len(report["automated_evidence"]), 12)
+        self.assertIn("repository-integrity.yml", gate.EXACT)
         self.assertEqual(report["source_commit"], HEAD)
         self.assertIn("not established", report["owner_environment_acceptance"])
 
@@ -130,6 +131,34 @@ class ReleaseEvidenceTests(unittest.TestCase):
             gate.checked_output(command)
         self.assertNotIn("PRIVATE_CANARY", str(caught.exception))
         self.assertIn("7", str(caught.exception))
+
+    def test_checkout_encoding_config_invalidates_old_evidence(self):
+        for path in (".gitattributes", ".gitignore", ".editorconfig"):
+            self.assertTrue(gate.affects_evidence(path), path)
+
+    def test_dirty_release_checkout_is_rejected_before_github_access(self):
+        calls = []
+        def execute(args):
+            calls.append(args)
+            if args[:2] == ["git", "rev-parse"]:
+                return HEAD
+            if args[:2] == ["git", "diff"]:
+                raise gate.GateError("modified tracked file")
+            self.fail("Remote API must not run after local source integrity fails")
+        with self.assertRaises(gate.GateError):
+            gate.check_main(REPO, HEAD, execute)
+        self.assertEqual(len(calls), 2)
+
+    def test_no_baseline_skip_or_allow_failure_in_compatibility_workflow(self):
+        text = (ROOT / ".github/workflows/semver.yml").read_text()
+        baseline = (ROOT / ".cargo/semver-baseline.txt").read_text().strip()
+        self.assertRegex(baseline, r"^[0-9a-f]{40}$")
+        self.assertIn("fetch-depth: 0", text)
+        self.assertIn('for baseline in "$stable" "$parent"', text)
+        self.assertIn("all-features only-explicit-features", text)
+        self.assertIn('git merge-base --is-ancestor "$stable" "$parent"', text)
+        self.assertNotIn("continue-on-error", text)
+        self.assertNotIn("|| true", text)
 
     def test_deep_triggers_cover_all_invalidation_inputs(self):
         required = {p + "**" for p in gate.INPUT_PREFIXES} | set(gate.INPUT_FILES)
