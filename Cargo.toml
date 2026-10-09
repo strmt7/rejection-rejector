@@ -53,7 +53,7 @@ tiny_http = "0.12"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 webbrowser = "1"
-which = "7"
+which = "8"
 zeroize = "1"
 # Temporary explicit pin: 0.8.3 is yanked; yoke 0.8.3 accepts ^0.8.2.
 yoke-derive = "=0.8.2"
