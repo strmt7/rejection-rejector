@@ -1636,6 +1636,8 @@ impl Store {
             job.state == JobState::Sending,
             "No reserved send is available to cancel"
         );
+        let original_state = job.state;
+        let original_revision = job.revision;
         job.state = JobState::Attention;
         job.revision += 1;
         job.updated_at = Utc::now();
@@ -1652,13 +1654,15 @@ impl Store {
             "Reserved delivery was not found; refusing to release conversation lock"
         );
         tx.execute(
-            "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1",
+            "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1 AND state=?6 AND revision=?7",
             params![
                 id,
                 job.state.db(),
                 job.revision,
                 job.updated_at.timestamp(),
-                self.vault.seal(&format!("item/{id}"), &job)?
+                self.vault.seal(&format!("item/{id}"), &job)?,
+                original_state.db(),
+                original_revision,
             ],
         )?;
         event(
@@ -1679,6 +1683,8 @@ impl Store {
             matches!(j.state, JobState::Sending | JobState::Uncertain),
             "No unresolved delivery"
         );
+        let original_state = j.state;
+        let original_revision = j.revision;
         j.state = if provider_id.is_some() {
             JobState::Sent
         } else {
@@ -1700,13 +1706,15 @@ impl Store {
             params![id, j.state.db(), encrypted],
         )?;
         tx.execute(
-            "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1",
+            "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1 AND state=?6 AND revision=?7",
             params![
                 id,
                 j.state.db(),
                 j.revision,
                 j.updated_at.timestamp(),
-                self.vault.seal(&format!("item/{id}"), &j)?
+                self.vault.seal(&format!("item/{id}"), &j)?,
+                original_state.db(),
+                original_revision,
             ],
         )?;
         event(
