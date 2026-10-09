@@ -15,6 +15,7 @@ import stat
 import struct
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -350,7 +351,7 @@ def verify(path: Path, commit: str, signing: str, expected_sha256: str | None = 
                 "scope": "Internal package consistency only; publisher identity requires independent signature/attestation verification."}
     except PackageError:
         raise
-    except (OSError, UnicodeError, zipfile.BadZipFile, ValueError, RuntimeError, NotImplementedError, EOFError, KeyError, TypeError) as error:
+    except (OSError, UnicodeError, zipfile.BadZipFile, ValueError, RuntimeError, NotImplementedError, EOFError, KeyError, TypeError, zlib.error) as error:
         raise PackageError("Package could not be read and verified safely") from error
 
 
@@ -366,7 +367,17 @@ def main() -> int:
         report = verify(args.package, args.expected_commit, args.signing_mode, args.expected_sha256)
         text = json.dumps(report, indent=2) + "\n"
         if args.report:
-            require(args.report.resolve() != args.package.resolve(), "Report cannot overwrite the package")
+            if args.report.exists():
+                # Check if report and package refer to the same file (hard links or same path)
+                try:
+                    report_stat = os.stat(args.report)
+                    package_stat = os.stat(args.package)
+                    if report_stat.st_ino == package_stat.st_ino and report_stat.st_dev == package_stat.st_dev:
+                        raise PackageError("Report cannot overwrite the package")
+                except (AttributeError, OSError):
+                    # Fallback to path comparison if stat not available or error
+                    if args.report.resolve() == args.package.resolve():
+                        raise PackageError("Report cannot overwrite the package")
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(text, encoding="utf-8")
         print(text, end="")
