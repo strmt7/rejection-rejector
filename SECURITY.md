@@ -1,39 +1,16 @@
-# Security
+# Security Policy
 
-For the full trust-boundary, data-flow and testable-invariant model, see [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+## Supported Versions
 
-Sending is disabled by default. Google send scope, app sending permission and Automatic consent are separate. Demo cannot send.
+Only the latest released version of Rejection Rejector is actively supported with security updates.
 
-Payloads use XChaCha20-Poly1305 with fresh random nonces and identity-bound associated data. Windows Credential Manager/macOS Keychain hold the master key; Linux uses an explicit strong Argon2-derived passphrase. No plaintext fallback exists. SQLite state/count/time/hash indexes remain clear: this is not SQLCipher/full-file encryption. Windows relies on private profile ACLs; do not use shared directories. Same-user malware, privileged attackers, process memory, clipboard, OS paging and a compromised runtime are outside this protection.
+## Reporting a Vulnerability
 
-Only Gmail and loopback Ollama are used for mail/inference. Remote/cloud model endpoints and redirects are rejected; local requests ignore environment proxies. Model downloads/installations are explicit. Existing Ollama daemons require their own safe configuration.
+Please report security vulnerabilities privately to the repository maintainers. Do **not** open a public issue for security vulnerabilities.
 
-Untrusted email receives no tool access. MIME/header/evidence checks and same-model verification reduce but do not eliminate prompt injection or false detections. Automatic mode additionally requires a deterministic clear-rejection phrase in the current de-quoted message; Human Review does not impose that conservative gate. Recipient/loop/thread guards and durable per-message pre-send records favor holding a reply over duplicates. The same rejection message cannot be sent twice; active/uncertain deliveries temporarily block the whole Gmail thread, while a completed Sent record does not block a later distinct rejection. Uncertain delivery is never blindly retried. Shutdown-sensitive operations are explicit: the GUI blocks accidental close during external send/automatic-dispatch and recovery-artifact writes, and normal worker teardown uses a bounded graceful join. Process termination can still interrupt an in-flight provider request, so durable reservation recovery remains authoritative.
+Include:
+- A description of the vulnerability
+- Steps to reproduce
+- Impact assessment
 
-Enterprise policy files are bounded, non-symlinked, schema-strict and fail closed. Managed deployments can require an exact SHA-256 policy pin, an Ed25519 detached signature, or both; the trusted digest/public key must be provisioned independently from the policy/signature files. Policy v2 also records an encrypted revision floor to reject rollback and same-revision byte drift.
-
-The local runtime journal is deliberately **not** a general-purpose application log: it records only typed operation/event enums, stable failure codes, retryability, timestamps and locally generated operation-correlation UUIDs. It has bounded rotation in the private data directory and has no fields for message text, subjects, addresses, OAuth data, API tokens, signatures, candidate facts or arbitrary exception strings. The encrypted semantic audit journal remains the authoritative action history.
-
-The API is read-only, loopback/token restricted and rejects browser Origin. Its token grants private data access. Portable recovery never exports the raw master key: it uses an Argon2id-derived wrapping key plus XChaCha20-Poly1305, binds the envelope to the vault UUID, validates the recovered key against the backup before credential-store installation, and refuses automatic overwrite of an existing OS credential. Recovery envelopes remain sensitive and must be stored separately from backups with the passphrase protected independently. No signed Windows installer, formal security audit, malware scanning, exactly-once delivery or enterprise compliance certification is claimed.
-
-Never post real emails, OAuth files, tokens or decrypted databases in issues. Revoke exposed credentials and disable sending before investigating.
-
-## Supply Chain Security
-
-This project implements comprehensive supply chain security controls:
-
-- **GitHub Actions SLSA Provenance**: Every release build generates SLSA (Supply-chain Levels for Software Artifacts) provenance attestations, cryptographically binding the binary to the exact source commit, repository, workflow, and build environment.
-
-- **CycloneDX SBOM Attachments**: Each release includes a machine-readable Software Bill of Materials (SBOM) in CycloneDX 1.5 JSON format, with cryptographic attestation verifying the SBOM matches the exact built artifact.
-
-- **RustSec Audit**: `cargo audit` runs in CI against the RustSec advisory database to detect known vulnerabilities in dependencies.
-
-- **Dependency Licensing**: Automated license compliance checking ensures all transitive dependencies comply with the project's MIT license.
-
-- **Workflow Static Analysis**: The `workflow-lint.yml` workflow validates GitHub Actions YAML for security best practices and common misconfigurations.
-
-- **Artifact Signing Pipeline**: Optional Authenticode signing via Azure Artifact Signing provides Windows publisher verification, with fail-closed behavior when signing infrastructure is unavailable.
-
-- **Immutable Release Evidence**: All release artifacts (binaries, SBOMs, provenance attestations, signing records) are permanently archived and tied to the exact git commit via SHA256 hashes.
-
-These controls ensure that consumers can cryptographically verify the integrity and origin of every release artifact, protecting against supply chain attacks and unauthorized tampering.
+We will acknowledge receipt within 48 hours and aim to provide a fix or mitigation within 7 days for critical issues.
