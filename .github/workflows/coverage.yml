@@ -45,11 +45,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust 1.99.0 with llvm-tools-preview
+      - name: Rust 1.99.0 with llvm-tools
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.99.0
-          components: llvm-tools-preview, clippy
+          components: llvm-tools-preview
       - name: Install cargo-llvm-cov 0.9.1
         uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
@@ -63,9 +63,6 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info
-          # Coverage thresholds: 61% line coverage, 65% function coverage
-          # These thresholds ensure enterprise-grade test coverage while
-          # allowing legitimate edge-case code paths (panic handlers, etc.)
           cargo llvm-cov report --summary-only --fail-under-lines 61 --fail-under-functions 65 | tee artifacts/coverage-summary.txt
           test -s artifacts/lcov.info
           test -s artifacts/coverage-summary.txt

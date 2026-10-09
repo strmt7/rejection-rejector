@@ -1107,29 +1107,6 @@ impl Engine {
             .map_err(anyhow::Error::new)
     }
 
-    /// Attempt to send a job with comprehensive security checks.
-    ///
-    /// This function implements defense-in-depth for outbound email sending:
-    /// - Blocks sending in demo mode
-    /// - Checks emergency-stop sentinel (fail-closed)
-    /// - Verifies worker is not paused or stopping
-    /// - Requires explicit sending enabled flag
-    /// - Validates job revision and reviewable state
-    /// - Ensures job identity hasn't been tampered with
-    /// - Validates draft hasn't changed after confirmation (hash check)
-    /// - Runs safety checks on draft content
-    /// - Verifies original message hasn't been recalled or changed
-    /// - Checks mailbox safety blocks (auto-submitted, duplicates, etc.)
-    /// - Validates message is within age window
-    /// - For automatic mode: checks policy blocks, recipient rate limits,
-    ///   model runtime version consistency, and model residency
-    /// - Performs pre-send storage headroom and audit checkpoint checks
-    /// - Re-checks emergency stop and paused state immediately before dispatch
-    /// - Creates durable reservation before network send (atomic transaction)
-    /// - Re-verifies audit checkpoints and emergency stop after send attempt
-    /// - Properly handles all failure cases with reservation release or reconciliation
-    /// - All paths either succeed with sent record or fail with reservation released
-    ///   or moved to Uncertain state for reconciliation (never blind retries)
     fn send_attempt(
         &mut self,
         id: &str,
