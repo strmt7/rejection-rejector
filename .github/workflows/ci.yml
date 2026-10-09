@@ -5,12 +5,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      package_windows:
-        description: Create the user-facing Windows ZIP for this manually requested run
-        required: false
-        default: false
-        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -118,9 +112,6 @@ jobs:
       - name: Six native GUI captures and review geometry
         if: runner.os == 'Linux'
         run: timeout 120s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
-      - name: Build Windows release binaries
-        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.package_windows
-        run: cargo build --locked --release --bins
       - name: Verify tracked source was not modified
         run: git diff --exit-code HEAD
       - name: Source and toolchain evidence
@@ -134,29 +125,6 @@ jobs:
           git rev-parse HEAD > artifacts/COMMIT.txt
           cp Cargo.lock artifacts/
           git archive --format=zip HEAD -o artifacts/rejection-rejector-source.zip
-      - name: Collect Windows package
-        if: runner.os == 'Windows' && success() && github.event_name == 'workflow_dispatch' && inputs.package_windows
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
-          Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
-          Copy-Item -Recurse docs artifacts/windows/docs
-          Copy-Item -Recurse scripts artifacts/windows/scripts
-          Copy-Item Cargo.lock artifacts/windows/
-          Copy-Item artifacts/COMMIT.txt artifacts/windows/
-          Copy-Item artifacts/toolchain.txt artifacts/windows/
-          $root = (Resolve-Path artifacts/windows).Path
-          $sums = Get-ChildItem $root -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $relative = [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\','/')
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $relative"
-          }
-          $sums | Set-Content artifacts/windows/SHA256SUMS.txt -Encoding ascii
-          Compress-Archive -Path artifacts/windows/* -DestinationPath artifacts/rejection-rejector-windows-x64.zip
-          $packageHash = (Get-FileHash artifacts/rejection-rejector-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$packageHash  rejection-rejector-windows-x64.zip" | Set-Content artifacts/SHA256.txt -Encoding ascii
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
