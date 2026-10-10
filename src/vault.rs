@@ -583,19 +583,25 @@ mod tests {
 pub(crate) mod test_support {
     //! Test-only helpers shared by every module that exercises the OS
     //! credential store.
-    use std::sync::{Mutex, MutexGuard};
 
     /// Serializes OS credential-store access across tests: the store is one
     /// shared system resource and concurrent mint/read/delete sequences have
     /// been observed to lose writes between parallel tests.
-    static CREDENTIAL_STORE_LOCK: Mutex<()> = Mutex::new(());
-
+    ///
     /// Acquire the credential-store serialization lock for the calling test.
-    /// Inputs: none. Output: a guard held until the end of the test; poisoning
-    /// left by an earlier panicked test is recovered so later tests still run.
-    pub(crate) fn lock_credential_store() -> MutexGuard<'static, ()> {
-        CREDENTIAL_STORE_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// Inputs: none. Output: a file handle holding an exclusive OS file lock
+    /// until drop. The lock is cross-process, so it also serializes nextest's
+    /// one-process-per-test execution of credential-store tests.
+    pub(crate) fn lock_credential_store() -> std::fs::File {
+        let path = std::env::temp_dir().join("rr-test-credential-store.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open credential-store test lock");
+        fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
+        file
     }
 }
