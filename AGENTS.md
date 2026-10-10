@@ -45,7 +45,9 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 ## Token-efficiency contract (all AI agents)
 
 1. Read `AGENTS.md` and `.agents/skills/rr-engineering/SKILL.md` first; never
-   walk the tree to re-derive structure.
+   walk the tree to re-derive structure. Mandatory skills: `caveman` (lite
+   compression), `cocoindex-code-search` (semantic search discipline),
+   `crawl4ai-research` (web research grounding), `rr-engineering` (safety).
 2. Batch independent tool calls into one turn; prefer grep/search over full
    file reads; keep any single read under 200 lines unless editing that file.
 3. Keep tool outputs small: filter with grep/awk before printing; never dump
