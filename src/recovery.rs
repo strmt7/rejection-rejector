@@ -1556,6 +1556,10 @@ mod tests {
         private_dir(&fresh).unwrap();
         let error = restore_backup(&fresh, &backup)
             .expect_err("restore without an OS credential must fail closed");
+        assert!(
+            !error.to_string().is_empty(),
+            "fail-closed restore errors must carry an explanation"
+        );
         #[cfg(any(windows, target_os = "macos"))]
         assert!(
             error
