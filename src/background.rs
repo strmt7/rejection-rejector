@@ -394,4 +394,146 @@ mod tests {
         assert!(xml.contains("<Count>3</Count>"));
         assert!(xml.contains(r"--data-dir &quot;C:\Users\Test User\RR&quot; run"));
     }
+
+    /// Guards XML escaping order and single-pass semantics: & must be escaped
+    /// before any other entity (or entities would double-escape), and escaping
+    /// must not be idempotent (a pre-escaped value is data, not markup).
+    #[test]
+    fn xml_escape_is_single_pass_and_escapes_ampersand_first() {
+        assert_eq!(xml_escape(r#"<a&b>"c'd"#), "&lt;a&amp;b&gt;&quot;c&apos;d");
+        assert_eq!(xml_escape("&amp;"), "&amp;amp;");
+        assert_eq!(xml_escape("&lt;"), "&amp;lt;");
+        assert_eq!(xml_escape("plain"), "plain");
+    }
+
+    /// Guards CreateProcess quoting rules: empty strings must become explicit
+    /// empty arguments (never dropped), control characters force quoting even
+    /// without spaces, and plain backslash runs stay unquoted.
+    #[test]
+    fn windows_argument_quoting_edge_cases() {
+        assert_eq!(quote_windows_argument(""), "\"\"");
+        assert_eq!(quote_windows_argument("tab\there"), "\"tab\there\"");
+        assert_eq!(quote_windows_argument(r"back\slash"), r"back\slash");
+        assert_eq!(quote_windows_argument(r"trail\\"), r"trail\\");
+        assert_eq!(quote_windows_argument(r"with space\"), "\"with space\\\\\"");
+        assert_eq!(quote_windows_argument("\"lead"), "\"\\\"lead\"");
+    }
+
+    /// Guards argument-string assembly order and quoting: --data-dir, the
+    /// quoted path and the literal run verb must appear in exactly that order,
+    /// so a reordered or unquoted invocation would be caught before install.
+    #[test]
+    fn expected_arguments_have_exact_order_and_quoting() {
+        assert_eq!(
+            expected_arguments(Path::new(r"C:\Program Files\RR")).unwrap(),
+            "--data-dir \"C:\\Program Files\\RR\" run"
+        );
+        assert_eq!(
+            expected_arguments(Path::new("plain")).unwrap(),
+            "--data-dir plain run"
+        );
+    }
+
+    /// Guards data-dir input validation: control characters (newline, tab,
+    /// carriage return, bell) must be refused before any XML is generated —
+    /// a smuggled control byte could forge or truncate the task definition.
+    #[test]
+    fn data_directory_with_control_characters_is_rejected() {
+        for bad in [
+            "with\nnewline",
+            "with\ttab",
+            "with\rreturn",
+            "bell\u{7}here",
+        ] {
+            assert!(expected_arguments(Path::new(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    /// Guards task-name/user binding: the user identity is trimmed of padding
+    /// but not altered otherwise, and must appear in both UserId slots (trigger
+    /// and principal) exactly twice so a mismatch cannot run as another user.
+    #[test]
+    fn render_task_xml_trims_the_user_identity_into_both_slots() {
+        let exe = Path::new(r"C:\RR\rr.exe");
+        let data = Path::new(r"C:\RR\data");
+        let xml = render_task_xml("  DOMAIN\\User  ", exe, data).unwrap();
+        assert_eq!(xml.matches("<UserId>DOMAIN\\User</UserId>").count(), 2);
+        assert!(!xml.contains("  DOMAIN"));
+    }
+
+    /// Guards render_task_xml input validation: blank/control users, control
+    /// characters in the executable path and parent-less executables must all
+    /// fail before any task definition file touches the disk.
+    #[test]
+    fn render_task_xml_rejects_invalid_user_and_executable_inputs() {
+        let exe = Path::new(r"C:\RR\rr.exe");
+        let data = Path::new(r"C:\RR\data");
+        for user in ["", "   ", "DOMAIN\nUser", "DOM\u{7}AIN"] {
+            assert!(render_task_xml(user, exe, data).is_err(), "{user:?}");
+        }
+        for bad_exe in [Path::new("/"), Path::new("C:\\RR\\rr.ex\u{1}e")] {
+            assert!(render_task_xml("DOMAIN\\User", bad_exe, data).is_err());
+        }
+    }
+
+    /// Guards working-directory derivation: the task must run from the
+    /// executable's parent directory, XML-escaped, or relative-path resolution
+    /// could launch a different binary after a working-directory change.
+    #[test]
+    fn task_working_directory_is_the_executable_parent() {
+        let exe = Path::new(r"C:\Program Files\RR & Co\rr.exe");
+        let data = Path::new(r"C:\RR\data");
+        let xml = render_task_xml("DOMAIN\\User", exe, data).unwrap();
+        assert!(
+            xml.contains("<WorkingDirectory>C:\\Program Files\\RR &amp; Co</WorkingDirectory>")
+        );
+        assert!(xml.contains(r"C:\Program Files\RR &amp; Co\rr.exe"));
+    }
+
+    /// Guards the full task-settings contract: restart policy, execution
+    /// limits, priority and battery/network policy must all be present, since
+    /// a missing RestartOnFailure would silently stop the worker after crashes.
+    #[test]
+    fn task_xml_holds_the_full_restart_and_scheduling_contract() {
+        let xml = render_task_xml(
+            "DOMAIN\\User",
+            Path::new(r"C:\RR\rr.exe"),
+            Path::new(r"C:\RR\data"),
+        )
+        .unwrap();
+        for needle in [
+            "<RestartOnFailure>",
+            "<Interval>PT1M</Interval>",
+            "<Count>3</Count>",
+            "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+            "<Priority>7</Priority>",
+            "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+            "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+            "<StartWhenAvailable>true</StartWhenAvailable>",
+            "<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+            "<LogonTrigger>",
+            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>",
+        ] {
+            assert!(xml.contains(needle), "missing {needle}");
+        }
+        assert_eq!(xml.matches("<Task version=\"1.4\"").count(), 1);
+        assert_eq!(xml.matches("</Task>").count(), 1);
+    }
+
+    /// Guards MSIX path detection anchoring and case folding: only a full
+    /// WindowsApps path segment counts (any case, either separator), so
+    /// similarly named directories are not over-refused.
+    #[test]
+    fn msix_detection_is_segment_anchored_and_case_insensitive() {
+        assert!(is_msix_managed_path(Path::new(
+            r"c:\program files\WINDOWSAPPS\Pack\rr.exe"
+        )));
+        assert!(is_msix_managed_path(Path::new(
+            "C:/Users/x/AppData/Local/Microsoft/WindowsApps/rr.exe"
+        )));
+        assert!(!is_msix_managed_path(Path::new(
+            r"C:\tools\windowsapps_backup\rr.exe"
+        )));
+        assert!(!is_msix_managed_path(Path::new(r"C:\tools\winapps\rr.exe")));
+    }
 }

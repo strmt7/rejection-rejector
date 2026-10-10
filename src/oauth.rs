@@ -71,6 +71,15 @@ pub fn secret() -> String {
     URL_SAFE_NO_PAD.encode(b)
 }
 
+/// RFC 7636 S256 code challenge: BASE64URL-ENCODE(SHA256(ASCII(verifier))).
+///
+/// Split out of `login()` so the exact challenge construction is pinned by the
+/// RFC test vector; a subtly wrong digest encoding would break authorization
+/// only at the Google redirect, far from any test.
+fn pkce_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
 fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
     ensure!(
         target.starts_with('/')
@@ -144,7 +153,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     );
     let state = secret();
     let verifier = Zeroizing::new(secret());
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = pkce_challenge(verifier.as_str());
     let scope = if send {
         format!("{READ_SCOPE} {SEND_SCOPE}")
     } else {
@@ -296,6 +305,165 @@ mod tests {
     fn pkce_entropy() {
         assert_eq!(secret().len(), 43);
         assert_ne!(secret(), secret());
+    }
+
+    /// Guards PKCE S256 correctness against the RFC 7636 appendix B vector:
+    /// a wrong digest encoding, padding, or alphabet would break authorization
+    /// only at Google's redirect and pass every local smoke check.
+    #[test]
+    fn pkce_challenge_matches_the_rfc_7636_test_vector() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        assert_eq!(
+            pkce_challenge(verifier),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    /// Guards challenge construction hygiene: the challenge must be unpadded
+    /// base64url of the SHA-256 digest (43 chars), never the verifier itself.
+    #[test]
+    fn pkce_challenge_is_unpadded_base64url_and_distinct_from_verifier() {
+        let verifier = secret();
+        let challenge = pkce_challenge(&verifier);
+        assert_eq!(challenge.len(), 43);
+        assert!(
+            challenge
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        );
+        assert_ne!(challenge, verifier);
+    }
+
+    /// Guards consent-declines: a Google error response must fail even when it
+    /// carries a well-formed state and code, so no token exchange is attempted.
+    #[test]
+    fn google_decline_is_rejected_despite_valid_state_and_code() {
+        let error = callback_code("/callback?state=s&code=x&error=access_denied", "s")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("declined"), "{error}");
+    }
+
+    /// Guards authorization-code validation at its exact length boundary:
+    /// 4095 bytes pass, 4096 and empty codes are rejected (off-by-one).
+    #[test]
+    fn authorization_code_length_is_an_exact_boundary() {
+        let code_4095 = "c".repeat(4095);
+        assert_eq!(
+            callback_code(&format!("/callback?state=s&code={code_4095}"), "s").unwrap(),
+            Some(code_4095)
+        );
+        let code_4096 = "c".repeat(4096);
+        assert!(callback_code(&format!("/callback?state=s&code={code_4096}"), "s").is_err());
+        assert!(callback_code("/callback?state=s&code=", "s").is_err());
+    }
+
+    /// Guards state comparison semantics: the state parameter must be compared
+    /// after URL-decoding and byte-for-byte (length included); raw comparison
+    /// or truncation would accept tampered callbacks.
+    #[test]
+    fn state_is_url_decoded_and_compared_byte_exact() {
+        assert_eq!(
+            callback_code("/callback?state=a%2Fb&code=x", "a/b").unwrap(),
+            Some("x".into())
+        );
+        assert!(callback_code("/callback?state=a%2Fb&code=x", "a%2Fb").is_err());
+        assert!(callback_code("/callback?state=abc&code=x", "abcd").is_err());
+        assert!(callback_code("/callback?state=abcd&code=x", "abc").is_err());
+        assert!(callback_code("/callback?state=ABC&code=x", "abc").is_err());
+        assert!(callback_code("/callback?state=abc&code=x", "abc ").is_err());
+    }
+
+    /// Guards callback path matching: only the exact /callback path extracts a
+    /// code; lookalike paths (trailing slash, different case) are ignored as
+    /// ordinary browser noise rather than erroring the login loop.
+    #[test]
+    fn only_the_exact_callback_path_extracts_a_code() {
+        assert_eq!(
+            callback_code("/callback/?state=s&code=x", "s").unwrap(),
+            None
+        );
+        assert_eq!(
+            callback_code("/Callback?state=s&code=x", "s").unwrap(),
+            None
+        );
+        assert_eq!(
+            callback_code("/callback/extra?state=s&code=x", "s").unwrap(),
+            None
+        );
+    }
+
+    fn client_file(contents: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("client.json");
+        std::fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    /// Guards the client-file size cap before any secret parsing: an oversized
+    /// file must be refused outright (both by metadata and by the bounded read).
+    #[test]
+    fn oversized_oauth_client_file_is_rejected_before_parsing() {
+        let (_dir, path) = client_file(&vec![b' '; 32_769]);
+        let error = login(&path, false, &AtomicBool::new(false))
+            .err()
+            .expect("login must fail")
+            .to_string();
+        assert!(error.contains("too large"), "{error}");
+    }
+
+    /// Guards OAuth client-file shape validation: only a Google "installed"
+    /// desktop-app JSON is accepted; web-app shapes, garbage and directories
+    /// fail with the guidance error before any listener or browser is started.
+    #[test]
+    fn malformed_oauth_client_files_are_rejected_before_any_network() {
+        let (_dir, garbage) = client_file(b"not json at all");
+        assert!(
+            login(&garbage, false, &AtomicBool::new(false))
+                .err()
+                .expect("login must fail")
+                .to_string()
+                .contains("Choose a Google Desktop app OAuth JSON")
+        );
+        let (_dir, web) = client_file(br#"{"web":{"client_id":"x","client_secret":"y"}}"#);
+        assert!(
+            login(&web, false, &AtomicBool::new(false))
+                .err()
+                .expect("login must fail")
+                .to_string()
+                .contains("Choose a Google Desktop app OAuth JSON")
+        );
+        let (_dir, missing) = client_file(br#"{"installed":{}}"#);
+        assert!(
+            login(&missing, false, &AtomicBool::new(false))
+                .err()
+                .expect("login must fail")
+                .to_string()
+                .contains("Choose a Google Desktop app OAuth JSON")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        assert!(login(dir.path(), false, &AtomicBool::new(false)).is_err());
+    }
+
+    /// Guards incomplete credential rejection: empty client_id or client_secret
+    /// must fail before the loopback listener starts, so a half-configured file
+    /// can never begin an authorization dance.
+    #[test]
+    fn incomplete_oauth_client_credentials_are_rejected() {
+        for body in [
+            br#"{"installed":{"client_id":"","client_secret":"s"}}"# as &[u8],
+            br#"{"installed":{"client_id":"i","secret":"","client_secret":""}}"#,
+        ] {
+            let (_dir, path) = client_file(body);
+            assert!(
+                login(&path, false, &AtomicBool::new(false))
+                    .err()
+                    .expect("login must fail")
+                    .to_string()
+                    .contains("Incomplete OAuth client file"),
+                "{body:?} must fail as incomplete"
+            );
+        }
     }
 }
 
