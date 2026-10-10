@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+- Three graded reply tones (Professional / Assertive / Hardline) with Hardline
+  as the default; legacy settings wire names still load unchanged.
+- Automatic-mode arming gate: a 30-second risk-acknowledgment cooldown with an
+  explicit warning modal before unattended sending can be enabled. Human
+  review remains the default mode.
+
+### Fixed
+- Classification output budget: real recruiting mail needs ~6.5k think tokens
+  before schema JSON; the previous 3072 budget failed closed on every real
+  email while short fixtures passed. Budgets now scale with the context tier
+  (32768 supported) and the email-text budget matches the output envelope.
+
+## Unreleased
+
 - Removes the legacy manual Windows-ZIP path from ordinary Rust CI so user-facing packages cannot bypass the attested release gates. Preserves normal Windows/Linux builds, source/debug evidence and manual verification runs.
 - Records the original 100-commit incident scope and reproducible audit procedure, prohibits commit-count padding, and aligns testing documentation with actual source-bound release checks.
 

@@ -141,6 +141,7 @@ pub struct App {
     editor_key: Option<(String, u64)>,
     dirty: bool,
     pending_select: Option<String>,
+    pending_arm: Option<crate::config::AutomaticArmGate>,
     send_confirmation: Option<Job>,
     install_confirmation: bool,
     recovery_dialog: Option<RecoveryDialog>,
@@ -172,6 +173,7 @@ impl App {
             editor_key: None,
             dirty: false,
             pending_select: None,
+            pending_arm: None,
             send_confirmation: None,
             install_confirmation: false,
             recovery_dialog: None,
@@ -1188,10 +1190,22 @@ impl App {
                         ui.label(label);
                     });
                 }
-                ui.checkbox(
-                    &mut self.settings.automatic_confirmed,
-                    "I authorize automatic replies that pass the app's checks",
-                );
+                if self.settings.automatic_confirmed {
+                    if ui
+                        .button("Disable Automatic mode and return to Human review")
+                        .clicked()
+                    {
+                        self.settings.automatic_confirmed = false;
+                        self.settings.automatic_since = None;
+                        self.pending_arm = None;
+                    }
+                } else if ui
+                    .button("Enable Automatic mode (requires a deliberate risk confirmation)")
+                    .clicked()
+                {
+                    self.pending_arm =
+                        Some(crate::config::AutomaticArmGate::open(chrono::Utc::now()));
+                }
                 ui.checkbox(
                     &mut self.settings.include_backlog,
                     "Also allow older rejections within the selected age window (off by default)",
@@ -1222,7 +1236,7 @@ impl App {
             egui::ComboBox::from_id_salt("reply_tone")
                 .selected_text(self.settings.tone.label())
                 .show_ui(ui, |ui| {
-                    for t in [Tone::Firm, Tone::Strong, Tone::Reconsideration] {
+                    for t in [Tone::Professional, Tone::Assertive, Tone::Hardline] {
                         ui.selectable_value(&mut self.settings.tone, t, t.label());
                     }
                 });
@@ -1668,6 +1682,30 @@ if ui.button("Install").clicked(){self.install_confirmation=false;self.worker.co
                         passphrase,
                     });
                 }
+            }
+        }
+        if let Some(gate) = self.pending_arm {
+            let now = chrono::Utc::now();
+            let remaining = gate.remaining(now).num_seconds().max(0);
+            let mut open = true;
+            egui::Window::new("Enable Automatic mode?").open(&mut open).collapsible(false).resizable(false).default_width(560.0).anchor(egui::Align2::CENTER_CENTER,[0.0,0.0]).show(ctx,|ui|{
+            ui.label(RichText::new("Warning: in Automatic mode the AI sends replies without your review.").strong());
+            ui.label("The model can be wrong. A wrongly sent reply can damage real job applications and your standing with recruiters. Ambiguous, truncated or unverifiable messages are deliberately held, but no automated check is perfect and mistakes do happen.");
+            ui.label(format!("This confirmation unlocks in {remaining} second(s). Use the pause to read this warning in full."));
+            ui.horizontal(|ui|{
+                let confirm = ui.add_enabled(gate.can_confirm(now), egui::Button::new("I understand the risks \u{2014} enable Automatic mode"));
+                if confirm.clicked() {
+                    self.settings.automatic_confirmed = true;
+                    self.settings.automatic_since = Some(now);
+                    self.pending_arm = None;
+                }
+                if ui.button("Cancel (stay in Human review)").clicked() {
+                    self.pending_arm = None;
+                }
+            });
+            });
+            if !open {
+                self.pending_arm = None;
             }
         }
         if let Some(job) = self.send_confirmation.clone() {

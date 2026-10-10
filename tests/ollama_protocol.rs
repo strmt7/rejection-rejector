@@ -78,7 +78,7 @@ impl Fixture {
                         data
                     }
                     "/api/ps" => {
-                        json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":9_000_000_000u64,"size_vram":if scenario==Scenario::CpuOnly {2_000_000_000u64}else{9_000_000_000u64},"context_length":16384}]})
+                        json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":9_000_000_000u64,"size_vram":if scenario==Scenario::CpuOnly {2_000_000_000u64}else{9_000_000_000u64},"context_length":32768}]})
                     }
                     "/api/generate" => {
                         let mut body = String::new();
@@ -172,7 +172,7 @@ fn three_stage_protocol_binds_draft_and_model_and_uses_reasoning() {
         assert_eq!(call["think"], true);
         assert_eq!(call["stream"], false);
         assert_eq!(call["model"], DEFAULT_MODEL);
-        assert_eq!(call["options"]["num_ctx"], 16384);
+        assert_eq!(call["options"]["num_ctx"], 32768);
         assert!(call["format"].is_object());
         assert!(call.get("tools").is_none());
     }

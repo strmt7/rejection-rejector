@@ -85,13 +85,22 @@ impl Mode {
         }
     }
 }
+/// Reply-tone intensity, graded soft to harsh.
+///
+/// Legacy wire names (`firm`, `strong`, `reconsideration`) remain accepted as
+/// deserialization aliases so existing settings keep loading unchanged.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Tone {
-    Firm,
+    /// Softest level: civil and constructive feedback request.
+    #[serde(alias = "firm", alias = "reconsideration")]
+    Professional,
+    /// Middle level: direct, assertive challenge.
+    #[serde(alias = "strong")]
+    Assertive,
+    /// Harsh level: blunt, uncompromising, still fact-bound.
     #[default]
-    Strong,
-    Reconsideration,
+    Hardline,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -110,25 +119,78 @@ pub struct TaskQualification {
 }
 
 impl Tone {
+    /// Human-readable level name.
+    ///
+    /// Inputs: none. Output: short label shown in the settings picker.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Firm => "Firm",
-            Self::Strong => "Strong",
-            Self::Reconsideration => "Reconsideration",
+            Self::Professional => "Professional (soft)",
+            Self::Assertive => "Assertive",
+            Self::Hardline => "Hardline (harsh)",
         }
     }
+    /// Trusted drafting instruction implementing this intensity level.
+    ///
+    /// Inputs: none. Output: prompt text merged into the draft contract; it is
+    /// trusted configuration and never read from email content.
     pub fn instruction(self) -> &'static str {
         match self {
-            Self::Firm => {
-                "Firmly request specific feedback against the advertised requirements; do not thank them for rejecting the application."
+            Self::Professional => {
+                "Request specific feedback against the advertised requirements politely and professionally; keep the tone civil and constructive, and do not thank them for rejecting the application."
             }
-            Self::Strong => {
+            Self::Assertive => {
                 "Directly challenge the decision and request a substantive, individualized explanation. Be assertive, concise and unmistakably dissatisfied, without insults, threats or unsupported accusations."
             }
-            Self::Reconsideration => {
-                "Request an individual reconsideration and an explanation of the criteria. Challenge the outcome professionally without pretending a reply can invalidate a hiring decision."
+            Self::Hardline => {
+                "Confront the decision bluntly and demand a substantive, individualized justification against the advertised requirements. Make the dissatisfaction unmistakable and the challenge uncompromising, while staying strictly fact-bound: no insults, threats, profanity or invented accusations, and no claim that a reply can overturn a hiring decision."
             }
         }
+    }
+}
+
+/// Delay the user must wait before an Automatic-mode arming can be confirmed.
+pub const AUTOMATIC_ARM_COOLDOWN_SECONDS: i64 = 30;
+
+/// Cooldown gate guarding the Human-review to Automatic transition.
+///
+/// Opening the gate starts a mandatory waiting period (comparable to enabling
+/// a device administrator on mobile platforms): the confirmation cannot be
+/// acknowledged until the cooldown elapses, so the risk warning cannot be
+/// clicked through in one motion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutomaticArmGate {
+    opened_at: DateTime<Utc>,
+}
+
+impl AutomaticArmGate {
+    /// Open the gate at the given instant.
+    ///
+    /// Inputs: `now` — current time. Output: gate whose cooldown ends at
+    /// `now + AUTOMATIC_ARM_COOLDOWN_SECONDS`.
+    pub fn open(now: DateTime<Utc>) -> Self {
+        Self { opened_at: now }
+    }
+
+    /// Remaining cooldown, clamped at zero.
+    ///
+    /// Inputs: `now` — current time. Output: non-negative duration until the
+    /// confirmation becomes available.
+    pub fn remaining(&self, now: DateTime<Utc>) -> chrono::Duration {
+        let left =
+            chrono::Duration::seconds(AUTOMATIC_ARM_COOLDOWN_SECONDS) - (now - self.opened_at);
+        if left < chrono::Duration::zero() {
+            chrono::Duration::zero()
+        } else {
+            left
+        }
+    }
+
+    /// Whether the confirmation may be acknowledged yet.
+    ///
+    /// Inputs: `now` — current time. Output: `true` only after the cooldown
+    /// has fully elapsed.
+    pub fn can_confirm(&self, now: DateTime<Utc>) -> bool {
+        self.remaining(now) == chrono::Duration::zero()
     }
 }
 
@@ -181,7 +243,7 @@ impl Default for Settings {
             include_backlog: false,
             cooldown_minutes: 15,
             daily_send_limit: 10,
-            tone: Tone::Strong,
+            tone: Tone::Hardline,
             signature: "Your name".into(),
             candidate_context: String::new(),
             model: DEFAULT_MODEL.into(),
@@ -191,7 +253,7 @@ impl Default for Settings {
             verifier_model: DEFAULT_VERIFIER_MODEL.into(),
             verifier_model_digest: None,
             ollama_url: "http://127.0.0.1:11434".into(),
-            num_ctx: 16384,
+            num_ctx: 32768,
             llm_timeout_seconds: 600,
             api_enabled: false,
             api_port: 8734,
@@ -259,8 +321,8 @@ impl Settings {
             );
         }
         ensure!(
-            [8192, 16384].contains(&self.num_ctx),
-            "Supported context sizes are 8192 and 16384; qualify GPU residency after changing this"
+            [8192, 16384, 32768].contains(&self.num_ctx),
+            "Supported context sizes are 8192, 16384 and 32768; qualify GPU residency after changing this"
         );
         ensure!(
             (30..=1200).contains(&self.llm_timeout_seconds),
@@ -773,5 +835,61 @@ mod tests {
         let base_hash = settings_context_hash(&settings);
         settings.verifier_model_digest = Some("b".repeat(64));
         assert_ne!(base_hash, settings_context_hash(&settings));
+    }
+}
+
+#[cfg(test)]
+mod tone_and_gate_tests {
+    use super::*;
+
+    #[test]
+    fn tone_defaults_to_hardest_level() {
+        assert_eq!(Tone::default(), Tone::Hardline);
+    }
+
+    #[test]
+    fn tone_legacy_wire_names_still_load() {
+        assert_eq!(
+            serde_json::from_str::<Tone>("\"firm\"").unwrap(),
+            Tone::Professional
+        );
+        assert_eq!(
+            serde_json::from_str::<Tone>("\"strong\"").unwrap(),
+            Tone::Assertive
+        );
+        assert_eq!(
+            serde_json::from_str::<Tone>("\"reconsideration\"").unwrap(),
+            Tone::Professional
+        );
+        assert_eq!(
+            serde_json::from_str::<Tone>("\"hardline\"").unwrap(),
+            Tone::Hardline
+        );
+    }
+
+    #[test]
+    fn tone_labels_and_instructions_are_unique() {
+        let all = [Tone::Professional, Tone::Assertive, Tone::Hardline];
+        for (a, b) in [(0usize, 1usize), (0, 2), (1, 2)] {
+            assert_ne!(all[a].label(), all[b].label());
+            assert_ne!(all[a].instruction(), all[b].instruction());
+        }
+    }
+
+    #[test]
+    fn automatic_arm_gate_enforces_the_cooldown() {
+        let t0 = Utc::now();
+        let gate = AutomaticArmGate::open(t0);
+        assert!(!gate.can_confirm(t0));
+        assert_eq!(
+            gate.remaining(t0).num_seconds(),
+            AUTOMATIC_ARM_COOLDOWN_SECONDS
+        );
+        let mid = t0 + chrono::Duration::seconds(AUTOMATIC_ARM_COOLDOWN_SECONDS - 1);
+        assert!(!gate.can_confirm(mid));
+        let after = t0 + chrono::Duration::seconds(AUTOMATIC_ARM_COOLDOWN_SECONDS);
+        assert!(gate.can_confirm(after));
+        let late = t0 + chrono::Duration::seconds(AUTOMATIC_ARM_COOLDOWN_SECONDS + 120);
+        assert_eq!(gate.remaining(late), chrono::Duration::zero());
     }
 }
