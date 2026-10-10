@@ -156,13 +156,26 @@ pub fn verify_anchor(store: &Store, data_dir: &Path, path: &Path) -> Result<Audi
     Ok(anchor)
 }
 
-pub fn os_anchor_required() -> Result<bool> {
-    match std::env::var(OS_AUDIT_ANCHOR_ENV) {
-        Ok(value) if value == OS_AUDIT_ANCHOR_REQUIRED => Ok(true),
-        Ok(value) => anyhow::bail!(
+/// Interpret the OS audit-anchor requirement from its raw environment value.
+///
+/// Inputs: `raw` — `None` when unset (not required), otherwise the exact
+/// value read from the environment. Output: `Ok(true)` only for the exact
+/// required literal; any other value fails closed with an error rather than
+/// silently disabling rollback protection.
+fn interpret_os_anchor_required(raw: Option<&str>) -> Result<bool> {
+    match raw {
+        Some(OS_AUDIT_ANCHOR_REQUIRED) => Ok(true),
+        Some(value) => anyhow::bail!(
             "{OS_AUDIT_ANCHOR_ENV} must be exactly '{OS_AUDIT_ANCHOR_REQUIRED}' when set, not {value:?}"
         ),
-        Err(std::env::VarError::NotPresent) => Ok(false),
+        None => Ok(false),
+    }
+}
+
+pub fn os_anchor_required() -> Result<bool> {
+    match std::env::var(OS_AUDIT_ANCHOR_ENV) {
+        Ok(value) => interpret_os_anchor_required(Some(&value)),
+        Err(std::env::VarError::NotPresent) => interpret_os_anchor_required(None),
         Err(error) => Err(anyhow::anyhow!(
             "Could not read {OS_AUDIT_ANCHOR_ENV}: {error}"
         )),
@@ -367,5 +380,62 @@ mod tests {
         let other_root = tempfile::tempdir().unwrap();
         let (store_b, dir_b) = workspace(other_root.path());
         assert!(verify_anchor(&store_b, &dir_b, &anchor).is_err());
+    }
+}
+
+#[cfg(test)]
+mod anchor_boundary_tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// The environment requirement must fail closed: only the exact literal
+    /// enables enforcement, anything else errors instead of disabling it.
+    #[test]
+    fn os_anchor_requirement_fails_closed_on_any_other_value() {
+        assert!(!interpret_os_anchor_required(None).unwrap());
+        assert!(interpret_os_anchor_required(Some(OS_AUDIT_ANCHOR_REQUIRED)).unwrap());
+        assert!(interpret_os_anchor_required(Some("REQUIRED")).is_err());
+        assert!(interpret_os_anchor_required(Some("")).is_err());
+        assert!(interpret_os_anchor_required(Some("required ")).is_err());
+        assert!(interpret_os_anchor_required(Some(" required")).is_err());
+        assert!(interpret_os_anchor_required(Some("1")).is_err());
+    }
+
+    /// Anchor files are a security boundary: missing, non-regular and
+    /// oversized files must be rejected; exact-limit files round-trip.
+    #[test]
+    fn anchor_file_reader_rejects_missing_oversized_and_non_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing");
+        assert!(read_small_regular_file(&missing).is_err());
+
+        let as_dir = dir.path().join("dir");
+        std::fs::create_dir(&as_dir).unwrap();
+        assert!(read_small_regular_file(&as_dir).is_err());
+
+        let oversized = dir.path().join("big");
+        let mut f = std::fs::File::create(&oversized).unwrap();
+        f.write_all(&vec![0u8; (MAX_ANCHOR_BYTES + 1) as usize])
+            .unwrap();
+        drop(f);
+        assert!(read_small_regular_file(&oversized).is_err());
+
+        let exact = dir.path().join("exact");
+        let payload = vec![7u8; MAX_ANCHOR_BYTES as usize];
+        std::fs::write(&exact, &payload).unwrap();
+        assert_eq!(read_small_regular_file(&exact).unwrap(), payload);
+    }
+
+    /// Symlinked anchors must be rejected outright: a link could redirect
+    /// the trust root to attacker-controlled content.
+    #[cfg(unix)]
+    #[test]
+    fn anchor_file_reader_rejects_symlinks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"trusted").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_small_regular_file(&link).is_err());
     }
 }
