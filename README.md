@@ -22,8 +22,8 @@
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
 | Sync | Durable incremental Gmail history queue; page-batched insert of missing identities only; cursor-expiry recovery |
 | Database | Embedded SQLite with authenticated encrypted payloads; Windows Credential Manager holds the key |
-| Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send |
-| Automatic | Explicit authorization, cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
+| Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send. Three graded reply tones — Professional (soft), Assertive, Hardline (harsh, default) |
+| Automatic | Human review by default; arming Automatic requires a 30-second risk-acknowledgment cooldown (device-administrator style). Once armed: cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes, and a pre-open native Recovery Mode for fresh/locked workspaces |
 | Integration | Reusable Rust library plus authenticated read-only loopback API with versioned OpenAPI, exact contract SHA-256 fingerprint, typed operation status, stable error codes and request IDs |

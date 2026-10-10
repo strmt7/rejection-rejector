@@ -557,7 +557,12 @@ impl Ollama {
         if self.settings.num_ctx <= 8192 {
             1536
         } else {
-            3072
+            // Measured on real recruiting mail (400-word ambiguous entries):
+            // think-enabled qwen3.5-class models spend ~6.5k tokens reasoning
+            // before any schema JSON, so 3072 ended every real classification
+            // as done_reason=length (100% fail-closed holds) while short
+            // fixtures still passed. 8192 covers the measurement with margin.
+            8192
         }
     }
 
@@ -574,6 +579,21 @@ impl Ollama {
             2560
         } else {
             8192
+        }
+    }
+
+    /// Email-text budget for classification input.
+    ///
+    /// Inputs: none (reads the `num_ctx` tier). Output: maximum bytes of the
+    /// de-quoted email text placed into the classification payload; sized so
+    /// `text + subject + system + TEMPLATE_MARGIN_BYTES + structured_predict`
+    /// stays inside the context tier (the same agreement the draft envelope
+    /// enforces).
+    fn classify_text_budget(&self) -> usize {
+        match self.settings.num_ctx {
+            8192 => 3500,
+            16384 => 5400,
+            _ => 24000,
         }
     }
 
@@ -765,14 +785,7 @@ impl Ollama {
 
     pub fn classify(&self, email: &Email) -> Result<(Verdict, bool)> {
         let current = mail::current_text(&email.text);
-        let (text, complete) = mail::bounded_text(
-            &current,
-            if self.settings.num_ctx == 8192 {
-                3500
-            } else {
-                9500
-            },
-        );
+        let (text, complete) = mail::bounded_text(&current, self.classify_text_budget());
         let payload =
             json!({"subject":mail::bounded_text(&email.subject,600).0,"untrusted_email":text});
         let verdict:Verdict=self.chat(
