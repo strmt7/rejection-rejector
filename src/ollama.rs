@@ -449,7 +449,16 @@ impl Ollama {
     ) -> Result<T> {
         let data = payload.to_string();
         // Conservative byte-based budget plus template allowance; never silently truncate a request.
-        let predict = 1536u32;
+        // Think-enabled models spend part of `num_predict` on reasoning before
+        // any schema JSON, so the output budget must scale with the context
+        // tier: 8192 keeps the historical tight budget (prompt envelope assumes
+        // it), while 16384 grants reasoning headroom so structured output can
+        // complete instead of failing closed as incomplete.
+        let predict = if self.settings.num_ctx <= 8192 {
+            1536u32
+        } else {
+            3072u32
+        };
         ensure!(
             system.len() + data.len() + predict as usize + 512 <= self.settings.num_ctx as usize,
             "Input exceeds safe context budget. Shorten candidate context/reply or select 16384 context and requalify the GPU"
