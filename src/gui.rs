@@ -15,47 +15,15 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
-const BG: Color32 = Color32::from_rgb(15, 20, 28);
-const PANEL: Color32 = Color32::from_rgb(22, 29, 39);
-const LINE: Color32 = Color32::from_rgb(47, 59, 74);
-const MINT: Color32 = Color32::from_rgb(103, 225, 186);
-const MUTED: Color32 = Color32::from_rgb(150, 167, 187);
-const AMBER: Color32 = Color32::from_rgb(245, 193, 103);
+mod theme;
+pub(crate) use theme::{AMBER, BG, LINE, MINT, MUTED, PANEL};
 
+/// Install the design tokens into the context.
+///
+/// Inputs: `ctx` — egui context to configure. Output: none; delegates to
+/// [`theme::apply`], the single source of truth for the visual style.
 fn configure_theme(ctx: &egui::Context) {
-    ctx.set_theme(egui::Theme::Dark);
-    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
-    style.visuals = egui::Visuals::dark();
-    style.visuals.override_text_color = Some(Color32::from_rgb(222, 231, 240));
-    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(34, 44, 58);
-    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(47, 65, 79);
-    style.visuals.panel_fill = BG;
-    style.visuals.window_fill = PANEL;
-    style.visuals.extreme_bg_color = BG;
-    style.visuals.faint_bg_color = PANEL;
-    style.visuals.selection.bg_fill = Color32::from_rgb(29, 81, 72);
-    style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, MINT);
-    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 44, 58);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 65, 79);
-    style.spacing.item_spacing = Vec2::new(12.0, 12.0);
-    style.spacing.button_padding = Vec2::new(14.0, 9.0);
-    style
-        .text_styles
-        .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Heading, egui::FontId::proportional(27.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
-    style
-        .text_styles
-        .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
-    ctx.set_style_of(egui::Theme::Dark, style);
+    theme::apply(ctx);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
