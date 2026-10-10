@@ -82,14 +82,20 @@ jobs:
           set -o pipefail
           scope_args=()
           if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
-            # Push runs mutate only the lines changed by the push: per-SHA
-            # evidence in minutes instead of hours. The weekly schedule keeps
-            # the full safety-critical core as the deep evidence pass.
+            # Push runs mutate only the lines changed by the push
+            # (cargo-mutants --in-diff): per-SHA evidence in minutes instead
+            # of hours. The weekly schedule keeps the full safety-critical
+            # core as the deep evidence pass.
             since="${MUTATION_SINCE:-}"
             if [ -z "$since" ] || [ "$since" = "0000000000000000000000000000000000000000" ]; then
               since="HEAD~1"
             fi
-            scope_args+=(--since "$since")
+            git diff "$since"...HEAD > artifacts/mutation.diff
+            if [ -s artifacts/mutation.diff ]; then
+              scope_args+=(--in-diff artifacts/mutation.diff)
+            else
+              echo "No code lines changed since $since; no mutants to run."
+            fi
           fi
           if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
             scope_args+=(
