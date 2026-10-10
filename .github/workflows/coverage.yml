@@ -33,8 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-coverage-main
-  cancel-in-progress: true
+  # Per-SHA group: coverage evidence must never be superseded by later
+  # pushes, or the release policy's latest-run evidence starves.
+  group: rust-coverage-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   coverage:
