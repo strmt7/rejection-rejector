@@ -76,6 +76,12 @@ enum Action {
     Status,
     /// Print a synthetic offline status; never connects to Gmail.
     Demo,
+    /// Run the interactive terminal interface (Queue, Review, Activity, Settings).
+    Tui {
+        /// Synthetic offline demo. No account, model or email sending.
+        #[arg(long)]
+        demo: bool,
+    },
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
     Doctor {
         /// Return a non-zero exit code unless this readiness level is satisfied.
@@ -463,6 +469,10 @@ fn main() -> Result<()> {
             eprintln!(
                 "Store this credential in the consuming application's OS-protected secret store. It cannot be revealed again; rotate it if lost."
             );
+        }
+        Action::Tui { demo } => {
+            let worker = Worker::spawn(dir, demo);
+            rejection_rejector::tui::run(worker)?;
         }
         Action::Status | Action::Demo => {
             let demo = matches!(args.command, Action::Demo);
