@@ -5,9 +5,9 @@
 [![caveman](https://img.shields.io/static/v1?label=&message=caveman&color=555&logo=github&logoColor=white)](https://github.com/JuliusBrussee/caveman)
 [![crawl4ai](https://img.shields.io/static/v1?label=&message=crawl4ai&color=555&logo=github&logoColor=white)](https://github.com/unclecode/crawl4ai)
 
-**Your voice, returned.** A standalone native Rust desktop application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending eligible replies.
+Time to fight recruiters back! A standalone native Rust desktop application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending replies.
 
-> Early release. Sending starts **disabled** and **Human review** is the default. No real emails or credentials are bundled. Validate the model on your own mailbox before enabling Automatic.
+Early release. Sending starts disabled and Human review is the default. No real emails or credentials are bundled. Validate the model on your own mailbox (ideally a test mailbox) before enabling Automatic.
 
 ## Implemented
 
@@ -112,7 +112,7 @@ Enterprise policy can be independently authenticated with SHA-256 pinning, Ed255
 - [Enterprise readiness](docs/ENTERPRISE_READINESS.md)
 - [Operations and incident runbook](docs/OPERATIONS.md)
 - [Windows accessibility and keyboard acceptance](docs/ACCESSIBILITY.md)
-- [Contribution and main-only development policy](CONTRIBUTING.md)
+- [Contribution and review policy](CONTRIBUTING.md)
 - [Tests and acceptance checks](docs/TESTING.md)
 - [Security](SECURITY.md)
 - [Threat model and data-flow invariants](docs/THREAT_MODEL.md)
