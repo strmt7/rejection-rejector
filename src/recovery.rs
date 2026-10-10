@@ -875,6 +875,7 @@ pub fn recovery_key_default_path(directory: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault::test_support::lock_credential_store;
     use crate::{
         types::{Source, Stub},
         vault::Vault,
@@ -1252,5 +1253,782 @@ mod tests {
         file.write_all(b"tamper").unwrap();
         file.sync_all().unwrap();
         assert!(verify_backup(&store, &destination).is_err());
+    }
+
+    /// Creates a workspace with a vault identifier and one seeded stub record.
+    /// Inputs: parent directory and workspace directory name. Output: workspace
+    /// path, vault identifier, vault handle and an open store over the seeded
+    /// database.
+    fn seeded_workspace(root: &Path, name: &str) -> (PathBuf, String, Vault, Store) {
+        let data = root.join(name);
+        private_dir(&data).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&data.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let vault = Vault::random();
+        let mut store = Store::open(&data.join(DATABASE_NAME), vault.clone()).unwrap();
+        store
+            .insert_stub(
+                Stub {
+                    account: "me@example.com".into(),
+                    provider_id: "seed-message".into(),
+                    thread_id: "seed-thread".into(),
+                    source: Source::Gmail,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        (data, id, vault, store)
+    }
+
+    /// Why: if any step of backup creation fails, no half-written `.partial`
+    /// staging directory may survive next to the destination; leftover staging
+    /// data would look like a valid backup to operators and could leak partial
+    /// database copies.
+    /// Inputs: workspace whose vault identifier disappears before the copy.
+    /// Output: error, no destination, and no `.partial-*` entry left behind.
+    #[test]
+    fn create_backup_failure_leaves_no_partial_staging_or_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, store) = seeded_workspace(root.path(), "data");
+        fs::remove_file(data.join(VAULT_ID_NAME)).unwrap();
+        let destination = root.path().join("backup");
+        let error = create_backup(&store, &data, &destination)
+            .expect_err("backup without a vault identifier must fail");
+        assert!(
+            error.to_string().contains("vault-id"),
+            "unexpected error: {error}"
+        );
+        assert!(!destination.exists());
+        for entry in fs::read_dir(root.path()).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().contains(".partial-"),
+                "partial staging directory leaked: {name:?}"
+            );
+        }
+    }
+
+    /// Why: the size limit on small metadata files is a security bound (it keeps
+    /// parser inputs bounded); a file exactly at the limit must be accepted and
+    /// one byte over must be refused, so an off-by-one regression is caught in
+    /// both directions.
+    /// Inputs: 100-byte file read with limits 100 and 99, plus a missing file.
+    /// Output: exactly-limit read succeeds, over-limit and missing reads error.
+    #[test]
+    fn read_small_enforces_the_size_limit_exactly() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manifest.json");
+        fs::write(&path, vec![b'x'; 100]).unwrap();
+        assert_eq!(read_small(&path, 100).unwrap().len(), 100);
+        let error = read_small(&path, 99).expect_err("one byte over the limit must be refused");
+        assert!(
+            error.to_string().contains("exceeds size limit"),
+            "unexpected error: {error}"
+        );
+        assert!(read_small(&root.path().join("missing"), 10).is_err());
+    }
+
+    /// Why: an I/O error while inspecting the restore-rearm marker must surface
+    /// as an error; mapping it to "absent" would silently skip the mandatory
+    /// delivery re-authorization after an offline restore.
+    /// Inputs: paths whose metadata lookup fails with a non-NotFound error.
+    /// Output: `restore_rearm_required` returns Err instead of Ok(false).
+    #[test]
+    fn restore_rearm_inspection_io_errors_are_not_treated_as_absent() {
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let broken = root.path().join("in<valid-name");
+        #[cfg(unix)]
+        let broken = {
+            // A parent component that is a regular file yields ENOTDIR, which is
+            // deliberately not the NotFound case handled as "absent".
+            let file = root.path().join("plain-file");
+            fs::write(&file, b"x").unwrap();
+            file.join(RESTORE_REARM_NAME)
+        };
+        assert!(restore_rearm_required(&broken).is_err());
+    }
+
+    /// Why: backup isolation health must distinguish "configured but the
+    /// destination does not exist yet" from a measured same-machine backup;
+    /// reporting a missing destination as same-failure-domain would hide a real
+    /// isolation gap behind a plausible-looking measurement.
+    /// Inputs: enabled settings pointing at a non-existent directory.
+    /// Output: configured=true, destination_exists=false, no domain verdict,
+    /// measurement "destination_missing".
+    #[test]
+    fn backup_isolation_reports_a_missing_destination_without_measuring() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, _store) = seeded_workspace(root.path(), "data");
+        let settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: root
+                .path()
+                .join("not-created")
+                .to_string_lossy()
+                .into_owned(),
+            ..Settings::default()
+        };
+        let status = backup_isolation_status(&data, &settings).unwrap();
+        assert!(status.configured);
+        assert!(!status.destination_exists);
+        assert_eq!(status.distinct_failure_domain, None);
+        assert_eq!(status.measurement, "destination_missing");
+    }
+
+    /// Why: scheduled-backup retention must only ever remove verified same-vault
+    /// backup directories with the exact prefix; any widening (plain files,
+    /// unrelated directories, non-UTF-8 names) would delete operator data, and
+    /// the retention bound itself must fail closed at both ends of its range.
+    /// Inputs: root containing a plain file, an unrelated directory and a
+    /// non-UTF-8 directory; keep values 1, 2 and 31. Output: zero removals with
+    /// every entry preserved, missing root a no-op, out-of-range keeps refused.
+    #[test]
+    fn prune_skips_unrelated_entries_and_enforces_retention_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let (_data, _id, _vault, store) = seeded_workspace(root.path(), "data");
+
+        let missing = root.path().join("absent");
+        assert_eq!(
+            prune_verified_scheduled_backups(&store, &missing, 2).unwrap(),
+            0
+        );
+        for keep in [1, 31] {
+            assert!(
+                prune_verified_scheduled_backups(&store, &missing, keep).is_err(),
+                "keep={keep} must be refused"
+            );
+        }
+
+        let backups = root.path().join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        let plain = backups.join("notes.txt");
+        fs::write(&plain, b"x").unwrap();
+        let unrelated = backups.join("do-not-delete");
+        fs::create_dir_all(&unrelated).unwrap();
+        #[cfg(windows)]
+        let weird_name = {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[0xD800])
+        };
+        #[cfg(unix)]
+        let weird_name = {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(vec![0xFF])
+        };
+        let weird = backups.join(&weird_name);
+        fs::create_dir(&weird).unwrap();
+
+        assert_eq!(
+            prune_verified_scheduled_backups(&store, &backups, 2).unwrap(),
+            0
+        );
+        assert!(plain.is_file(), "plain files must never be pruned");
+        assert!(
+            unrelated.is_dir(),
+            "unrelated directories must never be pruned"
+        );
+        assert!(
+            weird.is_dir(),
+            "non-UTF-8 names must be skipped, not deleted"
+        );
+    }
+
+    /// Why: a successful scheduled backup must not turn into a failure (or a
+    /// silent success) just because retention pruning cannot run; the operator
+    /// must still get the fresh backup plus an audited retention warning.
+    /// Inputs: backup root pre-filled with enough entries to exceed the prune
+    /// scan bound. Output: backup created and verified, pruning refused without
+    /// deleting anything, `backup.retention_warning` in the audit log.
+    #[test]
+    fn scheduled_backup_succeeds_and_warns_when_retention_pruning_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, vault_id_value, _vault, mut store) = seeded_workspace(root.path(), "data");
+        let backups = root.path().join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        for index in 0..513 {
+            fs::write(backups.join(format!("noise-{index:03}")), b"x").unwrap();
+        }
+        let settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: backups.to_string_lossy().into_owned(),
+            scheduled_backup_keep: 2,
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+
+        let manifest = create_scheduled_backup(&mut store, &data, &settings, Utc::now()).unwrap();
+        assert_eq!(manifest.vault_id, vault_id_value);
+        let scheduled: Vec<_> = fs::read_dir(&backups)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(SCHEDULED_BACKUP_PREFIX)
+            })
+            .collect();
+        assert_eq!(
+            scheduled.len(),
+            1,
+            "the fresh backup must survive the failed prune"
+        );
+        assert_eq!(
+            fs::read_dir(&backups).unwrap().count(),
+            514,
+            "a failed prune must not remove any entry"
+        );
+        let events = store.events(0, 1_000).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "backup.retention_warning"),
+            "retention failure must be surfaced in the audit log"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "backup.scheduled_succeeded")
+        );
+    }
+
+    /// Why: restore is transactional — a backup whose bytes no longer match its
+    /// manifest checksum must be rejected before the live workspace is touched;
+    /// accepting it would install silently corrupted state. The mid-file flip
+    /// also proves the checksum covers the whole database, not just a header.
+    /// Inputs: backup with one middle byte flipped. Output: checksum error, live
+    /// database bytes unchanged, no rollback directory, no rearm marker.
+    #[test]
+    fn restore_rejects_corrupted_backup_bytes_and_leaves_workspace_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let database = backup.join(DATABASE_NAME);
+        let mut bytes = fs::read(&database).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0xFF;
+        fs::write(&database, &bytes).unwrap();
+
+        let before = fs::read(data.join(DATABASE_NAME)).unwrap();
+        let error =
+            restore_backup(&data, &backup).expect_err("corrupted backup bytes must be rejected");
+        assert!(
+            error.to_string().contains("checksum mismatch"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(data.join(DATABASE_NAME)).unwrap(), before);
+        assert!(!data.join("recovery").exists());
+        assert!(!restore_rearm_required(&data).unwrap());
+    }
+
+    /// Why: restoring into a workspace of a different vault must be refused
+    /// before any file is written, and a restore that fails after temporarily
+    /// minting a vault identifier must roll that identifier back — otherwise the
+    /// failed workspace masquerades as an authentic one on the next run.
+    /// Inputs: one target with a foreign vault identifier, one fresh target
+    /// whose OS credential cannot be opened. Output: both restores fail without
+    /// creating a database; the fresh target's minted identifier is removed.
+    #[test]
+    fn restore_backup_refuses_cross_vault_targets_and_cleans_up_minted_identity() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+
+        let foreign = root.path().join("foreign");
+        private_dir(&foreign).unwrap();
+        let foreign_id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&foreign.join(VAULT_ID_NAME), foreign_id.as_bytes()).unwrap();
+        let error =
+            restore_backup(&foreign, &backup).expect_err("cross-vault restore must be refused");
+        assert!(
+            error.to_string().contains("does not match this workspace"),
+            "unexpected error: {error}"
+        );
+        assert!(!foreign.join(DATABASE_NAME).exists());
+
+        let fresh = root.path().join("fresh");
+        private_dir(&fresh).unwrap();
+        let error = restore_backup(&fresh, &backup)
+            .expect_err("restore without an OS credential must fail closed");
+        #[cfg(any(windows, target_os = "macos"))]
+        assert!(
+            error
+                .to_string()
+                .contains("Refusing to generate a replacement key"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !fresh.join(VAULT_ID_NAME).exists(),
+            "a failed restore must not leave a minted vault identifier behind"
+        );
+        assert!(!fresh.join(DATABASE_NAME).exists());
+    }
+
+    /// Why: the manifest and recovery-key file names are part of the on-disk
+    /// bundle contract; renaming them silently would break operator runbooks and
+    /// cross-version recovery tooling.
+    /// Inputs: arbitrary directory. Output: the two contracted paths.
+    #[test]
+    fn bundle_path_helpers_name_the_contract_members() {
+        let dir = Path::new("/bundle");
+        assert_eq!(
+            backup_manifest_path(dir),
+            Path::new("/bundle").join(MANIFEST_NAME)
+        );
+        assert_eq!(
+            recovery_key_default_path(dir),
+            Path::new("/bundle").join(RECOVERY_KEY_NAME)
+        );
+    }
+
+    /// Why: a truncated recovery envelope (partial write, torn download) must be
+    /// rejected as invalid before any Argon2 work or workspace mutation; a
+    /// lenient parser could accept a partially attacker-controlled envelope.
+    /// Inputs: envelope file cut to half its bytes. Output: verification errors
+    /// as invalid envelope and the recovery entry point leaves the target
+    /// directory completely untouched.
+    #[test]
+    fn truncated_recovery_envelope_bytes_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        let full = fs::read(&recovery_file).unwrap();
+        fs::write(&recovery_file, &full[..full.len() / 2]).unwrap();
+
+        let error = verify_recovery_key_for_backup(&backup, &recovery_file, passphrase)
+            .expect_err("a truncated envelope must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Recovery-key envelope is invalid"),
+            "unexpected error: {error}"
+        );
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        assert!(
+            recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase).is_err()
+        );
+        assert!(!target.join(DATABASE_NAME).exists());
+        assert!(!target.join(VAULT_ID_NAME).exists());
+    }
+
+    /// Why: the envelope's AEAD binds the wrapped key to the vault identifier as
+    /// associated data; an envelope whose identity was rewritten to match the
+    /// target backup must fail decryption even with the correct passphrase,
+    /// otherwise stolen key material could be re-labelled to another vault.
+    /// Inputs: envelope created for vault A with its identity rewritten to
+    /// vault B, checked against vault B's backup with the correct passphrase.
+    /// Output: authentication failure; nothing is verified or installed.
+    #[test]
+    fn recovery_envelope_bound_to_a_different_vault_identity_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let (_data_a, id_a, vault_a, _store_a) = seeded_workspace(root.path(), "vault-a");
+        let (data_b, id_b, _vault_b, store_b) = seeded_workspace(root.path(), "vault-b");
+        let backup = root.path().join("backup-b");
+        create_backup(&store_b, &data_b, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+
+        let mut forged = vault_a.recovery_envelope(&id_a, passphrase).unwrap();
+        forged.vault_id = id_b;
+        let recovery_file = root.path().join("forged-recovery-key.json");
+        write_new_private(&recovery_file, &serde_json::to_vec_pretty(&forged).unwrap()).unwrap();
+
+        let error = verify_recovery_key_for_backup(&backup, &recovery_file, passphrase)
+            .expect_err("an envelope bound to another identity must be rejected");
+        assert!(
+            error.to_string().contains("authentication failed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Attempts to create a file symlink, returning `None` where the OS forbids
+    /// symlink creation without elevated privileges.
+    /// Inputs: link path and its target path. Output: `Some(())` when the
+    /// symlink was created, `None` when the platform refused.
+    fn try_symlink(target: &Path, link: &Path) -> Option<()> {
+        #[cfg(windows)]
+        let result = std::os::windows::fs::symlink_file(target, link);
+        #[cfg(unix)]
+        let result = std::os::unix::fs::symlink(target, link);
+        result.ok()
+    }
+
+    /// Why: symlinked metadata and source files are a documented attack on
+    /// backup validation and staging (a link can point outside the bundle or at
+    /// operator files); both bounded reads and private copies must reject
+    /// symlinks outright instead of following them.
+    /// Inputs: symlinked manifest-sized file and symlinked copy source.
+    /// Output: both operations error with "must not be a symlink" and the copy
+    /// creates no destination; skipped where the OS forbids unprivileged
+    /// symlink creation.
+    #[test]
+    fn symlinked_metadata_and_sources_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside.txt");
+        fs::write(&outside, b"outside").unwrap();
+        let link = root.path().join("manifest.json");
+        if try_symlink(&outside, &link).is_none() {
+            return;
+        }
+        let error = read_small(&link, 64).expect_err("symlinked metadata must be refused");
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "unexpected error: {error}"
+        );
+
+        let copy_link = root.path().join("stage-source");
+        assert!(try_symlink(&outside, &copy_link).is_some());
+        let destination = root.path().join("stage.sqlite3");
+        let error = copy_private_new(&copy_link, &destination)
+            .expect_err("a symlinked copy source must be refused");
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "unexpected error: {error}"
+        );
+        assert!(!destination.exists());
+    }
+
+    /// Why: when a target workspace already holds a live database, recovery must
+    /// prove that database authenticates under the recovered key before the
+    /// replace phase; skipping the check could hand a foreign or planted
+    /// database the authority of the recovered vault, and a failure here must
+    /// abort with the live bytes untouched.
+    /// Inputs: target whose vault identifier matches but whose live database was
+    /// created under a different key. Output: authentication error before any
+    /// replacement, live database preserved.
+    #[test]
+    fn recover_workspace_refuses_a_live_database_that_fails_authentication() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+
+        let damaged = root.path().join("damaged-live");
+        private_dir(&damaged).unwrap();
+        write_new_private(&damaged.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        drop(Store::open(&damaged.join(DATABASE_NAME), Vault::random()).unwrap());
+        let before = fs::read(damaged.join(DATABASE_NAME)).unwrap();
+
+        let error = recover_workspace_from_backup(&damaged, &backup, &recovery_file, passphrase)
+            .expect_err("a non-authenticating live database must abort the recovery");
+        assert!(
+            error.to_string().contains("does not authenticate"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            fs::read(damaged.join(DATABASE_NAME)).unwrap(),
+            before,
+            "the rejected recovery must leave the live database byte-identical"
+        );
+    }
+
+    /// Removes a test credential from the OS credential store even when an
+    /// assertion panics, so repeated runs never collide with stale keys.
+    #[cfg(any(windows, target_os = "macos"))]
+    struct CredentialCleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for CredentialCleanup {
+        /// Deletes the credential bound to this test's vault identifier.
+        /// Inputs: `self.0` holds the vault identifier used as account name.
+        /// Output: none; deletion errors are ignored during teardown.
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    /// Why: the full recovery-key export path must work against a real
+    /// OS-credential workspace: the exported envelope has to authenticate the
+    /// backup, wrong passphrases must be rejected, and the same key must drive
+    /// the drill and a transactional restore. Exercises the production export,
+    /// drill and restore entry points end to end.
+    /// Inputs: keyring-backed workspace with one stub record and its backup.
+    /// Output: envelope round-trips, drill and restore succeed against the
+    /// recovered state, and re-exporting never overwrites the existing file.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn recovery_key_export_roundtrip_drives_drill_and_transactional_restore() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        private_dir(&data).unwrap();
+        let vault = Vault::open(&data).unwrap();
+        let id = vault_id(&data).unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+        let mut store = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
+        store
+            .insert_stub(
+                Stub {
+                    account: "me@example.com".into(),
+                    provider_id: "export-message".into(),
+                    thread_id: "export-thread".into(),
+                    source: Source::Gmail,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let backup = root.path().join("backup");
+        let manifest = create_backup(&store, &data, &backup).unwrap();
+
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = export_recovery_key(&data, passphrase, &recovery_file).unwrap();
+        assert_eq!(envelope.vault_id, id);
+        assert!(recovery_file.is_file());
+        let serialized = fs::read(&recovery_file).unwrap();
+        assert!(
+            !serialized
+                .windows(passphrase.len())
+                .any(|w| w == passphrase)
+        );
+        assert!(
+            export_recovery_key(&data, passphrase, &recovery_file).is_err(),
+            "export must never overwrite an existing recovery-key file"
+        );
+
+        let verified = verify_recovery_key_for_backup(&backup, &recovery_file, passphrase).unwrap();
+        assert_eq!(verified.vault_id, id);
+        assert!(
+            verify_recovery_key_for_backup(
+                &backup,
+                &recovery_file,
+                b"wrong passphrase but definitely long enough"
+            )
+            .is_err()
+        );
+
+        let drill = recovery_drill(&data, &backup).unwrap();
+        assert!(drill.isolated_restore_succeeded);
+        assert_eq!(drill.source_database_sha256, manifest.database_sha256);
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        write_new_private(&target.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let report = restore_backup(&target, &backup).unwrap();
+        assert_eq!(report.source_database_sha256, manifest.database_sha256);
+        assert!(restore_rearm_required(&target).unwrap());
+        let restored =
+            Store::open(&target.join(DATABASE_NAME), Vault::open(&target).unwrap()).unwrap();
+        assert_eq!(restored.counts("me@example.com").unwrap().stored, 1);
+    }
+
+    /// Why: recovery-key import must enforce vault identity end to end: a
+    /// foreign workspace is refused, a live database that does not authenticate
+    /// under the recovered key is refused, the OS credential is installed
+    /// exactly once, and every refusal rolls back the temporarily minted vault
+    /// identifier so failed workspaces cannot masquerade as authentic ones.
+    /// Inputs: backup plus its envelope against four target directories.
+    /// Output: cross-vault and non-authenticating imports error with cleanup;
+    /// the clean import installs a credential that opens the backup key.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn import_recovery_key_for_backup_enforces_identity_and_rolls_back_failures() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+
+        let other = root.path().join("other-vault");
+        private_dir(&other).unwrap();
+        let other_id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&other.join(VAULT_ID_NAME), other_id.as_bytes()).unwrap();
+        let error = import_recovery_key_for_backup(&other, &backup, &recovery_file, passphrase)
+            .expect_err("import into a different vault must be refused");
+        assert!(
+            error.to_string().contains("different vault"),
+            "unexpected error: {error}"
+        );
+
+        let mismatched = root.path().join("mismatched-live");
+        private_dir(&mismatched).unwrap();
+        drop(Store::open(&mismatched.join(DATABASE_NAME), Vault::random()).unwrap());
+        let error =
+            import_recovery_key_for_backup(&mismatched, &backup, &recovery_file, passphrase)
+                .expect_err("a live database of another vault must refuse the import");
+        assert!(
+            error.to_string().contains("does not authenticate"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !mismatched.join(VAULT_ID_NAME).exists(),
+            "a refused import must remove its minted vault identifier"
+        );
+
+        let clean = root.path().join("clean");
+        private_dir(&clean).unwrap();
+        let imported =
+            import_recovery_key_for_backup(&clean, &backup, &recovery_file, passphrase).unwrap();
+        assert_eq!(imported.vault_id, id);
+        let installed = Vault::open(&clean).unwrap();
+        let sealed = installed.seal("job:1", &"payload").unwrap();
+        assert_eq!(
+            vault.open_value::<String>("job:1", &sealed).unwrap(),
+            "payload",
+            "the installed OS credential must hold the recovered key"
+        );
+
+        let second = root.path().join("second");
+        private_dir(&second).unwrap();
+        let error = import_recovery_key_for_backup(&second, &backup, &recovery_file, passphrase)
+            .expect_err("import must never overwrite an existing OS credential");
+        assert!(
+            error.to_string().contains("already exists"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !second.join(VAULT_ID_NAME).exists(),
+            "a refused import must remove its minted vault identifier"
+        );
+    }
+
+    /// Why: portable recovery must prove the whole restore in an isolated
+    /// workspace first, then install the recovered OS credential only when none
+    /// exists, and refuse targets of other vaults before writing anything. The
+    /// two target scenarios also cover both credential-store branches: missing
+    /// credential (install) and existing credential (must authenticate backup).
+    /// Inputs: backup plus envelope; three target directories. Output: fresh
+    /// target restored with key installation, same-vault target restored through
+    /// the existing credential, foreign target untouched after refusal.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn recover_workspace_from_backup_installs_key_and_preserves_foreign_targets() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        let manifest = create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        let report =
+            recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase).unwrap();
+        assert_eq!(report.source_database_sha256, manifest.database_sha256);
+        assert_eq!(report.source_audit_head, manifest.audit_head);
+        assert!(restore_rearm_required(&target).unwrap());
+        let restored =
+            Store::open(&target.join(DATABASE_NAME), Vault::open(&target).unwrap()).unwrap();
+        assert_eq!(restored.counts("me@example.com").unwrap().stored, 1);
+
+        let same_vault = root.path().join("same-vault");
+        private_dir(&same_vault).unwrap();
+        write_new_private(&same_vault.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        // A consistent image of the live database (the raw file alone would miss
+        // WAL content) gives the target an existing same-key database to verify.
+        store.backup_to(&same_vault.join(DATABASE_NAME)).unwrap();
+        let report =
+            recover_workspace_from_backup(&same_vault, &backup, &recovery_file, passphrase)
+                .unwrap();
+        assert_eq!(report.source_database_sha256, manifest.database_sha256);
+
+        let foreign = root.path().join("foreign");
+        private_dir(&foreign).unwrap();
+        write_new_private(
+            &foreign.join(VAULT_ID_NAME),
+            uuid::Uuid::new_v4().to_string().as_bytes(),
+        )
+        .unwrap();
+        let error = recover_workspace_from_backup(&foreign, &backup, &recovery_file, passphrase)
+            .expect_err("portable recovery into another vault must be refused");
+        assert!(
+            error.to_string().contains("different vault"),
+            "unexpected error: {error}"
+        );
+        assert!(!foreign.join(DATABASE_NAME).exists());
+    }
+
+    /// Why: when an OS credential already claims the target vault identifier but
+    /// holds a different key, recovery must abort instead of installing the
+    /// backup under a credential that cannot authenticate it; otherwise a
+    /// planted or stale credential would be silently trusted as the recovered
+    /// vault.
+    /// Inputs: backup plus envelope of key K; target whose vault identifier
+    /// matches but whose OS credential was minted for a different key.
+    /// Output: authentication error from the credential check and no database
+    /// installed in the target.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn recover_workspace_refuses_a_mismatched_os_credential() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+
+        // Mint an OS credential for the same vault identifier that holds an
+        // unrelated key, then point the recovery at a matching target.
+        let decoy = root.path().join("decoy");
+        private_dir(&decoy).unwrap();
+        write_new_private(&decoy.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        Vault::random().install_os_key_if_missing(&decoy).unwrap();
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        write_new_private(&target.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        let error = recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase)
+            .expect_err("a mismatched OS credential must abort the recovery");
+        assert!(
+            error.to_string().contains("does not authenticate"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !target.join(DATABASE_NAME).exists(),
+            "the rejected recovery must not install anything"
+        );
     }
 }

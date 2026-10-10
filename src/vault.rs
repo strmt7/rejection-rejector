@@ -398,6 +398,8 @@ impl InstanceLock {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(any(windows, target_os = "macos"))]
+    use super::test_support::lock_credential_store;
     use super::*;
     #[test]
     fn encrypts_authenticates_and_binds_context() {
@@ -449,6 +451,8 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn existing_vault_id_without_credential_never_mints_a_replacement_key() {
+        // Serialize OS credential-store access (see `test_support`).
+        let _lock = lock_credential_store();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
@@ -470,5 +474,128 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let _a = InstanceLock::acquire(d.path()).unwrap();
         assert!(InstanceLock::acquire(d.path()).is_err());
+    }
+
+    /// Why: an encrypted database without its vault identifier must fail closed
+    /// before any key material is created; silently minting a new key would make
+    /// the existing ciphertext permanently undecryptable and hide the loss.
+    /// Inputs: directory holding only `state.sqlite3`. Output: error mentioning
+    /// key restoration, no `vault-id` written.
+    #[test]
+    fn vault_open_refuses_database_without_vault_identifier() {
+        let root = tempfile::tempdir().unwrap();
+        private_dir(root.path()).unwrap();
+        fs::write(root.path().join("state.sqlite3"), b"encrypted bytes").unwrap();
+        let error = Vault::open(root.path())
+            .err()
+            .expect("database without vault identifier must fail closed");
+        assert!(
+            error.to_string().contains("Restore the original key"),
+            "unexpected error: {error}"
+        );
+        assert!(!root.path().join("vault-id").exists());
+    }
+
+    /// Removes a test credential from the OS credential store even when an
+    /// assertion panics, so repeated test runs never collide with stale keys.
+    #[cfg(any(windows, target_os = "macos"))]
+    struct CredentialCleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for CredentialCleanup {
+        /// Delete the credential bound to this test's vault identifier.
+        /// Inputs: `self.0` holds the vault identifier used as account name.
+        /// Output: none; deletion errors are ignored during teardown.
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    /// Why: the OS-credential path must mint exactly one key on first open and
+    /// reuse that same key on every later open; a second mint would orphan all
+    /// previously sealed records. Exercises the mint arm, the read arm and the
+    /// seal/open round trip across two independently opened vaults.
+    /// Inputs: fresh directory. Output: both vault handles decrypt each other's
+    /// sealed records; the credential is removed on teardown.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn vault_open_mints_and_reuses_the_os_credential_key() {
+        // Serialize OS credential-store access (see `test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        private_dir(root.path()).unwrap();
+        let minted = Vault::open(root.path()).unwrap();
+        let id = vault_id(root.path()).unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+        let reopened = Vault::open(root.path()).unwrap();
+        let sealed = minted.seal("job:1", &"payload").unwrap();
+        assert_eq!(
+            reopened.open_value::<String>("job:1", &sealed).unwrap(),
+            "payload"
+        );
+        let sealed_back = reopened.seal("job:2", &"reply").unwrap();
+        assert_eq!(
+            minted.open_value::<String>("job:2", &sealed_back).unwrap(),
+            "reply"
+        );
+    }
+
+    /// Why: recovery-key import must install the recovered key exactly once and
+    /// refuse to overwrite an existing OS credential, otherwise a stale or
+    /// hostile credential could be silently replaced. Also proves a missing
+    /// vault identifier is rejected before any credential-store access.
+    /// Inputs: directory with a vault identifier and a recovered vault.
+    /// Output: first install succeeds, second install errors, an opened vault
+    /// reads the installed key, and a directory without identifier errors.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn install_os_key_if_missing_installs_once_and_refuses_overwrite() {
+        // Serialize OS credential-store access (see `test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        private_dir(root.path()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&root.path().join("vault-id"), id.as_bytes()).unwrap();
+        let _cleanup = CredentialCleanup(id);
+        let recovered = Vault::random();
+        recovered.install_os_key_if_missing(root.path()).unwrap();
+        let overwrite = recovered
+            .install_os_key_if_missing(root.path())
+            .expect_err("existing credential must not be overwritten");
+        assert!(
+            overwrite.to_string().contains("refusing to overwrite"),
+            "unexpected error: {overwrite}"
+        );
+        let opened = Vault::open(root.path()).unwrap();
+        let sealed = recovered.seal("job:1", &"state").unwrap();
+        assert_eq!(
+            opened.open_value::<String>("job:1", &sealed).unwrap(),
+            "state"
+        );
+
+        let unidentified = root.path().join("no-identity");
+        private_dir(&unidentified).unwrap();
+        assert!(recovered.install_os_key_if_missing(&unidentified).is_err());
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    //! Test-only helpers shared by every module that exercises the OS
+    //! credential store.
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serializes OS credential-store access across tests: the store is one
+    /// shared system resource and concurrent mint/read/delete sequences have
+    /// been observed to lose writes between parallel tests.
+    static CREDENTIAL_STORE_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire the credential-store serialization lock for the calling test.
+    /// Inputs: none. Output: a guard held until the end of the test; poisoning
+    /// left by an earlier panicked test is recovered so later tests still run.
+    pub(crate) fn lock_credential_store() -> MutexGuard<'static, ()> {
+        CREDENTIAL_STORE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
