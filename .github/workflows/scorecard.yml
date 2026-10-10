@@ -10,8 +10,6 @@ on:
 permissions:
   contents: read
   actions: read
-  id-token: write
-  security-events: write
 
 concurrency:
   group: scorecard-${{ github.ref }}
