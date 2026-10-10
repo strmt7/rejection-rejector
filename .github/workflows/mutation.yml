@@ -28,21 +28,30 @@ on:
   schedule:
     - cron: "11 2 * * 5"
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Mutation scope"
+        type: choice
+        options:
+          - safety-critical
+          - full
+        default: safety-critical
 
 permissions:
   contents: read
 
 concurrency:
   group: mutation-testing-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   safety-critical:
     name: Safety-critical mutation evidence
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: never
+      SCOPE_INPUT: ${{ inputs.scope }}
     steps:
       - name: Checkout exact main source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,12 +76,26 @@ jobs:
           mkdir -p artifacts
           set +e
           set -o pipefail
+          scope_args=()
+          if [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ] || [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
+            scope_args+=(
+              --file src/store.rs
+              --file src/vault.rs
+              --file src/emergency.rs
+              --file src/decision.rs
+              --file src/audit_anchor.rs
+              --file src/policy.rs
+              --file src/recovery.rs
+              --file "src/recovery/*"
+            )
+          fi
           cargo mutants \
             --all-features \
             --timeout-multiplier 3 \
             --minimum-test-timeout 20 \
             --jobs 2 \
             --output artifacts/mutants \
+            "${scope_args[@]}" \
             2>&1 | tee artifacts/mutation-run.log
           status=${PIPESTATUS[0]}
           set +o pipefail

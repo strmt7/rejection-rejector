@@ -104,3 +104,19 @@ Each evaluated model first runs the same local qualification used by the app, th
 Use a controlled Gmail test account for OAuth, one intentionally authorized reply and Sent reconciliation. Test pause/interruptions, age boundaries, changed conversations and edited drafts. Inspect Windows keyboard access and display scaling at 100%, 125%, 150% and 200%. Check real GPU/backend support, near-limit prompts, peak device memory and classification/draft quality on independently labelled private data before Automatic.
 
 CI does not authorize the owner's Gmail, send real email, run the actual model weights, measure a physical 16 GiB GPU or certify comprehensive Windows visual/accessibility behavior. The same-model reply audit is not an independent verifier. These limits must not be reported as passed tests.
+
+## Mutation testing scope
+
+The mutation gate (`.github/workflows/mutation.yml`) examines the safety-critical
+core only — `store.rs` (delivery state machine), `vault.rs` (crypto),
+`emergency.rs` (outbound stop), `decision.rs` (deterministic rejection gate),
+`audit_anchor.rs`, `policy.rs`, and `recovery.rs`/`recovery/` (restore
+integrity). This bounds the run so it completes as evidence instead of timing
+out mid-suite: an unscoped full-tree `cargo mutants` run over the whole crate
+exceeded the previous 45-minute job ceiling and was cancelled, which yielded no
+evidence at all. The job ceiling is now 180 minutes and `cancel-in-progress` is
+off so queued evidence runs are never dropped.
+
+Full-tree mutation is available on demand via **Run workflow** with
+`scope: full`. Timed-out mutants are inconclusive and cannot satisfy the gate;
+surviving viable mutants fail it.
