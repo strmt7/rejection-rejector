@@ -350,7 +350,7 @@ jobs:
           python scripts/verify_package.py $env:PACKAGE_PATH --expected-commit $env:GITHUB_SHA --signing-mode $env:SIGNING_MODE --expected-sha256 $report.archive_sha256 --report artifacts/package-verification-final.json
           if ($LASTEXITCODE -ne 0) { throw 'Package bytes changed after attestation' }
       - name: Upload package and evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rejection-rejector-attested-windows-${{ inputs.signing }}-${{ github.sha }}
           path: artifacts/
