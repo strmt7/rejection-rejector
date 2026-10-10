@@ -2141,10 +2141,9 @@ fn requires_close_confirmation(dirty: bool, operation: &OperationStatus) -> bool
     dirty || (operation.state == OperationState::Running && operation.kind.shutdown_sensitive())
 }
 
-/// Only the exact persisted draft is a valid GUI send candidate.
-fn visible_draft_matches(job: &Job, text: &str) -> bool {
-    job.draft.as_ref().is_some_and(|d| d.body == text)
-}
+#[cfg(test)]
+use crate::engine::visible_draft_matches;
+use crate::engine::{editor_binding_matches, send_gate_eligible};
 mod review;
 impl App {
     fn modal_open(&self) -> bool {
@@ -2164,9 +2163,6 @@ impl App {
             _ => Tab::Review,
         });
     }
-}
-fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
-    key.is_some_and(|(id, revision)| id == &job.id && *revision == job.revision)
 }
 
 #[cfg(test)]
@@ -2264,64 +2260,7 @@ mod editor_binding_regressions {
 #[cfg(test)]
 mod send_guard_tests {
     use super::*;
-    use crate::types::{Draft, OperationKind, OperationState, Source, Stub};
-
-    fn job_with_draft(id: &str, revision: u64, body: &str) -> Job {
-        let mut job = Job::new(
-            Stub {
-                account: "acct".to_string(),
-                provider_id: id.to_string(),
-                thread_id: "thread".to_string(),
-                source: Source::Gmail,
-            },
-            chrono::Utc::now(),
-        );
-        job.revision = revision;
-        job.draft = Some(Draft {
-            body: body.to_string(),
-            origin: "test".to_string(),
-        });
-        job
-    }
-
-    /// The "confirm the exact reply" invariant: any deviation from the
-    /// persisted draft, including whitespace-only edits, must disqualify the
-    /// visible text from being a send candidate.
-    #[test]
-    fn visible_draft_requires_exact_persisted_text() {
-        let job = job_with_draft("m1", 1, "Kind regards");
-        assert!(visible_draft_matches(&job, "Kind regards"));
-        assert!(!visible_draft_matches(&job, "Kind regards "));
-        assert!(!visible_draft_matches(&job, "kind regards"));
-        assert!(!visible_draft_matches(&job, ""));
-        assert!(!visible_draft_matches(
-            &job,
-            "Kind regards
-"
-        ));
-    }
-
-    /// A job without a persisted draft can never be a send candidate, whatever
-    /// the editor contains.
-    #[test]
-    fn missing_draft_never_matches() {
-        let job = job_with_draft("m2", 1, "x");
-        let mut no_draft = job;
-        no_draft.draft = None;
-        assert!(!visible_draft_matches(&no_draft, "anything"));
-    }
-
-    /// Stale-editor guard: the editor binds to message id AND revision, so an
-    /// editor retained from an older revision must not act on the newer one.
-    #[test]
-    fn editor_binding_rejects_stale_revision_and_foreign_message() {
-        let job = job_with_draft("m3", 7, "x");
-        let id = job.id.clone();
-        assert!(editor_binding_matches(&job, Some(&(id.clone(), 7))));
-        assert!(!editor_binding_matches(&job, Some(&(id.clone(), 6))));
-        assert!(!editor_binding_matches(&job, Some(&(id + "-other", 7))));
-        assert!(!editor_binding_matches(&job, None));
-    }
+    use crate::types::{OperationKind, OperationState};
 
     /// Close confirmation must fire for unsaved edits and for running
     /// shutdown-sensitive work, and only then.
