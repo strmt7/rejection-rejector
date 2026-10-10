@@ -160,7 +160,7 @@ def main() -> int:
         args.base_model,
         quantization_config=quant,
         device_map={"": 0} if device == "cuda" else None,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32,
+        torch_dtype=torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float32,
     )
     if args.load_in_4bit:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
