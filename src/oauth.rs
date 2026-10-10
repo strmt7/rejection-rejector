@@ -120,17 +120,19 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
 }
 
 /// Desktop-app OAuth: S256 PKCE, random state, random loopback port, five-minute expiry.
+///
+/// Inputs: `path` — Google Desktop-app OAuth JSON; `send` — whether the send
+/// scope is required; `cancelled` — cooperative cancellation flag. Output:
+/// the obtained [`Credentials`]. Opens the user's system browser with
+/// [`webbrowser::open`]; the launcher failure mapping lives in [`login_with`]
+/// so it is exercised without launching a real browser.
 pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credentials> {
     login_with(
         path,
         send,
         cancelled,
         Duration::from_secs(300),
-        |url| {
-            webbrowser::open(url)
-                .map(|_| ())
-                .context("Cannot open the system browser for Google sign-in")
-        },
+        webbrowser::open,
         TOKEN_URL,
     )
 }
@@ -144,13 +146,15 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
 /// [`Credentials`]. The browser launcher and token endpoint are injectable so
 /// the whole consent loop (state, PKCE binding, decline handling, exchange
 /// failure modes) can be exercised deterministically without a real browser
-/// or Google; [`login`] wires in the real ones.
-fn login_with(
+/// or Google; [`login`] wires in the real ones. A launcher failure of any
+/// error type is mapped to "Cannot open the system browser for Google
+/// sign-in".
+fn login_with<E: Into<anyhow::Error>>(
     path: &Path,
     send: bool,
     cancelled: &AtomicBool,
     timeout: Duration,
-    open_browser: impl Fn(&str) -> Result<()>,
+    open_browser: impl Fn(&str) -> std::result::Result<(), E>,
     token_url: &str,
 ) -> Result<Credentials> {
     let metadata = fs::symlink_metadata(path)?;
@@ -203,55 +207,20 @@ fn login_with(
         ("code_challenge", challenge.as_str()),
         ("code_challenge_method", "S256"),
     ]);
-    open_browser(url.as_str())?;
-    let start = Instant::now();
-    let login_deadline = start + timeout;
+    open_browser(url.as_str()).map_err(|error| {
+        let error: anyhow::Error = error.into();
+        anyhow::anyhow!("Cannot open the system browser for Google sign-in: {error}")
+    })?;
+    let login_deadline = Instant::now() + timeout;
     let local_port = listener.local_addr()?.port();
-    let code = Zeroizing::new(loop {
-        ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
-        ensure!(
-            start.elapsed() < timeout,
-            "Authorization timed out; no credentials saved"
-        );
-        match listener.accept() {
-            Ok((mut stream, peer)) => {
-                if !peer.ip().is_loopback() {
-                    continue;
-                }
-                stream.set_read_timeout(Some(Duration::from_millis(250)))?;
-                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                let deadline = (Instant::now() + Duration::from_secs(2)).min(login_deadline);
-                let result =
-                    callback::read_headers(&mut stream, cancelled, deadline).and_then(|headers| {
-                        let target = callback::request_target(&headers, local_port)?;
-                        callback_code(target, &state)
-                    });
-                let (status, text) = if matches!(&result, Ok(Some(_))) {
-                    (
-                        "200 OK",
-                        "Authorization received. Return to Rejection Rejector.",
-                    )
-                } else {
-                    (
-                        "400 Bad Request",
-                        "Authorization not accepted. Retry from the application.",
-                    )
-                };
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
-                    text.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                if let Ok(Some(code)) = result {
-                    break code;
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50))
-            }
-            Err(e) => return Err(e.into()),
-        }
-    });
+    let code = consent_code(
+        TcpListener::accept,
+        &listener,
+        local_port,
+        state.as_str(),
+        cancelled,
+        login_deadline,
+    )?;
     // Do not exchange an authorization code after cancellation or expiry.
     ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
     ensure!(Instant::now() < login_deadline, "Authorization expired");
@@ -289,6 +258,73 @@ fn login_with(
         refresh_token,
         can_send,
     })
+}
+
+/// One accept step on the loopback consent listener.
+type AcceptFn = fn(&TcpListener) -> std::io::Result<(std::net::TcpStream, std::net::SocketAddr)>;
+
+/// Drive the loopback consent callback until an authorization code arrives.
+///
+/// Inputs: `accept` — one accept step on the listener (production passes
+/// [`TcpListener::accept`]; tests inject an always-failing step to pin the
+/// error mapping without a real socket failure); `listener` — loopback
+/// listener bound to `127.0.0.1`, so every accepted peer is loopback by
+/// construction and no peer filter is needed; `local_port` — port advertised
+/// in the redirect URI; `state` — expected OAuth state; `cancelled` —
+/// cooperative cancellation flag; `login_deadline` — consent deadline.
+/// Output: the authorization code, or an error for cancellation, expiry, a
+/// listener or socket failure, or an unreadable callback request.
+fn consent_code(
+    accept: AcceptFn,
+    listener: &TcpListener,
+    local_port: u16,
+    state: &str,
+    cancelled: &AtomicBool,
+    login_deadline: Instant,
+) -> Result<Zeroizing<String>> {
+    let code = loop {
+        ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
+        ensure!(
+            Instant::now() < login_deadline,
+            "Authorization timed out; no credentials saved"
+        );
+        match accept(listener) {
+            Ok((mut stream, _peer)) => {
+                stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+                let deadline = (Instant::now() + Duration::from_secs(2)).min(login_deadline);
+                let result =
+                    callback::read_headers(&mut stream, cancelled, deadline).and_then(|headers| {
+                        let target = callback::request_target(&headers, local_port)?;
+                        callback_code(target, state)
+                    });
+                let (status, text) = if matches!(&result, Ok(Some(_))) {
+                    (
+                        "200 OK",
+                        "Authorization received. Return to Rejection Rejector.",
+                    )
+                } else {
+                    (
+                        "400 Bad Request",
+                        "Authorization not accepted. Retry from the application.",
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                if let Ok(Some(code)) = result {
+                    break code;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    Ok(Zeroizing::new(code))
 }
 #[cfg(test)]
 mod tests {
@@ -896,6 +932,38 @@ mod tests {
         .expect("login must fail")
         .to_string();
         assert!(error.contains("no browser"), "{error}");
+    }
+
+    /// Accept step that always fails with a hard (non-`WouldBlock`) error,
+    /// standing in for a listener failure during the consent loop.
+    ///
+    /// Inputs: ignored listener. Output: always `Err`.
+    fn failing_accept(
+        _listener: &TcpListener,
+    ) -> std::io::Result<(TcpStream, std::net::SocketAddr)> {
+        Err(std::io::Error::other("injected listener failure"))
+    }
+
+    // why: a listener failure other than `WouldBlock` must abort the consent
+    // loop immediately with the underlying error preserved, instead of
+    // silently spinning out the consent deadline; dropping, re-mapping or
+    // swallowing the error fails this test.
+    #[test]
+    fn listener_accept_failures_abort_the_consent_loop() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let error = consent_code(
+            failing_accept,
+            &listener,
+            listener.local_addr().unwrap().port(),
+            "state",
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(30),
+        )
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("injected listener failure"), "{error}");
     }
 }
 

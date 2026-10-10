@@ -119,10 +119,21 @@ struct Summary {
     tag_metrics: BTreeMap<String, TagSummary>,
 }
 
+/// Parse the evaluation case fixture set.
+///
+/// Inputs: `json` — raw case-fixture document. Output: the parsed cases, or
+/// a parse error; a malformed fixture must abort the evaluation loudly
+/// instead of silently scoring zero cases.
+fn parse_cases(json: &str) -> Result<Vec<Case>> {
+    Ok(serde_json::from_str(json)?)
+}
+
+/// The pinned evaluation fixture set, compiled into the binary.
+///
+/// Inputs: none. Output: the parsed cases (the pinned document parses by
+/// construction; any failure surfaces through [`parse_cases`]).
 fn fixtures() -> Result<Vec<Case>> {
-    Ok(serde_json::from_str(include_str!(
-        "../tests/fixtures/classification.json"
-    ))?)
+    parse_cases(include_str!("../tests/fixtures/classification.json"))
 }
 
 /// Evaluate the complete configured local pipeline on synthetic recruiting mail.
@@ -221,9 +232,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                 critical_negative_unsafe_drafts +=
                     usize::from(critical_negative && non_rejection_draft);
                 for tag in &case.tags {
-                    let metrics = tag_metrics.get_mut(tag.as_str()).ok_or_else(|| {
-                        anyhow::anyhow!("Evaluation tag registry invariant failed")
-                    })?;
+                    let metrics = tag_summary_mut(&mut tag_metrics, tag.as_str())?;
                     metrics.completed += 1;
                     metrics.correct += usize::from(matched);
                     metrics.rejection_true_positives += usize::from(
@@ -438,14 +447,44 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
     write_report(out, &report)
 }
 
-fn write_report(out: &Path, report: &serde_json::Value) -> Result<()> {
+/// Create the report's parent directory when the output path carries one.
+///
+/// Inputs: `out` — report file path. Output: `Ok(())` once any non-empty
+/// parent directory exists; a bare filename needs no directory work and
+/// nothing may be created for it. IO failures propagate unchanged.
+fn ensure_report_parent(out: &Path) -> Result<()> {
     if let Some(parent) = out.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)?;
     }
+    Ok(())
+}
+
+/// Write the evaluation report to disk with private permissions.
+///
+/// Inputs: `out` — report file path; `report` — serialized report value.
+/// Output: `Ok(())` once the pretty-printed report is stored; any parent
+/// directory is created first and IO or serialization failures propagate.
+fn write_report(out: &Path, report: &serde_json::Value) -> Result<()> {
+    ensure_report_parent(out)?;
     write_new_private(out, &serde_json::to_vec_pretty(report)?)?;
     Ok(())
+}
+
+/// Look up the pre-registered summary row for one case tag.
+///
+/// Inputs: `tag_metrics` — registry pre-populated from every case's tags
+/// before analysis; `tag` — tag being updated. Output: the mutable summary
+/// row, or the invariant error when the registry lacks the tag (a program
+/// bug — both loops walk the same case list — never an input condition).
+fn tag_summary_mut<'a>(
+    tag_metrics: &'a mut BTreeMap<String, TagSummary>,
+    tag: &str,
+) -> Result<&'a mut TagSummary> {
+    tag_metrics
+        .get_mut(tag)
+        .ok_or_else(|| anyhow::anyhow!("Evaluation tag registry invariant failed"))
 }
 
 fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
@@ -798,5 +837,47 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(parsed["suite"], "x");
+    }
+
+    // why: a malformed fixture must abort the evaluation loudly instead of
+    // silently scoring zero cases, and a syntactically valid empty corpus
+    // must still parse cleanly so the failure arm is genuinely a parse
+    // rejection and not a shape or emptiness check.
+    #[test]
+    fn fixture_parse_failures_abort_the_evaluation() {
+        assert!(parse_cases("not json").is_err());
+        assert!(parse_cases(r#"[{"id":"case-1","expected":}"#).is_err());
+        assert!(parse_cases("[]").unwrap().is_empty());
+    }
+
+    // why: a bare output filename means "write here", so parent-directory
+    // preparation must be a strict no-op — creating anything (a directory
+    // named after the report, or tripping on the empty parent path) corrupts
+    // the working directory or fails a legal write.
+    #[test]
+    fn report_parent_creation_is_skipped_for_bare_filenames() {
+        let bare = format!("bare-report-probe-{}.json", uuid::Uuid::new_v4());
+        ensure_report_parent(Path::new(&bare)).unwrap();
+        assert!(
+            !Path::new(&bare).exists(),
+            "a bare filename must not cause any filesystem entry"
+        );
+    }
+
+    // why: the tag registry is pre-populated from the same case list before
+    // analysis, so a missing tag is a program invariant violation that must
+    // fail the evaluation loudly instead of silently skipping tag metrics;
+    // this pins both the failure and its stable error identity.
+    #[test]
+    fn tag_registry_miss_is_a_hard_invariant_error() {
+        let mut registry = BTreeMap::<String, TagSummary>::new();
+        let error = tag_summary_mut(&mut registry, "missing-tag")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Evaluation tag registry invariant failed"),
+            "{error}"
+        );
     }
 }

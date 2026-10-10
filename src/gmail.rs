@@ -317,7 +317,26 @@ impl Gmail {
         )
     }
     /// Exactly one application-level send request; no automatic network retry is performed here.
+    ///
+    /// Inputs: `raw` — base64url RFC 2822 message; `thread_id` — target
+    /// thread. Output: the provider message id on confirmed delivery, or a
+    /// classified [`SendFailure`] (never a silent replay).
     pub fn send(&mut self, raw: &str, thread_id: &str) -> std::result::Result<String, SendFailure> {
+        self.send_with(raw, thread_id, net::client)
+    }
+
+    /// Send one message with an injectable HTTP client factory.
+    ///
+    /// Inputs: `raw` / `thread_id` — as [`Gmail::send`]; `make_client` —
+    /// blocking HTTP client factory (production passes [`net::client`]; tests
+    /// inject a failing factory to pin the construction-failure mapping).
+    /// Output: as [`Gmail::send`].
+    fn send_with(
+        &mut self,
+        raw: &str,
+        thread_id: &str,
+        make_client: fn(u64, bool) -> Result<reqwest::blocking::Client>,
+    ) -> std::result::Result<String, SendFailure> {
         if !self.can_send() {
             return Err(SendFailure {
                 kind: SendFailureKind::NotAccepted,
@@ -334,7 +353,7 @@ impl Gmail {
             kind: SendFailureKind::NotAccepted,
             message: format!("Google authorization failed before dispatch: {error}"),
         })?;
-        let client = net::client(60, false).map_err(|error| SendFailure {
+        let client = make_client(60, false).map_err(|error| SendFailure {
             kind: SendFailureKind::NotAccepted,
             message: format!("Gmail client could not be created: {error}"),
         })?;
@@ -1564,6 +1583,47 @@ mod tests {
         let failure = client.send("raw", "not a valid id!").unwrap_err();
         assert_eq!(failure.kind, SendFailureKind::NotAccepted);
         assert_eq!(fake.hits().len(), 0, "neither refusal may reach the wire");
+    }
+
+    /// Client factory that always fails, standing in for an unbuildable HTTP
+    /// client (e.g. TLS/runtime failure) before anything is dispatched.
+    ///
+    /// Inputs: ignored factory parameters. Output: always `Err`.
+    fn broken_client_factory(
+        _timeout: u64,
+        _local: bool,
+    ) -> anyhow::Result<reqwest::blocking::Client> {
+        Err(anyhow::anyhow!("injected client factory failure"))
+    }
+
+    // why: a client that cannot be built means no request left the process,
+    // so the send must classify as `NotAccepted` with the fixed
+    // "could not be created" mapping and only the token refresh may have
+    // touched the wire. Misclassifying this as `Uncertain` would wrongly
+    // freeze the at-most-once hold on a send that never happened.
+    #[test]
+    fn client_construction_failure_is_not_accepted_before_dispatch() {
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(true);
+        let failure = client
+            .send_with("raw", "thread-1", broken_client_factory)
+            .unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert!(
+            failure.message.contains("could not be created"),
+            "{}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("injected client factory failure"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(
+            fake.hits().len(),
+            1,
+            "only the token refresh may reach the wire; the message must not be dispatched"
+        );
     }
 
     /// Guards send outcome classification: connect loss before dispatch is

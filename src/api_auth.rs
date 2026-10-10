@@ -62,6 +62,16 @@ impl ApiTokenVerifier {
     }
 }
 
+/// Persist a one-way token verifier and drop the legacy plaintext slot.
+///
+/// Inputs: `store` — application meta store; `verifier` — reduced token
+/// verifier; `audit_kind` / `audit_detail` — audit-log event identity.
+/// Output: `Ok(())` once the verifier is stored and the legacy plaintext
+/// entry is atomically retired; any storage failure propagates unchanged.
+///
+/// The call result is bound by callers before `?` so LLVM line attribution
+/// lands on executed lines (the old multi-line `...)?;` form attributed the
+/// never-taken early-return block to its closing line, showing as uncovered).
 fn persist_verifier(
     store: &mut Store,
     verifier: &ApiTokenVerifier,
@@ -94,12 +104,13 @@ pub fn load_or_create(store: &mut Store) -> Result<ApiCredentialMaterial> {
     if let Some(legacy) = store.meta::<String>(LEGACY_TOKEN_META)? {
         let legacy = Zeroizing::new(legacy);
         let verifier = ApiTokenVerifier::from_token(legacy.as_str())?;
-        persist_verifier(
+        let persisted = persist_verifier(
             store,
             &verifier,
             "security.api_token_migrated",
             "Legacy recoverable integration API token replaced by a one-way verifier",
-        )?;
+        );
+        persisted?;
         return Ok(ApiCredentialMaterial {
             verifier,
             plaintext_once: None,
@@ -109,12 +120,13 @@ pub fn load_or_create(store: &mut Store) -> Result<ApiCredentialMaterial> {
 
     let token = Zeroizing::new(oauth::secret());
     let verifier = ApiTokenVerifier::from_token(token.as_str())?;
-    persist_verifier(
+    let persisted = persist_verifier(
         store,
         &verifier,
         "security.api_token_created",
         "Integration API token verifier created; plaintext credential is shown once only",
-    )?;
+    );
+    persisted?;
     Ok(ApiCredentialMaterial {
         verifier,
         plaintext_once: Some(token),
@@ -127,12 +139,13 @@ pub fn load_or_create(store: &mut Store) -> Result<ApiCredentialMaterial> {
 pub fn rotate(store: &mut Store) -> Result<ApiCredentialMaterial> {
     let token = Zeroizing::new(oauth::secret());
     let verifier = ApiTokenVerifier::from_token(token.as_str())?;
-    persist_verifier(
+    let persisted = persist_verifier(
         store,
         &verifier,
         "security.api_token_rotated",
         "Integration API token rotated; only the one-way verifier is persisted",
-    )?;
+    );
+    persisted?;
     Ok(ApiCredentialMaterial {
         verifier,
         plaintext_once: Some(token),

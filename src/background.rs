@@ -226,31 +226,56 @@ fn write_task_xml(data_dir: &Path, xml: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Run one Windows Task Scheduler command with the real `schtasks.exe`.
+///
+/// Inputs: `args` — exact `schtasks` argument vector. Output: the process
+/// output, or an error when the command cannot be spawned. This is the
+/// production [`CommandRunner`]; tests inject fakes so registration flows
+/// never touch the real scheduler.
 #[cfg(windows)]
-fn schtasks(args: &[&str]) -> Result<std::process::Output> {
+pub fn schtasks(args: &[&str]) -> Result<std::process::Output> {
     std::process::Command::new(system32_binary("schtasks.exe")?)
         .args(args)
         .output()
         .context("Unable to execute Windows Task Scheduler command")
 }
 
-// Coverage note: `install`, `remove` and the registered-task branch of
-// `status` shell out to the real Task Scheduler under the fixed production
-// task name. Running them from tests would create or DESTROY a genuine
-// per-user worker registration on a developer machine, so they are exercised
-// only by manual release verification; everything they compute (XML,
-// arguments, quoting, definition comparison) is covered through
-// `render_task_xml`, `expected_arguments` and `task_definition_matches`.
+/// Non-Windows stand-in for [`schtasks`]: the autostart entry points refuse
+/// before any command runs, so the runner only satisfies the shared API.
+///
+/// Inputs: `args` — ignored. Output: always the unsupported-platform error.
+#[cfg(not(windows))]
+pub fn schtasks(_args: &[&str]) -> Result<std::process::Output> {
+    Err(anyhow::anyhow!(
+        "Windows Task Scheduler autostart is supported only on Windows"
+    ))
+}
+
+/// Runner for one Task Scheduler invocation: takes the exact `schtasks`
+/// argument vector and returns the process output or a spawn failure.
+pub type CommandRunner = fn(&[&str]) -> Result<std::process::Output>;
+
+/// Register the worker as a per-user logon task and report the resulting
+/// registration state.
+///
+/// Inputs: `executable` — worker executable; `data_dir` — worker data
+/// directory; `run` — Task Scheduler command runner (production passes
+/// [`schtasks`], tests inject a fake so registration flows never touch the
+/// real scheduler). Output: the [`AutostartStatus`] observed after
+/// submission; input validation failures, a rejected definition and spawn
+/// failures propagate as errors, and the temporary definition file is
+/// removed on every path.
 #[cfg(windows)]
-pub fn install(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
+pub fn install(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
     let user = current_user()?;
     let xml = render_task_xml(&user, &executable, &data_dir)?;
     let xml_path = write_task_xml(&data_dir, &xml)?;
     let xml_arg = xml_path
         .to_str()
-        .context("Temporary task definition path is not valid Unicode")?;
-    let result = schtasks(&["/Create", "/TN", TASK_NAME, "/XML", xml_arg, "/F"]);
+        .context("Temporary task definition path is not valid Unicode");
+    let xml_arg = xml_arg?;
+    let result = run(&["/Create", "/TN", TASK_NAME, "/XML", xml_arg, "/F"]);
     let _ = std::fs::remove_file(&xml_path);
     let output = result?;
     ensure!(
@@ -258,19 +283,32 @@ pub fn install(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
         "Task Scheduler rejected worker registration (exit code {:?})",
         output.status.code()
     );
-    status(&executable, &data_dir)
+    status(&executable, &data_dir, run)
 }
 
+/// Non-Windows [`install`] stub: Task Scheduler autostart is Windows-only.
+///
+/// Inputs: ignored. Output: always the unsupported-platform error.
 #[cfg(not(windows))]
-pub fn install(_executable: &Path, _data_dir: &Path) -> Result<AutostartStatus> {
+pub fn install(
+    _executable: &Path,
+    _data_dir: &Path,
+    _run: CommandRunner,
+) -> Result<AutostartStatus> {
     Err(anyhow::anyhow!(
         "Windows Task Scheduler autostart is supported only on Windows"
     ))
 }
 
+/// Remove the registered worker task.
+///
+/// Inputs: `run` — Task Scheduler command runner (production passes
+/// [`schtasks`], tests inject a fake). Output: `Ok(())` when the scheduler
+/// confirms removal; a refused removal or spawn failure propagates as an
+/// error.
 #[cfg(windows)]
-pub fn remove() -> Result<()> {
-    let output = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])?;
+pub fn remove(run: CommandRunner) -> Result<()> {
+    let output = run(&["/Delete", "/TN", TASK_NAME, "/F"])?;
     ensure!(
         output.status.success(),
         "Task Scheduler could not remove the worker task (exit code {:?})",
@@ -279,8 +317,11 @@ pub fn remove() -> Result<()> {
     Ok(())
 }
 
+/// Non-Windows [`remove`] stub: Task Scheduler autostart is Windows-only.
+///
+/// Inputs: ignored. Output: always the unsupported-platform error.
 #[cfg(not(windows))]
-pub fn remove() -> Result<()> {
+pub fn remove(_run: CommandRunner) -> Result<()> {
     Err(anyhow::anyhow!(
         "Windows Task Scheduler autostart is supported only on Windows"
     ))
@@ -319,10 +360,18 @@ fn task_definition_matches(actual_xml: &str, executable: &Path, data_dir: &Path)
     Ok(required.iter().all(|needle| actual_xml.contains(needle)))
 }
 
+/// Report the worker's Task Scheduler registration state.
+///
+/// Inputs: `executable` — worker executable; `data_dir` — worker data
+/// directory; `run` — Task Scheduler command runner (production passes
+/// [`schtasks`], tests inject a fake). Output: the [`AutostartStatus`] —
+/// `installed: false` when the task is not registered, otherwise the
+/// registered definition compared against the required worker contract;
+/// invalid query output or input failures propagate as errors.
 #[cfg(windows)]
-pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
+pub fn status(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
-    let output = schtasks(&["/Query", "/TN", TASK_NAME, "/XML"])?;
+    let output = run(&["/Query", "/TN", TASK_NAME, "/XML"])?;
     if !output.status.success() {
         return Ok(AutostartStatus {
             supported: true,
@@ -353,8 +402,12 @@ pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
     })
 }
 
+/// Non-Windows [`status`] stub: Task Scheduler autostart is Windows-only.
+///
+/// Inputs: ignored except for echoing `executable` and `data_dir`. Output:
+/// an unsupported [`AutostartStatus`] describing the platform limitation.
 #[cfg(not(windows))]
-pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
+pub fn status(executable: &Path, data_dir: &Path, _run: CommandRunner) -> Result<AutostartStatus> {
     Ok(AutostartStatus {
         supported: false,
         installed: false,
@@ -659,7 +712,7 @@ mod tests {
     fn status_reports_consistent_registration_state() {
         let root = tempfile::tempdir().unwrap();
         let exe = std::env::current_exe().unwrap();
-        let state = status(&exe, root.path()).unwrap();
+        let state = status(&exe, root.path(), schtasks).unwrap();
         assert!(state.supported);
         assert_eq!(state.task_name, TASK_NAME);
         assert_eq!(
@@ -717,5 +770,282 @@ mod tests {
             !task_definition_matches(&xml, Path::new(&long_exe), Path::new(&long_data_plus))
                 .unwrap()
         );
+    }
+
+    /// Fake Task Scheduler runner: records every argument vector and replays
+    /// scripted responses. State is isolated per test thread so parallel
+    /// tests never touch the real Windows Task Scheduler or each other.
+    #[cfg(windows)]
+    mod fake_scheduler {
+        use std::cell::RefCell;
+        use std::collections::VecDeque;
+
+        thread_local! {
+            static CALLS: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
+            static SCRIPT: RefCell<VecDeque<(u32, Vec<u8>)>> =
+                const { RefCell::new(VecDeque::new()) };
+            static SPAWN_FAIL: RefCell<bool> = const { RefCell::new(false) };
+        }
+
+        /// Clear recorded calls and load `script` as the ordered exit-code /
+        /// stdout answers for upcoming invocations.
+        pub(super) fn reset(script: Vec<(u32, Vec<u8>)>) {
+            CALLS.with(|calls| calls.borrow_mut().clear());
+            SCRIPT.with(|s| *s.borrow_mut() = script.into());
+            SPAWN_FAIL.with(|f| *f.borrow_mut() = false);
+        }
+
+        /// Arm the fake so every invocation fails like an unspawnable
+        /// `schtasks.exe`.
+        pub(super) fn fail_spawn() {
+            reset(Vec::new());
+            SPAWN_FAIL.with(|f| *f.borrow_mut() = true);
+        }
+
+        /// Fake [`super::CommandRunner`]: record `args`, then replay the next
+        /// scripted response or the armed spawn failure.
+        pub(super) fn run(args: &[&str]) -> super::Result<std::process::Output> {
+            CALLS.with(|calls| {
+                calls
+                    .borrow_mut()
+                    .push(args.iter().map(|arg| (*arg).to_owned()).collect())
+            });
+            if SPAWN_FAIL.with(|f| *f.borrow()) {
+                return Err(anyhow::anyhow!("injected spawn failure"));
+            }
+            let (code, stdout) = SCRIPT
+                .with(|s| s.borrow_mut().pop_front())
+                .unwrap_or((0, Vec::new()));
+            Ok(output(code, stdout))
+        }
+
+        /// Every recorded argument vector since [`reset`].
+        pub(super) fn calls() -> Vec<Vec<String>> {
+            CALLS.with(|calls| calls.borrow().clone())
+        }
+
+        /// Build one synthetic `schtasks` process result.
+        ///
+        /// Inputs: `code` — process exit code; `stdout` — captured standard
+        /// output. Output: the matching [`std::process::Output`].
+        pub(super) fn output(code: u32, stdout: Vec<u8>) -> std::process::Output {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::Output {
+                status: std::process::ExitStatus::from_raw(code),
+                stdout,
+                stderr: Vec::new(),
+            }
+        }
+    }
+
+    /// Fresh stub workspace for registration-flow tests: a worker executable
+    /// file plus an existing data directory inside one tempdir.
+    ///
+    /// Inputs: none. Output: `(guard, executable, data_dir)` where `guard`
+    /// keeps the tempdir alive.
+    #[cfg(windows)]
+    fn stub_workspace() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("rr.exe");
+        std::fs::write(&exe, b"stub-worker").unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        (root, exe, data)
+    }
+
+    /// The exact task definition `install` submits for this workspace.
+    ///
+    /// Inputs: `exe` / `data` — pre-canonicalization workspace paths.
+    /// Output: the rendered task XML built from the canonicalized paths.
+    #[cfg(windows)]
+    fn expected_definition(exe: &Path, data: &Path) -> String {
+        render_task_xml(
+            &current_user().unwrap(),
+            &std::fs::canonicalize(exe).unwrap(),
+            &std::fs::canonicalize(data).unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// Leftover temporary task-definition files in the data directory.
+    ///
+    /// Inputs: `data` — worker data directory. Output: every entry named
+    /// like the private `write_task_xml` temporaries.
+    #[cfg(windows)]
+    fn leftover_definitions(data: &Path) -> Vec<String> {
+        std::fs::read_dir(data)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".autostart-task-"))
+            .collect()
+    }
+
+    // why: registration must drive the scheduler with exactly the fixed task
+    // name and the `/Create /TN <task> /XML <path> /F` contract, submit a
+    // definition file inside the data directory that is deleted afterwards,
+    // then answer the caller from a `/Query` — including a positive match
+    // verdict for the definition just submitted. Any drift in argument
+    // construction, ordering, cleanup or the reported state fails this test,
+    // and the fake runner keeps the real scheduler untouched.
+    #[cfg(windows)]
+    #[test]
+    fn install_registration_uses_exact_commands_and_cleans_up() {
+        let (_root, exe, data) = stub_workspace();
+        let definition = expected_definition(&exe, &data);
+        fake_scheduler::reset(vec![(0, Vec::new()), (0, definition.into_bytes())]);
+        let state = install(&exe, &data, fake_scheduler::run).unwrap();
+
+        let calls = fake_scheduler::calls();
+        assert_eq!(calls.len(), 2, "install must submit once, then query once");
+        assert_eq!(calls[0][0], "/Create");
+        assert_eq!(calls[0][1], "/TN");
+        assert_eq!(calls[0][2], TASK_NAME);
+        assert_eq!(calls[0][3], "/XML");
+        assert_eq!(calls[0][5], "/F");
+        let xml_arg = Path::new(&calls[0][4]);
+        assert!(
+            xml_arg.starts_with(std::fs::canonicalize(&data).unwrap()),
+            "the definition file must live in the data directory: {}",
+            xml_arg.display()
+        );
+        assert!(
+            !xml_arg.exists(),
+            "the temporary definition file must be removed after submission"
+        );
+        assert_eq!(calls[1][0], "/Query");
+        assert_eq!(calls[1][1], "/TN");
+        assert_eq!(calls[1][2], TASK_NAME);
+        assert_eq!(calls[1][3], "/XML");
+        assert!(state.installed);
+        assert_eq!(state.definition_matches_expected, Some(true));
+        assert!(
+            state.note.contains("matches the required"),
+            "{}",
+            state.note
+        );
+    }
+
+    // why: a scheduler-side rejection must surface as an error carrying the
+    // exit code, must never fall through to a status query for a task that
+    // was never registered, and must still remove the temporary definition
+    // file. Silent success here would report an autostart that does not
+    // exist.
+    #[cfg(windows)]
+    #[test]
+    fn install_rejection_is_an_error_and_still_cleans_up() {
+        let (_root, exe, data) = stub_workspace();
+        fake_scheduler::reset(vec![(1, Vec::new())]);
+        let error = install(&exe, &data, fake_scheduler::run)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rejected worker registration"), "{error}");
+        assert!(error.contains("exit code Some(1)"), "{error}");
+        let calls = fake_scheduler::calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "a rejected registration must not be queried"
+        );
+        assert!(
+            leftover_definitions(&data).is_empty(),
+            "the definition file must be removed even on rejection"
+        );
+    }
+
+    // why: a spawn failure must propagate as the runner's own error instead
+    // of masquerading as a scheduler rejection, and the temporary definition
+    // file must still be removed so failed attempts leave no task XML behind.
+    #[cfg(windows)]
+    #[test]
+    fn install_spawn_failures_propagate_and_still_clean_up() {
+        let (_root, exe, data) = stub_workspace();
+        fake_scheduler::fail_spawn();
+        let error = install(&exe, &data, fake_scheduler::run)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("injected spawn failure"), "{error}");
+        assert!(
+            leftover_definitions(&data).is_empty(),
+            "the definition file must be removed even when the spawn fails"
+        );
+    }
+
+    // why: removal must target exactly the fixed task name with
+    // `/Delete /TN <task> /F` and must not report success when the scheduler
+    // refuses — removing the wrong name would orphan the worker task
+    // forever, and a swallowed refusal would leave a stale registration.
+    #[cfg(windows)]
+    #[test]
+    fn remove_targets_the_fixed_task_name_and_reports_refusals() {
+        fake_scheduler::reset(vec![(0, Vec::new())]);
+        remove(fake_scheduler::run).unwrap();
+        assert_eq!(
+            fake_scheduler::calls(),
+            vec![vec![
+                "/Delete".to_string(),
+                "/TN".to_string(),
+                TASK_NAME.to_string(),
+                "/F".to_string()
+            ]]
+        );
+
+        fake_scheduler::reset(vec![(1, Vec::new())]);
+        let error = remove(fake_scheduler::run)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not remove the worker task"),
+            "{error}"
+        );
+        assert!(error.contains("exit code Some(1)"), "{error}");
+    }
+
+    // why: the registered-task branch must map the queried definition onto
+    // `definition_matches_expected` and the matching note, flag a drifted
+    // definition as `Some(false)` with the reinstall warning, and reject a
+    // non-UTF-8 query answer as an error instead of guessing a state — a
+    // fabricated "matches" verdict would let a stale or tampered
+    // registration masquerade as healthy.
+    #[cfg(windows)]
+    #[test]
+    fn status_registered_branch_maps_query_answers_faithfully() {
+        let (_root, exe, data) = stub_workspace();
+        let definition = expected_definition(&exe, &data);
+
+        fake_scheduler::reset(vec![(0, definition.clone().into_bytes())]);
+        let state = status(&exe, &data, fake_scheduler::run).unwrap();
+        assert!(state.installed);
+        assert_eq!(state.definition_matches_expected, Some(true));
+        assert!(
+            state.note.contains("matches the required"),
+            "{}",
+            state.note
+        );
+
+        fake_scheduler::reset(vec![(
+            0,
+            definition
+                .replace("<Count>3</Count>", "<Count>9</Count>")
+                .into_bytes(),
+        )]);
+        let state = status(&exe, &data, fake_scheduler::run).unwrap();
+        assert!(state.installed);
+        assert_eq!(state.definition_matches_expected, Some(false));
+        assert!(
+            state.note.contains("differs from the required"),
+            "{}",
+            state.note
+        );
+
+        fake_scheduler::reset(vec![(0, vec![0xff, 0xfe, 0xff])]);
+        let error = status(&exe, &data, fake_scheduler::run)
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("utf-8"), "{error}");
     }
 }
