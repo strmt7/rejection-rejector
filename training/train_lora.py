@@ -62,6 +62,36 @@ def discover_target_modules(model) -> list[str]:
     return found
 
 
+def make_causal_collator(tokenizer):
+    """Build a dynamic-padding collator for causal-LM labels.
+
+    Inputs: `tokenizer` — the model tokenizer (its `pad` pads `input_ids` and
+    `attention_mask`). Output: a callable mapping a list of feature dicts to a
+    padded batch where `labels` are padded with -100 so padded positions never
+    contribute to the loss.
+    """
+
+    def collate(features: list[dict]) -> dict:
+        import torch
+
+        labels = [feature["labels"] for feature in features]
+        inputs = [
+            {
+                "input_ids": feature["input_ids"],
+                "attention_mask": feature["attention_mask"],
+            }
+            for feature in features
+        ]
+        batch = tokenizer.pad(inputs, padding=True, return_tensors="pt")
+        width = batch["input_ids"].shape[1]
+        batch["labels"] = torch.tensor(
+            [label + [-100] * (width - len(label)) for label in labels]
+        )
+        return batch
+
+    return collate
+
+
 def load_jsonl(path: Path) -> list[dict]:
     """Load chat-format SFT rows.
 
@@ -89,14 +119,20 @@ def main() -> int:
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     import torch
     from datasets import Dataset
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
-    from trl import SFTTrainer
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        Trainer,
+        TrainingArguments,
+    )
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -139,13 +175,17 @@ def main() -> int:
     )
     model = get_peft_model(model, lora)
 
-    def to_text(row: dict) -> str:
-        """Render one chat row as a plain training string.
+    def tokenize_row(row: dict) -> dict:
+        """Tokenize one chat row for causal-LM training.
 
-        Inputs: `row` — a `messages` row. Output: concatenated transcript the
-        causal LM learns to continue through the assistant turn.
+        Inputs: `row` — a `messages` row. Output: dict with `input_ids` and
+        `labels` (identical, so the loss trains on the full transcript and the
+        assistant answer), truncated to `--max-seq-len`.
         """
-        return tokenizer.apply_chat_template(row["messages"], tokenize=False)
+        text = tokenizer.apply_chat_template(row["messages"], tokenize=False)
+        encoded = tokenizer(text, truncation=True, max_length=args.max_seq_len)
+        encoded["labels"] = list(encoded["input_ids"])
+        return encoded
 
     args_out = args.output_dir
     args_out.mkdir(parents=True, exist_ok=True)
@@ -159,13 +199,14 @@ def main() -> int:
         save_strategy="no",
         report_to=[],
         seed=args.seed,
+        use_cpu=device == "cpu",
+        bf16=args.bf16,
     )
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=model,
         args=train_args,
-        train_dataset=Dataset.from_list([{"text": to_text(row)} for row in rows]),
-        processing_class=tokenizer,
-        formatting_func=None,
+        train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
+        data_collator=make_causal_collator(tokenizer),
     )
     result = trainer.train()
 
