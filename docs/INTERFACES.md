@@ -72,6 +72,14 @@ confirmation.
   interfaces, no request bodies larger than the existing limits, no
   execution of content that arrives from mail.
 
+Usage: `rr web` starts the worker and prints the page URL
+(`http://127.0.0.1:<port>/`); the page is served by the loopback API, so the
+API must be enabled in Settings first. The operator pastes the local API
+bearer token into the page (kept in page memory only); every queue, review,
+activity and settings action then travels through the same `Command` channel
+as the desktop and terminal interfaces, including the mandatory
+confirm-exact-reply dialog and the cooldown-gated Automatic arming.
+
 ## Windows installer (component selection)
 
 Inno Setup script (`windows/installer.iss`) with three tasks, all selected by

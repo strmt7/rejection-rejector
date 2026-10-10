@@ -1,11 +1,12 @@
 use crate::{
     api_auth,
-    config::Settings,
+    config::{AutomaticArmGate, Mode, Settings},
     engine::{Engine, automatic_policy},
     ollama::{self, ModelStatus, Ollama},
     retry::{CircuitTransition, RetryGate},
     runtime_log::{RuntimeEvent, RuntimeJournal, RuntimeSignal},
     types::*,
+    web::{self, WriteOutcome, WriteRequest},
 };
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -223,6 +224,15 @@ pub enum Command {
     OpenMetrics {
         reply: Sender<String>,
     },
+    /// State-changing web command received by the loopback API (`rr web`).
+    ///
+    /// The request is already payload-validated by [`web::parse_write_request`];
+    /// the worker applies the shared safety gates and executes it against the
+    /// engine exactly like the matching interactive command.
+    ApiWrite {
+        request: WriteRequest,
+        reply: Sender<WriteOutcome>,
+    },
 }
 
 impl Command {
@@ -260,6 +270,7 @@ impl Command {
             Self::HideApiToken => OperationKind::HideApiToken,
             Self::RotateApiToken => OperationKind::RotateApiToken,
             Self::Api { .. } | Self::OpenMetrics { .. } => OperationKind::ApiRequest,
+            Self::ApiWrite { request, .. } => request.operation_kind(),
         }
     }
 }
@@ -629,6 +640,258 @@ fn rotate_api_token(
     Ok(())
 }
 
+/// Read the shared snapshot's current operation status.
+///
+/// Inputs: `shared` — shared UI state. Output: the latest [`OperationStatus`]
+/// for a write response (the default status when the state lock is poisoned).
+fn current_operation(shared: &Arc<Mutex<Snapshot>>) -> OperationStatus {
+    shared
+        .lock()
+        .map(|snapshot| snapshot.operation.clone())
+        .unwrap_or_default()
+}
+
+/// Map an engine refusal onto the stable write error contract.
+///
+/// Inputs: `kind` — operation kind being executed; `error` — engine refusal.
+/// Output: [`web::WriteError`] whose `code` and `retryable` flag follow the
+/// same stable worker-failure semantics as every other operation surface.
+fn engine_write_error(kind: OperationKind, error: &anyhow::Error) -> web::WriteError {
+    let (code, retryable) = classify_operation_failure(kind, error);
+    web::WriteError {
+        status: if retryable { 503 } else { 409 },
+        code,
+        message: error.to_string(),
+        retryable,
+    }
+}
+
+/// Shared worker bookkeeping one executed web write runs through.
+///
+/// Inputs: none (plain struct). Output: the operation-state handles plus the
+/// current list view a post-write refresh restores.
+struct WriteContext<'a> {
+    /// Shared UI state written by the operation lifecycle.
+    shared: &'a Arc<Mutex<Snapshot>>,
+    /// Worker liveness probe updated alongside the UI state.
+    pulse: &'a WorkerPulse,
+    /// Privacy-minimal runtime journal recording operation lifecycles.
+    journal: &'a Option<RuntimeJournal>,
+    /// Message id currently selected in the list view.
+    selected: Option<&'a str>,
+    /// Whether the list view shows reviewable messages only.
+    review: bool,
+    /// Current list page.
+    page: u32,
+}
+
+/// Finish one executed web write with the shared operation machinery.
+///
+/// Inputs: `e` — engine owning the workspace; `context` — worker
+/// bookkeeping and list view; `kind` — operation kind; `result` — engine
+/// outcome. Output: [`WriteOutcome`] carrying the typed operation status on
+/// success or the stable error envelope on refusal; the audit-boundary
+/// checkpoint, operation report and view refresh run exactly as for
+/// interactive commands.
+fn report_write(
+    e: &Engine,
+    context: &WriteContext<'_>,
+    kind: OperationKind,
+    result: Result<()>,
+) -> WriteOutcome {
+    let result = protect_audit_boundary(e, result);
+    report(context.shared, context.pulse, kind, &result);
+    record_current_operation(context.journal, context.shared);
+    let _ = refresh(
+        e,
+        context.shared,
+        context.selected,
+        context.review,
+        context.page,
+    );
+    match result {
+        Ok(()) => WriteOutcome::accepted(&current_operation(context.shared)),
+        Err(error) => WriteOutcome::error(&engine_write_error(kind, &error)),
+    }
+}
+
+/// Execute one validated web write against the engine.
+///
+/// Inputs: `e` — engine owning the workspace; `request` — parsed write
+/// request; `arm_gate` — server-side Automatic-arm cooldown state mutated in
+/// place; `context` — worker bookkeeping and list view. Output:
+/// [`WriteOutcome`] for the HTTP response — pure gate rejections come back
+/// typed without recording an operation (nothing was touched), executed
+/// writes run through the same begin/report/audit-boundary/refresh sequence
+/// as the interactive commands they mirror. The gates themselves live in
+/// [`web`] so they are unit testable and identical to the desktop and
+/// terminal rules.
+fn handle_api_write(
+    e: &mut Engine,
+    request: &WriteRequest,
+    arm_gate: &mut Option<AutomaticArmGate>,
+    context: &WriteContext<'_>,
+) -> WriteOutcome {
+    let now = Utc::now();
+    let kind = request.operation_kind();
+    let not_found = || {
+        web::WriteError::reject(
+            404,
+            web::CODE_ITEM_NOT_FOUND,
+            "No message with that identifier exists in this workspace",
+        )
+    };
+    match request {
+        WriteRequest::EditDraft { id, revision, body } => {
+            let job = match e.owned(id) {
+                Ok(job) => job,
+                Err(_) => return WriteOutcome::error(&not_found()),
+            };
+            if let Err(error) = web::guard_edit(&job, *revision, body, e.settings.mode) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Saving your edited reply…",
+            );
+            let result = e.edit(id, *revision, body.clone());
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Regenerate { id, revision } => {
+            let job = match e.owned(id) {
+                Ok(job) => job,
+                Err(_) => return WriteOutcome::error(&not_found()),
+            };
+            if let Err(error) = web::guard_regenerate(&job, *revision, e.settings.mode, e.demo) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Requesting a fresh local analysis…",
+            );
+            let result = e.regenerate(id, *revision);
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Dismiss { id, revision } => {
+            let job = match e.owned(id) {
+                Ok(job) => job,
+                Err(_) => return WriteOutcome::error(&not_found()),
+            };
+            if let Err(error) = web::guard_dismiss(&job, *revision) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Dismissing the message…",
+            );
+            let result = e.dismiss(id, *revision);
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Send {
+            id,
+            revision,
+            confirm_reply,
+        } => {
+            let job = match e.owned(id) {
+                Ok(job) => job,
+                Err(_) => return WriteOutcome::error(&not_found()),
+            };
+            let blocks = crate::tui::hard_blocks_for(&job, &e.account);
+            let busy = context
+                .shared
+                .lock()
+                .map(|snapshot| {
+                    !snapshot.busy.is_empty() || snapshot.operation.state == OperationState::Running
+                })
+                .unwrap_or(false);
+            let runtime = web::SendRuntime {
+                hard_blocks: &blocks,
+                busy,
+                sending_enabled: e.settings.sending_enabled,
+                demo: e.demo,
+                paused: e.paused.load(Ordering::SeqCst),
+            };
+            let send = web::SendRequest {
+                id: id.as_str(),
+                revision: *revision,
+                confirm_reply: confirm_reply.as_str(),
+            };
+            if let Err(error) = web::guard_send(&job, &send, &runtime) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Rechecking the conversation and sending your confirmed reply…",
+            );
+            let result = e.send(id, *revision, &hash(confirm_reply), false);
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::UpdateSettings {
+            mode,
+            tone,
+            reply_language,
+            sending_enabled,
+        } => {
+            let candidate =
+                web::merge_settings(&e.settings, *mode, *tone, *reply_language, *sending_enabled);
+            if let Err(error) = web::guard_settings(&candidate) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(context.shared, context.pulse, kind, "Updating settings…");
+            let result = e.update_settings(candidate);
+            let mut outcome = report_write(e, context, kind, result);
+            outcome.merge_payload(web::settings_view(&e.settings));
+            outcome
+        }
+        WriteRequest::AutomaticArm { action } => match action {
+            web::AutomaticArmAction::Open => {
+                let gate = AutomaticArmGate::open(now);
+                *arm_gate = Some(gate);
+                WriteOutcome::accepted_with(json!({"arm": web::arm_gate_view(&gate, now)}))
+            }
+            web::AutomaticArmAction::Cancel => {
+                *arm_gate = None;
+                WriteOutcome::accepted_with(json!({"arm": Value::Null}))
+            }
+            web::AutomaticArmAction::Confirm => {
+                let view = match web::guard_arm_confirm(arm_gate.as_ref(), now) {
+                    Ok(view) => view,
+                    Err(error) => return WriteOutcome::error(&error),
+                };
+                let mut candidate = e.settings.clone();
+                candidate.mode = Mode::Automatic;
+                candidate.automatic_confirmed = true;
+                candidate.automatic_since = Some(now);
+                if let Err(error) = web::guard_settings(&candidate) {
+                    return WriteOutcome::error(&error);
+                }
+                begin_operation(
+                    context.shared,
+                    context.pulse,
+                    kind,
+                    "Enabling Automatic mode after the risk confirmation…",
+                );
+                let result = e.update_settings(candidate);
+                let mut outcome = report_write(e, context, kind, result);
+                if outcome.status < 400 {
+                    *arm_gate = None;
+                    outcome = WriteOutcome::accepted_with(json!({"arm": view}));
+                    outcome.merge_payload(web::settings_view(&e.settings));
+                }
+                outcome
+            }
+        },
+    }
+}
+
 fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> OperationState {
     if result.is_ok() {
         OperationState::Succeeded
@@ -688,6 +951,9 @@ fn run(
     let mut selected: Option<String> = None;
     let mut review = true;
     let mut page = 0;
+    // Server-side cooldown gate for the web Automatic-arm flow; the 30-second
+    // wait lives here, never in the page.
+    let mut arm_gate: Option<AutomaticArmGate> = None;
     refresh(&e, &shared, None, review, page)?;
     let api_disabled = Arc::new(AtomicBool::new(false));
     if e.settings.api_enabled && !e.demo {
@@ -758,6 +1024,18 @@ fn run(
                 let data = api_query_with_operation(&e, &path, operation.as_ref())
                     .unwrap_or_else(|_| json!({"error":"Invalid request or unavailable resource"}));
                 let _ = reply.try_send(data);
+            }
+            Ok(Command::ApiWrite { request, reply }) => {
+                let context = WriteContext {
+                    shared: &shared,
+                    pulse: &pulse,
+                    journal: &journal,
+                    selected: selected.as_deref(),
+                    review,
+                    page,
+                };
+                let outcome = handle_api_write(&mut e, &request, &mut arm_gate, &context);
+                let _ = reply.try_send(outcome);
             }
             Ok(Command::OpenMetrics { reply }) => {
                 let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
@@ -1017,7 +1295,9 @@ fn run(
                         Ok(())
                     }
                     Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
-                    Command::Api { .. } | Command::OpenMetrics { .. } => Err(anyhow::anyhow!(
+                    Command::Api { .. }
+                    | Command::OpenMetrics { .. }
+                    | Command::ApiWrite { .. } => Err(anyhow::anyhow!(
                         "Internal API command reached the wrong dispatcher"
                     )),
                 };
@@ -1521,6 +1801,13 @@ fn api_query_with_operation(
                 Utc::now(),
             )?)?)
         }
+        "/v1/settings" => {
+            ensure!(
+                query.is_empty(),
+                "Settings endpoint takes no query parameters"
+            );
+            Ok(crate::web::settings_view(&e.settings))
+        }
         "/v1/status" => {
             ensure!(
                 query.is_empty(),
@@ -1621,11 +1908,13 @@ mod tests {
         let spec: serde_json::Value = serde_json::from_str(crate::api::OPENAPI_DOCUMENT).unwrap();
         let paths = spec["paths"].as_object().unwrap();
         for expected in [
+            "/",
             "/v1/live",
             "/v1/openapi.json",
             "/v1/capabilities",
             "/v1/health",
             "/v1/status",
+            "/v1/settings",
             "/v1/items",
             "/v1/item-feed",
             "/v1/items/{id}",
@@ -1635,11 +1924,43 @@ mod tests {
             "/v1/audit/contains",
             "/v1/metrics",
             "/v1/metrics/openmetrics",
+            "/v1/commands/edit-draft",
+            "/v1/commands/regenerate",
+            "/v1/commands/dismiss",
+            "/v1/commands/send",
+            "/v1/commands/update-settings",
+            "/v1/commands/automatic-arm",
         ] {
             assert!(paths.contains_key(expected), "OpenAPI missing {expected}");
         }
-        assert_eq!(paths.len(), 14);
+        assert_eq!(paths.len(), 22);
         assert_eq!(spec["openapi"], "3.1.0");
+    }
+
+    // why: the web settings view is the page's only settings source; it must
+    // stay minimal and non-secret — a stray credential, path or mailbox field
+    // here would leak into every browser session.
+    #[test]
+    fn settings_route_exposes_only_non_secret_presentation_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            dir.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let value = api_query(&engine, "/v1/settings").unwrap();
+        assert_eq!(value["mode"], "human_review");
+        assert_eq!(value["tone"], "hardline");
+        assert_eq!(value["reply_language"], "auto");
+        assert_eq!(value["sending_enabled"], false);
+        assert_eq!(value["automatic_confirmed"], false);
+        assert_eq!(
+            value["automatic_arm_cooldown_seconds"],
+            crate::config::AUTOMATIC_ARM_COOLDOWN_SECONDS
+        );
+        assert_eq!(value.as_object().unwrap().len(), 6);
     }
 
     #[test]
