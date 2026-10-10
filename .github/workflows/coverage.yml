@@ -73,7 +73,7 @@ jobs:
           # Python operator tooling (scripts/) is release-chain code and is
           # covered by the operator regression tests; test code itself is
           # deliberately excluded from measurement.
-          python3 -m pip install -q coverage
+          python3 -m pip install -q --require-hashes -r scripts/ci/requirements-coverage.txt
           python3 -m coverage run --source=scripts -m unittest discover -s tests/release
           python3 -m coverage xml -o artifacts/coverage.xml
           python3 -m coverage report | tee artifacts/coverage-python.txt
