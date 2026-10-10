@@ -28,6 +28,7 @@ pub mod evaluation;
 pub mod gmail;
 #[cfg(feature = "gui")]
 pub mod gui;
+pub mod language;
 pub mod mail;
 pub mod metrics;
 pub mod net;

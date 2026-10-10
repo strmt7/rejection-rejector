@@ -39,6 +39,7 @@ ctrlc = "3"
 directories = "6"
 fs2 = "0.4"
 html2text = "0.17"
+lingua = { version = "1.8", default-features = false, features = ["english", "chinese", "hindi", "spanish", "french", "arabic", "bengali", "portuguese", "russian", "urdu", "german", "greek"] }
 mailparse = "0.18"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "webpki-roots", "form", "query"] }

@@ -22,7 +22,7 @@
 | Email age window | **1 / 3 / 7 / 14 / 28 days** |
 | Sync | Durable incremental Gmail history queue; page-batched insert of missing identities only; cursor-expiry recovery |
 | Database | Embedded SQLite with authenticated encrypted payloads; Windows Credential Manager holds the key |
-| Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send. Three graded reply tones — Professional (soft), Assertive, Hardline (harsh, default) |
+| Review | Original and editable reply side by side; save, regenerate, dismiss, confirm exact reply and send. Four graded reply tones — Professional (soft), Assertive, Hardline (harsh, default), Insane (offensive, with strict legal limits) |
 | Automatic | Human review by default; arming Automatic requires a 30-second risk-acknowledgment cooldown (device-administrator style). Once armed: cooldown, send-attempt cap, independent clear-current-rejection gate, source/draft/model checks and fresh conversation preflight |
 | Mode-aware UI | Review tab is disabled in Automatic mode |
 | Recovery | Durable at-most-once delivery records, checksum/audit-bound encrypted backups, offline transactional restore, separate Argon2id/XChaCha20-Poly1305 wrapped recovery-key envelopes, and a pre-open native Recovery Mode for fresh/locked workspaces |
@@ -94,7 +94,7 @@ No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQ
 
 ## Important boundaries
 
-The GUI or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether the GUI stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Replies are English; multilingual detection is prompted but comprehensive language accuracy is unverified.
+The GUI or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether the GUI stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Reply language follows the first substantive language of the rejection (or English on request). Twelve languages are explicitly guaranteed in the prompt contract and evaluation fixtures: English, Mandarin Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Urdu, German and Greek; other languages are attempted best-effort. A deterministic language detector sets the reply language and verifies the drafted reply before it can proceed, so a language mismatch holds the message instead of sending it.
 
 Managed deployments can additionally configure an out-of-band emergency-stop sentinel that blocks every outbound Gmail write independently of the GUI/model/settings and is rechecked immediately before dispatch.
 

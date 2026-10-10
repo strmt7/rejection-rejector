@@ -1236,8 +1236,23 @@ impl App {
             egui::ComboBox::from_id_salt("reply_tone")
                 .selected_text(self.settings.tone.label())
                 .show_ui(ui, |ui| {
-                    for t in [Tone::Professional, Tone::Assertive, Tone::Hardline] {
+                    for t in [
+                        Tone::Professional,
+                        Tone::Assertive,
+                        Tone::Hardline,
+                        Tone::Insane,
+                    ] {
                         ui.selectable_value(&mut self.settings.tone, t, t.label());
+                    }
+                });
+            egui::ComboBox::from_id_salt("reply_language")
+                .selected_text(self.settings.reply_language.label())
+                .show_ui(ui, |ui| {
+                    for l in [
+                        crate::config::ReplyLanguage::Auto,
+                        crate::config::ReplyLanguage::English,
+                    ] {
+                        ui.selectable_value(&mut self.settings.reply_language, l, l.label());
                     }
                 });
             let facts_label =
