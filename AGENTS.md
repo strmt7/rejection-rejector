@@ -42,6 +42,19 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 - No new web stack, hosted inference, or Python in the product; keep it local-first.
 - Commit style: conventional commits (`fix:`, `ci:`, `docs:`, `refactor:`, `test:`).
 
+## Token-efficiency contract (all AI agents)
+
+1. Read `AGENTS.md` and `.agents/skills/rr-engineering/SKILL.md` first; never
+   walk the tree to re-derive structure.
+2. Batch independent tool calls into one turn; prefer grep/search over full
+   file reads; keep any single read under 200 lines unless editing that file.
+3. Keep tool outputs small: filter with grep/awk before printing; never dump
+   raw build logs; print only error lines and counts.
+4. Make targeted edits (patch-style) instead of rewriting whole files.
+5. Do not re-read a file to verify an edit a tool already confirmed.
+6. Root-cause once, then scan sibling code paths for the same pattern instead
+   of rediscovering the bug file by file.
+
 ## Definition of done
 
 Local suite green (fmt, clippy, all tests, `tests/release`) AND pushed AND remote
