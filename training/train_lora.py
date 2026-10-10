@@ -120,6 +120,7 @@ def main() -> int:
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
+    parser.add_argument("--progress-file", type=Path, help="Heartbeat JSON for live probing (default: output-dir/progress.json)")
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
@@ -133,6 +134,46 @@ def main() -> int:
         Trainer,
         TrainingArguments,
     )
+
+    class ProgressCallback:
+        """Training heartbeat for live probing.
+
+        Inputs: `path` — heartbeat file; trainer callbacks receive the run
+        state. Output: none; each step atomically writes job, step, total
+        steps, latest loss, elapsed seconds and status so
+        `training/progress.py` can probe live progress and detect stalls.
+        """
+
+        def __init__(self, path: Path) -> None:
+            import time
+
+            self.path = path
+            self.began = time.time()
+            self._time = time
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            self._write(state, "running")
+
+        def on_step_end(self, args, state, control, **kwargs):
+            self._write(state, "running")
+
+        def on_train_end(self, args, state, control, **kwargs):
+            self._write(state, "complete")
+
+        def _write(self, state, status: str) -> None:
+            record = {
+                "job": "train_lora",
+                "step": int(state.global_step),
+                "total_steps": int(state.max_steps or 0),
+                "loss": state.log_history[-1].get("loss") if state.log_history else None,
+                "elapsed_seconds": self._time.time() - self.began,
+                "updated_at_unix": self._time.time(),
+                "status": status,
+            }
+            progress.write_progress(self.path, record)
+
+    import progress
+    from transformers import TrainerCallback  # noqa: F401  (documents the callback contract)
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -202,11 +243,13 @@ def main() -> int:
         use_cpu=device == "cpu",
         bf16=args.bf16,
     )
+    progress_path = args.progress_file or (args_out / "progress.json")
     trainer = Trainer(
         model=model,
         args=train_args,
         train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
         data_collator=make_causal_collator(tokenizer),
+        callbacks=[ProgressCallback(progress_path)],
     )
     result = trainer.train()
 

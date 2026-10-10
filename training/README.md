@@ -61,6 +61,20 @@ error class because it would fire an assertive reply at the wrong message.
    subject to the observed false-positive target, and reports the binomial
    upper bound so "zero observed" is never mistaken for zero risk.
 
+## Live progress probing
+
+Long jobs write an atomic JSON heartbeat (default: `output-dir/progress.json`,
+override with `--progress-file`). Probe it at any time:
+
+```
+python training/progress.py probe <path>/progress.json
+python training/progress.py watch <path>/progress.json --interval 10
+```
+
+The summary reports percent, rate, ETA, and `stalled` — a heartbeat older
+than two minutes is flagged even when its status still says running, so a
+killed job cannot masquerade as a slow one.
+
 ## Quickstart
 
 ```
