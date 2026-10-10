@@ -139,12 +139,19 @@ mod tests {
         );
     }
 
-    /// Why: a mixed-up type scale silently breaks hierarchy; headings must
-    /// stay larger than body text, body larger than captions.
+    /// Why: a wiring error that installs the wrong size into a text slot
+    /// silently breaks hierarchy — assert the INSTALLED style, not the
+    /// constants, so a swapped slot fails this test.
     #[test]
-    fn type_scale_keeps_visual_hierarchy() {
-        assert!(TEXT_HEADING > TEXT_BODY, "headings above body");
-        assert!(TEXT_BODY > TEXT_SMALL, "body above captions");
-        assert!(TEXT_MONO > TEXT_SMALL, "monospace above captions");
+    fn installed_style_keeps_visual_hierarchy() {
+        let ctx = egui::Context::default();
+        super::apply(&ctx);
+        let style = ctx.style_of(egui::Theme::Dark);
+        let size = |t: TextStyle| style.text_styles.get(&t).map(|f| f.size);
+        let heading = size(TextStyle::Heading).expect("heading installed");
+        let body = size(TextStyle::Body).expect("body installed");
+        let small = size(TextStyle::Small).expect("small installed");
+        assert!(heading > body, "headings above body");
+        assert!(body > small, "body above captions");
     }
 }

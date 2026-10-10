@@ -260,15 +260,15 @@ fn main() -> Result<()> {
             let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
             match action {
                 AutostartAction::Install => {
-                    let result = background::install(&executable, &dir)?;
+                    let result = background::install(&executable, &dir, background::schtasks)?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 AutostartAction::Status => {
-                    let result = background::status(&executable, &dir)?;
+                    let result = background::status(&executable, &dir, background::schtasks)?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 AutostartAction::Remove => {
-                    background::remove()?;
+                    background::remove(background::schtasks)?;
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({

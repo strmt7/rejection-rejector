@@ -143,35 +143,35 @@ fn origin_policy_allows(
         && origin == Some(loopback_origin.as_str())
 }
 
-/// Read one state-changing request body under the fixed size cap.
+/// The typed rejection for a body over the fixed write cap.
 ///
-/// Inputs: `request` — in-flight request whose body has not been consumed.
-/// Output: the raw body bytes, or a typed [`crate::web::WriteError`]: a
-/// declared `Content-Length` or actual stream over
-/// [`crate::web::MAX_WRITE_BODY_BYTES`] fails with
-/// [`crate::web::CODE_REQUEST_BODY_TOO_LARGE`] without buffering the excess,
-/// and a read failure is a non-retryable [`crate::web::CODE_INVALID_REQUEST`].
-fn read_write_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, crate::web::WriteError> {
-    let too_large = || crate::web::WriteError {
+/// Inputs: none. Output: a [`crate::web::WriteError`] with status 413 and
+/// code [`crate::web::CODE_REQUEST_BODY_TOO_LARGE`], shared by the declared
+/// and streamed length checks so both yield the identical contract.
+fn body_too_large() -> crate::web::WriteError {
+    crate::web::WriteError {
         status: 413,
         code: crate::web::CODE_REQUEST_BODY_TOO_LARGE.into(),
         message: "The request body exceeds the fixed local write limit".into(),
         retryable: false,
-    };
-    let declared = unique_header(request.headers(), "Content-Length")
-        .map(str::trim)
-        .and_then(|value| value.parse::<usize>().ok());
-    if declared.is_some_and(|length| length > crate::web::MAX_WRITE_BODY_BYTES) {
-        return Err(too_large());
     }
+}
+
+/// Read one request body stream under the fixed size cap.
+///
+/// Inputs: `reader` — unconsumed body source. Output: the raw body bytes, or
+/// a typed [`crate::web::WriteError`]: a mid-body transport failure (e.g. a
+/// TCP reset) is a non-retryable [`crate::web::CODE_INVALID_REQUEST`] that
+/// never echoes the underlying I/O error, and a body past
+/// [`crate::web::MAX_WRITE_BODY_BYTES`] fails with
+/// [`crate::web::CODE_REQUEST_BODY_TOO_LARGE`] without buffering the excess.
+/// Generic over [`std::io::Read`] so the failure mapping is testable with a
+/// faulting reader instead of a real socket reset.
+fn read_capped_body<R: Read>(reader: R) -> Result<Vec<u8>, crate::web::WriteError> {
     let mut raw = Vec::new();
-    request
-        .as_reader()
+    reader
         .take(crate::web::MAX_WRITE_BODY_BYTES as u64 + 1)
         .read_to_end(&mut raw)
-        // Coverage note: only a mid-body transport failure (e.g. a TCP RST)
-        // reaches the mapping below; forcing an RST needs `set_linger`, which
-        // is feature-gated on stable Rust, so this arm is not portable to test.
         .map_err(|_| crate::web::WriteError {
             status: 400,
             code: crate::web::CODE_INVALID_REQUEST.into(),
@@ -179,9 +179,27 @@ fn read_write_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, crate::w
             retryable: false,
         })?;
     if raw.len() > crate::web::MAX_WRITE_BODY_BYTES {
-        return Err(too_large());
+        return Err(body_too_large());
     }
     Ok(raw)
+}
+
+/// Read one state-changing request body under the fixed size cap.
+///
+/// Inputs: `request` — in-flight request whose body has not been consumed.
+/// Output: the raw body bytes, or a typed [`crate::web::WriteError`]: a
+/// declared `Content-Length` over [`crate::web::MAX_WRITE_BODY_BYTES`] fails
+/// with [`crate::web::CODE_REQUEST_BODY_TOO_LARGE`] before any read, and
+/// transport or size failures while streaming map exactly as
+/// [`read_capped_body`] documents.
+fn read_write_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, crate::web::WriteError> {
+    let declared = unique_header(request.headers(), "Content-Length")
+        .map(str::trim)
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared.is_some_and(|length| length > crate::web::MAX_WRITE_BODY_BYTES) {
+        return Err(body_too_large());
+    }
+    read_capped_body(request.as_reader())
 }
 
 /// Handle one state-changing request: parse, dispatch to the worker, wrap the
@@ -262,6 +280,64 @@ fn handle_write(
             .to_string(),
         ),
     }
+}
+
+/// Build the fixed response header set attached to every API response.
+///
+/// Inputs: `request_id` — per-request correlation identifier;
+/// `contract_sha256` — hex digest of the pinned OpenAPI contract;
+/// `build_identity_sha256` — hex digest of the build identity;
+/// `content_type` — response body media type. Output: the seven headers in
+/// application order as fallible constructions. Every name is an ASCII
+/// literal and every value is a constant or generated ASCII (UUID/hex
+/// digests), so production inputs always construct; the fallibility is kept
+/// and guarded by [`finalize_response`] so the failure path is injectable
+/// and tested instead of a dead 500 arm.
+fn response_headers(
+    request_id: &str,
+    contract_sha256: &str,
+    build_identity_sha256: &str,
+    content_type: &str,
+) -> [Result<Header, ()>; 7] {
+    [
+        Header::from_bytes("Content-Type", content_type),
+        Header::from_bytes("Cache-Control", "no-store"),
+        Header::from_bytes("X-Content-Type-Options", "nosniff"),
+        Header::from_bytes(
+            "Content-Security-Policy",
+            crate::web::WEB_CONTENT_SECURITY_POLICY,
+        ),
+        Header::from_bytes("X-Request-ID", request_id),
+        Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256),
+        Header::from_bytes("X-RR-Build-Identity-SHA256", build_identity_sha256),
+    ]
+}
+
+/// Assemble the response to send from one body plus fallible headers.
+///
+/// Inputs: `body` — response body; `status` — response status;
+/// `headers` — constructed headers in application order. Output: the normal
+/// response carrying every header when all constructions succeed, or the
+/// fixed bare 500 "Internal response construction failure" response when any
+/// header cannot be built (guards against malformed header input ever
+/// reaching a client half-formed).
+fn finalize_response(
+    body: String,
+    status: u16,
+    headers: impl IntoIterator<Item = Result<Header, ()>>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    let headers: Vec<Header> = match headers.into_iter().collect() {
+        Ok(headers) => headers,
+        Err(()) => {
+            return Response::from_string("Internal response construction failure")
+                .with_status_code(500);
+        }
+    };
+    let mut response = Response::from_string(body).with_status_code(status);
+    for header in headers {
+        response = response.with_header(header);
+    }
+    response
 }
 
 /// Local loopback HTTP surface: read API, embedded web page, gated writes.
@@ -465,32 +541,16 @@ pub fn start_with_verifier(
                     }
                 }
             };
-            let headers = [
-                Header::from_bytes("Content-Type", content_type),
-                Header::from_bytes("Cache-Control", "no-store"),
-                Header::from_bytes("X-Content-Type-Options", "nosniff"),
-                Header::from_bytes(
-                    "Content-Security-Policy",
-                    crate::web::WEB_CONTENT_SECURITY_POLICY,
+            let response = finalize_response(
+                body,
+                status,
+                response_headers(
+                    request_id.as_str(),
+                    contract_sha256.as_str(),
+                    build_identity_sha256.as_str(),
+                    content_type,
                 ),
-                Header::from_bytes("X-Request-ID", request_id.as_bytes()),
-                Header::from_bytes("X-RR-API-Contract-SHA256", contract_sha256.as_bytes()),
-                Header::from_bytes(
-                    "X-RR-Build-Identity-SHA256",
-                    build_identity_sha256.as_bytes(),
-                ),
-            ];
-            if headers.iter().any(Result::is_err) {
-                let _ = request.respond(
-                    Response::from_string("Internal response construction failure")
-                        .with_status_code(500),
-                );
-                continue;
-            }
-            let mut response = Response::from_string(body).with_status_code(status);
-            for header in headers.into_iter().filter_map(Result::ok) {
-                response = response.with_header(header);
-            }
+            );
             let _ = request.respond(response);
         }
     });
@@ -551,6 +611,116 @@ mod tests {
             .unwrap();
         assert!(policy.contains("default-src 'none'"));
         assert!(policy.contains("connect-src 'self'"));
+    }
+
+    /// Body source that yields a short prefix and then fails, simulating a
+    /// mid-body transport reset without needing real socket options.
+    struct FailingReader {
+        delivered: bool,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.delivered {
+                self.delivered = true;
+                buf[..4].copy_from_slice(b"part");
+                return Ok(4);
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "SECRET-IO-DETAIL",
+            ))
+        }
+    }
+
+    // why: the read-failure mapping is the only stable answer to a transport
+    // reset mid-body; it must stay a non-retryable 400 `invalid_request` with
+    // a fixed message and must never echo the I/O error text, which can carry
+    // local path or socket details. A regression to 500/retryable, a changed
+    // code, or a message that leaks the source error fails this test.
+    #[test]
+    fn mid_body_read_failures_map_to_non_retryable_invalid_request() {
+        let error = read_capped_body(FailingReader { delivered: false }).unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.code, crate::web::CODE_INVALID_REQUEST);
+        assert!(!error.retryable);
+        assert_eq!(error.message, "The request body could not be read");
+        assert!(!error.message.contains("SECRET-IO-DETAIL"));
+    }
+
+    // why: every response must carry exactly the pinned security and provenance
+    // headers (no-store, nosniff, strict CSP, request id, contract and build
+    // identity digests); dropping, reordering or corrupting any of them is a
+    // silent contract break this pins.
+    #[test]
+    fn response_headers_pin_the_security_and_provenance_contract() {
+        let headers = response_headers("req-1", "ca", "bi", "text/plain; charset=utf-8");
+        let rendered: Vec<(String, String)> = headers
+            .iter()
+            .map(|header| {
+                let header = header.as_ref().unwrap();
+                (
+                    header.field.as_str().to_string(),
+                    header.value.as_str().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                (
+                    "Content-Type".to_string(),
+                    "text/plain; charset=utf-8".to_string()
+                ),
+                ("Cache-Control".to_string(), "no-store".to_string()),
+                ("X-Content-Type-Options".to_string(), "nosniff".to_string()),
+                (
+                    "Content-Security-Policy".to_string(),
+                    crate::web::WEB_CONTENT_SECURITY_POLICY.to_string(),
+                ),
+                ("X-Request-ID".to_string(), "req-1".to_string()),
+                ("X-RR-API-Contract-SHA256".to_string(), "ca".to_string()),
+                ("X-RR-Build-Identity-SHA256".to_string(), "bi".to_string()),
+            ]
+        );
+    }
+
+    // why: the response assembler must attach every header plus the exact
+    // body and status on the normal path, and must fall back to the bare 500
+    // "Internal response construction failure" carrying no half-built
+    // headers when any header cannot be constructed — malformed header input
+    // must never reach a client half-formed. This is the injectable form of
+    // the former dead 500 arm in the server loop.
+    #[test]
+    fn finalize_response_applies_headers_or_falls_back_to_the_bare_500() {
+        let ok = finalize_response(
+            "{\"ok\":true}".to_string(),
+            200,
+            response_headers("req-1", "ca", "bi", "application/json"),
+        );
+        assert_eq!(ok.status_code().0, 200);
+        assert_eq!(ok.headers().len(), 7);
+        assert_eq!(ok.into_reader().into_inner(), b"{\"ok\":true}".to_vec());
+
+        let broken = Header::from_bytes("X-Broken", "caf\u{e9}");
+        assert!(broken.is_err(), "the probe header must be unbuildable");
+        let fallback = finalize_response(
+            "ignored".to_string(),
+            200,
+            vec![Header::from_bytes("X-Ok", "1"), broken],
+        );
+        assert_eq!(fallback.status_code().0, 500);
+        assert!(
+            !fallback
+                .headers()
+                .iter()
+                .any(|header| header.field.equiv("X-Ok")),
+            "the 500 fallback must carry no half-built headers"
+        );
+        assert_eq!(
+            fallback.into_reader().into_inner(),
+            b"Internal response construction failure".to_vec()
+        );
     }
 
     // why: the embedded shell is what a browser navigates to; it must load

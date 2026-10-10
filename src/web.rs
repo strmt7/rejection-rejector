@@ -369,21 +369,43 @@ pub fn validate_item_id(id: &str) -> Result<(), WriteError> {
     }
 }
 
+/// The state-changing write routes, classified as a typed kind so request
+/// handling can match exhaustively (compiler-checked) instead of carrying a
+/// dead string-match fallback arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteRoute {
+    EditDraft,
+    Regenerate,
+    DismissRow,
+    Send,
+    UpdateSettings,
+    AutomaticArm,
+}
+
+/// Classify a request path as one of the state-changing write routes.
+///
+/// Inputs: `route` — request path including any query string. Output:
+/// `Some(kind)` only for the exact write-route constants (a query suffix
+/// makes the path a different route); `None` for everything else.
+fn classify_write_route(route: &str) -> Option<WriteRoute> {
+    match route {
+        EDIT_DRAFT_ROUTE => Some(WriteRoute::EditDraft),
+        REGENERATE_ROUTE => Some(WriteRoute::Regenerate),
+        DISMISS_ROW_ROUTE => Some(WriteRoute::DismissRow),
+        SEND_ROUTE => Some(WriteRoute::Send),
+        UPDATE_SETTINGS_ROUTE => Some(WriteRoute::UpdateSettings),
+        AUTOMATIC_ARM_ROUTE => Some(WriteRoute::AutomaticArm),
+        _ => None,
+    }
+}
+
 /// Whether `route` is one of the state-changing write routes.
 ///
 /// Inputs: `route` — request path including any query string. Output:
 /// `true` only for the exact write-route constants (a query suffix makes the
 /// path a different route and is rejected).
 pub fn is_write_route(route: &str) -> bool {
-    matches!(
-        route,
-        EDIT_DRAFT_ROUTE
-            | REGENERATE_ROUTE
-            | DISMISS_ROW_ROUTE
-            | SEND_ROUTE
-            | UPDATE_SETTINGS_ROUTE
-            | AUTOMATIC_ARM_ROUTE
-    )
+    classify_write_route(route).is_some()
 }
 
 #[derive(Debug, Deserialize)]
@@ -432,13 +454,13 @@ struct AutomaticArmPayload {
 /// [`CODE_ROUTE_NOT_FOUND`], and malformed or unknown-field JSON with
 /// [`CODE_INVALID_REQUEST`] (never echoing the submitted content).
 pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, WriteError> {
-    if !is_write_route(route) {
+    let Some(kind) = classify_write_route(route) else {
         return Err(WriteError::reject(
             404,
             CODE_ROUTE_NOT_FOUND,
             "Unknown state-changing route",
         ));
-    }
+    };
     if body.len() > MAX_WRITE_BODY_BYTES {
         return Err(WriteError::reject(
             413,
@@ -453,8 +475,8 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             "The request body is not a valid payload for this command",
         )
     };
-    match route {
-        EDIT_DRAFT_ROUTE => {
+    match kind {
+        WriteRoute::EditDraft => {
             let payload: EditDraftPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
             validate_item_id(&payload.id)?;
             Ok(WriteRequest::EditDraft {
@@ -463,17 +485,17 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
                 body: payload.body,
             })
         }
-        REGENERATE_ROUTE | DISMISS_ROW_ROUTE => {
+        WriteRoute::Regenerate | WriteRoute::DismissRow => {
             let payload: RevisionPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
             validate_item_id(&payload.id)?;
             let (id, revision) = (payload.id, payload.revision);
-            Ok(if route == REGENERATE_ROUTE {
+            Ok(if kind == WriteRoute::Regenerate {
                 WriteRequest::Regenerate { id, revision }
             } else {
                 WriteRequest::Dismiss { id, revision }
             })
         }
-        SEND_ROUTE => {
+        WriteRoute::Send => {
             let payload: SendPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
             validate_item_id(&payload.id)?;
             Ok(WriteRequest::Send {
@@ -482,7 +504,7 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
                 confirm_reply: payload.confirm_reply,
             })
         }
-        UPDATE_SETTINGS_ROUTE => {
+        WriteRoute::UpdateSettings => {
             let payload: UpdateSettingsPayload =
                 serde_json::from_slice(body).map_err(|_| invalid())?;
             Ok(WriteRequest::UpdateSettings {
@@ -492,18 +514,13 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
                 sending_enabled: payload.sending_enabled,
             })
         }
-        AUTOMATIC_ARM_ROUTE => {
+        WriteRoute::AutomaticArm => {
             let payload: AutomaticArmPayload =
                 serde_json::from_slice(body).map_err(|_| invalid())?;
             Ok(WriteRequest::AutomaticArm {
                 action: payload.action,
             })
         }
-        _ => Err(WriteError::reject(
-            404,
-            CODE_ROUTE_NOT_FOUND,
-            "Unknown state-changing route",
-        )),
     }
 }
 
