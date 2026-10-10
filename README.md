@@ -1,13 +1,13 @@
 # Rejection Rejector
 
-**Your voice, returned.** A standalone native Rust desktop application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending eligible replies.
-
-> Early release. Sending starts **disabled** and **Human review** is the default. No real emails or credentials are bundled. Validate the model on your own mailbox before enabling Automatic.
-
 [![Codecov](https://img.shields.io/codecov/c/github/strmt7/rejection-rejector?label=Codecov&logo=codecov)](https://codecov.io/gh/strmt7/rejection-rejector)
 [![cocoindex-code](https://img.shields.io/static/v1?label=&message=cocoindex-code&color=555&logo=github&logoColor=white)](https://github.com/cocoindex-io/cocoindex-code)
 [![caveman](https://img.shields.io/static/v1?label=&message=caveman&color=555&logo=github&logoColor=white)](https://github.com/JuliusBrussee/caveman)
 [![crawl4ai](https://img.shields.io/static/v1?label=&message=crawl4ai&color=555&logo=github&logoColor=white)](https://github.com/unclecode/crawl4ai)
+
+**Your voice, returned.** A standalone native Rust desktop application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending eligible replies.
+
+> Early release. Sending starts **disabled** and **Human review** is the default. No real emails or credentials are bundled. Validate the model on your own mailbox before enabling Automatic.
 
 ## Implemented
 
