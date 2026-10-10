@@ -354,12 +354,15 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
     let recall = ratio(rejection_tp, rejection_tp + rejection_fn);
     let residency = ollama.residency(&installed.digest).ok();
     let gpu_resident = residency.as_ref().is_some_and(|status| status.gpu_resident);
-    let recommendation_eligible = completed == cases.len()
-        && probability_contract_failures == 0
-        && rejection_fp == 0
-        && critical_negative_fp == 0
-        && recall.unwrap_or(0.0) >= 0.90
-        && gpu_resident;
+    let recommendation_eligible = recommendation_eligible(
+        completed,
+        cases.len(),
+        probability_contract_failures,
+        rejection_fp,
+        critical_negative_fp,
+        recall,
+        gpu_resident,
+    );
 
     let summary = Summary {
         fixture_count: cases.len(),
@@ -420,6 +423,51 @@ fn write_report(out: &Path, report: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Ranking tuple: model tag, rejection recall, mean rejection Brier score,
+/// critical-negative maximum rejection probability and mean latency seconds.
+type CandidateRank = (String, f64, f64, f64, f64);
+
+/// Lexicographic decision-model ranking policy.
+///
+/// Inputs: `left`/`right` candidate ranks. Output: ordering that prefers
+/// eligible models first (eligibility is filtered before ranking), then higher
+/// rejection recall, then lower rejection Brier, then lower critical-negative
+/// rejection probability, then lower latency, then the model tag for
+/// determinism.
+fn rank_candidates(left: &CandidateRank, right: &CandidateRank) -> std::cmp::Ordering {
+    right
+        .1
+        .total_cmp(&left.1)
+        .then_with(|| left.2.total_cmp(&right.2))
+        .then_with(|| left.3.total_cmp(&right.3))
+        .then_with(|| left.4.total_cmp(&right.4))
+        .then_with(|| left.0.cmp(&right.0))
+}
+
+/// Whether a decision-model evaluation qualifies for recommendation.
+///
+/// Inputs: completion counts against the fixture set, probability-contract
+/// failure count, rejection false positives, critical-negative false
+/// positives, rejection recall and GPU residency. Output: `true` only when
+/// every gate passes: full completion, zero contract failures, zero false
+/// positives of either class, recall of at least 0.90 and GPU residency.
+fn recommendation_eligible(
+    completed: usize,
+    fixture_count: usize,
+    contract_failures: usize,
+    rejection_fp: usize,
+    critical_negative_fp: usize,
+    rejection_recall: Option<f64>,
+    gpu_resident: bool,
+) -> bool {
+    completed == fixture_count
+        && contract_failures == 0
+        && rejection_fp == 0
+        && critical_negative_fp == 0
+        && rejection_recall.unwrap_or(0.0) >= 0.90
+        && gpu_resident
+}
+
 fn report_metric(report: &Value, pointer: &str) -> Option<f64> {
     report.pointer(pointer).and_then(Value::as_f64)
 }
@@ -475,15 +523,7 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<Value> {
         })
         .collect::<Vec<_>>();
 
-    ranked.sort_by(|left, right| {
-        right
-            .1
-            .total_cmp(&left.1)
-            .then_with(|| left.2.total_cmp(&right.2))
-            .then_with(|| left.3.total_cmp(&right.3))
-            .then_with(|| left.4.total_cmp(&right.4))
-            .then_with(|| left.0.cmp(&right.0))
-    });
+    ranked.sort_by(rank_candidates);
 
     let recommendation = ranked.first().map(|row| row.0.clone());
     let report = json!({
@@ -593,5 +633,96 @@ mod tests {
         let mut broken = answer;
         broken.probabilities.remove("uncertain");
         assert!(validate_probabilities(&broken).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ranking_and_eligibility_tests {
+    use super::*;
+
+    /// Zero denominators must yield None rather than NaN or a panic.
+    #[test]
+    fn ratio_handles_zero_denominators() {
+        assert_eq!(ratio(0, 0), None);
+        assert_eq!(ratio(3, 0), None);
+        assert_eq!(ratio(3, 4), Some(0.75));
+        assert_eq!(ratio(0, 4), Some(0.0));
+    }
+
+    /// Ranking is lexicographic: recall dominates, ties fall through to Brier,
+    /// then critical-negative score, latency and finally the model tag.
+    #[test]
+    fn ranking_prefers_recall_then_brier_then_critical_negative_then_latency() {
+        let base = ("m".to_string(), 0.9, 0.10, 0.20, 2.0);
+        let better_recall = ("a".to_string(), 0.95, 0.90, 0.90, 9.0);
+        assert_eq!(
+            rank_candidates(&better_recall, &base),
+            std::cmp::Ordering::Less
+        );
+        let tie_better_brier = ("b".to_string(), 0.9, 0.05, 0.20, 2.0);
+        assert_eq!(
+            rank_candidates(&tie_better_brier, &base),
+            std::cmp::Ordering::Less
+        );
+        let tie_better_critical = ("c".to_string(), 0.9, 0.10, 0.15, 2.0);
+        assert_eq!(
+            rank_candidates(&tie_better_critical, &base),
+            std::cmp::Ordering::Less
+        );
+        let tie_better_latency = ("d".to_string(), 0.9, 0.10, 0.20, 1.5);
+        assert_eq!(
+            rank_candidates(&tie_better_latency, &base),
+            std::cmp::Ordering::Less
+        );
+        let total_tie = ("a".to_string(), 0.9, 0.10, 0.20, 2.0);
+        assert_eq!(rank_candidates(&total_tie, &base), std::cmp::Ordering::Less);
+    }
+
+    /// Each eligibility gate must independently disqualify a recommendation;
+    /// dropping any one of them would let unsafe evidence through.
+    #[test]
+    fn every_eligibility_gate_independently_disqualifies() {
+        let perfect = (20, 20, 0, 0, 0, Some(0.95), true);
+        let (c, n, cf, rfp, cfp, recall, gpu) = perfect;
+        assert!(recommendation_eligible(c, n, cf, rfp, cfp, recall, gpu));
+        assert!(
+            !recommendation_eligible(19, n, cf, rfp, cfp, recall, gpu),
+            "incomplete run"
+        );
+        assert!(
+            !recommendation_eligible(c, n, 1, rfp, cfp, recall, gpu),
+            "contract failures"
+        );
+        assert!(
+            !recommendation_eligible(c, n, cf, 1, cfp, recall, gpu),
+            "rejection false positive"
+        );
+        assert!(
+            !recommendation_eligible(c, n, cf, rfp, 1, recall, gpu),
+            "critical-negative false positive"
+        );
+        assert!(
+            !recommendation_eligible(c, n, cf, rfp, cfp, Some(0.89), gpu),
+            "recall below 0.90"
+        );
+        assert!(
+            !recommendation_eligible(c, n, cf, rfp, cfp, None, gpu),
+            "missing recall"
+        );
+        assert!(
+            !recommendation_eligible(c, n, cf, rfp, cfp, recall, false),
+            "no GPU residency"
+        );
+    }
+
+    /// Metric extraction must distinguish missing, non-numeric and numeric
+    /// JSON values without fabricating numbers.
+    #[test]
+    fn report_metric_never_fabricates_values() {
+        let report = serde_json::json!({"summary": {"recall": 0.5, "count": 7, "name": "x"}});
+        assert_eq!(report_metric(&report, "/summary/recall"), Some(0.5));
+        assert_eq!(report_metric(&report, "/summary/count"), Some(7.0));
+        assert_eq!(report_metric(&report, "/summary/name"), None);
+        assert_eq!(report_metric(&report, "/summary/missing"), None);
     }
 }
