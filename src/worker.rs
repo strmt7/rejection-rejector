@@ -972,7 +972,7 @@ fn run(
             api_disabled.clone(),
             pulse.clone(),
         ) {
-            Ok(()) => {
+            Ok(_) => {
                 if let Some(journal) = &journal {
                     let _ = journal.record_event(RuntimeEvent::ApiListenerStarted);
                 }
