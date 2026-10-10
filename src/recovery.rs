@@ -861,7 +861,18 @@ pub fn restore_backup(data_dir: &Path, backup_dir: &Path) -> Result<RestoreRepor
             return Err(error);
         }
     };
-    restore_backup_with_vault(data_dir, backup_dir, &manifest, vault)
+    // The minted vault identity is rolled back on ANY failure of the restore
+    // itself, not only at vault opening: a failed restore must never leave a
+    // fresh workspace looking authentic (the test in this module pins it).
+    match restore_backup_with_vault(data_dir, backup_dir, &manifest, vault) {
+        Ok(report) => Ok(report),
+        Err(error) => {
+            if created_vault_id {
+                let _ = fs::remove_file(&vault_id_path);
+            }
+            Err(error)
+        }
+    }
 }
 
 pub fn backup_manifest_path(directory: &Path) -> PathBuf {
