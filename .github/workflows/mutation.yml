@@ -41,7 +41,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: mutation-testing-main
+  # Per-SHA group: evidence runs must never be superseded by later pushes,
+  # otherwise the release policy's "latest main mutation evidence" starves.
+  group: mutation-testing-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
