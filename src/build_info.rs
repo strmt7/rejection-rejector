@@ -19,7 +19,7 @@ pub struct BuildInfo {
 }
 
 fn hash_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hex_lower(Sha256::digest(bytes))
 }
 
 fn lock_hash() -> &'static str {
@@ -55,7 +55,7 @@ fn identity_hash(
         digest.update((value.len() as u64).to_le_bytes());
         digest.update(value.as_bytes());
     }
-    format!("{:x}", digest.finalize())
+    crate::hex_lower(digest.finalize())
 }
 
 pub fn current() -> BuildInfo {

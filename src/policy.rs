@@ -19,7 +19,7 @@ pub fn schema_text() -> &'static str {
 }
 
 pub fn schema_sha256() -> String {
-    format!("{:x}", Sha256::digest(schema_text().as_bytes()))
+    crate::hex_lower(Sha256::digest(schema_text().as_bytes()))
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -516,7 +516,7 @@ fn configured_signature_requirement(policy_path: &Path) -> Result<Option<Signatu
         anyhow::anyhow!("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY must be valid Unicode")
     })?;
     let public_key = normalize_public_key(&key)?;
-    let signer_key_sha256 = format!("{:x}", Sha256::digest(&public_key));
+    let signer_key_sha256 = crate::hex_lower(Sha256::digest(&public_key));
     let signature_path = signature_override
         .map(PathBuf::from)
         .map(validate_signature_path)
@@ -660,7 +660,7 @@ fn load_file_with_controls(
     let policy: EnterprisePolicy =
         serde_json::from_slice(&bytes).context("Enterprise policy is invalid JSON")?;
     policy.validate_at(Utc::now())?;
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = crate::hex_lower(Sha256::digest(&bytes));
     if let Some(expected) = &expected_digest {
         ensure!(
             &digest == expected,
@@ -852,7 +852,7 @@ mod tests {
         let path = root.path().join("policy.json");
         let body = br#"{"version":1,"prohibit_sending":true}"#;
         std::fs::write(&path, body).unwrap();
-        let digest = format!("{:x}", Sha256::digest(body));
+        let digest = crate::hex_lower(Sha256::digest(body));
 
         let loaded = load_file_with_controls(&path, Some(digest.clone()), None).unwrap();
         assert_eq!(loaded.digest, digest);
@@ -1002,7 +1002,7 @@ mod tests {
         .unwrap();
         let public_key = key_pair.public_key().as_ref().to_vec();
         let requirement = SignatureRequirement {
-            signer_key_sha256: format!("{:x}", Sha256::digest(&public_key)),
+            signer_key_sha256: crate::hex_lower(Sha256::digest(&public_key)),
             public_key,
             signature_path: signature_path.clone(),
         };
@@ -1045,7 +1045,7 @@ mod tests {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[3u8; 32]).unwrap();
         let public_key = key_pair.public_key().as_ref().to_vec();
         let requirement = SignatureRequirement {
-            signer_key_sha256: format!("{:x}", Sha256::digest(&public_key)),
+            signer_key_sha256: crate::hex_lower(Sha256::digest(&public_key)),
             public_key,
             signature_path: signature_path.clone(),
         };

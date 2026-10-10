@@ -34,7 +34,7 @@ fn sha256_domain(domain: &[u8], value: &[u8]) -> String {
     digest.update(domain);
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
-    format!("{:x}", digest.finalize())
+    crate::hex_lower(digest.finalize())
 }
 
 fn valid_hash(value: &str) -> bool {

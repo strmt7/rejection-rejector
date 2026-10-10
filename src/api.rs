@@ -52,7 +52,7 @@ impl RateLimiter {
 }
 
 pub fn openapi_sha256() -> String {
-    format!("{:x}", Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
+    crate::hex_lower(Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
 }
 
 fn error_body(code: &str, message: &str, retryable: bool, request_id: &str) -> serde_json::Value {

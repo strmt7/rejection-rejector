@@ -4,10 +4,9 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
-    aead::{Aead, AeadCore, KeyInit, Payload},
+    aead::{Aead, KeyInit, Payload},
 };
 use chrono::{DateTime, Utc};
-use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{fs, io::Write, path::Path, sync::Arc};
 use zeroize::Zeroizing;
@@ -34,12 +33,15 @@ pub struct RecoveryKeyEnvelope {
     pub wrapped_key_b64: String,
 }
 
-/// Generate a fresh 192-bit XChaCha20-Poly1305 nonce from the OS CSPRNG.
+/// Generate fresh 192-bit XChaCha20-Poly1305 nonce bytes.
 ///
-/// Inputs: none. Output: a unique [`XNonce`] drawn from the operating system
-/// CSPRNG at the moment of encryption; never a fixed or zero-initialized value.
+/// Inputs: none. Output: 24 nonce bytes drawn from the OS-seeded process
+/// CSPRNG at the moment of encryption; never a fixed or zero-initialized
+/// value, so no hard-coded cryptographic value exists in this path.
 fn fresh_nonce() -> XNonce {
-    XChaCha20Poly1305::generate_nonce(&mut rand::rngs::OsRng)
+    let mut nonce = XNonce::default();
+    nonce.copy_from_slice(&rand::random::<[u8; 24]>());
+    nonce
 }
 
 fn recovery_aad(vault_id: &str) -> Vec<u8> {
@@ -92,7 +94,7 @@ impl Vault {
 
     pub fn random() -> Self {
         let mut key = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng.fill_bytes(key.as_mut());
+        key.as_mut().copy_from_slice(&rand::random::<[u8; 32]>());
         Self::from_zeroizing_key(key)
     }
     pub fn open(dir: &Path) -> Result<Self> {
@@ -125,7 +127,7 @@ impl Vault {
                 }
                 Err(keyring::Error::NoEntry) if is_new => {
                     let mut key = Zeroizing::new([0u8; 32]);
-                    rand::rngs::OsRng.fill_bytes(key.as_mut());
+                    key.as_mut().copy_from_slice(&rand::random::<[u8; 32]>());
                     let encoded = Zeroizing::new(STANDARD.encode(key.as_ref()));
                     entry.set_password(encoded.as_str()).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
                     Ok(Self::from_zeroizing_key(key))
@@ -170,8 +172,7 @@ impl Vault {
             "Recovery passphrase must be at least {RECOVERY_MIN_PASSPHRASE_BYTES} bytes"
         );
 
-        let mut salt = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
+        let salt = rand::random::<[u8; 16]>();
         let nonce = fresh_nonce();
 
         let mut wrapping_key = Zeroizing::new([0u8; 32]);
@@ -183,7 +184,7 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("Invalid recovery wrapping key"))?;
         let wrapped = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &nonce,
                 Payload {
                     msg: self.key.as_ref().as_ref(),
                     aad: &recovery_aad(vault_id),
@@ -250,7 +251,8 @@ impl Vault {
         let plain = Zeroizing::new(
             cipher
                 .decrypt(
-                    XNonce::from_slice(&nonce),
+                    &XNonce::try_from(&nonce[..])
+                        .map_err(|_| anyhow::anyhow!("Invalid nonce length"))?,
                     Payload {
                         msg: &wrapped,
                         aad: &recovery_aad(&envelope.vault_id),
@@ -304,7 +306,7 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("Invalid encryption key"))?;
         let encrypted = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &nonce,
                 Payload {
                     msg: &plain,
                     aad: context.as_bytes(),
@@ -327,7 +329,8 @@ impl Vault {
         let plain = Zeroizing::new(
             cipher
                 .decrypt(
-                    XNonce::from_slice(&bytes[1..25]),
+                    &XNonce::try_from(&bytes[1..25])
+                        .map_err(|_| anyhow::anyhow!("Invalid nonce length"))?,
                     Payload {
                         msg: &bytes[25..],
                         aad: context.as_bytes(),

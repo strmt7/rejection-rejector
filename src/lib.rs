@@ -46,3 +46,38 @@ pub mod sync;
 pub mod types;
 pub mod vault;
 pub mod worker;
+
+/// Format bytes as lowercase hexadecimal.
+///
+/// Inputs: `bytes` — any byte buffer ([`AsRef`]`<`[`u8`]`>`; SHA-256 digests
+/// included). Output: [`String`] of exactly `2 * bytes.len()` lowercase hex
+/// characters. This is the single digest-formatting path (sha2 0.11 digests no
+/// longer implement [`core::fmt::LowerHex`]).
+pub fn hex_lower(bytes: impl AsRef<[u8]>) -> String {
+    bytes
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod hex_lower_tests {
+    use super::hex_lower;
+
+    #[test]
+    fn hex_lower_encodes_single_and_multi_byte_buffers() {
+        assert_eq!(hex_lower(b""), "");
+        assert_eq!(hex_lower([0x00, 0x0f, 0xff]), "000fff");
+    }
+
+    #[test]
+    fn hex_lower_accepts_sha256_digest_output() {
+        use sha2::{Digest, Sha256};
+        let out = hex_lower(Sha256::digest(b"abc"));
+        assert_eq!(
+            out,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}
