@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+Breaking (0.x minor = breaking by Cargo semver convention; stored settings
+keep loading through serde aliases):
+
+- `Tone` is now Professional / Assertive / Hardline (default) / Insane;
+  legacy wire names (firm/strong/reconsideration) still deserialize.
+- `Settings` gains `reply_language` (Match email / Always English).
+- `Command` gains variants for the web surface; the loopback API adds
+  authenticated write endpoints (OpenAPI contract updated).
+
+Added: `rr tui` and `rr web` surfaces, the component-selectable Windows
+installer, corpus-proven twelve-language reply policy, and the coverage
+doctrine (100% lines as a standing goal, never a CI gate).
 
 ### Added
 - Multilingual reply policy: replies follow the email's first substantive
@@ -22,7 +35,7 @@
   email while short fixtures passed. Budgets now scale with the context tier
   (32768 supported) and the email-text budget matches the output envelope.
 
-## Unreleased
+
 
 - Removes the legacy manual Windows-ZIP path from ordinary Rust CI so user-facing packages cannot bypass the attested release gates. Preserves normal Windows/Linux builds, source/debug evidence and manual verification runs.
 - Records the original 100-commit incident scope and reproducible audit procedure, prohibits commit-count padding, and aligns testing documentation with actual source-bound release checks.
