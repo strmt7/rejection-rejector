@@ -3,8 +3,15 @@
 ## Unreleased
 
 ### Added
-- Three graded reply tones (Professional / Assertive / Hardline) with Hardline
-  as the default; legacy settings wire names still load unchanged.
+- Multilingual reply policy: replies follow the email's first substantive
+  language (deterministically detected and verified against the draft; a
+  mismatch holds the message). Twelve languages are contractually guaranteed:
+  English, Mandarin Chinese, Hindi, Spanish, French, Arabic, Bengali,
+  Portuguese, Russian, Urdu, German and Greek; Auto covers all languages.
+- Reply-language setting: match the email (default) or always English.
+- Four graded reply tones (Professional / Assertive / Hardline / Insane) with
+  Hardline as the default; Insane is offensive and borderline profane within
+  strict legal limits. Legacy settings wire names still load unchanged.
 - Automatic-mode arming gate: a 30-second risk-acknowledgment cooldown with an
   explicit warning modal before unattended sending can be enabled. Human
   review remains the default mode.

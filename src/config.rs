@@ -101,6 +101,8 @@ pub enum Tone {
     /// Harsh level: blunt, uncompromising, still fact-bound.
     #[default]
     Hardline,
+    /// Offensive level: hostile and borderline profane within legal limits.
+    Insane,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -127,6 +129,7 @@ impl Tone {
             Self::Professional => "Professional (soft)",
             Self::Assertive => "Assertive",
             Self::Hardline => "Hardline (harsh)",
+            Self::Insane => "Insane (offensive)",
         }
     }
     /// Trusted drafting instruction implementing this intensity level.
@@ -144,6 +147,36 @@ impl Tone {
             Self::Hardline => {
                 "Confront the decision bluntly and demand a substantive, individualized justification against the advertised requirements. Make the dissatisfaction unmistakable and the challenge uncompromising, while staying strictly fact-bound: no insults, threats, profanity or invented accusations, and no claim that a reply can overturn a hiring decision."
             }
+            Self::Insane => {
+                "Rip the decision apart with raw, hostile blunness bordering on swearing: make the disgust and contempt unmistakable and treat the process as an insult. Legal limits are absolute: never use slurs or discriminatory language, never threaten or encourage harm, never defame or allege crimes or misconduct without evidence, never demand money or threaten legal action, never disclose third-party personal data, and never claim a reply can overturn a hiring decision. Rude and contemptuous is allowed; illegal, abusive or discriminatory is not."
+            }
+        }
+    }
+}
+
+/// Language policy for drafted replies.
+///
+/// `Auto` replies in the first substantive language of the rejection (a
+/// deterministic detector decides it; see `crate::language`), which
+/// accommodates every language; `English` always replies in English.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyLanguage {
+    /// Reply in the email's first substantive language (all languages).
+    #[default]
+    Auto,
+    /// Always reply in English.
+    English,
+}
+
+impl ReplyLanguage {
+    /// Human-readable policy name.
+    ///
+    /// Inputs: none. Output: label shown in the settings picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Match the email's first language (all languages)",
+            Self::English => "Always English",
         }
     }
 }
@@ -210,6 +243,8 @@ pub struct Settings {
     pub cooldown_minutes: u16,
     pub daily_send_limit: u16,
     pub tone: Tone,
+    #[serde(default)]
+    pub reply_language: ReplyLanguage,
     pub signature: String,
     pub candidate_context: String,
     pub model: String,
@@ -244,6 +279,7 @@ impl Default for Settings {
             cooldown_minutes: 15,
             daily_send_limit: 10,
             tone: Tone::Hardline,
+            reply_language: ReplyLanguage::Auto,
             signature: "Your name".into(),
             candidate_context: String::new(),
             model: DEFAULT_MODEL.into(),
@@ -536,6 +572,7 @@ pub fn settings_context_hash(settings: &Settings) -> String {
         settings.candidate_context.as_str(),
         settings.signature.as_str(),
         settings.tone.instruction(),
+        settings.reply_language.label(),
     ] {
         digest.update(value.as_bytes());
         digest.update([0]);
@@ -891,5 +928,28 @@ mod tone_and_gate_tests {
         assert!(gate.can_confirm(after));
         let late = t0 + chrono::Duration::seconds(AUTOMATIC_ARM_COOLDOWN_SECONDS + 120);
         assert_eq!(gate.remaining(late), chrono::Duration::zero());
+    }
+}
+
+#[cfg(test)]
+mod reply_language_tests {
+    use super::*;
+
+    #[test]
+    fn reply_language_defaults_to_auto() {
+        assert_eq!(ReplyLanguage::default(), ReplyLanguage::Auto);
+        assert_eq!(Settings::default().reply_language, ReplyLanguage::Auto);
+    }
+
+    #[test]
+    fn reply_language_wire_names_are_stable() {
+        assert_eq!(
+            serde_json::from_str::<ReplyLanguage>("\"auto\"").unwrap(),
+            ReplyLanguage::Auto
+        );
+        assert_eq!(
+            serde_json::from_str::<ReplyLanguage>("\"english\"").unwrap(),
+            ReplyLanguage::English
+        );
     }
 }
