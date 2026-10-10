@@ -36,12 +36,17 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"
 ctrlc = "3"
+# Pinned terminal-UI stack for `rr tui` (both MIT / Apache-2.0 dual licensed).
+# ratatui 0.30 drives crossterm 0.29 through its `crossterm_0_29` feature so
+# the direct crossterm dependency and the widget backend share one crate.
+crossterm = "=0.29.0"
 directories = "6"
 fs2 = "0.4"
 html2text = "0.17"
 lingua = { version = "1.8", default-features = false, features = ["english", "chinese", "hindi", "spanish", "french", "arabic", "bengali", "portuguese", "russian", "urdu", "german", "greek"] }
 mailparse = "0.18"
 rand = "0.10"
+ratatui = { version = "=0.30.2", default-features = false, features = ["std", "layout-cache", "crossterm_0_29"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "webpki-roots", "form", "query"] }
 ring = "0.17.14"
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }

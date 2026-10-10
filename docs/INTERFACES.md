@@ -42,6 +42,19 @@ AI actions (qualify, compare, evaluate).
 - Pure presentation-state helpers (selection movement, action enablement,
   editor dirty tracking) live in testable functions, not in the draw loop.
 
+Usage: `rr tui` runs the full screen interface; `rr tui --demo` opens the
+synthetic offline workspace and `--data-dir` selects a workspace like every
+other subcommand. Panes switch with `1` Queue, `2` Review, `3` Activity,
+`4` Settings (`Tab` cycles). Review: `e` edit the reply, `s` save, `g`
+regenerate, `d` dismiss, `w` opens the mandatory confirm-exact-reply dialog
+(`y` sends the exact persisted draft, `n`/`Esc` cancels), `D` discards unsaved
+text, `a` expands the analysis. Settings: `Up/Down` moves the row cursor and
+`Left`/`Right` changes the focused value (mode, four tones, reply language,
+sending); enabling Automatic opens the `AutomaticArmGate` risk dialog with the
+visible 30-second countdown and cancel, and the same row disables Automatic
+again. `p` pauses/resumes dispatch; `q` quits after the unsaved-work
+confirmation.
+
 ## Local web UI (`rr web`)
 
 - Served by the existing loopback HTTP server; assets are embedded in the

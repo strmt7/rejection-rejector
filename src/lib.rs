@@ -44,6 +44,7 @@ pub mod shadow;
 pub mod storage;
 pub mod store;
 pub mod sync;
+pub mod tui;
 pub mod types;
 pub mod vault;
 pub mod worker;
