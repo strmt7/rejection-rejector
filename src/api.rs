@@ -261,10 +261,19 @@ pub fn start_with_verifier(
     stop: Arc<AtomicBool>,
     disabled: Arc<AtomicBool>,
     pulse: WorkerPulse,
-) -> Result<()> {
+) -> Result<u16> {
     let contract_sha256 = openapi_sha256();
     let build_identity_sha256 = crate::build_info::identity_sha256();
-    let server = Server::http(format!("127.0.0.1:{port}"))
+    let listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+        .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
+    // Bind exactly once and work from the port the socket actually holds:
+    // `port` may be 0 (ephemeral, required by parallel tests), and the Host
+    // and Origin policies must check the real endpoint.
+    let port = listener
+        .local_addr()
+        .map_err(|e| anyhow::anyhow!("Cannot inspect loopback API listener: {e}"))?
+        .port();
+    let server = Server::from_listener(listener, None)
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
         let mut rate_limiter = RateLimiter::new(Instant::now());
@@ -468,7 +477,7 @@ pub fn start_with_verifier(
             let _ = request.respond(response);
         }
     });
-    Ok(())
+    Ok(port)
 }
 
 /// Backwards-compatible library entry point. The supplied plaintext token is
@@ -481,7 +490,7 @@ pub fn start(
     stop: Arc<AtomicBool>,
     disabled: Arc<AtomicBool>,
     pulse: WorkerPulse,
-) -> Result<()> {
+) -> Result<u16> {
     let verifier = ApiTokenVerifier::from_token(&token)?;
     start_with_verifier(port, verifier, commands, stop, disabled, pulse)
 }
@@ -498,13 +507,10 @@ mod tests {
     /// test answers dispatched commands itself) and `stop` shuts the
     /// listener down.
     fn serve(token: &str) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
         let (commands, receiver) = bounded(4);
         let stop = Arc::new(AtomicBool::new(false));
-        start(
-            port,
+        let port = start(
+            0,
             token.into(),
             commands,
             stop.clone(),
@@ -894,10 +900,6 @@ mod tests {
 
     #[test]
     fn openmetrics_route_uses_real_authenticated_wire_contract() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         let token = "T".repeat(48);
         let (commands, receiver) = bounded(4);
         let stop = Arc::new(AtomicBool::new(false));
@@ -917,8 +919,8 @@ mod tests {
             }
         });
 
-        start(
-            port,
+        let port = start(
+            0,
             token.clone(),
             commands,
             stop.clone(),
