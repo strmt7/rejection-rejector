@@ -126,13 +126,20 @@ impl App {
                     if ui.add_enabled(available && !self.dirty, egui::Button::new("Dismiss")).clicked() {
                         self.worker.command(Command::Dismiss { id: job.id.clone(), revision: job.revision });
                     }
-                    let can_send = available
-                        && !self.dirty
-                        && visible_draft_matches(job, &self.editor)
-                        && send_blocks.is_empty()
-                        && s.settings.sending_enabled
-                        && !s.demo
-                        && !self.worker.paused.load(Ordering::SeqCst);
+                    let can_send = !self.modal_open()
+                        && send_gate_eligible(
+                            job,
+                            &crate::engine::SendGateContext {
+                                editor_text: &self.editor,
+                                editor_bound: bound,
+                                dirty: self.dirty,
+                                hard_blocks: &send_blocks,
+                                busy: !s.busy.is_empty(),
+                                sending_enabled: s.settings.sending_enabled,
+                                demo: s.demo,
+                                paused: self.worker.paused.load(Ordering::SeqCst),
+                            },
+                        );
                     if ui.add_enabled(can_send, egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT)).clicked() {
                         self.send_confirmation = Some(job.clone());
                     }

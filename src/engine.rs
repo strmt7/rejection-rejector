@@ -167,6 +167,68 @@ fn dispatch_require(
     }
 }
 
+/// Presentation-independent inputs for the send gate.
+///
+/// Each interface (desktop, terminal, web) collects these from its own state
+/// and hands them to [`send_gate_eligible`]; no interface reimplements the
+/// decision.
+pub struct SendGateContext<'a> {
+    /// Visible reply text currently shown to the user.
+    pub editor_text: &'a str,
+    /// Whether the editor is bound to the job's id and revision.
+    pub editor_bound: bool,
+    /// Whether the editor holds unsaved changes.
+    pub dirty: bool,
+    /// Mail-level sending blocks that apply to the original message.
+    pub hard_blocks: &'a [String],
+    /// Whether background work is currently in flight.
+    pub busy: bool,
+    /// Whether sending has been explicitly enabled in settings.
+    pub sending_enabled: bool,
+    /// Whether the workspace runs in demonstration mode.
+    pub demo: bool,
+    /// Whether the background worker is paused.
+    pub paused: bool,
+}
+
+/// Whether the visible reply is the exact persisted draft for this job.
+///
+/// Inputs: `job` — candidate job; `text` — visible editor text. Output:
+/// `true` only when the job has a persisted draft and `text` equals it byte
+/// for byte; any edit disqualifies the candidate (the confirm-exact-reply
+/// rule).
+pub fn visible_draft_matches(job: &Job, text: &str) -> bool {
+    job.draft.as_ref().is_some_and(|d| d.body == text)
+}
+
+/// Whether an editor is bound to this job's identity and revision.
+///
+/// Inputs: `job` — candidate job; `key` — `(id, revision)` the editor was
+/// loaded for. Output: `true` only for the exact pair, so stale editors can
+/// never act on a newer revision or a different message.
+pub fn editor_binding_matches(job: &Job, key: Option<&(String, u64)>) -> bool {
+    key.is_some_and(|(id, revision)| id == &job.id && *revision == job.revision)
+}
+
+/// Whether a job is a valid send candidate in the current runtime state.
+///
+/// Inputs: `job` — candidate job; `ctx` — presentation-independent state.
+/// Output: `true` only when every gate passes: the job is reviewable, the
+/// editor is bound and clean and shows the exact persisted draft, no mail
+/// hard blocks apply, nothing is busy, sending is enabled, and the session
+/// is neither in demo mode nor paused.
+pub fn send_gate_eligible(job: &Job, ctx: &SendGateContext<'_>) -> bool {
+    job.state.reviewable()
+        && ctx.editor_bound
+        && !ctx.dirty
+        && visible_draft_matches(job, ctx.editor_text)
+        && ctx.hard_blocks.is_empty()
+        && !ctx.busy
+        && ctx.sending_enabled
+        && !ctx.demo
+        && !ctx.paused
+}
+
 pub struct Engine {
     pub db: Store,
     pub settings: Settings,
@@ -1888,5 +1950,91 @@ mod dispatch_failure_taxonomy_tests {
         drop(held);
         let reacquired = crate::vault::InstanceLock::acquire(dir.path());
         assert!(reacquired.is_ok(), "lock must release on drop");
+    }
+}
+
+#[cfg(test)]
+mod send_gate_tests {
+    use super::*;
+
+    fn job_with_draft() -> Job {
+        let mut job = Job::new(
+            Stub {
+                account: "acct".to_string(),
+                provider_id: "msg".to_string(),
+                thread_id: "thread".to_string(),
+                source: Source::Gmail,
+            },
+            chrono::Utc::now(),
+        );
+        job.state = JobState::Ready;
+        job.revision = 3;
+        job.draft = Some(Draft {
+            body: "exact".to_string(),
+            origin: "test".to_string(),
+        });
+        job
+    }
+
+    fn ctx<'a>(text: &'a str) -> SendGateContext<'a> {
+        SendGateContext {
+            editor_text: text,
+            editor_bound: true,
+            dirty: false,
+            hard_blocks: &[],
+            busy: false,
+            sending_enabled: true,
+            demo: false,
+            paused: false,
+        }
+    }
+
+    /// Every individual gate must independently disqualify a send; the
+    /// conjunction is what protects users from wrong or duplicate sends.
+    #[test]
+    fn every_send_gate_independently_disqualifies() {
+        let job = job_with_draft();
+        assert!(send_gate_eligible(&job, &ctx("exact")));
+
+        let mut dirty = ctx("exact");
+        dirty.dirty = true;
+        assert!(!send_gate_eligible(&job, &dirty), "unsaved editor");
+
+        let unbound = ctx("exact");
+        let mut unbound = unbound;
+        unbound.editor_bound = false;
+        assert!(!send_gate_eligible(&job, &unbound), "stale editor");
+
+        assert!(!send_gate_eligible(&job, &ctx("exact ")), "edited text");
+
+        let blocked = ["blocked".to_string()];
+        let mut blocks = ctx("exact");
+        blocks.hard_blocks = &blocked;
+        assert!(!send_gate_eligible(&job, &blocks), "mail hard block");
+
+        let mut busy = ctx("exact");
+        busy.busy = true;
+        assert!(!send_gate_eligible(&job, &busy), "busy worker");
+
+        let mut off = ctx("exact");
+        off.sending_enabled = false;
+        assert!(!send_gate_eligible(&job, &off), "sending disabled");
+
+        let mut demo = ctx("exact");
+        demo.demo = true;
+        assert!(!send_gate_eligible(&job, &demo), "demo mode");
+
+        let mut paused = ctx("exact");
+        paused.paused = true;
+        assert!(!send_gate_eligible(&job, &paused), "paused worker");
+    }
+
+    /// A job that is not reviewable (already sent, dismissed, uncertain) is
+    /// never a send candidate regardless of editor state.
+    #[test]
+    fn non_reviewable_jobs_are_never_send_candidates() {
+        let mut job = job_with_draft();
+        job.state = JobState::Sent;
+        assert!(!send_gate_eligible(&job, &ctx("exact")));
     }
 }
