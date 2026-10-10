@@ -1166,4 +1166,140 @@ mod tests {
             }
         );
     }
+
+    // why: regenerate and dismiss are the two remaining write routes whose
+    // parsing arms and worker-operation mapping were never exercised; a
+    // swapped arm (dismiss parsing as regenerate) would silently issue the
+    // wrong worker command for the same payload shape.
+    #[test]
+    fn regenerate_and_dismiss_parse_and_map_to_their_operations() {
+        let id = "b".repeat(64);
+        let regen = parse_write_request(
+            REGENERATE_ROUTE,
+            format!(r#"{{"id":"{id}","revision":7}}"#).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            regen,
+            WriteRequest::Regenerate {
+                id: id.clone(),
+                revision: 7
+            }
+        );
+        assert_eq!(regen.operation_kind(), OperationKind::RegenerateDraft);
+        let dismiss = parse_write_request(
+            DISMISS_ROW_ROUTE,
+            format!(r#"{{"id":"{id}","revision":9}}"#).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            dismiss,
+            WriteRequest::Dismiss {
+                id: id.clone(),
+                revision: 9
+            }
+        );
+        assert_eq!(dismiss.operation_kind(), OperationKind::DismissItem);
+    }
+
+    // why: the revision is the CAS binding for every state change; u64::MAX
+    // must be representable exactly while 2^64, negatives and fractions must
+    // fail closed instead of wrapping or truncating into a live revision.
+    #[test]
+    fn revision_parsing_fails_closed_at_the_u64_boundary() {
+        let id = "c".repeat(64);
+        let max = parse_write_request(
+            DISMISS_ROW_ROUTE,
+            format!(r#"{{"id":"{id}","revision":18446744073709551615}}"#).as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            max,
+            WriteRequest::Dismiss {
+                id: id.clone(),
+                revision: u64::MAX
+            }
+        );
+        for bad in ["18446744073709551616", "-1", "1.5", "\"7\"", "null"] {
+            let body = format!(r#"{{"id":"{id}","revision":{bad}}}"#);
+            let error = parse_write_request(DISMISS_ROW_ROUTE, body.as_bytes()).unwrap_err();
+            assert_eq!(error.code, CODE_INVALID_REQUEST, "{bad} must not parse");
+        }
+    }
+
+    // why: the dismiss gate must bind to the same reviewable revision as the
+    // edit gate; a looser binding would let a stale editor discard a job that
+    // has already moved on.
+    #[test]
+    fn dismiss_gate_binds_to_the_same_reviewable_revision() {
+        let job = reviewable_job(CONFIRM_TEXT);
+        assert!(guard_dismiss(&job, 3).is_ok());
+        for stale in [0, 2, 4, u64::MAX] {
+            assert_eq!(
+                guard_dismiss(&job, stale).unwrap_err().code,
+                CODE_STALE_REVISION
+            );
+        }
+    }
+
+    // why: success outcomes are assembled on the wire; `accepted` must carry
+    // the typed operation status, merges must only extend success bodies, and
+    // a non-object payload must be a no-op instead of a panic or a corrupted
+    // envelope. Error bodies must never gain foreign fields.
+    #[test]
+    fn write_outcomes_merge_extras_only_into_success_bodies() {
+        let accepted = WriteOutcome::accepted(&OperationStatus::default());
+        assert_eq!(accepted.status, 200);
+        assert_eq!(accepted.body["accepted"], true);
+        assert!(accepted.body.get("operation").is_some());
+
+        let mut merged = WriteOutcome::accepted_with(json!({"operation": {"kind": "edit_draft"}}));
+        assert_eq!(merged.status, 200);
+        assert_eq!(merged.body["operation"]["kind"], "edit_draft");
+        let scalar = WriteOutcome::accepted_with(json!("plain"));
+        assert_eq!(scalar.body["accepted"], true);
+        assert_eq!(scalar.body.as_object().unwrap().len(), 1);
+
+        merged.merge_payload(json!({"extra": 1}));
+        assert_eq!(merged.body["extra"], 1);
+        let mut scalar_target = WriteOutcome::accepted_with(json!({"a": 1}));
+        scalar_target.merge_payload(json!("nope"));
+        assert_eq!(scalar_target.body["a"], 1);
+
+        let mut rejected =
+            WriteOutcome::error(&WriteError::reject(409, CODE_STALE_REVISION, "stale"));
+        rejected.merge_payload(json!({"extra": 1}));
+        assert!(rejected.body.get("extra").is_none());
+        assert_eq!(rejected.body["code"], CODE_STALE_REVISION);
+    }
+
+    // why: the response envelope is the stable integration contract;
+    // successful bodies must merge their payload fields at the top level
+    // while rejections must wrap the stable error object and nothing else.
+    #[test]
+    fn response_envelope_merges_success_fields_and_wraps_errors() {
+        let ok = WriteOutcome::accepted_with(json!({"operation": {"kind": "send_reply"}}));
+        let envelope = response_envelope("req-1", &ok);
+        assert_eq!(envelope["api_version"], crate::api::API_VERSION);
+        assert_eq!(envelope["request_id"], "req-1");
+        assert_eq!(envelope["accepted"], true);
+        assert_eq!(envelope["operation"]["kind"], "send_reply");
+        assert!(envelope.get("error").is_none());
+
+        let bad = WriteOutcome::error(&WriteError::reject(413, CODE_REQUEST_BODY_TOO_LARGE, "big"));
+        let envelope = response_envelope("req-2", &bad);
+        assert_eq!(envelope["request_id"], "req-2");
+        assert_eq!(envelope["error"]["code"], CODE_REQUEST_BODY_TOO_LARGE);
+        assert!(envelope.get("accepted").is_none());
+
+        // A success carrying a non-object body must still emit the stable
+        // envelope instead of panicking or dropping the correlation id.
+        let non_object = WriteOutcome {
+            status: 200,
+            body: json!("scalar"),
+        };
+        let envelope = response_envelope("req-3", &non_object);
+        assert_eq!(envelope["request_id"], "req-3");
+        assert!(envelope.get("accepted").is_none());
+    }
 }

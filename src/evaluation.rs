@@ -785,4 +785,18 @@ mod tests {
             assert!(case.text.trim().len() >= 10, "{}: tiny body", case.id);
         }
     }
+
+    /// Guards report persistence: a nested, not-yet-existing output directory
+    /// must be created before the private write, so a first run into a fresh
+    /// path cannot fail only after the whole evaluation has already run.
+    #[test]
+    fn write_report_creates_missing_parent_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("nested").join("deep").join("report.json");
+        write_report(&out, &serde_json::json!({"suite": "x"})).unwrap();
+        assert!(out.is_file());
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(parsed["suite"], "x");
+    }
 }

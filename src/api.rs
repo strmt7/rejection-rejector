@@ -169,6 +169,9 @@ fn read_write_body(request: &mut tiny_http::Request) -> Result<Vec<u8>, crate::w
         .as_reader()
         .take(crate::web::MAX_WRITE_BODY_BYTES as u64 + 1)
         .read_to_end(&mut raw)
+        // Coverage note: only a mid-body transport failure (e.g. a TCP RST)
+        // reaches the mapping below; forcing an RST needs `set_linger`, which
+        // is feature-gated on stable Rust, so this arm is not portable to test.
         .map_err(|_| crate::web::WriteError {
             status: 400,
             code: crate::web::CODE_INVALID_REQUEST.into(),
@@ -202,6 +205,20 @@ fn handle_write(
                 .to_string(),
         )
     };
+    // The write contract is `application/json` (see the OpenAPI document and
+    // the embedded page's fetch wrapper); a body announced as any other type
+    // is refused before it is read or dispatched. A missing header is left to
+    // the body parser, which requires valid JSON regardless.
+    if let Some(value) = unique_header(request.headers(), "Content-Type") {
+        let essence = value.split(';').next().unwrap_or_default().trim();
+        if !essence.eq_ignore_ascii_case("application/json") {
+            return error_outcome(&crate::web::WriteError::reject(
+                400,
+                crate::web::CODE_INVALID_REQUEST,
+                "State-changing requests must carry an application/json body",
+            ));
+        }
+    }
     let raw = match read_write_body(request) {
         Ok(raw) => raw,
         Err(error) => return error_outcome(&error),
@@ -985,5 +1002,406 @@ mod tests {
         ] {
             assert!(!authorized(value, &verifier));
         }
+    }
+
+    /// Bind the real API server with an explicit worker-channel capacity so
+    /// queue-full (`worker_busy`) paths are reachable with an unanswered
+    /// worker role.
+    ///
+    /// Inputs: `token` — bearer credential; `capacity` — command-queue slots.
+    /// Output: `(port, receiver, stop)` like [`serve`].
+    fn serve_cap(token: &str, capacity: usize) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
+        let (commands, receiver) = bounded(capacity);
+        let stop = Arc::new(AtomicBool::new(false));
+        let port = start(
+            0,
+            token.into(),
+            commands,
+            stop.clone(),
+            Arc::new(AtomicBool::new(false)),
+            WorkerPulse::new(),
+        )
+        .unwrap();
+        (port, receiver, stop)
+    }
+
+    /// Perform one raw HTTP/1.1 exchange against the loopback API.
+    ///
+    /// Inputs: `port` — bound API port; `request` — full raw request bytes.
+    /// Output: the raw response text (headers included).
+    fn raw_exchange(port: u16, request: &str) -> String {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
+        response
+    }
+
+    // why: the bearer credential is the only gate between the loopback port
+    // and the worker; malformed authorization headers (wrong scheme case,
+    // missing token, scheme-less values, duplicated headers that become
+    // ambiguous) must all land in the same 401 envelope instead of some
+    // silently matching prefix.
+    #[test]
+    fn malformed_bearer_headers_are_refused_on_the_wire() {
+        let token = "T".repeat(48);
+        let (port, receiver, stop) = serve(&token);
+        let client = crate::net::client(5, true).unwrap();
+        for value in [
+            format!("bearer {token}"),
+            "Bearer".to_string(),
+            "Bearer ".to_string(),
+            format!("Bearer\t{token}"),
+            format!("Bearer  {token}"),
+            format!("Basic {token}"),
+            token.clone(),
+        ] {
+            let response = client
+                .get(format!("http://127.0.0.1:{port}/v1/status"))
+                .header(reqwest::header::AUTHORIZATION, value.as_str())
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 401, "{value:?}");
+        }
+        // Two Authorization headers are ambiguous and must authenticate nobody.
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/v1/status"))
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 401);
+        assert!(receiver.try_recv().is_err());
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: the accept loop polls in 250 ms slices; if a quiet period made it
+    // exit instead of continue, the API would die a quarter second after the
+    // last request and every later request would hang on a closed listener.
+    #[test]
+    fn idle_accept_loop_survives_quiet_periods() {
+        let (port, receiver, stop) = serve(&"T".repeat(48));
+        std::thread::sleep(Duration::from_millis(700));
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/live"))
+            .bearer_auth("T".repeat(48))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert!(receiver.try_recv().is_err());
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: the rate limiter is the only backstop against a runaway local
+    // client; the bounded burst must surface as a stable `rate_limited`
+    // envelope on the wire, not as silently dropped or queued requests.
+    #[test]
+    fn wire_requests_over_the_burst_are_rate_limited() {
+        let (port, _receiver, stop) = serve(&"T".repeat(48));
+        let client = crate::net::client(10, true).unwrap();
+        let mut limited = None;
+        for _ in 0..(API_RATE_LIMIT_BURST + 2) {
+            let response = client
+                .get(format!("http://127.0.0.1:{port}/v1/live"))
+                .bearer_auth("T".repeat(48))
+                .send()
+                .unwrap();
+            if response.status().as_u16() == 429 {
+                limited = Some(response);
+                break;
+            }
+        }
+        let response = limited.expect("the burst ceiling must trigger 429 on the wire");
+        assert_csp(&response);
+        let body: serde_json::Value = response.json().unwrap();
+        assert_eq!(body["error"]["code"], "rate_limited");
+        assert_eq!(body["error"]["retryable"], true);
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: with a wedged (never-answering) worker the API must stay
+    // fail-closed and bounded: an unanswered read times out into
+    // `worker_timeout`, and once the command queue is full every further
+    // dispatch attempt (write or metrics) must fail fast as `worker_busy`
+    // instead of buffering unbounded work or hanging the HTTP client.
+    #[test]
+    fn wedged_worker_yields_busy_and_timeout_envelopes() {
+        let (port, _receiver, stop) = serve_cap(&"T".repeat(48), 1);
+        let client = crate::net::client(10, true).unwrap();
+        let token = "T".repeat(48);
+        // Fills the single command slot and waits out the read deadline.
+        let late = client
+            .get(format!("http://127.0.0.1:{port}/v1/status"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(late.status().as_u16(), 503);
+        let body: serde_json::Value = late.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_timeout");
+        assert_eq!(body["error"]["retryable"], true);
+        // Queue full: writes must fail fast without waiting the write deadline.
+        let write = client
+            .post(format!("http://127.0.0.1:{port}/v1/commands/dismiss"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({"id": "a".repeat(64), "revision": 1}))
+            .send()
+            .unwrap();
+        assert_eq!(write.status().as_u16(), 503);
+        let body: serde_json::Value = write.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_busy");
+        assert_eq!(body["error"]["retryable"], true);
+        // Metrics dispatches are bounded the same way.
+        let metrics = client
+            .get(format!("http://127.0.0.1:{port}/v1/metrics/openmetrics"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(metrics.status().as_u16(), 503);
+        let body: serde_json::Value = metrics.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_busy");
+        // Read dispatches fail fast against the full queue too — they must
+        // never block waiting for a slot behind wedged work.
+        let read = client
+            .get(format!("http://127.0.0.1:{port}/v1/status"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(read.status().as_u16(), 503);
+        let body: serde_json::Value = read.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_busy");
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: a worker reply carrying an `error` field is an application-level
+    // rejection and must surface as the stable 400 `invalid_request` envelope,
+    // while a data reply is forwarded verbatim — swapping these would either
+    // hide real errors behind 200s or break valid reads.
+    #[test]
+    fn worker_replies_shape_read_outcomes() {
+        let token = "T".repeat(48);
+        // Error payload -> 400.
+        let (port, receiver, stop) = serve(&token);
+        let handle =
+            std::thread::spawn(
+                move || match receiver.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Command::Api { reply, .. }) => {
+                        reply
+                            .send(serde_json::json!({"error": "unknown item"}))
+                            .unwrap();
+                    }
+                    _ => panic!("unexpected command"),
+                },
+            );
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/status"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 400);
+        let body: serde_json::Value = response.json().unwrap();
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["error"]["retryable"], false);
+        handle.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+
+        // Data payload -> 200 verbatim.
+        let (port, receiver, stop) = serve(&token);
+        let handle =
+            std::thread::spawn(
+                move || match receiver.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Command::Api { reply, path }) => {
+                        assert_eq!(path, "/v1/status");
+                        reply.send(serde_json::json!({"items": [1, 2]})).unwrap();
+                    }
+                    _ => panic!("unexpected command"),
+                },
+            );
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/status"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let body: serde_json::Value = response.json().unwrap();
+        assert_eq!(body["items"], serde_json::json!([1, 2]));
+        handle.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: openmetrics output must carry the Prometheus content type (a
+    // scraper refuses other types) and must answer with the worker's text.
+    #[test]
+    fn openmetrics_replies_use_the_prometheus_content_type() {
+        let token = "T".repeat(48);
+        let (port, receiver, stop) = serve(&token);
+        let handle =
+            std::thread::spawn(
+                move || match receiver.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Command::OpenMetrics { reply }) => {
+                        reply.send("# TYPE rr_up gauge\nrr_up 1\n".into()).unwrap();
+                    }
+                    _ => panic!("unexpected command"),
+                },
+            );
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/metrics/openmetrics"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            OPENMETRICS_CONTENT_TYPE
+        );
+        assert!(response.text().unwrap().contains("rr_up 1"));
+        handle.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: an unanswered metrics dispatch must degrade to the stable
+    // `worker_timeout` envelope within the read deadline instead of hanging
+    // the scraper forever.
+    #[test]
+    fn unanswered_openmetrics_times_out_with_a_stable_envelope() {
+        let (port, _receiver, stop) = serve_cap(&"T".repeat(48), 1);
+        let response = crate::net::client(10, true)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/v1/metrics/openmetrics"))
+            .bearer_auth("T".repeat(48))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 503);
+        let body: serde_json::Value = response.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_timeout");
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: the stream cap is what bounds listener memory when a client lies
+    // about (or omits) Content-Length; a chunked body over the cap must stop
+    // at `MAX_WRITE_BODY_BYTES + 1` and answer 413, while a body of exactly
+    // the cap must reach the parser (and fail there on its own merits).
+    #[test]
+    fn chunked_bodies_are_capped_by_the_stream_limit() {
+        let token = "T".repeat(48);
+        let (port, receiver, stop) = serve_cap(&token, 1);
+        let header = format!(
+            "POST /v1/commands/edit-draft HTTP/1.1\r\n\
+             Host: 127.0.0.1:{port}\r\n\
+             Authorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\n\
+             Transfer-Encoding: chunked\r\n\r\n"
+        );
+        let chunk_of = |size: usize| format!("{:x}\r\n{}\r\n", size, "x".repeat(size));
+        // Exactly the cap: the parser sees it (garbage JSON -> invalid_request).
+        let exact = format!(
+            "{header}{}0\r\n\r\n",
+            chunk_of(crate::web::MAX_WRITE_BODY_BYTES)
+        );
+        let response = raw_exchange(port, &exact);
+        assert!(
+            response.contains(" 400 ") && response.contains("invalid_request"),
+            "exact-cap body must reach the parser: {response}"
+        );
+        assert!(!response.contains("request_body_too_large"));
+        // One byte over the cap: stopped at the stream limit, never dispatched.
+        let over = format!(
+            "{header}{}0\r\n\r\n",
+            chunk_of(crate::web::MAX_WRITE_BODY_BYTES + 1)
+        );
+        let response = raw_exchange(port, &over);
+        assert!(
+            response.contains(" 413 ") && response.contains("request_body_too_large"),
+            "over-cap body must be refused: {response}"
+        );
+        assert!(receiver.try_recv().is_err());
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why: the write contract is application/json; a body announced as any
+    // other type must be refused before parsing or dispatch, while the same
+    // body under the JSON content type (including parameters and case
+    // variations) proceeds to the worker gates.
+    #[test]
+    fn writes_reject_non_json_content_types() {
+        let token = "T".repeat(48);
+        let (port, receiver, stop) = serve_cap(&token, 1);
+        let client = crate::net::client(5, true).unwrap();
+        let payload = serde_json::json!({"id": "a".repeat(64), "revision": 1});
+        for wrong in ["text/plain", "application/x-www-form-urlencoded", ""] {
+            let response = client
+                .post(format!("http://127.0.0.1:{port}/v1/commands/dismiss"))
+                .bearer_auth(&token)
+                .header(reqwest::header::CONTENT_TYPE, wrong)
+                .body(payload.to_string())
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400, "{wrong:?}");
+            let body: serde_json::Value = response.json().unwrap();
+            assert_eq!(body["error"]["code"], "invalid_request");
+        }
+        assert!(receiver.try_recv().is_err());
+        stop.store(true, Ordering::SeqCst);
+
+        // Accepted variants reach the worker (queue-full proves dispatch).
+        for good in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "APPLICATION/JSON",
+        ] {
+            let (port, receiver, stop) = serve_cap(&token, 1);
+            let client = crate::net::client(5, true).unwrap();
+            // Occupy the queue so the accepted write fails as busy, not 400.
+            let _late = client
+                .get(format!("http://127.0.0.1:{port}/v1/status"))
+                .bearer_auth(&token)
+                .send()
+                .unwrap();
+            let response = client
+                .post(format!("http://127.0.0.1:{port}/v1/commands/dismiss"))
+                .bearer_auth(&token)
+                .header(reqwest::header::CONTENT_TYPE, good)
+                .body(payload.to_string())
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 503, "{good:?}");
+            let body: serde_json::Value = response.json().unwrap();
+            assert_eq!(body["error"]["code"], "worker_busy");
+            drop(receiver);
+            stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // why: a write dispatched to a worker that never answers must release the
+    // request at the fixed local deadline with the stable `worker_timeout`
+    // envelope — the write CAS outcome stays with the worker, but the HTTP
+    // surface must never hold the connection open indefinitely.
+    #[test]
+    fn unanswered_writes_time_out_with_a_stable_envelope() {
+        let (port, _receiver, stop) = serve_cap(&"T".repeat(48), 1);
+        let response = crate::net::client(WRITE_REPLY_TIMEOUT.as_secs() + 10, true)
+            .unwrap()
+            .post(format!("http://127.0.0.1:{port}/v1/commands/dismiss"))
+            .bearer_auth("T".repeat(48))
+            .json(&serde_json::json!({"id": "a".repeat(64), "revision": 1}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 503);
+        let body: serde_json::Value = response.json().unwrap();
+        assert_eq!(body["error"]["code"], "worker_timeout");
+        assert_eq!(body["error"]["retryable"], true);
+        stop.store(true, Ordering::SeqCst);
     }
 }

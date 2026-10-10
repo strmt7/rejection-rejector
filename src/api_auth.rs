@@ -195,4 +195,33 @@ mod tests {
         assert!(!second.verifier.verify_token(first_plaintext.as_str()));
         assert!(store.meta::<String>(LEGACY_TOKEN_META).unwrap().is_none());
     }
+
+    // why: the verifier must fail closed on tokens below the entropy floor
+    // instead of hashing them anyway, so a truncated or hand-typed credential
+    // can never authenticate even against a matching short stored token.
+    #[test]
+    fn sub_entropy_tokens_never_verify() {
+        let verifier = ApiTokenVerifier::from_token(&"A".repeat(48)).unwrap();
+        assert!(ApiTokenVerifier::from_token("short").is_err());
+        assert!(ApiTokenVerifier::from_token("").is_err());
+        assert!(!verifier.verify_token("short"));
+        assert!(!verifier.verify_token(""));
+        assert!(!verifier.authorize_header(Some("Bearer short")));
+    }
+
+    // why: reloading the persisted verifier must reproduce the same
+    // credential without ever resurrecting plaintext, so a second startup
+    // neither rotates the token nor exposes it again.
+    #[test]
+    fn reloading_the_persisted_verifier_is_stable_and_never_yields_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("state.sqlite3"), Vault::random()).unwrap();
+        let first = load_or_create(&mut store).unwrap();
+        let plaintext = first.plaintext_once.unwrap();
+        let second = load_or_create(&mut store).unwrap();
+        assert!(second.plaintext_once.is_none());
+        assert!(!second.migrated_legacy);
+        assert_eq!(second.verifier.to_hex(), first.verifier.to_hex());
+        assert!(second.verifier.verify_token(plaintext.as_str()));
+    }
 }

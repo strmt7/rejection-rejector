@@ -179,10 +179,32 @@ impl std::error::Error for SendFailure {}
 pub struct Gmail {
     creds: Credentials,
     token: Option<(Zeroizing<String>, Instant)>,
+    root: String,
+    token_url: String,
 }
 impl Gmail {
     pub fn new(creds: Credentials) -> Self {
-        Self { creds, token: None }
+        Self {
+            creds,
+            token: None,
+            root: ROOT.into(),
+            token_url: TOKEN_URL.into(),
+        }
+    }
+    /// Build a client against explicit endpoints (test harnesses only).
+    ///
+    /// Inputs: `creds` — OAuth credentials; `root` — Gmail API base URL;
+    /// `token_url` — OAuth token endpoint. Output: a [`Gmail`] whose network
+    /// traffic goes to the given endpoints instead of Google's, so the
+    /// request/refresh failure modes can be exercised deterministically.
+    #[cfg(test)]
+    fn with_endpoints(creds: Credentials, root: &str, token_url: &str) -> Self {
+        Self {
+            creds,
+            token: None,
+            root: root.into(),
+            token_url: token_url.into(),
+        }
     }
     pub fn can_send(&self) -> bool {
         self.creds.can_send
@@ -194,7 +216,7 @@ impl Gmail {
             return Ok(token.clone());
         }
         let response = net::client(30, false)?
-            .post(TOKEN_URL)
+            .post(self.token_url.as_str())
             .form(&[
                 ("client_id", self.creds.client_id.as_str()),
                 ("client_secret", self.creds.client_secret.as_str()),
@@ -219,7 +241,7 @@ impl Gmail {
     ) -> Result<reqwest::blocking::Response> {
         let token = self.access()?;
         net::client(45, false)?
-            .get(format!("{ROOT}{path}"))
+            .get(format!("{}{path}", self.root))
             .bearer_auth(token.as_str())
             .query(params)
             .send()
@@ -317,7 +339,7 @@ impl Gmail {
             message: format!("Gmail client could not be created: {error}"),
         })?;
         let response = client
-            .post(format!("{ROOT}/messages/send"))
+            .post(format!("{}/messages/send", self.root))
             .bearer_auth(token.as_str())
             .json(&serde_json::json!({"raw":raw,"threadId":thread_id}))
             .send()
@@ -1138,5 +1160,567 @@ mod tests {
             serde_json::from_str::<HistoryPage>(r#"{"history":[]}"#).is_err(),
             "missing historyId must fail so the sync cursor cannot be silently lost"
         );
+    }
+
+    fn test_creds(can_send: bool) -> Credentials {
+        Credentials {
+            client_id: "client-id".into(),
+            client_secret: "client-secret".into(),
+            refresh_token: "refresh-token".into(),
+            can_send,
+        }
+    }
+
+    use std::sync::Arc;
+
+    /// Deterministic fake Gmail + OAuth-token server.
+    ///
+    /// Each route is `(path, status, extra_headers, body)` matched against the
+    /// request path (query string ignored); unmatched paths get 404. Every
+    /// request line is recorded so tests can pin request shapes and prove the
+    /// token refresh is not replayed per call.
+    struct Fake {
+        base: String,
+        token_url: String,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        hits: Arc<std::sync::Mutex<Vec<String>>>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Fake {
+        fn new(routes: &[(&str, u16, &str, &str)]) -> Self {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = stop.clone();
+            let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let tracked = hits.clone();
+            let routes: Vec<(String, u16, String, String)> = routes
+                .iter()
+                .map(|(p, s, h, b)| ((*p).to_string(), *s, (*h).to_string(), (*b).to_string()))
+                .collect();
+            let handle = std::thread::spawn(move || {
+                while !flag.load(Ordering::SeqCst) {
+                    let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(50)) else {
+                        continue;
+                    };
+                    let path = request.url().split('?').next().unwrap_or("").to_string();
+                    tracked
+                        .lock()
+                        .unwrap()
+                        .push(format!("{} {}", request.method(), request.url()));
+                    let (status, headers, body) = routes
+                        .iter()
+                        .find(|(p, _, _, _)| *p == path)
+                        .map(|(_, s, h, b)| (*s, h.clone(), b.clone()))
+                        .unwrap_or((404, String::new(), "{}".into()));
+                    let mut response =
+                        tiny_http::Response::from_string(body).with_status_code(status);
+                    if !headers.is_empty() {
+                        let (name, value) = headers.split_once(':').unwrap();
+                        response = response.with_header(
+                            tiny_http::Header::from_bytes(name, value.trim()).unwrap(),
+                        );
+                    }
+                    let _ = request.respond(response);
+                }
+            });
+            let token_url = format!("{base}/token");
+            Self {
+                base,
+                token_url,
+                stop,
+                hits,
+                handle: Some(handle),
+            }
+        }
+
+        fn client(&self, can_send: bool) -> Gmail {
+            Gmail::with_endpoints(test_creds(can_send), &self.base, &self.token_url)
+        }
+
+        fn hits(&self) -> Vec<String> {
+            self.hits.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            use std::sync::atomic::Ordering;
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    const TOKEN_OK: &str =
+        r#"{"access_token":"at-1","expires_in":3600,"refresh_token":"rt-2","scope":"scope-a"}"#;
+
+    fn raw_json(id: &str, thread: &str, date: &str, mime: &str) -> String {
+        serde_json::json!({
+            "id": id,
+            "threadId": thread,
+            "internalDate": date,
+            "labelIds": ["INBOX"],
+            "raw": URL_SAFE_NO_PAD.encode(mime.as_bytes()),
+        })
+        .to_string()
+    }
+
+    /// Guards the error surface: status and retry hints must survive the
+    /// typed errors' Display impls, which are what operators actually see.
+    #[test]
+    fn api_error_and_failure_types_display_without_leaking() {
+        let error = GmailApiError {
+            status: 429,
+            retry_after: Some(Duration::from_secs(7)),
+        };
+        assert_eq!(error.status(), 429);
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(error.to_string(), "Gmail API returned HTTP 429");
+        let fetch = FetchFailure {
+            kind: FetchFailureKind::MalformedMessage,
+            message: "m".into(),
+        };
+        assert_eq!(fetch.kind, FetchFailureKind::MalformedMessage);
+        assert_eq!(fetch.to_string(), "m");
+        let send = SendFailure {
+            kind: SendFailureKind::Uncertain,
+            message: "u".into(),
+        };
+        assert_eq!(send.kind, SendFailureKind::Uncertain);
+        assert_eq!(send.to_string(), "u");
+    }
+
+    /// Guards the send grant: `can_send` is the deterministic gate that keeps
+    /// read-only credentials from ever reaching the send endpoint.
+    #[test]
+    fn new_clients_expose_only_the_grant_they_were_issued() {
+        assert!(!Gmail::new(test_creds(false)).can_send());
+        assert!(Gmail::new(test_creds(true)).can_send());
+    }
+
+    /// Guards the response contract: non-success statuses become the typed
+    /// `GmailApiError` with the parsed Retry-After hint, and success bodies
+    /// are decoded under the size limit.
+    #[test]
+    fn gmail_json_maps_error_statuses_and_decodes_success_bodies() {
+        let fake = Fake::new(&[("/probe", 503, "Retry-After: 10", r#"{"error":"busy"}"#)]);
+        let response = reqwest::blocking::get(format!("{}/probe", fake.base)).unwrap();
+        let error = match gmail_json::<MessagePage>(response, 4096) {
+            Err(error) => error,
+            Ok(_) => panic!("a 503 status must never decode as a page"),
+        };
+        assert_eq!(retry_after_hint(&error), Some(Duration::from_secs(10)));
+        assert!(error.to_string().contains("HTTP 503"));
+        drop(fake);
+
+        let fake = Fake::new(&[("/probe", 200, "", r#"{"messages":[]}"#)]);
+        let response = reqwest::blocking::get(format!("{}/probe", fake.base)).unwrap();
+        let page: MessagePage = gmail_json(response, 4096).unwrap();
+        assert!(page.messages.is_empty());
+    }
+
+    /// Guards the token refresh: one refresh must serve many requests (no
+    /// per-call re-authentication), and the refreshed credential is never
+    /// echoed into request recording.
+    #[test]
+    fn token_refresh_is_cached_across_requests() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/profile",
+                200,
+                "",
+                r#"{"emailAddress":"me@example.com","historyId":"42"}"#,
+            ),
+        ]);
+        let mut client = fake.client(true);
+        let first = client.profile().unwrap();
+        let second = client.profile().unwrap();
+        assert_eq!(first.email_address, "me@example.com");
+        assert_eq!(first.history_id, "42");
+        assert_eq!(second.history_id, "42");
+        let refreshes = fake
+            .hits()
+            .iter()
+            .filter(|hit| hit.starts_with("POST /token"))
+            .count();
+        assert_eq!(
+            refreshes,
+            1,
+            "the refreshed token must be cached: {:?}",
+            fake.hits()
+        );
+    }
+
+    /// Guards request shape: list queries must carry the fixed page size plus
+    /// the caller's query and page token in the right slots, and the parsed
+    /// page must round-trip the returned messages and next-page token.
+    #[test]
+    fn list_carries_query_and_paging_parameters() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages",
+                200,
+                "",
+                r#"{"messages":[{"id":"m1","threadId":"t1"}],"nextPageToken":"next"}"#,
+            ),
+        ]);
+        let mut client = fake.client(false);
+        let page = client.list("in:inbox", Some("cursor")).unwrap();
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(page.messages[0].id, "m1");
+        assert_eq!(page.next_page_token.as_deref(), Some("next"));
+        let hit = fake
+            .hits()
+            .into_iter()
+            .find(|hit| hit.starts_with("GET /messages"))
+            .unwrap();
+        assert!(hit.contains("maxResults=500"), "{hit}");
+        assert!(hit.contains("pageToken=cursor"), "{hit}");
+        assert!(hit.contains("q=in"), "{hit}");
+    }
+
+    /// Guards sync-cursor semantics: a 404 from the history endpoint is the
+    /// documented "cursor expired" signal (full rescan), not a failure, while
+    /// a 200 is a normal page.
+    #[test]
+    fn history_signals_cursor_expiry_on_404() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/history", 404, "", r#"{"error":"expired"}"#),
+        ]);
+        let mut client = fake.client(false);
+        assert!(matches!(
+            client.history("1", None),
+            Ok(HistoryResult::Expired)
+        ));
+        drop(fake);
+
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/history", 200, "", r#"{"historyId":"9","history":[]}"#),
+        ]);
+        let mut client = fake.client(false);
+        match client.history("1", Some("p")).unwrap() {
+            HistoryResult::Page(page) => assert_eq!(page.history_id, "9"),
+            HistoryResult::Expired => panic!("200 must be a page, not expiry"),
+        }
+    }
+
+    /// Guards fetch failure classification: infrastructure problems (404
+    /// vanished messages, 5xx, unreadable bodies) never poison the queue with
+    /// `MalformedMessage`, while identity mismatches are message-level
+    /// failures, and only a fully parsed payload yields an `Email`.
+    #[test]
+    fn email_failure_modes_are_classified() {
+        // Vanished message: not a failure at all.
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/messages/msg-1", 404, "", r#"{"error":"gone"}"#),
+        ]);
+        let mut client = fake.client(false);
+        assert!(matches!(client.email(&queued_stub()), Ok(None)));
+        drop(fake);
+
+        // Upstream 5xx: infrastructure, message untouched.
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/messages/msg-1", 500, "", r#"{"error":"boom"}"#),
+        ]);
+        let mut client = fake.client(false);
+        let failure = client.email(&queued_stub()).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::Infrastructure);
+        assert!(
+            failure.to_string().contains("HTTP 500"),
+            "{}",
+            failure.message
+        );
+        drop(fake);
+
+        // Unreadable body: infrastructure, not the message's fault.
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/messages/msg-1", 200, "", "not json"),
+        ]);
+        let mut client = fake.client(false);
+        let failure = client.email(&queued_stub()).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::Infrastructure);
+        drop(fake);
+
+        // Identity mismatch: malformed message.
+        let mime = "Content-Type: text/plain\r\n\r\nbody";
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages/msg-1",
+                200,
+                "",
+                &raw_json("other", "thread-1", "1700000000000", mime),
+            ),
+        ]);
+        let mut client = fake.client(false);
+        let failure = client.email(&queued_stub()).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        drop(fake);
+
+        // Fully valid payload parses to an identity-bound email.
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages/msg-1",
+                200,
+                "",
+                &raw_json("msg-1", "thread-1", "1700000000000", mime),
+            ),
+        ]);
+        let mut client = fake.client(false);
+        let email = client.email(&queued_stub()).unwrap().unwrap();
+        assert_eq!(email.subject, "");
+        assert_eq!(email.text, "body");
+        drop(fake);
+
+        // A poisoned provider id is refused as a malformed message before any
+        // API request is issued.
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(false);
+        let poisoned = Stub {
+            account: "me@example.com".into(),
+            provider_id: "not a valid id!".into(),
+            thread_id: "thread-1".into(),
+            source: Source::Gmail,
+        };
+        let failure = client.email(&poisoned).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        assert_eq!(
+            fake.hits().len(),
+            0,
+            "a malformed id must never reach the API"
+        );
+        drop(fake);
+
+        // A transport failure while fetching is infrastructure (the queued
+        // message must survive untouched), never a malformed-message verdict.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_url = format!("http://{}", dead.local_addr().unwrap());
+        drop(dead);
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = Gmail::with_endpoints(test_creds(false), &dead_url, &fake.token_url);
+        let failure = client.email(&queued_stub()).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::Infrastructure);
+        assert!(
+            failure.to_string().contains("fetch failed"),
+            "{}",
+            failure.message
+        );
+    }
+
+    /// Guards thread fetches: invalid ids are refused before any network I/O
+    /// (no request may be issued for an attacker-shaped id), and valid ones
+    /// parse the minimal thread shape.
+    #[test]
+    fn thread_rejects_invalid_ids_before_the_network() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/threads/thread-1",
+                200,
+                "",
+                r#"{"messages":[{"id":"msg-1","internalDate":"1700000000000"}]}"#,
+            ),
+        ]);
+        let mut client = fake.client(false);
+        assert!(client.thread("not a valid id!").is_err());
+        assert!(client.thread("").is_err());
+        let before = fake.hits().len();
+        let thread = client.thread("thread-1").unwrap();
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].id, "msg-1");
+        assert!(
+            fake.hits().len() > before,
+            "the valid fetch must hit the wire"
+        );
+    }
+
+    /// Guards the deterministic send gate: read-only credentials and
+    /// attacker-shaped thread ids are refused with `NotAccepted` before any
+    /// network I/O, so no ambiguous delivery state can arise from them.
+    #[test]
+    fn send_refuses_ungranted_or_unsafe_requests_before_dispatch() {
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(false);
+        let failure = client.send("raw", "thread-1").unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert!(
+            failure.to_string().contains("permission"),
+            "{}",
+            failure.message
+        );
+        let mut client = fake.client(true);
+        let failure = client.send("raw", "not a valid id!").unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert_eq!(fake.hits().len(), 0, "neither refusal may reach the wire");
+    }
+
+    /// Guards send outcome classification: connect loss before dispatch is
+    /// `NotAccepted`, 4xx rejections are `NotAccepted`, 5xx and unreadable or
+    /// invalid confirmations are `Uncertain` (at-most-once forbids replay),
+    /// and only an id-carrying 2xx confirms the send.
+    #[test]
+    fn send_outcomes_classify_transport_and_http_results() {
+        // Authorization failure before dispatch.
+        let fake = Fake::new(&[("/token", 500, "", r#"{"error":"no"}"#)]);
+        let mut client = fake.client(true);
+        let failure = client.send("raw", "thread-1").unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert!(
+            failure.to_string().contains("authorization failed"),
+            "{}",
+            failure.message
+        );
+        drop(fake);
+
+        // Connect loss against a dead endpoint after a live token refresh.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_url = format!("http://{}", dead.local_addr().unwrap());
+        drop(dead);
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = Gmail::with_endpoints(test_creds(true), &dead_url, &fake.token_url);
+        let failure = client.send("raw", "thread-1").unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert!(
+            failure.to_string().contains("was not dispatched"),
+            "{}",
+            failure.message
+        );
+        drop(fake);
+
+        for (status, body, kind, phrase) in [
+            (
+                429u16,
+                r#"{"error":"quota"}"#,
+                SendFailureKind::NotAccepted,
+                "HTTP 429",
+            ),
+            (
+                503,
+                r#"{"error":"boom"}"#,
+                SendFailureKind::Uncertain,
+                "uncertain",
+            ),
+            (200, "not json", SendFailureKind::Uncertain, "unreadable"),
+            (
+                200,
+                r#"{"id":"not a valid id!"}"#,
+                SendFailureKind::Uncertain,
+                "invalid message identifier",
+            ),
+        ] {
+            let fake = Fake::new(&[
+                ("/token", 200, "", TOKEN_OK),
+                ("/messages/send", status, "", body),
+            ]);
+            let mut client = fake.client(true);
+            let failure = client.send("raw", "thread-1").unwrap_err();
+            assert_eq!(failure.kind, kind, "{status} {body}");
+            assert!(
+                failure.to_string().contains(phrase),
+                "{status} {body}: {}",
+                failure.message
+            );
+        }
+
+        // A connection that dies after the request left (no response at all)
+        // is not a connect failure: the delivery outcome is unknown, so the
+        // failure must be classified Uncertain and must never be replayed.
+        let dropper = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let drop_url = format!("http://{}", dropper.local_addr().unwrap());
+        let dropping = std::thread::spawn(move || {
+            let (stream, _) = dropper.accept().unwrap();
+            drop(stream);
+        });
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = Gmail::with_endpoints(test_creds(true), &drop_url, &fake.token_url);
+        let failure = client.send("raw", "thread-1").unwrap_err();
+        dropping.join().unwrap();
+        assert_eq!(
+            failure.kind,
+            SendFailureKind::Uncertain,
+            "{}",
+            failure.message
+        );
+        assert!(
+            failure
+                .to_string()
+                .contains("without a reliable delivery result"),
+            "{}",
+            failure.message
+        );
+        drop(fake);
+
+        // The happy path returns the provider's message id exactly once.
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/messages/send", 200, "", r#"{"id":"sent-1"}"#),
+        ]);
+        let mut client = fake.client(true);
+        assert_eq!(client.send("raw", "thread-1").unwrap(), "sent-1");
+        let sends = fake
+            .hits()
+            .iter()
+            .filter(|hit| hit.starts_with("POST /messages/send"))
+            .count();
+        assert_eq!(sends, 1, "exactly one application-level send request");
+    }
+
+    /// Guards sent-mail reconciliation: an invalid outgoing Message-ID is
+    /// refused before the search, an empty result is `None`, and a hit returns
+    /// the provider id of the first match.
+    #[test]
+    fn find_sent_requires_a_valid_message_id_and_returns_the_first_hit() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages",
+                200,
+                "",
+                r#"{"messages":[{"id":"found-1","threadId":"t"}],"nextPageToken":"n"}"#,
+            ),
+        ]);
+        let mut client = fake.client(false);
+        assert!(client.find_sent("nonsense").is_err());
+        assert_eq!(
+            client.find_sent("<msg@example.com>").unwrap().as_deref(),
+            Some("found-1")
+        );
+        let hit = fake
+            .hits()
+            .into_iter()
+            .find(|hit| hit.starts_with("GET /messages"))
+            .unwrap();
+        assert!(hit.contains("in%3Asent"), "{hit}");
+        assert!(hit.contains("rfc822msgid%3Amsg"), "{hit}");
+        drop(fake);
+
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/messages", 200, "", r#"{"messages":[]}"#),
+        ]);
+        let mut client = fake.client(false);
+        assert_eq!(client.find_sent("<msg@example.com>").unwrap(), None);
+        drop(fake);
+
+        // A transport failure must propagate as an error, never be read as
+        // "nothing was sent" (which would break sent-mail reconciliation).
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_url = format!("http://{}", dead.local_addr().unwrap());
+        drop(dead);
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = Gmail::with_endpoints(test_creds(false), &dead_url, &fake.token_url);
+        assert!(client.find_sent("<msg@example.com>").is_err());
     }
 }

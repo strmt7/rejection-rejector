@@ -234,6 +234,13 @@ fn schtasks(args: &[&str]) -> Result<std::process::Output> {
         .context("Unable to execute Windows Task Scheduler command")
 }
 
+// Coverage note: `install`, `remove` and the registered-task branch of
+// `status` shell out to the real Task Scheduler under the fixed production
+// task name. Running them from tests would create or DESTROY a genuine
+// per-user worker registration on a developer machine, so they are exercised
+// only by manual release verification; everything they compute (XML,
+// arguments, quoting, definition comparison) is covered through
+// `render_task_xml`, `expected_arguments` and `task_definition_matches`.
 #[cfg(windows)]
 pub fn install(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
@@ -279,6 +286,39 @@ pub fn remove() -> Result<()> {
     ))
 }
 
+/// Compare a registered Task Scheduler definition against the required one.
+///
+/// Inputs: `actual_xml` — raw XML returned by `schtasks /Query /XML`;
+/// `executable` — worker executable; `data_dir` — worker data directory.
+/// Output: `Ok(true)` only when the registered definition carries the exact
+/// `<Command>`, `<Arguments>` and least-privilege settings contract; a stale,
+/// rewritten or partially matching registration reports `Ok(false)`.
+#[cfg(windows)]
+fn task_definition_matches(actual_xml: &str, executable: &Path, data_dir: &Path) -> Result<bool> {
+    let expected_command = format!(
+        "<Command>{}</Command>",
+        xml_escape(
+            executable
+                .to_str()
+                .context("Executable path is invalid Unicode")?
+        )
+    );
+    let expected_arguments = format!(
+        "<Arguments>{}</Arguments>",
+        xml_escape(&expected_arguments(data_dir)?)
+    );
+    let required = [
+        expected_command.as_str(),
+        expected_arguments.as_str(),
+        "<LogonType>InteractiveToken</LogonType>",
+        "<RunLevel>LeastPrivilege</RunLevel>",
+        "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+        "<Interval>PT1M</Interval>",
+        "<Count>3</Count>",
+    ];
+    Ok(required.iter().all(|needle| actual_xml.contains(needle)))
+}
+
 #[cfg(windows)]
 pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
@@ -296,28 +336,7 @@ pub fn status(executable: &Path, data_dir: &Path) -> Result<AutostartStatus> {
         });
     }
     let actual = String::from_utf8(output.stdout)?;
-    let expected_command = format!(
-        "<Command>{}</Command>",
-        xml_escape(
-            executable
-                .to_str()
-                .context("Executable path is invalid Unicode")?
-        )
-    );
-    let expected_arguments = format!(
-        "<Arguments>{}</Arguments>",
-        xml_escape(&expected_arguments(&data_dir)?)
-    );
-    let required = [
-        expected_command.as_str(),
-        expected_arguments.as_str(),
-        "<LogonType>InteractiveToken</LogonType>",
-        "<RunLevel>LeastPrivilege</RunLevel>",
-        "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
-        "<Interval>PT1M</Interval>",
-        "<Count>3</Count>",
-    ];
-    let matches = required.iter().all(|needle| actual.contains(needle));
+    let matches = task_definition_matches(&actual, &executable, &data_dir)?;
     Ok(AutostartStatus {
         supported: true,
         installed: true,
@@ -539,5 +558,164 @@ mod tests {
             r"C:\tools\windowsapps_backup\rr.exe"
         )));
         assert!(!is_msix_managed_path(Path::new(r"C:\tools\winapps\rr.exe")));
+    }
+
+    /// Guards System32 resolution: only binaries that really exist in
+    /// System32 resolve, and a missing one fails before any process spawn.
+    #[cfg(windows)]
+    #[test]
+    fn system32_resolution_rejects_missing_binaries() {
+        assert!(system32_binary("whoami.exe").unwrap().is_file());
+        assert!(system32_binary("definitely-not-a-real-binary.exe").is_err());
+    }
+
+    /// Guards identity validation: the queried Windows identity must be a
+    /// non-empty, bounded, control-character-free string, since it is later
+    /// XML-escaped into the task definition's two UserId slots.
+    #[cfg(windows)]
+    #[test]
+    fn current_user_is_a_valid_windows_identity() {
+        let user = current_user().unwrap();
+        assert!(!user.is_empty());
+        assert!(user.len() <= 512);
+        assert!(!user.chars().any(char::is_control));
+    }
+
+    /// Guards input canonicalization: MSIX-managed or unresolvable
+    /// executables and non-file "executables" are refused before any task
+    /// definition is generated, and the happy path creates the data directory
+    /// and returns canonical paths.
+    #[cfg(windows)]
+    #[test]
+    fn canonical_inputs_reject_msix_missing_and_non_file_executables() {
+        let root = tempfile::tempdir().unwrap();
+        let error = canonical_inputs(
+            Path::new(r"C:\Program Files\WindowsApps\Pack\rr.exe"),
+            root.path(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("MSIX"), "{error}");
+        assert!(canonical_inputs(&root.path().join("missing.exe"), root.path()).is_err());
+        let dir_exe = root.path().join("a-directory");
+        std::fs::create_dir(&dir_exe).unwrap();
+        let error = canonical_inputs(&dir_exe, root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not a file"), "{error}");
+        let exe = std::env::current_exe().unwrap();
+        let data = root.path().join("data").join("nested");
+        let (canon_exe, canon_data) = canonical_inputs(&exe, &data).unwrap();
+        assert!(canon_exe.is_file());
+        assert!(canon_data.is_dir());
+    }
+
+    /// Guards the on-disk task definition format: Task Scheduler reads only
+    /// UTF-16LE with a BOM, so the writer must emit exactly that byte layout
+    /// (including the non-ASCII round trip) or registration silently fails.
+    #[cfg(windows)]
+    #[test]
+    fn write_task_xml_emits_utf16le_with_bom() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_task_xml(root.path(), "<Task>Ä</Task>").unwrap();
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".autostart-task-")
+        );
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..2], &[0xff, 0xfe], "Task Scheduler needs a BOM");
+        let decoded: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|unit| u16::from_le_bytes(*unit))
+            .collect();
+        assert_eq!(String::from_utf16(&decoded).unwrap(), "<Task>Ä</Task>");
+    }
+
+    /// Guards schtasks plumbing: querying an unregistered task must come back
+    /// as a non-zero exit the caller can distinguish from a real definition.
+    #[cfg(windows)]
+    #[test]
+    fn schtasks_reports_unregistered_tasks_as_failed_queries() {
+        let output = schtasks(&[
+            "/Query",
+            "/TN",
+            "Rejection Rejector Unregistered Probe",
+            "/XML",
+        ])
+        .unwrap();
+        assert!(!output.status.success());
+    }
+
+    /// Guards status invariants: `status` must never claim a definition match
+    /// for a task it did not find, and it must echo the canonicalized inputs
+    /// back to the caller. (Whether the worker task is registered depends on
+    /// the host; only the invariants are pinned here.)
+    #[cfg(windows)]
+    #[test]
+    fn status_reports_consistent_registration_state() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let state = status(&exe, root.path()).unwrap();
+        assert!(state.supported);
+        assert_eq!(state.task_name, TASK_NAME);
+        assert_eq!(
+            state.definition_matches_expected.is_some(),
+            state.installed,
+            "a match verdict exists only for a registered task"
+        );
+        assert_eq!(state.executable, std::fs::canonicalize(&exe).unwrap());
+    }
+
+    /// Guards the registered-definition comparison: only the exact command,
+    /// arguments and least-privilege settings bundle counts as installed —
+    /// a rewritten executable, a different data dir, a weakened run level or
+    /// a changed restart count must all fail the comparison. Very long paths
+    /// must round-trip through Windows quoting and XML escaping intact.
+    #[cfg(windows)]
+    #[test]
+    fn task_definition_matching_is_exact_and_quoting_aware() {
+        let exe = Path::new(r"C:\Program Files\RR & Co\rr.exe");
+        let data = Path::new(r"C:\Users\Test User\RR");
+        let xml = render_task_xml("DOMAIN\\User", exe, data).unwrap();
+        assert!(task_definition_matches(&xml, exe, data).unwrap());
+        assert!(
+            !task_definition_matches(&xml, Path::new(r"C:\Program Files\Other\rr.exe"), data)
+                .unwrap()
+        );
+        assert!(!task_definition_matches(&xml, exe, Path::new(r"C:\Users\Other\RR")).unwrap());
+        for tampered in [
+            xml.replace("<Count>3</Count>", "<Count>5</Count>"),
+            xml.replace(
+                "<RunLevel>LeastPrivilege</RunLevel>",
+                "<RunLevel>HighestAvailable</RunLevel>",
+            ),
+            xml.replace("<Interval>PT1M</Interval>", "<Interval>PT5M</Interval>"),
+        ] {
+            assert!(
+                !task_definition_matches(&tampered, exe, data).unwrap(),
+                "weakened settings must never count as a match"
+            );
+        }
+
+        let long_exe = format!(
+            "C:\\{}\\rr.exe",
+            "a very long program directory ".repeat(10)
+        );
+        let long_data = format!("C:\\{}\\data", "a very long data directory ".repeat(10));
+        let xml =
+            render_task_xml("DOMAIN\\User", Path::new(&long_exe), Path::new(&long_data)).unwrap();
+        assert!(
+            task_definition_matches(&xml, Path::new(&long_exe), Path::new(&long_data)).unwrap(),
+            "very long names must survive quoting and escaping unchanged"
+        );
+        let long_data_plus = format!("{long_data}x");
+        assert!(
+            !task_definition_matches(&xml, Path::new(&long_exe), Path::new(&long_data_plus))
+                .unwrap()
+        );
     }
 }
