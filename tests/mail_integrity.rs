@@ -2,7 +2,7 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use mailparse::MailHeaderMap;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rejection_rejector::{config::Settings, mail, ollama, types::*};
 
 fn candidate() -> (Job, Settings) {
@@ -116,12 +116,12 @@ fn randomized_utf8_bounding_is_prefix_safe_and_never_splits_codepoints() {
     ];
 
     for case_index in 0..512u32 {
-        let units = rng.gen_range(0..=180);
+        let units = rng.random_range(0..=180);
         let mut input = String::new();
         for _ in 0..units {
-            input.push_str(alphabet[rng.gen_range(0..alphabet.len())]);
+            input.push_str(alphabet[rng.random_range(0..alphabet.len())]);
         }
-        let limit = rng.gen_range(0..=input.len().saturating_add(8));
+        let limit = rng.random_range(0..=input.len().saturating_add(8));
         let (bounded, complete) = mail::bounded_text(&input, limit);
 
         assert!(
@@ -168,8 +168,8 @@ fn randomized_quoted_rejection_history_never_survives_current_message_boundary()
     ];
 
     for case_index in 0..512u32 {
-        let current = current_lines[rng.gen_range(0..current_lines.len())];
-        let marker = markers[rng.gen_range(0..markers.len())];
+        let current = current_lines[rng.random_range(0..current_lines.len())];
+        let marker = markers[rng.random_range(0..markers.len())];
         let quoted = format!(
             "{current}\n{marker}\nWe have decided not to move forward with your application."
         );

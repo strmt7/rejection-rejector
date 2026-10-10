@@ -1,4 +1,4 @@
-use rand::{RngCore, rngs::OsRng};
+use rand::TryRng;
 use std::time::{Duration, Instant};
 
 const MAX_PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -101,10 +101,10 @@ impl RetryGate {
 }
 
 fn jitter(delay: Duration, cap: Duration) -> Duration {
-    jitter_with_rng(delay, cap, &mut OsRng)
+    jitter_with_rng(delay, cap, &mut rand::rng())
 }
 
-fn jitter_with_rng(delay: Duration, cap: Duration, rng: &mut impl RngCore) -> Duration {
+fn jitter_with_rng(delay: Duration, cap: Duration, rng: &mut impl TryRng) -> Duration {
     let spread_seconds = delay.as_secs() / 5;
     if spread_seconds == 0 || delay >= cap {
         return delay.min(cap);
@@ -125,19 +125,19 @@ mod tests {
 
     struct EntropyFailure;
 
-    impl RngCore for EntropyFailure {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl TryRng for EntropyFailure {
+        type Error = std::io::Error;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(std::io::Error::other("synthetic entropy outage"))
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(std::io::Error::other("synthetic entropy outage"))
         }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            dest.fill(0);
-        }
-        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), rand::Error> {
-            let error = std::io::Error::other("synthetic entropy outage");
-            Err(rand::Error::new(error))
+
+        fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
+            Err(std::io::Error::other("synthetic entropy outage"))
         }
     }
 

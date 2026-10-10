@@ -1,6 +1,6 @@
 //! Pure-policy regression tests: no network, credentials, live model or email sending.
 use chrono::{DateTime, Duration, Utc};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rejection_rejector::{
     config::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
@@ -277,10 +277,10 @@ fn randomized_unsafe_combinations_never_authorize_automatic_delivery() {
 
     for case_index in 0..512u32 {
         let (mut job, mut settings, now) = eligible();
-        let mutation_count = rng.gen_range(1..=6);
+        let mutation_count = rng.random_range(1..=6);
 
         for _ in 0..mutation_count {
-            match rng.gen_range(0..12) {
+            match rng.random_range(0..12) {
                 0 => settings.automatic_confirmed = false,
                 1 => settings.model_digest = Some("b".repeat(64)),
                 2 => {

@@ -1,7 +1,6 @@
 use crate::net;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -68,8 +67,7 @@ impl Zeroize for Tokens {
     }
 }
 pub fn secret() -> String {
-    let mut b = [0; 32];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    let b = rand::random::<[u8; 32]>();
     URL_SAFE_NO_PAD.encode(b)
 }
 

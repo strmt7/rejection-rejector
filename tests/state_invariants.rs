@@ -2,7 +2,7 @@
 //! Fixed seeds make failures reproducible while exercising thousands of combinations.
 
 use chrono::Utc;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use rejection_rejector::{
     config::{
         Mode, PROMPT_VERSION, Settings, TaskQualification, evaluation_suite_hash,
@@ -50,31 +50,31 @@ fn enterprise_policy_is_monotone_and_idempotent_across_generated_settings() {
     for case in 0..10_000u32 {
         let mut settings = Settings {
             signature: "Invariant Test Applicant".into(),
-            sending_enabled: rng.gen_bool(0.5),
-            api_enabled: rng.gen_bool(0.5),
-            daily_send_limit: rng.gen_range(1..=100),
-            cooldown_minutes: rng.gen_range(1..=1440),
-            retention_days: rng.gen_range(30..=3650),
+            sending_enabled: rng.random_bool(0.5),
+            api_enabled: rng.random_bool(0.5),
+            daily_send_limit: rng.random_range(1..=100),
+            cooldown_minutes: rng.random_range(1..=1440),
+            retention_days: rng.random_range(30..=3650),
             ..Settings::default()
         };
         settings.validate().expect("generated baseline settings");
 
-        let restrict_primary = rng.gen_bool(0.35);
-        let restrict_verifier = rng.gen_bool(0.35);
-        let require_independent_verifier = rng.gen_bool(0.5);
+        let restrict_primary = rng.random_bool(0.35);
+        let restrict_verifier = rng.random_bool(0.35);
+        let require_independent_verifier = rng.random_bool(0.5);
         let policy = EnterprisePolicy {
             version: 3,
             policy_id: Some("generated-policy".into()),
             revision: Some(1),
-            force_human_review: rng.gen_bool(0.25),
-            prohibit_sending: rng.gen_bool(0.25),
-            prohibit_integration_api: rng.gen_bool(0.25),
-            prohibit_recovery_key_export: rng.gen_bool(0.25),
-            require_external_audit_anchor: rng.gen_bool(0.25),
+            force_human_review: rng.random_bool(0.25),
+            prohibit_sending: rng.random_bool(0.25),
+            prohibit_integration_api: rng.random_bool(0.25),
+            prohibit_recovery_key_export: rng.random_bool(0.25),
+            require_external_audit_anchor: rng.random_bool(0.25),
             require_independent_verifier,
-            max_daily_send_limit: rng.gen_bool(0.75).then(|| rng.gen_range(1..=100)),
-            min_cooldown_minutes: rng.gen_bool(0.75).then(|| rng.gen_range(1..=1440)),
-            min_retention_days: rng.gen_bool(0.75).then(|| rng.gen_range(30..=3650)),
+            max_daily_send_limit: rng.random_bool(0.75).then(|| rng.random_range(1..=100)),
+            min_cooldown_minutes: rng.random_bool(0.75).then(|| rng.random_range(1..=1440)),
+            min_retention_days: rng.random_bool(0.75).then(|| rng.random_range(30..=3650)),
             allowed_models: if restrict_primary {
                 vec!["granite4.2:8b-q8_0".into()]
             } else {
@@ -172,8 +172,8 @@ fn loaded(revision: u64, digest: String) -> LoadedPolicy {
 fn revision_floor_never_rolls_back_or_accepts_same_revision_drift() {
     let mut rng = StdRng::seed_from_u64(SEED ^ 0x00A1_1D17);
     for case in 0..5_000u32 {
-        let base = rng.gen_range(2..=1_000_000u64);
-        let advance = rng.gen_range(1..=10_000u64);
+        let base = rng.random_range(2..=1_000_000u64);
+        let advance = rng.random_range(1..=10_000u64);
         let mut floor = PolicyRevisionFloor::default();
 
         assert!(
@@ -213,12 +213,12 @@ fn automatic_readiness_is_exactly_fail_closed_over_generated_runtime_states() {
     let mut rng = StdRng::seed_from_u64(SEED ^ 0x5AFE_7EAD);
 
     for case in 0..10_000u32 {
-        let database_integrity_ok = rng.gen_bool(0.5);
-        let storage_write_safe = rng.gen_bool(0.5);
-        let connected = rng.gen_bool(0.5);
-        let send_scope = rng.gen_bool(0.5);
-        let paused = rng.gen_bool(0.5);
-        let stopping = rng.gen_bool(0.5);
+        let database_integrity_ok = rng.random_bool(0.5);
+        let storage_write_safe = rng.random_bool(0.5);
+        let connected = rng.random_bool(0.5);
+        let send_scope = rng.random_bool(0.5);
+        let paused = rng.random_bool(0.5);
+        let stopping = rng.random_bool(0.5);
 
         let assessed = readiness::assess(
             &settings,

@@ -100,7 +100,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::hex_lower(digest.finalize()))
 }
 
 fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {

@@ -15,6 +15,29 @@ use std::{
     time::Duration,
 };
 
+/// Convert a domain `u64` into SQLite's signed INTEGER representation.
+///
+/// Inputs: `value` — unsigned counter/revision/timestamp domain value.
+/// Output: [`i64`] suitable for SQL parameters; values outside the signed
+/// 64-bit range return [`rusqlite::Error`] instead of silently wrapping.
+fn sql_i64(value: u64) -> rusqlite::Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+            "u64 value exceeds the SQLite INTEGER range",
+        )))
+    })
+}
+
+/// Read a SQLite INTEGER column as `u64`.
+///
+/// Inputs: `row` — one query result row; `index` — 0-based column index.
+/// Output: the column value as [`u64`]; negative stored values are rejected
+/// instead of wrapping, so corrupted state cannot become a large unsigned value.
+fn row_get_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let raw: i64 = row.get(index)?;
+    u64::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, raw))
+}
+
 pub const DATABASE_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,7 +113,7 @@ fn audit_hash(previous_hash: &str, event_id: &str, payload: &[u8]) -> String {
         digest.update((part.len() as u64).to_le_bytes());
         digest.update(part);
     }
-    format!("{:x}", digest.finalize())
+    crate::hex_lower(digest.finalize())
 }
 
 fn valid_audit_hash(value: &str) -> bool {
@@ -341,7 +364,7 @@ fn verify_application_invariants_connection(
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Vec<u8>>(1)?,
-            row.get::<_, u64>(2)?,
+            row_get_u64(row, 2)?,
             row.get::<_, String>(3)?,
         ))
     })?;
@@ -461,8 +484,9 @@ fn verify_application_invariants_connection(
         }
     }
 
-    let delivery_records: u64 =
-        conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| row.get(0))?;
+    let delivery_records: u64 = conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| {
+        row_get_u64(row, 0)
+    })?;
     ensure!(
         delivery_records == active_delivery_records + sent_delivery_records,
         "Delivery table contains records not represented by authenticated item state"
@@ -495,7 +519,7 @@ fn recipient_attempts_since(
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Vec<u8>>(1)?,
-            row.get::<_, u64>(2)?,
+            row_get_u64(row, 2)?,
             row.get::<_, String>(3)?,
         ))
     })?;
@@ -938,7 +962,7 @@ impl Store {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, u64>(2)?,
+                    row_get_u64(row, 2)?,
                     row.get::<_, String>(3)?,
                 ))
             })?;
@@ -1099,7 +1123,7 @@ impl Store {
             .query_row(
                 "SELECT payload,revision,state FROM items WHERE id=?1",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, row_get_u64(r, 1)?, r.get(2)?)),
             )
             .optional()?
             .context("Message not found")?;
@@ -1149,7 +1173,7 @@ impl Store {
         let persisted_state: String = tx
             .query_row(
                 "SELECT state FROM items WHERE id=?1 AND revision=?2",
-                params![next.id, old],
+                params![next.id, sql_i64(old)?],
                 |row| row.get(0),
             )
             .optional()?
@@ -1162,7 +1186,7 @@ impl Store {
             persisted_state.db(),
             next.state.db()
         );
-        let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,received_at=COALESCE(?6,received_at),payload=?7 WHERE id=?1 AND revision=?8", params![next.id, next.state.db(), next.revision, next.updated_at.timestamp(), next.retry_at, received_at, self.vault.seal(&format!("item/{}", next.id), &next)?, old])?;
+        let changed = tx.execute("UPDATE items SET state=?2,revision=?3,updated_at=?4,retry_at=?5,received_at=COALESCE(?6,received_at),payload=?7 WHERE id=?1 AND revision=?8", params![next.id, next.state.db(), sql_i64(next.revision)?, next.updated_at.timestamp(), next.retry_at, received_at, self.vault.seal(&format!("item/{}", next.id), &next)?, sql_i64(old)?])?;
         ensure!(
             changed == 1,
             "Stale revision: reload the message before acting"
@@ -1234,14 +1258,14 @@ impl Store {
             params![
                 hash(account),
                 review_only,
-                limit,
-                u64::from(page) * u64::from(limit)
+                sql_i64(u64::from(limit))?,
+                sql_i64(u64::from(page) * u64::from(limit))?
             ],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, u64>(2)?,
+                    row_get_u64(r, 2)?,
                     r.get::<_, String>(3)?,
                 ))
             },
@@ -1307,14 +1331,14 @@ impl Store {
                 snapshot_rowid,
                 review_only,
                 before_rowid,
-                u64::from(limit) + 1
+                sql_i64(u64::from(limit) + 1)?
             ],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, u64>(3)?,
+                    row_get_u64(row, 3)?,
                     row.get::<_, String>(4)?,
                 ))
             },
@@ -1462,8 +1486,8 @@ impl Store {
         let rows = query.query_map([hash(account)], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, u64>(1)?,
-                row.get::<_, u64>(2)?,
+                row_get_u64(row, 1)?,
+                row_get_u64(row, 2)?,
             ))
         })?;
         for row in rows {
@@ -1485,7 +1509,7 @@ impl Store {
             .conn
             .prepare("SELECT state,COUNT(*) FROM items WHERE account_key=?1 GROUP BY state")?;
         let r = q.query_map([hash(account)], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?))
+            Ok((r.get::<_, String>(0)?, row_get_u64(r, 1)?))
         })?;
         for row in r {
             let (s, n) = row?;
@@ -1501,7 +1525,7 @@ impl Store {
         c.attempts_24h = self.conn.query_row(
             "SELECT COUNT(*) FROM deliveries WHERE attempt_at>=?1",
             [Utc::now().timestamp() - 86400],
-            |r| r.get(0),
+            |r| row_get_u64(r, 0),
         )?;
         Ok(c)
     }
@@ -1555,7 +1579,7 @@ impl Store {
         let (b, r, s): (Vec<u8>, u64, String) = tx.query_row(
             "SELECT payload,revision,state FROM items WHERE id=?1",
             [&snapshot.id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, row_get_u64(r, 1)?, r.get(2)?)),
         )?;
         let mut j = decode(&self.vault, &snapshot.id, &b, r, &s)?;
         ensure!(
@@ -1565,7 +1589,7 @@ impl Store {
         let attempts: u64 = tx.query_row(
             "SELECT COUNT(*) FROM deliveries WHERE attempt_at>=?1",
             [now.timestamp() - 86400],
-            |r| r.get(0),
+            |r| row_get_u64(r, 0),
         )?;
         ensure!(
             attempts < u64::from(limit),
@@ -1614,7 +1638,7 @@ impl Store {
             "UPDATE items SET state='sending',revision=?2,updated_at=?3,payload=?4 WHERE id=?1",
             params![
                 j.id,
-                j.revision,
+                sql_i64(j.revision)?,
                 now.timestamp(),
                 self.vault.seal(&format!("item/{}", j.id), &j)?
             ],
@@ -1658,11 +1682,11 @@ impl Store {
             params![
                 id,
                 job.state.db(),
-                job.revision,
+                sql_i64(job.revision)?,
                 job.updated_at.timestamp(),
                 self.vault.seal(&format!("item/{id}"), &job)?,
                 original_state.db(),
-                original_revision,
+                sql_i64(original_revision)?,
             ],
         )?;
         event(
@@ -1714,11 +1738,11 @@ impl Store {
             params![
                 id,
                 j.state.db(),
-                j.revision,
+                sql_i64(j.revision)?,
                 j.updated_at.timestamp(),
                 self.vault.seal(&format!("item/{id}"), &j)?,
                 original_state.db(),
-                original_revision,
+                sql_i64(original_revision)?,
             ],
         )?;
         ensure!(
@@ -1786,13 +1810,13 @@ impl Store {
     fn page_stats(&self) -> Result<(u64, u64, u64)> {
         let page_count: u64 = self
             .conn
-            .query_row("PRAGMA page_count", [], |row| row.get(0))?;
+            .query_row("PRAGMA page_count", [], |row| row_get_u64(row, 0))?;
         let freelist_count: u64 = self
             .conn
-            .query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+            .query_row("PRAGMA freelist_count", [], |row| row_get_u64(row, 0))?;
         let page_size: u64 = self
             .conn
-            .query_row("PRAGMA page_size", [], |row| row.get(0))?;
+            .query_row("PRAGMA page_size", [], |row| row_get_u64(row, 0))?;
         Ok((page_count, freelist_count, page_size))
     }
 

@@ -461,7 +461,7 @@ pub fn evaluation_suite_hash() -> String {
     digest.update(
         b"weights:fp_avoidance=.35,recall=.20,pipeline=.20,accuracy=.15,completion=.10;eligibility:complete,fp=0,unsafe_drafts=0,critical_complete,critical_fp=0,critical_unsafe_drafts=0,recall>=.90,pipeline>=.90,gpu_resident",
     );
-    format!("{:x}", digest.finalize())
+    crate::hex_lower(digest.finalize())
 }
 
 pub fn settings_context_hash(settings: &Settings) -> String {
@@ -488,7 +488,7 @@ pub fn settings_context_hash(settings: &Settings) -> String {
         );
         digest.update([0]);
     }
-    format!("{:x}", digest.finalize())
+    crate::hex_lower(digest.finalize())
 }
 
 pub fn validate_local_url(value: &str) -> Result<()> {

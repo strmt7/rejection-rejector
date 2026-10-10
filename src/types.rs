@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub fn hash(value: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(value.as_ref()))
+    crate::hex_lower(Sha256::digest(value.as_ref()))
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
