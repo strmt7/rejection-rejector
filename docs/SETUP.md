@@ -112,8 +112,8 @@ Create a temporary passphrase file containing at least 20 bytes, export the wrap
 On a replacement Windows/macOS machine, copy the backup and recovery-key envelope, create/use the intended data directory, then import the key **before** restore:
 
 ```powershell
-.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\strmt7\RejectionRejector" import-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt --confirm IMPORT
-.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\strmt7\RejectionRejector" restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
+.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\<user>\RejectionRejector" import-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt --confirm IMPORT
+.\rr.exe --data-dir "$env:LOCALAPPDATA\dev\<user>\RejectionRejector" restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
 ```
 
 Import first authenticates the wrapped key against the backup database. It refuses to overwrite an existing OS credential. Linux continues to use the original `RR_VAULT_PASSPHRASE` plus vault ID rather than OS-key import. The recovery-key file is encrypted but still sensitive; keep it separate from the backup and protect the passphrase independently.

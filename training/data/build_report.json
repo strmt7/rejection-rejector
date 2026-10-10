@@ -1,0 +1,18 @@
+{
+  "entries_read": 640,
+  "evaluation_records": 240,
+  "train_records": 801,
+  "holdout_records": 199,
+  "hard_negative_upweight": 3,
+  "train_by_category": {
+    "other": 581,
+    "opportunity": 140,
+    "rejection": 80
+  },
+  "holdout_by_category": {
+    "rejection": 20,
+    "other": 145,
+    "opportunity": 34
+  },
+  "seed": 42
+}
