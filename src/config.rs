@@ -33,8 +33,12 @@ pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
 pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 35, 1);
 /// Curated challengers for this application's text-classification/drafting task.
 /// They are not ranked until evaluated locally on the task-specific suite.
-pub const MODEL_CANDIDATES: [(&str, &str); 7] = [
+pub const MODEL_CANDIDATES: [(&str, &str); 8] = [
     ("Qwen3.5 9B Q8 · provisional default", "qwen3.5:9b-q8_0"),
+    (
+        "MiMo V2.6 Distill 9B Q8 · agentic-distill challenger",
+        "maternion/mimo-v2.6:9b-instruct-q8_0",
+    ),
     (
         "Granite 4.2 8B Q8 · classification/JSON challenger",
         "granite4.2:8b-q8_0",
@@ -187,7 +191,7 @@ impl Default for Settings {
             verifier_model: DEFAULT_VERIFIER_MODEL.into(),
             verifier_model_digest: None,
             ollama_url: "http://127.0.0.1:11434".into(),
-            num_ctx: 8192,
+            num_ctx: 16384,
             llm_timeout_seconds: 600,
             api_enabled: false,
             api_port: 8734,
