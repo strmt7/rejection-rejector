@@ -479,6 +479,10 @@ mod tests {
     /// Guards working-directory derivation: the task must run from the
     /// executable's parent directory, XML-escaped, or relative-path resolution
     /// could launch a different binary after a working-directory change.
+    ///
+    /// Windows-only: these assertions pin `Path::parent` semantics for
+    /// backslash paths, which are not path separators on Unix.
+    #[cfg(windows)]
     #[test]
     fn task_working_directory_is_the_executable_parent() {
         let exe = Path::new(r"C:\Program Files\RR & Co\rr.exe");
