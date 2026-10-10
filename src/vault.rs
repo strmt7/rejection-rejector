@@ -4,7 +4,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, AeadCore, KeyInit, Payload},
 };
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -32,6 +32,14 @@ pub struct RecoveryKeyEnvelope {
     pub salt_b64: String,
     pub nonce_b64: String,
     pub wrapped_key_b64: String,
+}
+
+/// Generate a fresh 192-bit XChaCha20-Poly1305 nonce from the OS CSPRNG.
+///
+/// Inputs: none. Output: a unique [`XNonce`] drawn from the operating system
+/// CSPRNG at the moment of encryption; never a fixed or zero-initialized value.
+fn fresh_nonce() -> XNonce {
+    XChaCha20Poly1305::generate_nonce(&mut rand::rngs::OsRng)
 }
 
 fn recovery_aad(vault_id: &str) -> Vec<u8> {
@@ -163,9 +171,8 @@ impl Vault {
         );
 
         let mut salt = [0u8; 16];
-        let mut nonce = [0u8; 24];
         rand::rngs::OsRng.fill_bytes(&mut salt);
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let nonce = fresh_nonce();
 
         let mut wrapping_key = Zeroizing::new([0u8; 32]);
         recovery_argon2(RECOVERY_MEMORY_KIB, RECOVERY_TIME_COST, RECOVERY_LANES)?
@@ -292,8 +299,7 @@ impl Vault {
 
     pub fn seal<T: Serialize>(&self, context: &str, value: &T) -> Result<Vec<u8>> {
         let plain = Zeroizing::new(serde_json::to_vec(value)?);
-        let mut nonce = [0; 24];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let nonce = fresh_nonce();
         let cipher = XChaCha20Poly1305::new_from_slice(self.key.as_ref().as_ref())
             .map_err(|_| anyhow::anyhow!("Invalid encryption key"))?;
         let encrypted = cipher
