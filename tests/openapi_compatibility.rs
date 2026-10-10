@@ -92,3 +92,50 @@ fn compatibility_baseline_is_intentionally_older_than_current_contract() {
             .contains_key("/v1/metrics/openmetrics")
     );
 }
+
+// why: the web interface contract additions must stay additive over the
+// frozen v1 baseline — the read API keeps every byte of its shape while the
+// page, the settings view and the write-command channel appear only as new
+// paths; a removal or reshaping of an existing route would break the
+// compatibility promise this test exists to pin.
+#[test]
+fn web_page_and_write_command_routes_are_additive_contract_extensions() {
+    let baseline: Value = serde_json::from_str(BASELINE).unwrap();
+    let current: Value = serde_json::from_str(CURRENT).unwrap();
+    let paths = current["paths"].as_object().unwrap();
+    for route in [
+        "/",
+        "/v1/settings",
+        "/v1/commands/edit-draft",
+        "/v1/commands/regenerate",
+        "/v1/commands/dismiss",
+        "/v1/commands/send",
+        "/v1/commands/update-settings",
+        "/v1/commands/automatic-arm",
+    ] {
+        assert!(paths.contains_key(route), "OpenAPI missing {route}");
+        assert!(
+            !baseline["paths"].as_object().unwrap().contains_key(route),
+            "frozen baseline must not gain {route}"
+        );
+    }
+    for route in ["/v1/commands/send", "/v1/commands/automatic-arm"] {
+        let post = &paths[route]["post"];
+        assert!(post["requestBody"]["content"]["application/json"]["schema"]["$ref"].is_string());
+        assert!(post["responses"]["409"]["$ref"].is_string());
+    }
+    // Stable typed contract pieces the write channel depends on.
+    assert!(current["components"]["schemas"]["OperationStatus"].is_object());
+    assert!(current["components"]["schemas"]["WriteResponse"].is_object());
+    assert!(current["components"]["schemas"]["SettingsView"].is_object());
+    assert!(current["components"]["responses"]["WriteConflict"].is_object());
+    assert!(current["components"]["responses"]["RequestTooLarge"].is_object());
+    // The strict CSP is contractual and present on every documented response.
+    for response in current["components"]["responses"]
+        .as_object()
+        .unwrap()
+        .values()
+    {
+        assert!(response["headers"]["Content-Security-Policy"]["$ref"].is_string());
+    }
+}

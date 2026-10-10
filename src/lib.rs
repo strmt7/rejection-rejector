@@ -47,6 +47,7 @@ pub mod sync;
 pub mod tui;
 pub mod types;
 pub mod vault;
+pub mod web;
 pub mod worker;
 
 /// Format bytes as lowercase hexadecimal.

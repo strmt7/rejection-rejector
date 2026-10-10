@@ -40,10 +40,10 @@ impl Provider for FakeProvider {
     }
     fn history(&mut self, _start: &str, _page: Option<&str>) -> anyhow::Result<HistoryResult> {
         self.calls += 1;
-        if let Some(flag) = &self.cancel {
-            if self.calls >= self.cancel_after {
-                flag.store(true, Ordering::SeqCst);
-            }
+        if let Some(flag) = &self.cancel
+            && self.calls >= self.cancel_after
+        {
+            flag.store(true, Ordering::SeqCst);
         }
         Ok(self.pages.pop_front().expect("scripted history exhausted"))
     }
@@ -105,10 +105,7 @@ fn cursor_advances_only_after_all_pages() {
     seed(&mut db, &settings, "tester@example.com", "900");
     let mut provider = FakeProvider {
         email: "tester@example.com".into(),
-        pages: VecDeque::from([
-            page(&["m1"], Some("p2".into()), "901"),
-            page(&["m2"], None, "902"),
-        ]),
+        pages: VecDeque::from([page(&["m1"], Some("p2"), "901"), page(&["m2"], None, "902")]),
         cancel: None,
         cancel_after: 0,
         calls: 0,
@@ -140,7 +137,7 @@ fn cancelled_sync_retains_cursor_and_replay_is_idempotent() {
     let mut provider = FakeProvider {
         email: "tester@example.com".into(),
         pages: VecDeque::from([
-            page(&["m1", "m2"], Some("p2".into()), "901"),
+            page(&["m1", "m2"], Some("p2"), "901"),
             page(&["m2", "m3"], None, "902"),
         ]),
         cancel: Some(cancelled.clone()),
@@ -168,7 +165,7 @@ fn cancelled_sync_retains_cursor_and_replay_is_idempotent() {
     let mut replay = FakeProvider {
         email: "tester@example.com".into(),
         pages: VecDeque::from([
-            page(&["m1", "m2"], Some("p2".into()), "901"),
+            page(&["m1", "m2"], Some("p2"), "901"),
             page(&["m2", "m3"], None, "902"),
         ]),
         cancel: None,
@@ -204,8 +201,8 @@ fn repeated_pagination_token_is_rejected() {
     let mut provider = FakeProvider {
         email: "tester@example.com".into(),
         pages: VecDeque::from([
-            page(&["m1"], Some("same".into()), "901"),
-            page(&["m2"], Some("same".into()), "902"),
+            page(&["m1"], Some("same"), "901"),
+            page(&["m2"], Some("same"), "902"),
         ]),
         cancel: None,
         cancel_after: 0,

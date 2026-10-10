@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rejection Rejector — local web interface</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --panel-2: #22262e; --line: #323845;
+    --text: #e8eaf0; --muted: #9aa3b2; --accent: #6ea8fe; --warn: #e6c07b;
+    --danger: #e06c75; --ok: #7fd18a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .chip {
+    font-size: 12px; padding: 2px 10px; border: 1px solid var(--line);
+    border-radius: 999px; color: var(--muted); background: var(--panel-2);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip.warn b { color: var(--warn); }
+  .chip.ok b { color: var(--ok); }
+  nav { display: flex; gap: 4px; padding: 10px 20px 0; }
+  nav button {
+    background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+    border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 18px;
+    font: inherit; cursor: pointer;
+  }
+  nav button.active { color: var(--text); background: var(--panel-2); }
+  main { padding: 16px 20px 40px; }
+  section { display: none; }
+  section.visible { display: block; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 0 8px 8px 8px; padding: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  h3 { font-size: 13px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: 12px; font-weight: 600; }
+  tr.item { cursor: pointer; }
+  tr.item:hover td { background: var(--panel-2); }
+  tr.item.selected td { background: #2a3140; }
+  .state { font-size: 12px; color: var(--warn); }
+  .review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .review-grid { grid-template-columns: 1fr; } }
+  .mail {
+    white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    max-height: 480px; overflow-y: auto;
+  }
+  textarea {
+    width: 100%; min-height: 320px; resize: vertical; background: var(--panel-2);
+    color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; font: 14px/1.5 inherit;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button.action {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer;
+  }
+  button.action:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #10131a; font-weight: 600; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .dirty { color: var(--warn); font-size: 12px; }
+  .error { color: var(--danger); font-size: 12px; white-space: pre-wrap; }
+  .settings-row {
+    display: grid; grid-template-columns: 260px 1fr; gap: 12px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--line);
+  }
+  .settings-row .label { color: var(--muted); }
+  select, input[type="password"], input[type="text"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font: inherit;
+  }
+  .risk { color: var(--warn); }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(8, 10, 14, .72);
+    display: none; align-items: center; justify-content: center; padding: 20px;
+    z-index: 10;
+  }
+  .overlay.visible { display: flex; }
+  .dialog {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    max-width: 720px; width: 100%; max-height: 86vh; overflow-y: auto; padding: 20px;
+  }
+  .dialog h2 { margin-bottom: 8px; }
+  .exact {
+    white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0;
+    max-height: 320px; overflow-y: auto;
+  }
+  .countdown { font-variant-numeric: tabular-nums; }
+  .log-entry { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .log-entry .meta { color: var(--muted); font-size: 12px; }
+  .token-gate { max-width: 520px; margin: 10vh auto; }
+  .token-gate .panel { border-radius: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rejection Rejector</h1>
+  <span class="sub">local web interface &middot; loopback only &middot; email shown as plain text</span>
+  <div class="chips" id="status-chips"></div>
+</header>
+<nav id="tabs">
+  <button data-tab="queue" class="active">Queue</button>
+  <button data-tab="review">Review</button>
+  <button data-tab="activity">Activity</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+<main>
+  <div id="page-error" class="error"></div>
+
+  <section id="tab-queue" class="visible">
+    <div class="panel">
+      <h2>Queue</h2>
+      <p class="hint">Reviewable messages first. Click a row to open it in Review.</p>
+      <table>
+        <thead>
+          <tr><th>Message</th><th>From</th><th>State</th><th>Flags</th></tr>
+        </thead>
+        <tbody id="queue-body"></tbody>
+      </table>
+      <div class="row">
+        <button class="action" id="queue-prev">Previous page</button>
+        <button class="action" id="queue-next">Next page</button>
+        <span class="hint" id="queue-page"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-review">
+    <div class="panel">
+      <h2>Review</h2>
+      <p class="hint">Original message left (plain text), editable reply right. Sending always shows the exact persisted reply first.</p>
+      <div class="review-grid">
+        <div>
+          <h3>Original</h3>
+          <div class="mail" id="review-original">Select a message in the Queue.</div>
+        </div>
+        <div>
+          <h3>Reply</h3>
+          <textarea id="review-editor" spellcheck="true"></textarea>
+          <div class="row">
+            <button class="action" id="review-save">Save changes</button>
+            <button class="action" id="review-regenerate">Regenerate with local AI</button>
+            <button class="action danger" id="review-dismiss">Dismiss</button>
+            <button class="action primary" id="review-send">Review &amp; send</button>
+            <span class="dirty" id="review-dirty"></span>
+          </div>
+          <div class="row"><span class="error" id="review-error"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-activity">
+    <div class="panel">
+      <h2>Activity</h2>
+      <p class="hint">Newest events last; the same tamper-evident journal the desktop shows.</p>
+      <div id="activity-body"></div>
+    </div>
+  </section>
+
+  <section id="tab-settings">
+    <div class="panel">
+      <h2>Settings</h2>
+      <p class="hint">Changes save immediately through the worker, exactly like the desktop settings rows.</p>
+      <div class="settings-row">
+        <span class="label">Mode</span>
+        <span>
+          <select id="setting-mode">
+            <option value="human_review">Human review</option>
+            <option value="automatic">Automatic</option>
+          </select>
+        </span>
+      </div>
+      <div class="settings-row">
+        <span class="label">Reply tone</span>
+        <span>
+          <select id="setting-tone">
+            <option value="professional">Professional (soft)</option>
+            <option value="assertive">Assertive</option>
+            <option value="hardline">Hardline (harsh)</option>
+            <option value="insane">Insane (offensive)</option>
+          </select>
+        </span>
+      </div>
+      <div class="settings-row">
+        <span class="label">Reply language</span>
+        <span>
+          <select id="setting-language">
+            <option value="auto">Match the email's first language (all languages)</option>
+            <option value="english">Always English</option>
+          </select>
+        </span>
+      </div>
+      <div class="settings-row">
+        <span class="label">Enable sending from this application</span>
+        <span><label><input type="checkbox" id="setting-sending"> sending enabled</label></span>
+      </div>
+      <div class="settings-row">
+        <span class="label">Automatic arming</span>
+        <span>
+          <button class="action" id="setting-arm">Arm Automatic mode…</button>
+          <button class="action danger" id="setting-disarm">Return to Human review</button>
+          <span class="hint" id="setting-arm-state"></span>
+        </span>
+      </div>
+      <div class="row"><span class="error" id="settings-error"></span></div>
+    </div>
+  </section>
+</main>
+
+<div class="overlay" id="confirm-overlay">
+  <div class="dialog">
+    <h2>Confirm this exact reply</h2>
+    <p class="hint" id="confirm-target"></p>
+    <div class="exact" id="confirm-body"></div>
+    <p class="risk">Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.</p>
+    <div class="row">
+      <button class="action primary" id="confirm-send">Send this exact reply now</button>
+      <button class="action" id="confirm-cancel">Cancel</button>
+      <span class="error" id="confirm-error"></span>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="arm-overlay">
+  <div class="dialog">
+    <h2>Enable Automatic mode?</h2>
+    <p class="risk">Warning: in Automatic mode the AI sends replies without your review.</p>
+    <p>The model can be wrong. A wrongly sent reply can damage real job applications and your standing with recruiters. Ambiguous, truncated or unverifiable messages are deliberately held, but no automated check is perfect and mistakes do happen.</p>
+    <p>This confirmation unlocks in <span class="countdown" id="arm-countdown">30</span> second(s). Use the pause to read this warning in full.</p>
+    <div class="row">
+      <button class="action primary" id="arm-confirm" disabled>I understand the risks — enable Automatic mode</button>
+      <button class="action" id="arm-cancel">Cancel (stay in Human review)</button>
+      <span class="error" id="arm-error"></span>
+    </div>
+  </div>
+</div>
+
+<div class="token-gate overlay visible" id="token-overlay">
+  <div class="panel">
+    <h2>Connect to the local API</h2>
+    <p class="hint">Paste the local API bearer token (Settings → API token, or <code>rr rotate-api-token</code>). The token stays in this page's memory only and is never stored or logged.</p>
+    <div class="row">
+      <input type="password" id="token-input" size="48" autocomplete="off">
+      <button class="action primary" id="token-connect">Connect</button>
+    </div>
+    <div class="row"><span class="error" id="token-error"></span></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// Rendering rule: every piece of email/API content reaches the DOM through
+// textContent or input values only. innerHTML is never used, so hostile email
+// content can never become markup.
+const state = {
+  token: null,
+  tab: "queue",
+  items: [],
+  selected: null,
+  events: [],
+  settings: null,
+  status: null,
+  page: 0,
+  dirty: false,
+  confirmBody: "",
+  armTimer: null,
+};
+
+function el(id) { return document.getElementById(id); }
+function setText(id, text) { el(id).textContent = text; }
+
+function showError(id, error) {
+  const node = el(id);
+  if (!node) return;
+  if (!error) { node.textContent = ""; return; }
+  const parts = [];
+  if (error.code) parts.push(error.code);
+  if (error.message) parts.push(error.message);
+  node.textContent = parts.join(": ") || String(error);
+}
+
+async function api(path, options) {
+  const init = Object.assign({ headers: {} }, options || {});
+  init.headers = Object.assign({ "Content-Security-Policy-Client": "strict" }, init.headers);
+  if (state.token) init.headers["Authorization"] = "Bearer " + state.token;
+  if (init.body !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+  }
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (network) {
+    const error = new Error("The local API is not reachable");
+    error.code = "network_error";
+    throw error;
+  }
+  let payload = {};
+  try { payload = await response.json(); } catch (ignore) { payload = {}; }
+  if (!response.ok || payload.error) {
+    const error = new Error((payload.error && payload.error.message) || ("HTTP " + response.status));
+    error.code = (payload.error && payload.error.code) || ("http_" + response.status);
+    error.retryable = !!(payload.error && payload.error.retryable);
+    throw error;
+  }
+  return payload;
+}
+
+async function refreshStatus() {
+  const status = await api("/v1/status");
+  state.status = status;
+  renderChips();
+}
+
+async function refreshSettings() {
+  const settings = await api("/v1/settings");
+  state.settings = settings;
+  renderSettings();
+}
+
+function renderChips() {
+  const status = state.status;
+  const chips = el("status-chips");
+  chips.replaceChildren();
+  if (!status) return;
+  const add = (label, value, cls) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (cls ? " " + cls : "");
+    const strong = document.createElement("b");
+    strong.textContent = value;
+    chip.append(document.createTextNode(label + " "), strong);
+    chips.append(chip);
+  };
+  add("account", status.account || "not connected", "");
+  add("mode", status.mode === "automatic" ? "Automatic" : "Human review",
+      status.mode === "automatic" ? "warn" : "ok");
+  add("sending", status.sending_enabled ? "enabled" : "disabled",
+      status.sending_enabled ? "warn" : "");
+  if (status.paused) add("dispatch", "paused", "warn");
+  if (status.operation && status.operation.state === "running") {
+    add("operation", status.operation.message || String(status.operation.kind), "warn");
+  }
+}
+
+function stateLabel(job) {
+  return String(job.state || "").replaceAll("_", " ");
+}
+
+function renderQueue() {
+  const body = el("queue-body");
+  body.replaceChildren();
+  for (const job of state.items) {
+    const row = document.createElement("tr");
+    row.className = "item" + (state.selected && state.selected.id === job.id ? " selected" : "");
+    const subject = document.createElement("td");
+    subject.textContent = (job.email && job.email.subject) || job.id.slice(0, 12);
+    const from = document.createElement("td");
+    from.textContent = (job.email && job.email.from) || "unknown";
+    const status = document.createElement("td");
+    status.className = "state";
+    status.textContent = stateLabel(job);
+    const flags = document.createElement("td");
+    flags.textContent = (job.flags || []).length ? String(job.flags.length) : "—";
+    row.append(subject, from, status, flags);
+    row.addEventListener("click", () => selectJob(job.id));
+    body.append(row);
+  }
+  setText("queue-page", "page " + (state.page + 1) + " · " + state.items.length + " message(s)");
+}
+
+async function loadQueue() {
+  const feed = await api("/v1/items?page=" + state.page);
+  state.items = feed.items || [];
+  renderQueue();
+}
+
+function renderOriginal() {
+  const target = el("review-original");
+  target.replaceChildren();
+  const job = state.selected;
+  if (!job || !job.email) {
+    target.textContent = "Select a message in the Queue.";
+    return;
+  }
+  const lines = [
+    "From: " + job.email.from,
+    "Subject: " + job.email.subject,
+    "Received: " + String(job.email.received_at || ""),
+    "Revision: " + String(job.revision) + " · state: " + stateLabel(job),
+    "",
+    String(job.email.text || ""),
+  ];
+  target.textContent = lines.join("\n");
+}
+
+function renderReview() {
+  renderOriginal();
+  const editor = el("review-editor");
+  const job = state.selected;
+  if (job && !state.dirty) {
+    editor.value = (job.draft && job.draft.body) || "";
+  }
+  const clean = job && job.draft && editor.value === job.draft.body;
+  setText("review-dirty", state.dirty ? "unsaved changes — save before sending" : "");
+  for (const id of ["review-save", "review-regenerate", "review-dismiss", "review-send"]) {
+    el(id).disabled = !job;
+  }
+  el("review-send").disabled = !job || state.dirty || !clean;
+}
+
+async function selectJob(id) {
+  try {
+    state.selected = await api("/v1/items/" + id);
+    state.dirty = false;
+    showError("review-error", null);
+    switchTab("review");
+  } catch (error) {
+    showError("page-error", error);
+  }
+}
+
+async function refreshActivity() {
+  const feed = await api("/v1/events?after=0");
+  state.events = feed.events || [];
+  const target = el("activity-body");
+  target.replaceChildren();
+  for (const event of state.events) {
+    const entry = document.createElement("div");
+    entry.className = "log-entry";
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = "#" + String(event.seq) + " · " + String(event.at || "") + " · " +
+      String(event.kind) + " · " + String(event.domain || "") + " · " + String(event.severity || "");
+    const detail = document.createElement("div");
+    detail.textContent = String(event.detail || "");
+    entry.append(meta, detail);
+    target.append(entry);
+  }
+}
+
+function renderSettings() {
+  const settings = state.settings;
+  if (!settings) return;
+  el("setting-mode").value = settings.mode;
+  el("setting-tone").value = settings.tone;
+  el("setting-language").value = settings.reply_language;
+  el("setting-sending").checked = !!settings.sending_enabled;
+  setText("setting-arm-state",
+    settings.automatic_confirmed ? "Automatic mode is armed." : "Automatic mode is not armed.");
+  el("setting-disarm").disabled = settings.mode !== "automatic";
+}
+
+async function saveSettings(edit) {
+  showError("settings-error", null);
+  try {
+    const result = await api("/v1/commands/update-settings", {
+      method: "POST",
+      body: JSON.stringify(edit),
+    });
+    if (result.settings) state.settings = result.settings;
+    await Promise.all([refreshSettings(), refreshStatus()]);
+  } catch (error) {
+    showError("settings-error", error);
+    await refreshSettings();
+  }
+}
+
+function openArmDialog() {
+  el("arm-overlay").classList.add("visible");
+  el("arm-error").textContent = "";
+  el("arm-confirm").disabled = true;
+  setText("arm-countdown", "…");
+}
+
+function closeArmDialog() {
+  el("arm-overlay").classList.remove("visible");
+  if (state.armTimer) {
+    clearInterval(state.armTimer);
+    state.armTimer = null;
+  }
+}
+
+async function beginArm() {
+  openArmDialog();
+  try {
+    const result = await api("/v1/commands/automatic-arm", {
+      method: "POST",
+      body: JSON.stringify({ action: "open" }),
+    });
+    const arm = result.arm || { remaining_seconds: 30, confirm_enabled: false };
+    let remaining = Math.max(0, Number(arm.remaining_seconds) || 0);
+    setText("arm-countdown", String(remaining));
+    el("arm-confirm").disabled = !arm.confirm_enabled;
+    state.armTimer = setInterval(() => {
+      remaining = Math.max(0, remaining - 1);
+      setText("arm-countdown", String(remaining));
+      if (remaining === 0) {
+        el("arm-confirm").disabled = false;
+        if (state.armTimer) { clearInterval(state.armTimer); state.armTimer = null; }
+      }
+    }, 1000);
+  } catch (error) {
+    showError("arm-error", error);
+  }
+}
+
+function openConfirmDialog() {
+  const job = state.selected;
+  if (!job || !job.draft) return;
+  // The dialog shows and confirms the exact persisted draft; the send
+  // payload is the same string, and the server re-checks the byte match.
+  state.confirmBody = job.draft.body;
+  setText("confirm-target",
+    "To: " + ((job.email && job.email.from) || "unknown") +
+    " · Subject: " + ((job.email && job.email.subject) || ""));
+  setText("confirm-body", state.confirmBody);
+  showError("confirm-error", null);
+  el("confirm-overlay").classList.add("visible");
+}
+
+function closeConfirmDialog() {
+  el("confirm-overlay").classList.remove("visible");
+  state.confirmBody = "";
+}
+
+async function refreshAll() {
+  await refreshStatus();
+  if (state.tab === "queue") await loadQueue();
+  else if (state.tab === "activity") await refreshActivity();
+  else if (state.tab === "settings") await refreshSettings();
+}
+
+function switchTab(tab) {
+  state.tab = tab;
+  for (const button of document.querySelectorAll("#tabs button")) {
+    button.classList.toggle("active", button.dataset.tab === tab);
+  }
+  for (const section of document.querySelectorAll("main section")) {
+    section.classList.toggle("visible", section.id === "tab-" + tab);
+  }
+  if (tab === "review") renderReview();
+  refreshAll().catch((error) => showError("page-error", error));
+}
+
+function wire() {
+  for (const button of document.querySelectorAll("#tabs button")) {
+    button.addEventListener("click", () => switchTab(button.dataset.tab));
+  }
+  el("token-connect").addEventListener("click", async () => {
+    showError("token-error", null);
+    state.token = el("token-input").value.trim();
+    if (!state.token) { showError("token-error", { message: "Enter the local API bearer token" }); return; }
+    try {
+      await refreshStatus();
+      await refreshSettings();
+      el("token-overlay").classList.remove("visible");
+      await refreshAll();
+    } catch (error) {
+      state.token = null;
+      showError("token-error", error);
+    }
+  });
+
+  el("queue-prev").addEventListener("click", () => {
+    if (state.page > 0) state.page -= 1;
+    loadQueue().catch((error) => showError("page-error", error));
+  });
+  el("queue-next").addEventListener("click", () => {
+    if (state.items.length) state.page += 1;
+    loadQueue().catch((error) => showError("page-error", error));
+  });
+
+  el("review-editor").addEventListener("input", () => {
+    state.dirty = true;
+    renderReview();
+  });
+  el("review-save").addEventListener("click", async () => {
+    const job = state.selected;
+    if (!job) return;
+    showError("review-error", null);
+    try {
+      await api("/v1/commands/edit-draft", {
+        method: "POST",
+        body: JSON.stringify({
+          id: job.id,
+          revision: job.revision,
+          body: el("review-editor").value,
+        }),
+      });
+      state.selected = await api("/v1/items/" + job.id);
+      state.dirty = false;
+      renderReview();
+    } catch (error) {
+      showError("review-error", error);
+    }
+  });
+  el("review-regenerate").addEventListener("click", async () => {
+    const job = state.selected;
+    if (!job) return;
+    showError("review-error", null);
+    try {
+      await api("/v1/commands/regenerate", {
+        method: "POST",
+        body: JSON.stringify({ id: job.id, revision: job.revision }),
+      });
+      state.selected = await api("/v1/items/" + job.id);
+      state.dirty = false;
+      renderReview();
+    } catch (error) {
+      showError("review-error", error);
+    }
+  });
+  el("review-dismiss").addEventListener("click", async () => {
+    const job = state.selected;
+    if (!job) return;
+    showError("review-error", null);
+    try {
+      await api("/v1/commands/dismiss", {
+        method: "POST",
+        body: JSON.stringify({ id: job.id, revision: job.revision }),
+      });
+      state.selected = null;
+      state.dirty = false;
+      renderReview();
+      switchTab("queue");
+    } catch (error) {
+      showError("review-error", error);
+    }
+  });
+  el("review-send").addEventListener("click", openConfirmDialog);
+
+  el("confirm-cancel").addEventListener("click", closeConfirmDialog);
+  el("confirm-send").addEventListener("click", async () => {
+    const job = state.selected;
+    if (!job) return;
+    showError("confirm-error", null);
+    try {
+      await api("/v1/commands/send", {
+        method: "POST",
+        body: JSON.stringify({
+          id: job.id,
+          revision: job.revision,
+          confirm_reply: state.confirmBody,
+        }),
+      });
+      closeConfirmDialog();
+      state.selected = await api("/v1/items/" + job.id);
+      renderReview();
+      await refreshStatus();
+    } catch (error) {
+      showError("confirm-error", error);
+    }
+  });
+
+  el("setting-mode").addEventListener("change", (event) => {
+    const value = event.target.value;
+    if (value === "automatic") {
+      // Arming is a separate, cooldown-gated step; the select snaps back
+      // until the server-side gate has actually been opened and confirmed.
+      event.target.value = (state.settings && state.settings.mode) || "human_review";
+      beginArm();
+    } else {
+      saveSettings({ mode: "human_review" });
+    }
+  });
+  el("setting-tone").addEventListener("change", (event) => {
+    saveSettings({ tone: event.target.value });
+  });
+  el("setting-language").addEventListener("change", (event) => {
+    saveSettings({ reply_language: event.target.value });
+  });
+  el("setting-sending").addEventListener("change", (event) => {
+    saveSettings({ sending_enabled: event.target.checked });
+  });
+  el("setting-arm").addEventListener("click", beginArm);
+  el("setting-disarm").addEventListener("click", () => {
+    saveSettings({ mode: "human_review" });
+  });
+
+  el("arm-cancel").addEventListener("click", async () => {
+    closeArmDialog();
+    try {
+      await api("/v1/commands/automatic-arm", {
+        method: "POST",
+        body: JSON.stringify({ action: "cancel" }),
+      });
+    } catch (error) {
+      showError("settings-error", error);
+    }
+  });
+  el("arm-confirm").addEventListener("click", async () => {
+    showError("arm-error", null);
+    try {
+      const result = await api("/v1/commands/automatic-arm", {
+        method: "POST",
+        body: JSON.stringify({ action: "confirm" }),
+      });
+      if (result.settings) state.settings = result.settings;
+      closeArmDialog();
+      await Promise.all([refreshSettings(), refreshStatus()]);
+    } catch (error) {
+      showError("arm-error", error);
+    }
+  });
+}
+
+wire();
+setInterval(() => {
+  if (state.token) {
+    refreshAll().catch((error) => showError("page-error", error));
+  }
+}, 5000);
+</script>
+</body>
+</html>

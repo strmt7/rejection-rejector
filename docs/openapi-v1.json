@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.15.0",
-    "description": "Authenticated, read-only, loopback-only integration API. Browser Origin requests are refused, responses are no-store, every response carries X-Request-ID and X-RR-API-Contract-SHA256, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket."
+    "version": "1.16.0",
+    "description": "Authenticated, loopback-only local API and embedded web interface. Browser Origin requests are refused except same-origin writes from the embedded page, responses are no-store, every response carries X-Request-ID, X-RR-API-Contract-SHA256 and a strict Content-Security-Policy, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket. Read endpoints stay read-only; the operator web UI issues state-changing commands through the bearer-protected /v1/commands/* channel, which enforces the same server-side gates as the desktop and terminal interfaces (shared send gate, confirm-exact-reply payload matching, cooldown-gated Automatic arming) under a fixed request-body cap."
   },
   "servers": [
     {
@@ -871,6 +871,228 @@
             "description": "Privacy-safe emergency-stop state. The configured filesystem path is never returned."
           }
         }
+      },
+      "SettingsView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "tone",
+          "reply_language",
+          "sending_enabled",
+          "automatic_confirmed",
+          "automatic_arm_cooldown_seconds"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "human_review",
+              "automatic"
+            ]
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "professional",
+              "assertive",
+              "hardline",
+              "insane"
+            ]
+          },
+          "reply_language": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "english"
+            ]
+          },
+          "sending_enabled": {
+            "type": "boolean"
+          },
+          "automatic_confirmed": {
+            "type": "boolean"
+          },
+          "automatic_arm_cooldown_seconds": {
+            "type": "integer",
+            "description": "Cooldown the Automatic-arm risk confirmation must wait out, enforced server-side."
+          }
+        }
+      },
+      "EditDraftRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision",
+          "body"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "body": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 6000
+          }
+        }
+      },
+      "RevisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SendCommandRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision",
+          "confirm_reply"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "confirm_reply": {
+            "type": "string",
+            "description": "The exact reply text shown in the confirm-exact-reply dialog. It must match the persisted draft byte for byte or the send is refused with confirm_reply_mismatch."
+          }
+        }
+      },
+      "UpdateSettingsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Partial edit; omitted fields keep their current value. Automatic mode additionally requires sending enabled and an acknowledged arm confirmation (automatic_not_armed otherwise).",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "human_review",
+              "automatic"
+            ]
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "professional",
+              "assertive",
+              "hardline",
+              "insane"
+            ]
+          },
+          "reply_language": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "english"
+            ]
+          },
+          "sending_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AutomaticArmRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "open",
+              "confirm",
+              "cancel"
+            ],
+            "description": "open starts the cooldown, confirm is refused while it runs (automatic_arm_cooldown), cancel abandons the arming."
+          }
+        }
+      },
+      "ArmGateStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "remaining_seconds",
+          "confirm_enabled"
+        ],
+        "properties": {
+          "remaining_seconds": {
+            "type": "integer",
+            "description": "Seconds left on the server-side cooldown countdown."
+          },
+          "confirm_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WriteResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "request_id",
+          "accepted"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationStatus"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsView"
+          },
+          "arm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArmGateStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       }
     },
     "headers": {
@@ -894,6 +1116,12 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         }
+      },
+      "ContentSecurityPolicy": {
+        "description": "Strict Content-Security-Policy set on every response: the embedded page may run only its own inline style/script and same-origin API calls; email content is rendered as plain text and never as markup.",
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -905,6 +1133,9 @@
           },
           "X-RR-Build-Identity-SHA256": {
             "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
           }
         },
         "content": {
@@ -923,6 +1154,9 @@
           },
           "X-RR-Build-Identity-SHA256": {
             "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
           }
         },
         "content": {
@@ -941,6 +1175,9 @@
           },
           "X-RR-Build-Identity-SHA256": {
             "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
           }
         },
         "content": {
@@ -959,6 +1196,9 @@
           },
           "X-RR-Build-Identity-SHA256": {
             "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
           }
         },
         "content": {
@@ -971,6 +1211,59 @@
       },
       "RateLimited": {
         "description": "Local loopback request burst exceeded the fixed token-bucket guard.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "headers": {
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
+          }
+        }
+      },
+      "WriteConflict": {
+        "description": "A server-side gate refused the write: stale_revision, confirm_reply_mismatch, send_gate_blocked, automatic_arm_cooldown, automatic_arm_not_open, automatic_not_armed, wrong_mode or demo_blocked. The stable code names the gate.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-API-Contract-SHA256": {
+            "$ref": "#/components/headers/ContractFingerprint"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "RequestTooLarge": {
+        "description": "The request body exceeded the fixed local write cap and was refused before parsing (request_body_too_large).",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "X-RR-API-Contract-SHA256": {
+            "$ref": "#/components/headers/ContractFingerprint"
+          },
+          "X-RR-Build-Identity-SHA256": {
+            "$ref": "#/components/headers/BuildIdentityFingerprint"
+          },
+          "Content-Security-Policy": {
+            "$ref": "#/components/headers/ContentSecurityPolicy"
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -1666,6 +1959,470 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Embedded local web interface page",
+        "description": "Single-page UI embedded in the binary (no Node, no external assets). The shell contains no data and is served without a bearer token; every data route stays authenticated. Email content is rendered as plain text only, and every response carries a strict Content-Security-Policy.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Embedded HTML page",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/v1/settings": {
+      "get": {
+        "summary": "Non-secret presentation settings for the web interface",
+        "description": "Mode, tone (including the Insane level), reply-language policy, sending toggle and Automatic-arm state only; no credentials, paths or mailbox identity are exposed.",
+        "responses": {
+          "200": {
+            "description": "Settings view",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/edit-draft": {
+      "post": {
+        "summary": "Persist an edited reply draft (mirrors Command::Edit)",
+        "description": "Writes the operator-edited reply for one reviewable job. Human review mode only; the (id, revision) binding must be current or the write is refused with stale_revision.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/regenerate": {
+      "post": {
+        "summary": "Discard the draft and request a fresh local analysis (mirrors Command::Regenerate)",
+        "description": "Human review mode only; demonstration mode never runs a local model (demo_blocked).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/dismiss": {
+      "post": {
+        "summary": "Dismiss one reviewable job without sending (mirrors Command::Dismiss)",
+        "description": "Stale revisions are refused with stale_revision.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/send": {
+      "post": {
+        "summary": "Send the exact persisted draft after confirm-exact-reply (mirrors Command::Send)",
+        "description": "Server-side gates run before dispatch and again inside the engine: the shared send_gate_eligible gate, the confirm-exact-reply payload matching the persisted draft byte for byte (confirm_reply_mismatch otherwise), and the editor (id, revision) binding (stale_revision otherwise). Automatic-mode arming is guarded by the config::AutomaticArmGate cooldown of 30 seconds, enforced server-side rather than in the page.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/update-settings": {
+      "post": {
+        "summary": "Persist edited settings (mirrors Command::Settings)",
+        "description": "Partial settings edit. Saving Automatic mode requires sending enabled and an acknowledged arm confirmation (automatic_not_armed); the reserved api_allow_writes setting still rejects true.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/automatic-arm": {
+      "post": {
+        "summary": "Drive the cooldown-gated Automatic-mode arming flow",
+        "description": "open starts the config::AutomaticArmGate 30-second cooldown and returns the visible countdown; confirm is refused while the cooldown runs (automatic_arm_cooldown) and only then flips the workspace to Automatic mode; cancel abandons the arming and stays in Human review.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomaticArmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
           }
         }
       }

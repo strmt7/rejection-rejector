@@ -82,6 +82,12 @@ enum Action {
         #[arg(long)]
         demo: bool,
     },
+    /// Serve the embedded local web interface from the loopback API.
+    ///
+    /// The page is served by the same loopback listener as the integration
+    /// API, so the API must be enabled in Settings first; the bearer token is
+    /// entered in the page and never stored by the browser.
+    Web,
     /// Print a non-sensitive local readiness report for Gmail, Ollama and the pinned model.
     Doctor {
         /// Return a non-zero exit code unless this readiness level is satisfied.
@@ -473,6 +479,49 @@ fn main() -> Result<()> {
         Action::Tui { demo } => {
             let worker = Worker::spawn(dir, demo);
             rejection_rejector::tui::run(worker)?;
+        }
+        Action::Web => {
+            let worker = Worker::spawn(dir, false);
+            let stop = worker.stop.clone();
+            let paused = worker.paused.clone();
+            ctrlc::set_handler(move || {
+                paused.store(true, Ordering::SeqCst);
+                stop.store(true, Ordering::SeqCst);
+            })?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let snapshot = worker.view();
+                if snapshot.fatal {
+                    anyhow::bail!("{}", snapshot.error);
+                }
+                if snapshot.initialized {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    anyhow::bail!("The workspace did not initialize before the startup deadline");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let snapshot = worker.view();
+            if !snapshot.api_listening {
+                anyhow::bail!(
+                    "rr web is served by the local integration API. Enable the API in Settings, save, and run rr web again (enterprise policy may also prohibit the API)."
+                );
+            }
+            println!(
+                "Local web interface: http://127.0.0.1:{}/",
+                snapshot.settings.api_port
+            );
+            println!(
+                "Enter the local API bearer token in the page. It is kept in page memory only. Ctrl+C stops the worker."
+            );
+            while !worker.stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_secs(1));
+                let snapshot = worker.view();
+                if snapshot.fatal {
+                    anyhow::bail!("{}", snapshot.error);
+                }
+            }
         }
         Action::Status | Action::Demo => {
             let demo = matches!(args.command, Action::Demo);
