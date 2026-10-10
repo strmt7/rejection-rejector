@@ -72,6 +72,6 @@ All development for this repository is performed directly on `main` per reposito
 
 ## Accepted repository-governance observations
 
-The maintainer accepts the exact Scorecard `Code-Review` (alert 8) and `CII Best Practices` (alert 9) observations recorded in the [governance baseline](../.github/scanner-governance-baseline.json) as a pass. They remain visible in audit output and do not block release readiness.
+The maintainer accepts the exact `CII Best Practices` (alert 9) observation recorded in the [governance baseline](../.github/scanner-governance-baseline.json) as a pass until the project's badge application completes; it remains visible in audit output and does not block release readiness. The former `Code-Review` observation is no longer accepted: it is enforced properly by reviewed pull requests with required approval and protected default branch. `SAST` is enforced by CodeQL on every push and pull request.
 
 The `Maintained` observation (alert 7) is age-gated, not suppressed: the Scorecard check only succeeds once a repository is more than 90 days old, which occurs on 2026-12-25 for this repository. With continuous weekly commits it resolves automatically at that point. All other source, dependency and qualification requirements remain in force.

@@ -1,6 +1,6 @@
 # Contributing and development policy
 
-Rejection Rejector is developed by the repository owner directly on **`main`**. Normal maintainer development branches are not used for this project.
+Rejection Rejector changes land through **pull requests with review before merge**. The default branch is protected: force pushes and deletion are blocked and at least one approving review is required, so every accepted change carries explicit review evidence.
 
 ## Atomic main development
 

@@ -1,13 +1,8 @@
 {
   "schema_version": 1,
   "repository": "strmt7/rejection-rejector",
-  "rationale": "The maintainer accepts these exact repository-governance observations as a passing baseline. They are not source vulnerabilities or evidence that peer review or certification has been completed.",
+  "rationale": "The maintainer accepts these exact repository-governance observations as a passing baseline. They are not source vulnerabilities or evidence that peer review or certification has been completed. Code-Review is no longer accepted here: it is enforced properly through reviewed pull requests and branch protection.",
   "accepted_governance": [
-    {
-      "alert_number": 8,
-      "tool": "Scorecard",
-      "rule_id": "CodeReviewID"
-    },
     {
       "alert_number": 9,
       "tool": "Scorecard",
