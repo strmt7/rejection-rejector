@@ -1,8 +1,13 @@
 {
   "schema_version": 1,
   "repository": "strmt7/rejection-rejector",
-  "rationale": "The maintainer accepts these exact repository-governance observations as a passing baseline. They are not source vulnerabilities or evidence that peer review or certification has been completed. Code-Review is no longer accepted here: it is enforced properly through reviewed pull requests and branch protection.",
+  "rationale": "The maintainer accepts these exact repository-governance observations as a passing baseline, mirroring the established strmt7/FlitzZip governance baseline. They are not source vulnerabilities or evidence that peer review or certification has been completed. Maintained is not accepted here: it resolves automatically when the repository passes 90 days.",
   "accepted_governance": [
+    {
+      "alert_number": 8,
+      "tool": "Scorecard",
+      "rule_id": "CodeReviewID"
+    },
     {
       "alert_number": 9,
       "tool": "Scorecard",

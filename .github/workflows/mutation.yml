@@ -53,6 +53,7 @@ jobs:
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: never
+      MUTATION_SINCE: ${{ github.event.before }}
       SCOPE_INPUT: ${{ inputs.scope }}
     steps:
       - name: Checkout exact main source
@@ -79,7 +80,17 @@ jobs:
           set +e
           set -o pipefail
           scope_args=()
-          if [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ] || [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
+            # Push runs mutate only the lines changed by the push: per-SHA
+            # evidence in minutes instead of hours. The weekly schedule keeps
+            # the full safety-critical core as the deep evidence pass.
+            since="${MUTATION_SINCE:-}"
+            if [ -z "$since" ] || [ "$since" = "0000000000000000000000000000000000000000" ]; then
+              since="HEAD~1"
+            fi
+            scope_args+=(--since "$since")
+          fi
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
             scope_args+=(
               --file src/store.rs
               --file src/vault.rs
