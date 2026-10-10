@@ -184,4 +184,26 @@ mod tests {
         let bytes = read_headers(&mut reader, &AtomicBool::new(false), deadline).unwrap();
         assert_eq!(bytes.as_slice(), b"GET /callback HTTP/1.1\r\n\r\n");
     }
+
+    /// Guards hard stream failures: a read error that is not a timeout or an
+    /// interrupt must abort the callback read with an explicit failure rather
+    /// than looping on a broken socket or accepting a partial header block.
+    #[test]
+    fn hard_stream_errors_abort_the_callback_read() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(ErrorKind::ConnectionReset, "reset"))
+            }
+        }
+        let cancelled = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let error = read_headers(&mut Broken, &cancelled, deadline).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot read OAuth callback request"),
+            "unexpected error: {error}"
+        );
+    }
 }

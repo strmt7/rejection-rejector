@@ -121,6 +121,38 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
 
 /// Desktop-app OAuth: S256 PKCE, random state, random loopback port, five-minute expiry.
 pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credentials> {
+    login_with(
+        path,
+        send,
+        cancelled,
+        Duration::from_secs(300),
+        |url| {
+            webbrowser::open(url)
+                .map(|_| ())
+                .context("Cannot open the system browser for Google sign-in")
+        },
+        TOKEN_URL,
+    )
+}
+
+/// Parameterized core of [`login`].
+///
+/// Inputs: `path` — Google Desktop-app OAuth JSON; `send` — whether the send
+/// scope is required; `cancelled` — cooperative cancellation flag;
+/// `timeout` — consent deadline; `open_browser` — consent-URL launcher;
+/// `token_url` — OAuth token endpoint. Output: the obtained
+/// [`Credentials`]. The browser launcher and token endpoint are injectable so
+/// the whole consent loop (state, PKCE binding, decline handling, exchange
+/// failure modes) can be exercised deterministically without a real browser
+/// or Google; [`login`] wires in the real ones.
+fn login_with(
+    path: &Path,
+    send: bool,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+    open_browser: impl Fn(&str) -> Result<()>,
+    token_url: &str,
+) -> Result<Credentials> {
     let metadata = fs::symlink_metadata(path)?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
@@ -171,14 +203,14 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
         ("code_challenge", challenge.as_str()),
         ("code_challenge_method", "S256"),
     ]);
-    webbrowser::open(url.as_str()).context("Cannot open the system browser for Google sign-in")?;
+    open_browser(url.as_str())?;
     let start = Instant::now();
-    let login_deadline = start + Duration::from_secs(300);
+    let login_deadline = start + timeout;
     let local_port = listener.local_addr()?.port();
     let code = Zeroizing::new(loop {
         ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
         ensure!(
-            start.elapsed() < Duration::from_secs(300),
+            start.elapsed() < timeout,
             "Authorization timed out; no credentials saved"
         );
         match listener.accept() {
@@ -225,7 +257,7 @@ pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credenti
     ensure!(Instant::now() < login_deadline, "Authorization expired");
     drop(listener);
     let response = net::client(30, false)?
-        .post(TOKEN_URL)
+        .post(token_url)
         .form(&[
             ("client_id", config.installed.client_id.as_str()),
             ("client_secret", config.installed.client_secret.as_str()),
@@ -464,6 +496,406 @@ mod tests {
                 "{body:?} must fail as incomplete"
             );
         }
+    }
+
+    /// Guards PKCE verifier bounds: the generated verifier must sit inside the
+    /// RFC 7636 unreserved alphabet and length window at both ends, because
+    /// Google rejects anything else at the redirect, far from any local check.
+    #[test]
+    fn pkce_verifiers_stay_inside_rfc_7636_bounds() {
+        for _ in 0..32 {
+            let verifier = secret();
+            assert!(verifier.len() >= 43 && verifier.len() <= 128, "{verifier}");
+            assert!(
+                verifier
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+                "verifier leaves the unreserved alphabet: {verifier}"
+            );
+        }
+    }
+
+    /// Guards the missing-parameter branches of callback parsing: a callback
+    /// without exactly one `code` or exactly one `state` is an error, never a
+    /// silent success or a wrong-branch parse.
+    #[test]
+    fn callbacks_missing_state_or_code_are_errors() {
+        assert!(callback_code("/callback?code=x", "s").is_err());
+        assert!(callback_code("/callback?state=s", "s").is_err());
+        assert!(callback_code("/callback?state=s&code=x&code=y", "s").is_err());
+        assert!(callback_code("/callback?state=s&state=s", "s").is_err());
+    }
+
+    use std::net::TcpStream;
+    use std::sync::{Arc, mpsc};
+
+    /// Serve exactly one token exchange on a loopback socket.
+    ///
+    /// Inputs: `status` — HTTP status of the exchange response; `body` —
+    /// response body. Output: `(token_url, request)` where `request` resolves
+    /// to the raw request the exchange sent.
+    fn token_server(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/token", listener.local_addr().unwrap());
+        let body = body.to_owned();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => request.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request).to_string()
+        });
+        (url, handle)
+    }
+
+    /// Parse the consent URL the browser launcher received.
+    ///
+    /// Inputs: `url` — consent URL. Output: query pairs; panics unless the
+    /// URL targets the real Google consent endpoint over HTTPS.
+    fn consent_query(url: &str) -> HashMap<String, String> {
+        let parsed = url::Url::parse(url).unwrap();
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("accounts.google.com"));
+        parsed
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    /// Drive one callback request against the loopback listener behind the
+    /// consent URL's `redirect_uri`.
+    ///
+    /// Inputs: `redirect_uri` — exact redirect from the consent URL;
+    /// `target` — request target to send. Output: the raw HTTP response.
+    fn drive(redirect_uri: &str, target: &str) -> String {
+        let addr = redirect_uri
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut stream = TcpStream::connect(&addr).unwrap();
+        stream
+            .write_all(
+                format!("GET {target} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
+        response
+    }
+
+    /// Look up one form-encoded field in a raw HTTP request.
+    ///
+    /// Inputs: `request` — raw request text; `name` — field name. Output: the
+    /// decoded value, or `None` when absent.
+    fn form_value(request: &str, name: &str) -> Option<String> {
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+        url::form_urlencoded::parse(body.as_bytes())
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.to_string())
+    }
+
+    /// Start the consent-callback driver behind the injected browser launcher.
+    ///
+    /// Inputs: `script` — runs on its own thread once the consent URL is
+    /// issued; it may drive any number of callback requests sequentially.
+    /// Output: `(launcher, join)` for `login_with`; `join` yields the script's
+    /// return value. The script must live on its own thread because the
+    /// callback listener only starts answering after the launcher returns.
+    fn driver<T: Send + 'static>(
+        script: impl FnOnce(String) -> T + Send + 'static,
+    ) -> (
+        impl Fn(&str) -> Result<()> + Send + 'static,
+        std::thread::JoinHandle<T>,
+    ) {
+        let (tx, rx) = mpsc::channel::<String>();
+        let handle = std::thread::spawn(move || script(rx.recv().unwrap()));
+        let launcher = move |url: &str| -> Result<()> {
+            tx.send(url.to_owned())
+                .map_err(|_| anyhow::anyhow!("consent URL receiver dropped"))?;
+            Ok(())
+        };
+        (launcher, handle)
+    }
+
+    fn client_json() -> (tempfile::TempDir, std::path::PathBuf) {
+        client_file(br#"{"installed":{"client_id":"cid","client_secret":"cs"}}"#)
+    }
+
+    fn token_body(scope: &str, refresh: bool) -> String {
+        let rt = if refresh { r#""rt-secret""# } else { "null" };
+        format!(
+            r#"{{"access_token":"at-secret","expires_in":3600,"refresh_token":{rt},"scope":"{scope}"}}"#
+        )
+    }
+
+    /// Guards the full consent loop end to end: the consent URL must pin the
+    /// fixed policy parameters and the S256 challenge against the real Google
+    /// endpoint, the exchange must post exactly the verifier whose digest is
+    /// that challenge plus the same redirect_uri and code, and only the
+    /// refresh credential may land in the result.
+    #[test]
+    fn login_flow_binds_pkce_and_returns_only_the_refresh_credential() {
+        let (_root, path) = client_json();
+        let (token_url, request) = token_server(200, &token_body(READ_SCOPE, true));
+        let (launcher, driver) = driver(|url| {
+            let query = consent_query(&url);
+            assert_eq!(query.get("response_type").map(String::as_str), Some("code"));
+            assert_eq!(
+                query.get("code_challenge_method").map(String::as_str),
+                Some("S256")
+            );
+            assert_eq!(
+                query.get("access_type").map(String::as_str),
+                Some("offline")
+            );
+            assert_eq!(query.get("prompt").map(String::as_str), Some("consent"));
+            assert_eq!(query.get("scope").map(String::as_str), Some(READ_SCOPE));
+            let response = drive(
+                query.get("redirect_uri").unwrap(),
+                &format!(
+                    "/callback?state={}&code=code-1",
+                    query.get("state").unwrap()
+                ),
+            );
+            assert!(response.contains("200 OK"), "{response}");
+            query
+        });
+        let creds = login_with(
+            &path,
+            false,
+            &AtomicBool::new(false),
+            Duration::from_secs(30),
+            launcher,
+            &token_url,
+        )
+        .unwrap();
+        let query = driver.join().unwrap();
+        assert_eq!(creds.client_id, "cid");
+        assert_eq!(creds.client_secret, "cs");
+        assert_eq!(creds.refresh_token, "rt-secret");
+        assert!(!creds.can_send);
+
+        let request = request.join().unwrap();
+        assert!(
+            request.contains("grant_type=authorization_code"),
+            "{request}"
+        );
+        assert!(request.contains("code=code-1"), "{request}");
+        assert_eq!(
+            form_value(&request, "redirect_uri").as_deref(),
+            query.get("redirect_uri").map(String::as_str),
+            "the exchange must reuse the exact redirect the consent URL advertised"
+        );
+        assert_eq!(
+            pkce_challenge(form_value(&request, "code_verifier").unwrap().as_str()),
+            *query.get("code_challenge").unwrap(),
+            "the posted verifier must hash to the advertised challenge"
+        );
+    }
+
+    /// Guards scope enforcement at the exchange boundary: read permission is
+    /// mandatory, the send grant is honored only when requested, and a token
+    /// response without a refresh token is refused instead of storing a
+    /// credential that dies together with the access token.
+    #[test]
+    fn token_exchange_enforces_scopes_and_the_refresh_token() {
+        let (_root, path) = client_json();
+        type ExchangeCase = (bool, String, bool, Option<bool>, Option<String>);
+        let cases: Vec<ExchangeCase> = vec![
+            (
+                true,
+                format!("{READ_SCOPE} {SEND_SCOPE}"),
+                true,
+                Some(true),
+                None,
+            ),
+            (
+                true,
+                READ_SCOPE.into(),
+                true,
+                None,
+                Some("send permission".into()),
+            ),
+            (false, READ_SCOPE.into(), true, Some(false), None),
+            (
+                false,
+                "other-scope".into(),
+                true,
+                None,
+                Some("read permission".into()),
+            ),
+            (
+                false,
+                READ_SCOPE.into(),
+                false,
+                None,
+                Some("No refresh token".into()),
+            ),
+        ];
+        for (send, scope, refresh, expect_send, error_phrase) in cases {
+            let (token_url, _request) = token_server(200, &token_body(&scope, refresh));
+            let (launcher, done) = driver(move |url| {
+                let query = consent_query(&url);
+                if send {
+                    assert_eq!(
+                        query.get("scope").map(String::as_str),
+                        Some(format!("{READ_SCOPE} {SEND_SCOPE}").as_str()),
+                        "send=true must widen the consent scope"
+                    );
+                }
+                let response = drive(
+                    query.get("redirect_uri").unwrap(),
+                    &format!("/callback?state={}&code=c1", query.get("state").unwrap()),
+                );
+                assert!(response.contains("200 OK"), "{response}");
+            });
+            let result = login_with(
+                &path,
+                send,
+                &AtomicBool::new(false),
+                Duration::from_secs(30),
+                launcher,
+                &token_url,
+            );
+            done.join().unwrap();
+            match (error_phrase, expect_send) {
+                (Some(phrase), _) => {
+                    let error = result.err().expect("login must fail").to_string();
+                    assert!(error.contains(&phrase), "{scope}: {error}");
+                }
+                (None, Some(can_send)) => {
+                    let creds = result.unwrap();
+                    assert_eq!(creds.can_send, can_send, "{scope}");
+                    assert_eq!(creds.refresh_token, "rt-secret");
+                }
+                _ => unreachable!("every case pins an outcome"),
+            }
+        }
+    }
+
+    /// Guards the callback loop against hostile first contacts: a tampered
+    /// state and a Google decline are both refused on the wire with 400 and
+    /// the loop keeps listening, so one forged request cannot burn the login.
+    #[test]
+    fn tampered_and_declined_callbacks_do_not_stop_the_flow() {
+        let (_root, path) = client_json();
+        let (token_url, _request) = token_server(
+            200,
+            &token_body(&format!("{READ_SCOPE} {SEND_SCOPE}"), true),
+        );
+        let (launcher, driver) = driver(|url| {
+            let query = consent_query(&url);
+            assert_eq!(
+                query.get("scope").map(String::as_str),
+                Some(format!("{READ_SCOPE} {SEND_SCOPE}").as_str()),
+                "send=true must widen the consent scope"
+            );
+            let redirect = query.get("redirect_uri").unwrap().clone();
+            let state = query.get("state").unwrap().clone();
+            let forged = drive(&redirect, "/callback?state=attacker&code=x");
+            assert!(forged.contains("400 Bad Request"), "{forged}");
+            let declined = drive(
+                &redirect,
+                &format!("/callback?state={state}&code=ok&error=access_denied"),
+            );
+            assert!(declined.contains("400 Bad Request"), "{declined}");
+            let valid = drive(&redirect, &format!("/callback?state={state}&code=ok-code"));
+            assert!(valid.contains("200 OK"), "{valid}");
+        });
+        let creds = login_with(
+            &path,
+            true,
+            &AtomicBool::new(false),
+            Duration::from_secs(30),
+            launcher,
+            &token_url,
+        )
+        .unwrap();
+        driver.join().unwrap();
+        assert!(creds.can_send);
+        assert_eq!(creds.refresh_token, "rt-secret");
+    }
+
+    /// Guards cooperative cancellation: once the flag is raised no code is
+    /// exchanged, even though a valid consent URL was already issued.
+    #[test]
+    fn cancellation_stops_the_flow_before_any_exchange() {
+        let (_root, path) = client_json();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let (launcher, driver) = driver(move |_url| {
+            flag.store(true, Ordering::SeqCst);
+        });
+        let error = login_with(
+            &path,
+            false,
+            &cancelled,
+            Duration::from_secs(30),
+            launcher,
+            "http://127.0.0.1:1/token",
+        )
+        .err()
+        .expect("login must fail")
+        .to_string();
+        driver.join().unwrap();
+        assert!(error.contains("cancelled"), "{error}");
+    }
+
+    /// Guards the consent deadline: an expired window fails closed with no
+    /// credentials even while the browser launcher is happy.
+    #[test]
+    fn an_expired_consent_window_fails_closed() {
+        let (_root, path) = client_json();
+        let (launcher, driver) = driver(|_url| ());
+        let error = login_with(
+            &path,
+            false,
+            &AtomicBool::new(false),
+            Duration::ZERO,
+            launcher,
+            "http://127.0.0.1:1/token",
+        )
+        .err()
+        .expect("login must fail")
+        .to_string();
+        driver.join().unwrap();
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    /// Guards launcher failure propagation: if no browser can be opened the
+    /// login aborts immediately instead of waiting out the consent deadline.
+    #[test]
+    fn browser_launcher_failures_abort_the_login() {
+        let (_root, path) = client_json();
+        let error = login_with(
+            &path,
+            false,
+            &AtomicBool::new(false),
+            Duration::from_secs(30),
+            |_| Err(anyhow::anyhow!("no browser")),
+            "http://127.0.0.1:1/token",
+        )
+        .err()
+        .expect("login must fail")
+        .to_string();
+        assert!(error.contains("no browser"), "{error}");
     }
 }
 

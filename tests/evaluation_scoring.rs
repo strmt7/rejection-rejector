@@ -33,6 +33,13 @@ struct Fake {
 }
 impl Fake {
     fn new(installed: &[&str]) -> Self {
+        Self::with_failures(installed, "", "")
+    }
+    /// Deterministic fake Ollama that answers the first request to `route`
+    /// whose body contains `body_marker` (any request to `route` when the
+    /// marker is empty) with HTTP 500, so targeted mid-run model failures can
+    /// be exercised without a real runtime.
+    fn with_failures(installed: &[&str], route: &str, body_marker: &str) -> Self {
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
@@ -41,6 +48,10 @@ impl Fake {
         let listed = models.clone();
         let last_model = Arc::new(Mutex::new(String::new()));
         let tracked = last_model.clone();
+        let failure_route = route.to_owned();
+        let failure_marker = body_marker.to_owned();
+        let failure_left = Arc::new(Mutex::new(1usize));
+        let failure_state = failure_left.clone();
         let handle = thread::spawn(move || {
             while !flag.load(Ordering::SeqCst) {
                 let Some(mut req) = server.recv_timeout(Duration::from_millis(50)).unwrap() else {
@@ -52,6 +63,21 @@ impl Fake {
                     && let Some(model) = value.get("model").and_then(Value::as_str)
                 {
                     *tracked.lock().unwrap() = model.to_owned();
+                }
+                let inject_failure = !failure_route.is_empty()
+                    && failure_route == req.url()
+                    && (failure_marker.is_empty() || body.contains(&failure_marker))
+                    && {
+                        let mut left = failure_state.lock().unwrap();
+                        let inject = *left > 0;
+                        *left = left.saturating_sub(1);
+                        inject
+                    };
+                if inject_failure {
+                    let response = Response::from_string("{\"error\":\"injected failure\"}")
+                        .with_status_code(500);
+                    let _ = req.respond(response);
+                    continue;
                 }
                 let answer = match req.url() {
                     "/api/version" => json!({"version":"0.35.1"}),
@@ -513,4 +539,65 @@ fn comparison_report_pins_the_contractual_thresholds() {
     );
     assert_eq!(eligibility["full_gpu_residency_required"], true);
     assert_eq!(report["suite"], "rr-eval-contract-v5");
+}
+
+/// Guards per-case failure isolation: when the model errors mid-run, exactly
+/// that case is recorded as an error row (never silently dropped or counted
+/// as correct), it is excluded from `completed` while staying in
+/// `fixture_count`, and the run can never pass the eligibility gate — a
+/// partially failed corpus must not inflate accuracy or become recommendable.
+#[test]
+fn model_errors_become_error_rows_and_fail_the_eligibility_gate() {
+    let fake = Fake::with_failures(&[DEFAULT_MODEL], "/api/chat", "Application outcome");
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("report.json");
+    let report = evaluation::run(&fake.settings(), &out).unwrap();
+    let results = report["results"].as_array().unwrap();
+    let errors: Vec<&Value> = results
+        .iter()
+        .filter(|row| row.get("error").is_some())
+        .collect();
+    assert_eq!(errors.len(), 1, "exactly one case must surface the failure");
+    assert_eq!(errors[0]["id"], "en_rejection_regret");
+    assert_eq!(errors[0]["match"], false);
+    assert!(errors[0].get("expected").is_some());
+    assert!(errors[0].get("actual").is_none());
+    let summary = &report["summary"];
+    assert_eq!(
+        summary["completed"].as_u64().unwrap() as usize,
+        results.len() - 1
+    );
+    assert_eq!(
+        summary["fixture_count"].as_u64().unwrap() as usize,
+        results.len()
+    );
+    assert_eq!(summary["recommendation_eligible"], false);
+    assert!(summary["accuracy"].as_f64().unwrap().is_finite());
+}
+
+/// Guards candidate isolation in the bake-off: one candidate whose evaluation
+/// errors must be reported with its own error entry (skipped for
+/// recommendation) while the comparison report keeps its contract; a broken
+/// candidate may never abort the comparison or be recommended.
+#[test]
+fn comparison_isolates_candidate_evaluation_failures() {
+    let fake = Fake::with_failures(&[DEFAULT_MODEL], "/api/ps", "");
+    let dir = tempfile::tempdir().unwrap();
+    let out: &Path = &dir.path().join("compare.json");
+    evaluation::compare_installed(&fake.settings(), out).unwrap();
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap();
+    let candidates = report["candidates"].as_array().unwrap();
+    let evaluated: Vec<&Value> = candidates
+        .iter()
+        .filter(|c| c.get("report").is_some() || c.get("error").is_some())
+        .collect();
+    assert_eq!(evaluated.len(), 1, "only the installed model is evaluated");
+    assert!(evaluated[0].get("error").is_some());
+    assert!(evaluated[0].get("report").is_none());
+    assert_eq!(evaluated[0]["model"], DEFAULT_MODEL);
+    for skipped in candidates.iter().filter(|c| c["model"] != DEFAULT_MODEL) {
+        assert_eq!(skipped["skipped"], true, "{}", skipped["model"]);
+        assert!(skipped.get("error").is_none());
+    }
+    assert!(report.get("eligibility").is_some());
 }
