@@ -57,6 +57,21 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 6. Root-cause once, then scan sibling code paths for the same pattern instead
    of rediscovering the bug file by file.
 
+## Coverage doctrine (all AI agents)
+
+The goal is **not a single uncovered line of product code** — 100% line
+coverage of the measured areas (Rust src/ and the Python operator tooling in
+scripts/). This is a standing goal, not a CI gate: `--fail-under` thresholds
+exist only as regression floors. Rules:
+
+1. Only logical product code is measured and tested — never test code, never
+   tests of tests.
+2. Tests must be meaningful: they should fail if the code becomes subtly
+   wrong (wrong order, off-by-one, dropped validation), not merely execute
+   lines.
+3. Every uncovered line left in a changed area must have a written reason
+   (unreachable, platform-gated, or rendering glue).
+
 ## Definition of done
 
 Local suite green (fmt, clippy, all tests, `tests/release`) AND pushed AND remote
