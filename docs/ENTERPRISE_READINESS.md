@@ -69,3 +69,9 @@ A release candidate should not be described as enterprise-ready until, at minimu
 - remaining limitations are published rather than silently waived.
 
 All development for this repository is performed directly on `main` per repository-owner instruction.
+
+## Accepted repository-governance observations
+
+The maintainer accepts the exact Scorecard `Code-Review` (alert 8) and `CII Best Practices` (alert 9) observations recorded in the [governance baseline](../.github/scanner-governance-baseline.json) as a pass. They remain visible in audit output and do not block release readiness.
+
+The `Maintained` observation (alert 7) is age-gated, not suppressed: the Scorecard check only succeeds once a repository is more than 90 days old, which occurs on 2026-12-25 for this repository. With continuous weekly commits it resolves automatically at that point. All other source, dependency and qualification requirements remain in force.
