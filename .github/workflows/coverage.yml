@@ -70,13 +70,21 @@ jobs:
           mkdir -p artifacts
           cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info
           cargo llvm-cov report --summary-only --fail-under-lines 61 --fail-under-functions 65 | tee artifacts/coverage-summary.txt
+          # Python operator tooling (scripts/) is release-chain code and is
+          # covered by the operator regression tests; test code itself is
+          # deliberately excluded from measurement.
+          python3 -m pip install -q coverage
+          python3 -m coverage run --source=scripts -m unittest discover -s tests/release
+          python3 -m coverage xml -o artifacts/coverage.xml
+          python3 -m coverage report | tee artifacts/coverage-python.txt
           test -s artifacts/lcov.info
           test -s artifacts/coverage-summary.txt
+          test -s artifacts/coverage.xml
       - name: Upload coverage to Codecov
         if: always() && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          files: ./artifacts/lcov.info
+          files: ./artifacts/lcov.info,./artifacts/coverage.xml
           use_oidc: true
           flags: rust
           name: rejection-rejector

@@ -30,8 +30,15 @@ is officially supported for that stack's vendor:
   and the ROCm 7.x runtime's agent initialization requires it, so PyTorch
   ROCm wheels cannot initialize GPU training in WSL2. Use bare-metal Linux
   for ROCm training.
+- **AMD ROCm on native Windows**: supported per AMD's Radeon compatibility
+  matrix (ROCm 7.2.1 + PyTorch 2.9.1 win_amd64 wheels from repo.radeon.com,
+  Python 3.12, Adrenalin 26.2.2+); the RX 9070 XT (gfx1201) row covers both
+  runtime and HIP SDK. 9B NF4 QLoRA peaks at roughly 10-12 GB of 16 GB at
+  sequence length 2048. Use bitsandbytes ROCm wheels for NF4 or the
+  AMD-documented Unsloth Windows stack.
 - **CPU**: supported everywhere. Sufficient for pipeline validation and for
-  small models; 9B-class training is feasible but slow.
+  small models; 9B-class training is feasible but slow (~1-2 hours per epoch
+  measured on a 16-core CPU).
 
 ## Requirements
 
