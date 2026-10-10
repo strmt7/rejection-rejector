@@ -33,8 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: enterprise-deep-verification-main
-  cancel-in-progress: true
+  # Per-SHA group: deep-verification evidence must never be superseded by
+  # later pushes, or the release policy's latest-run evidence starves.
+  group: enterprise-deep-verification-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   deep-verification:

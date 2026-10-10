@@ -33,8 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-fuzz-main
-  cancel-in-progress: true
+  # Per-SHA group: fuzzing evidence must never be superseded by later
+  # pushes, or the release policy's latest-run evidence starves.
+  group: rust-fuzz-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   fuzz:
