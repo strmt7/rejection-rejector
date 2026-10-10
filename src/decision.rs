@@ -726,3 +726,70 @@ mod ranking_and_eligibility_tests {
         assert_eq!(report_metric(&report, "/summary/missing"), None);
     }
 }
+
+#[cfg(test)]
+mod brier_scoring_tests {
+    use super::*;
+
+    fn answer(probs: [f64; 4]) -> DecisionAnswer {
+        let keys = ["rejection", "opportunity", "other", "uncertain"];
+        DecisionAnswer {
+            choice: "rejection".to_string(),
+            probabilities: keys
+                .iter()
+                .zip(probs)
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            confidence: None,
+        }
+    }
+
+    /// A perfectly predicted one-hot distribution scores zero on both the
+    /// multiclass and the rejection Brier scales.
+    #[test]
+    fn perfect_predictions_score_zero() {
+        let (multi, rejection) =
+            probability_scores(&answer([1.0, 0.0, 0.0, 0.0]), Category::Rejection).unwrap();
+        assert_eq!(multi, 0.0);
+        assert_eq!(rejection, 0.0);
+    }
+
+    /// Hand-computed scores: a 50/50 split on a rejection expectation gives
+    /// multiclass 0.5 and rejection 0.25 exactly.
+    #[test]
+    fn brier_scores_match_hand_computation() {
+        let (multi, rejection) =
+            probability_scores(&answer([0.5, 0.5, 0.0, 0.0]), Category::Rejection).unwrap();
+        assert!((multi - 0.5).abs() < 1e-12, "multiclass {multi}");
+        assert!((rejection - 0.25).abs() < 1e-12, "rejection {rejection}");
+    }
+
+    /// A confidently wrong rejection verdict is punished twice: the rejection
+    /// term alone reaches 1.0, and non-rejection expectations must not be
+    /// conflated with rejections.
+    #[test]
+    fn confidently_wrong_rejection_is_punished_and_expectations_do_not_conflate() {
+        let (multi, rejection) =
+            probability_scores(&answer([1.0, 0.0, 0.0, 0.0]), Category::Other).unwrap();
+        assert!((rejection - 1.0).abs() < 1e-12);
+        assert!(
+            multi > 1.0,
+            "multiclass accumulates all four terms: {multi}"
+        );
+        let (_, rejection_non) =
+            probability_scores(&answer([0.0, 0.0, 1.0, 0.0]), Category::Other).unwrap();
+        assert_eq!(rejection_non, 0.0);
+    }
+
+    /// Incomplete probability vectors must fail closed: a missing category is
+    /// an error, never an implicit zero that would flatter the score.
+    #[test]
+    fn missing_probability_is_an_error_not_a_zero() {
+        let partial = DecisionAnswer {
+            choice: "rejection".to_string(),
+            probabilities: [("rejection".to_string(), 0.9)].into(),
+            confidence: None,
+        };
+        assert!(probability_scores(&partial, Category::Rejection).is_err());
+    }
+}

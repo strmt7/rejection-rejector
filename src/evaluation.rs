@@ -289,12 +289,13 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
 
     // Task-specific weighting: false-positive avoidance dominates because replying
     // to an offer/interview is materially worse than holding a genuine rejection.
-    let task_score = 100.0
-        * (0.35 * fp_avoidance.unwrap_or(0.0)
-            + 0.20 * recall.unwrap_or(0.0)
-            + 0.20 * pipeline_rate.unwrap_or(0.0)
-            + 0.15 * accuracy.unwrap_or(0.0)
-            + 0.10 * completion_rate);
+    let task_score = task_score(
+        fp_avoidance,
+        recall,
+        pipeline_rate,
+        accuracy,
+        completion_rate,
+    );
 
     let recommendation_eligible = completed == cases.len()
         && rejection_fp == 0
@@ -401,23 +402,7 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
         }
     }
 
-    let mut winner: Option<(String, f64)> = None;
-    for candidate in &candidates {
-        let eligible = candidate
-            .pointer("/report/summary/recommendation_eligible")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let score = candidate
-            .pointer("/report/summary/task_score")
-            .and_then(serde_json::Value::as_f64);
-        let model = candidate.get("model").and_then(serde_json::Value::as_str);
-        if eligible
-            && let (Some(score), Some(model)) = (score, model)
-            && winner.as_ref().is_none_or(|(_, best)| score > *best)
-        {
-            winner = Some((model.to_owned(), score));
-        }
-    }
+    let winner = select_winner(&candidates);
 
     let report = serde_json::json!({
         "timestamp": chrono::Utc::now(),
@@ -465,6 +450,52 @@ fn write_report(out: &Path, report: &serde_json::Value) -> Result<()> {
 
 fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     (denominator != 0).then(|| numerator as f64 / denominator as f64)
+}
+
+/// Weighted task score over the five aggregation components.
+///
+/// False-positive avoidance carries the largest weight (0.35): replying to an
+/// offer, interview or adversarial message is materially worse than holding a
+/// genuine rejection. Missing components (zero denominators) score as 0.0.
+fn task_score(
+    fp_avoidance: Option<f64>,
+    recall: Option<f64>,
+    pipeline_rate: Option<f64>,
+    accuracy: Option<f64>,
+    completion_rate: f64,
+) -> f64 {
+    100.0
+        * (0.35 * fp_avoidance.unwrap_or(0.0)
+            + 0.20 * recall.unwrap_or(0.0)
+            + 0.20 * pipeline_rate.unwrap_or(0.0)
+            + 0.15 * accuracy.unwrap_or(0.0)
+            + 0.10 * completion_rate)
+}
+
+/// Pick the recommendation among evaluated candidates.
+///
+/// Only candidates that passed every eligibility gate may win; among those the
+/// highest task score wins, with earlier candidate order breaking exact ties.
+/// Skipped/error/malformed candidates are never recommendable.
+fn select_winner(candidates: &[serde_json::Value]) -> Option<(String, f64)> {
+    let mut winner: Option<(String, f64)> = None;
+    for candidate in candidates {
+        let eligible = candidate
+            .pointer("/report/summary/recommendation_eligible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let score = candidate
+            .pointer("/report/summary/task_score")
+            .and_then(serde_json::Value::as_f64);
+        let model = candidate.get("model").and_then(serde_json::Value::as_str);
+        if eligible
+            && let (Some(score), Some(model)) = (score, model)
+            && winner.as_ref().is_none_or(|(_, best)| score > *best)
+        {
+            winner = Some((model.to_owned(), score));
+        }
+    }
+    winner
 }
 
 #[cfg(test)]
@@ -581,5 +612,177 @@ mod tests {
     fn task_score_weights_sum_to_one() {
         let total_weight: f64 = [0.35, 0.20, 0.20, 0.15, 0.10].iter().sum();
         assert!((total_weight - 1.0).abs() < 1e-9);
+    }
+
+    /// Guards each component's individual weight in isolation: a weight swap
+    /// (e.g. recall vs pipeline rate) or scale change would move one of these
+    /// exact values, catching silent re-weighting of the safety model.
+    #[test]
+    fn task_score_component_weights_are_individually_pinned() {
+        let unit = Some(1.0);
+        let none = None;
+        assert!((task_score(unit, none, none, none, 0.0) - 35.0).abs() < 1e-9);
+        assert!((task_score(none, unit, none, none, 0.0) - 20.0).abs() < 1e-9);
+        assert!((task_score(none, none, unit, none, 0.0) - 20.0).abs() < 1e-9);
+        assert!((task_score(none, none, none, unit, 0.0) - 15.0).abs() < 1e-9);
+        assert!((task_score(none, none, none, none, 1.0) - 10.0).abs() < 1e-9);
+    }
+
+    /// Guards numeric edge cases: all-missing components score exactly zero
+    /// (not NaN from 0/0), a perfect run scores exactly 100, and a missing
+    /// component equals an explicit 0.0 rather than being dropped from the sum.
+    #[test]
+    fn task_score_handles_missing_and_extreme_components() {
+        assert_eq!(task_score(None, None, None, None, 0.0), 0.0);
+        assert!((task_score(Some(1.0), Some(1.0), Some(1.0), Some(1.0), 1.0) - 100.0).abs() < 1e-9);
+        assert_eq!(
+            task_score(None, Some(1.0), None, None, 0.0),
+            task_score(Some(0.0), Some(1.0), Some(0.0), Some(0.0), 0.0)
+        );
+    }
+
+    fn candidate(model: &str, eligible: bool, score: f64) -> serde_json::Value {
+        serde_json::json!({
+            "label": model,
+            "model": model,
+            "report": {"summary": {"recommendation_eligible": eligible, "task_score": score}}
+        })
+    }
+
+    /// Guards the eligibility gate in candidate filtering: an ineligible model
+    /// with a top score must never be recommended over a barely-eligible one —
+    /// scoring by score alone would reintroduce the exact risk the gate blocks.
+    #[test]
+    fn winner_selection_never_recommends_ineligible_candidates() {
+        let candidates = vec![
+            candidate("danger-fast", false, 99.9),
+            candidate("safe-slow", true, 42.0),
+        ];
+        assert_eq!(select_winner(&candidates), Some(("safe-slow".into(), 42.0)));
+    }
+
+    /// Guards tie-breaking determinism: with identical eligible scores the
+    /// earlier candidate wins (strict `>`), so output cannot flap between runs.
+    #[test]
+    fn winner_selection_breaks_ties_by_candidate_order() {
+        let candidates = vec![
+            candidate("first", true, 50.0),
+            candidate("second", true, 50.0),
+        ];
+        assert_eq!(select_winner(&candidates), Some(("first".into(), 50.0)));
+    }
+
+    /// Guards malformed-candidate handling: skipped entries, error entries and
+    /// missing score/model fields must be skipped, and an empty or fully
+    /// ineligible field must yield no recommendation at all.
+    #[test]
+    fn winner_selection_ignores_skipped_malformed_and_absent_candidates() {
+        let skipped =
+            serde_json::json!({"label":"a","model":"a","skipped":true,"reason":"not installed"});
+        let errored = serde_json::json!({"label":"b","model":"b","error":"boom"});
+        let eligible_no_score = serde_json::json!({"label":"c","model":"c","report":{"summary":{"recommendation_eligible":true}}});
+        let eligible_no_model = serde_json::json!({"label":"d","report":{"summary":{"recommendation_eligible":true,"task_score":10.0}}});
+        assert_eq!(select_winner(&[]), None);
+        assert_eq!(
+            select_winner(&[skipped, errored, eligible_no_score, eligible_no_model]),
+            None
+        );
+    }
+
+    /// Guards snake_case tag renaming: every CaseTag must round-trip through
+    /// its wire name and unknown names must fail, so fixture drift cannot
+    /// silently drop a tag from the metrics registry.
+    #[test]
+    fn case_tag_wire_names_round_trip_and_unknown_tags_fail() {
+        let names = [
+            "multilingual",
+            "ats_automation",
+            "interview",
+            "offer",
+            "recruiter_correction",
+            "quoted_history",
+            "prompt_injection",
+            "ambiguous",
+            "pending_status",
+            "assessment",
+            "talent_pool",
+            "role_closure",
+            "application_action_required",
+            "survey",
+        ];
+        for name in names {
+            let parsed: CaseTag = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+            assert_eq!(parsed.as_str(), name);
+        }
+        assert!(serde_json::from_str::<CaseTag>("\"offer_letter\"").is_err());
+        assert!(serde_json::from_str::<CaseTag>("\"Interview\"").is_err());
+    }
+
+    /// Guards the critical-negative risk set exactly: adding or removing a tag
+    /// here changes which mistakes are double-weighted, so the membership is
+    /// pinned rather than inferred.
+    #[test]
+    fn critical_negative_tag_set_is_exactly_pinned() {
+        for tag in [
+            CaseTag::Interview,
+            CaseTag::Offer,
+            CaseTag::RecruiterCorrection,
+            CaseTag::QuotedHistory,
+            CaseTag::PromptInjection,
+            CaseTag::Ambiguous,
+            CaseTag::Assessment,
+            CaseTag::TalentPool,
+            CaseTag::RoleClosure,
+            CaseTag::ApplicationActionRequired,
+        ] {
+            assert!(tag.critical_negative(), "{:?} must be critical", tag);
+        }
+        for tag in [
+            CaseTag::Multilingual,
+            CaseTag::AtsAutomation,
+            CaseTag::PendingStatus,
+            CaseTag::Survey,
+        ] {
+            assert!(!tag.critical_negative(), "{:?} must not be critical", tag);
+        }
+    }
+
+    /// Guards fixture schema strictness: identity and expectation fields are
+    /// mandatory while tags default to empty, so a truncated fixture file fails
+    /// loudly instead of scoring cases with default expectations.
+    #[test]
+    fn case_schema_requires_identity_and_expected_category() {
+        let full: Case =
+            serde_json::from_str(r#"{"id":"c1","subject":"s","text":"t","expected":"rejection"}"#)
+                .unwrap();
+        assert_eq!(full.id, "c1");
+        assert_eq!(full.expected, Category::Rejection);
+        assert!(full.tags.is_empty());
+        for partial in [
+            r#"{"id":"c1","subject":"s","text":"t"}"#,
+            r#"{"subject":"s","text":"t","expected":"rejection"}"#,
+            r#"{"id":"c1","subject":"s","text":"t","expected":"nope"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Case>(partial).is_err(),
+                "{partial} must not parse"
+            );
+        }
+    }
+
+    /// Guards fixture content sanity: every embedded case needs non-empty
+    /// identity and content, otherwise scoring silently divides by fixtures
+    /// that can never be classified.
+    #[test]
+    fn every_fixture_has_substantive_identity_and_content() {
+        for case in fixtures().unwrap() {
+            assert!(!case.id.trim().is_empty(), "empty id");
+            assert!(
+                !case.subject.trim().is_empty(),
+                "{}: empty subject",
+                case.id
+            );
+            assert!(case.text.trim().len() >= 10, "{}: tiny body", case.id);
+        }
     }
 }

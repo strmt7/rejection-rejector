@@ -1815,3 +1815,78 @@ mod tests {
         assert!(!auto_blocks(&j, &s, "demo@example.invalid", Utc::now()).is_empty());
     }
 }
+
+#[cfg(test)]
+mod dispatch_failure_taxonomy_tests {
+    use super::*;
+
+    /// A satisfied precondition passes for every kind; a failed one always
+    /// produces a typed failure.
+    #[test]
+    fn dispatch_require_passes_only_when_the_condition_holds() {
+        for kind in [
+            DispatchFailureKind::Retryable,
+            DispatchFailureKind::ReviewRequired,
+            DispatchFailureKind::ReconcileRequired,
+            DispatchFailureKind::StateHandled,
+        ] {
+            assert!(dispatch_require(true, kind, "ok").is_ok());
+            assert!(dispatch_require(false, kind, "x").is_err());
+        }
+    }
+
+    /// Failure kinds route to recovery paths and carry stable operation codes.
+    /// Swapping Retryable and ReconcileRequired would let an operator retry an
+    /// uncertain delivery (a double-send risk), so retryability and codes are
+    /// pinned here as the at-most-once routing contract.
+    #[test]
+    fn failure_kind_routing_pins_the_at_most_once_invariants() {
+        let retryable = dispatch_require(false, DispatchFailureKind::Retryable, "t").unwrap_err();
+        assert!(retryable.retryable_for_operator());
+        assert_eq!(retryable.operation_code(), "retryable_dispatch");
+
+        let review = dispatch_require(false, DispatchFailureKind::ReviewRequired, "r").unwrap_err();
+        assert!(!review.retryable_for_operator());
+        assert_eq!(review.operation_code(), "review_required_dispatch");
+
+        let reconcile =
+            dispatch_require(false, DispatchFailureKind::ReconcileRequired, "u").unwrap_err();
+        assert!(
+            !reconcile.retryable_for_operator(),
+            "uncertain delivery must not be operator-retried"
+        );
+        assert_eq!(
+            reconcile.operation_code(),
+            "reconcile_required_delivery_uncertain"
+        );
+
+        let handled = dispatch_require(false, DispatchFailureKind::StateHandled, "h").unwrap_err();
+        assert!(!handled.retryable_for_operator());
+        assert_eq!(handled.operation_code(), "dispatch_state_handled");
+    }
+
+    /// Custom codes keep the operations journal contract, and the displayed
+    /// message is the operator-facing text.
+    #[test]
+    fn custom_codes_and_display_are_preserved() {
+        let failure = DispatchFailure::handled_code("custom_code", "operator text");
+        assert_eq!(failure.operation_code(), "custom_code");
+        assert!(!failure.retryable_for_operator());
+        assert_eq!(failure.to_string(), "operator text");
+    }
+
+    /// One workspace, one live engine: the instance lock must exclude a second
+    /// holder of the same directory and release cleanly on drop.
+    #[test]
+    fn instance_lock_is_exclusive_per_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = crate::vault::InstanceLock::acquire(dir.path()).expect("first lock");
+        assert!(
+            crate::vault::InstanceLock::acquire(dir.path()).is_err(),
+            "second lock on the same workspace must fail"
+        );
+        drop(held);
+        let reacquired = crate::vault::InstanceLock::acquire(dir.path());
+        assert!(reacquired.is_ok(), "lock must release on drop");
+    }
+}
