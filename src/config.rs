@@ -873,6 +873,78 @@ mod tests {
         settings.verifier_model_digest = Some("b".repeat(64));
         assert_ne!(base_hash, settings_context_hash(&settings));
     }
+
+    #[test]
+    fn automatic_with_verifier_enabled_requires_verifier_pin() {
+        let mut settings = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            signature: "Test Applicant".into(),
+            model_digest: Some("a".repeat(64)),
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            ..Settings::default()
+        };
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("Qualify and pin the independent verifier"),
+            "unexpected error: {error}"
+        );
+        settings.verifier_model_digest = Some("b".repeat(64));
+        let error = settings.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("Run the task-specific model evaluation"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn migrate_format_rejects_unknown_and_future_versions() {
+        let mut future = Settings {
+            settings_format_version: SETTINGS_FORMAT_VERSION + 1,
+            ..Settings::default()
+        };
+        let error = future.migrate_format().unwrap_err().to_string();
+        assert!(
+            error.contains("written by a newer application format version"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(future.settings_format_version, SETTINGS_FORMAT_VERSION + 1);
+
+        let mut unknown = Settings {
+            settings_format_version: 0,
+            ..Settings::default()
+        };
+        let error = unknown.migrate_format().unwrap_err().to_string();
+        assert!(
+            error.contains("Unsupported legacy settings format version 0"),
+            "unexpected error: {error}"
+        );
+
+        let mut current = Settings::default();
+        assert!(!current.migrate_format().unwrap());
+    }
+
+    #[test]
+    fn repair_keeps_current_automatic_automation_intact() {
+        let mut s = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            signature: "Test Applicant".into(),
+            model_digest: Some("a".repeat(64)),
+            ..Default::default()
+        };
+        s.task_qualification = Some(task_qualification(&s));
+        assert!(s.task_qualification_current());
+        // A currently qualified Automatic configuration must not be disarmed.
+        assert!(!s.repair_legacy_automatic_state());
+        assert_eq!(s.mode, Mode::Automatic);
+        assert!(s.sending_enabled);
+    }
 }
 
 #[cfg(test)]

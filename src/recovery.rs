@@ -391,21 +391,20 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
         use std::path::Component;
         fn volume_prefix(path: &Path) -> Result<Option<String>> {
             let canonical = fs::canonicalize(path)?;
-            Ok(canonical
-                .components()
-                .find_map(|component| match component {
-                    Component::Prefix(prefix) => {
-                        Some(prefix.as_os_str().to_string_lossy().to_ascii_lowercase())
-                    }
-                    _ => None,
-                }))
+            let mut prefix = None;
+            for component in canonical.components() {
+                if let Component::Prefix(value) = component {
+                    prefix = Some(value.as_os_str().to_string_lossy().to_ascii_lowercase());
+                    break;
+                }
+            }
+            Ok(prefix)
         }
         let workspace_prefix = volume_prefix(workspace)?;
         let backup_prefix = volume_prefix(backup)?;
-        Ok(match (workspace_prefix, backup_prefix) {
-            (Some(workspace), Some(backup)) => Some(workspace == backup),
-            _ => None,
-        })
+        Ok(workspace_prefix
+            .zip(backup_prefix)
+            .map(|(workspace, backup)| workspace == backup))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -413,6 +412,14 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
         Ok(None)
     }
 }
+
+/// Platform capability name recorded in the backup-isolation status.
+#[cfg(unix)]
+const ISOLATION_MEASUREMENT: &str = "filesystem_device_id";
+#[cfg(windows)]
+const ISOLATION_MEASUREMENT: &str = "windows_volume_prefix";
+#[cfg(not(any(unix, windows)))]
+const ISOLATION_MEASUREMENT: &str = "unsupported_platform";
 
 pub fn backup_isolation_status(
     data_dir: &Path,
@@ -447,13 +454,7 @@ pub fn backup_isolation_status(
         configured: true,
         destination_exists: true,
         distinct_failure_domain: same.map(|value| !value),
-        measurement: if cfg!(unix) {
-            "filesystem_device_id"
-        } else if cfg!(windows) {
-            "windows_volume_prefix"
-        } else {
-            "unsupported_platform"
-        },
+        measurement: ISOLATION_MEASUREMENT,
     })
 }
 
@@ -2045,5 +2046,100 @@ mod tests {
             !target.join(DATABASE_NAME).exists(),
             "the rejected recovery must not install anything"
         );
+    }
+
+    /// Why: `read_small` is the size gate for vault identifiers and manifests;
+    /// an oversized input must be refused with the offending path so operators
+    /// can find it, and only inputs within the limit may be returned.
+    #[test]
+    fn read_small_refuses_oversized_inputs_and_names_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big");
+        fs::write(&path, vec![0u8; 64]).unwrap();
+        let error = read_small(&path, 32).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds size limit"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(read_small(&path, 64).unwrap().len(), 64);
+    }
+
+    /// Why: a failed restore must never leave a fresh workspace looking
+    /// authentic; the vault identifier minted for the attempt is rolled back
+    /// together with the error, so no half-restored identity can hold a key.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn failed_restore_rolls_back_the_minted_vault_identifier() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, _vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        drop(store);
+        let _cleanup = CredentialCleanup(id.clone());
+
+        // Mint the OS credential for the bundle's vault identifier from an
+        // unrelated decoy key so the target workspace's vault opens but cannot
+        // authenticate the backup database.
+        let decoy = root.path().join("decoy");
+        private_dir(&decoy).unwrap();
+        write_new_private(&decoy.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        Vault::random().install_os_key_if_missing(&decoy).unwrap();
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        let error = restore_backup(&target, &backup).expect_err("mismatched key must abort");
+        assert!(
+            error.to_string().contains("Cannot decrypt record"),
+            "unexpected error: {error}"
+        );
+        assert!(!target.join(VAULT_ID_NAME).exists());
+        assert!(!target.join(DATABASE_NAME).exists());
+    }
+
+    /// Why: portable recovery must fail closed on a corrupt OS credential —
+    /// it neither overwrites the credential nor leaves a minted vault
+    /// identifier behind that could later masquerade as an authentic workspace.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn corrupt_os_credential_aborts_recovery_and_rolls_back_the_vault_id() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        drop(store);
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+
+        // A credential that is not a valid stored key makes vault opening fail
+        // and the guarded install refuse to overwrite it.
+        keyring::Entry::new("rejection-rejector.v1", &id)
+            .unwrap()
+            .set_password("corrupt-credential-payload")
+            .unwrap();
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        let error = recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase)
+            .expect_err("a corrupt OS credential must abort the recovery");
+        assert!(
+            error.to_string().contains("refusing to overwrite"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !target.join(VAULT_ID_NAME).exists(),
+            "the minted vault identifier must be rolled back"
+        );
+        assert!(!target.join(DATABASE_NAME).exists());
     }
 }

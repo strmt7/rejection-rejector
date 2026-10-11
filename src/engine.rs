@@ -447,6 +447,12 @@ impl Engine {
     pub fn send_scope(&self) -> bool {
         self.gmail.as_ref().is_some_and(Gmail::can_send)
     }
+    /// Test-only: publish a provider client into the engine without OAuth so
+    /// dispatch orchestration can run against `Gmail::with_endpoints` mocks.
+    #[cfg(test)]
+    pub(crate) fn attach_gmail_for_tests(&mut self, gmail: Gmail) {
+        self.gmail = Some(gmail);
+    }
     pub fn enterprise_policy_status(&self) -> PolicyStatus {
         self.enterprise_policy
             .as_ref()
@@ -2036,5 +2042,437 @@ mod send_gate_tests {
         let mut job = job_with_draft();
         job.state = JobState::Sent;
         assert!(!send_gate_eligible(&job, &ctx("exact")));
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use crate::config::DEFAULT_VERIFIER_MODEL;
+    use crate::test_support::{MockServer, draft_body, gmail_email, verified_analysis};
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    fn demo(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn live(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    struct Cleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    fn verdict_content() -> Value {
+        json!({"category":"rejection","confidence":99,
+            "evidence":"We have decided not to move forward with your application.",
+            "explanation":"Explicit negative hiring decision","company":"","position":"","language":"en"})
+    }
+
+    fn verification_content() -> Value {
+        json!({"genuine_rejection":true,"claims_supported":true,"professional":true,
+            "injection_free":true,"purpose_aligned":true,"reason":"Synthetic verification result"})
+    }
+
+    /// Scriptable local runtime whose loaded-model state follows the wire
+    /// protocol, so `/api/ps` answers residency like the real daemon.
+    fn runtime(cpu_only_from_call: usize) -> MockServer {
+        let loaded: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let state = loaded.clone();
+        let ps_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        MockServer::new(move |route, body| {
+            let body = body.unwrap_or(json!({}));
+            let model = body["model"].as_str().unwrap_or("").to_owned();
+            match route {
+                "/api/version" => Some(json!({"version": "0.35.1"})),
+                "/api/tags" => Some(json!({"models": [
+                    {"name": crate::config::DEFAULT_MODEL, "digest": "a".repeat(64), "size": 7_200_000_000u64},
+                    {"name": DEFAULT_VERIFIER_MODEL, "digest": "b".repeat(64), "size": 7_200_000_000u64}
+                ]})),
+                "/api/show" => Some(json!({"details":{"format":"gguf"},
+                    "model_info":{"general.architecture":"gemma4"},
+                    "capabilities":["completion","thinking"]})),
+                "/api/ps" => {
+                    let n = ps_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let current = state.lock().unwrap().clone();
+                    Some(match current {
+                        Some(name) => json!({"models": [{
+                            "name": name,
+                            "digest": if name == DEFAULT_VERIFIER_MODEL { "b".repeat(64) } else { "a".repeat(64) },
+                            "size": 7_200_000_000u64,
+                            "size_vram": if n >= cpu_only_from_call { 1_000_000_000u64 } else { 7_200_000_000u64 },
+                            "context_length": 32768u32
+                        }]}),
+                        None => json!({"models": []}),
+                    })
+                }
+                "/api/generate" => {
+                    if body["keep_alive"] == json!(0) {
+                        *state.lock().unwrap() = None;
+                    } else {
+                        *state.lock().unwrap() = Some(model);
+                    }
+                    Some(json!({"done":true,"prompt_eval_count":4,"eval_count":1}))
+                }
+                "/api/chat" => {
+                    *state.lock().unwrap() = Some(model);
+                    let payload: Value = serde_json::from_str(
+                        body["messages"][1]["content"].as_str().unwrap_or("{}"),
+                    )
+                    .unwrap_or(json!({}));
+                    let content = if payload.get("proposed_reply").is_some() {
+                        verification_content()
+                    } else if payload.get("tone").is_some() {
+                        json!({"body": draft_body("Test Applicant")})
+                    } else {
+                        verdict_content()
+                    };
+                    Some(
+                        json!({"model":"m","message":{"role":"assistant","content":content.to_string()},
+                        "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                    )
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// The automatic-policy block codes are the operator-facing contract; each
+    /// gate must name the specific reason dispatch is held.
+    #[test]
+    fn automatic_policy_reports_stable_block_codes() {
+        let mut settings = Settings::default();
+        crate::test_support::arm_automatic(&mut settings);
+        let now = Utc::now();
+        let account = "applicant@example.invalid";
+        let email = gmail_email(
+            account,
+            1,
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        let body = draft_body(&settings.signature);
+
+        // Missing analysis, then missing draft, are distinct early blocks.
+        let mut job = Job::new(email.stub.clone(), now);
+        job.email = Some(email.clone());
+        let decision = automatic_policy(&job, &settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::LocalAnalysisMissing)
+        );
+        job.analysis = Some(verified_analysis(&settings, &email, &body));
+        let decision = automatic_policy(&job, &settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::DraftMissing)
+        );
+
+        // Original content loss is its own early block.
+        let bare = Job::new(email.stub.clone(), now);
+        let decision = automatic_policy(&bare, &settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::OriginalEmailMissing)
+        );
+
+        // A reviewable-but-not-Ready rejection is held as low-confidence.
+        job.draft = Some(Draft {
+            body: body.clone(),
+            origin: "ollama-v1".into(),
+        });
+        job.drafted_at = Some(now - chrono::Duration::hours(1));
+        job.state = JobState::Attention;
+        let decision = automatic_policy(&job, &settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::NotHighConfidenceRejection)
+        );
+        job.state = JobState::Ready;
+
+        // Escalating drafts are held even when everything else is current.
+        let hostile = "I will sue you unless you explain your assessment criteria for this advertised position in full detail and provide every note from every interview stage and the complete scoring sheet you used.\n\nRegards,\nTest Applicant";
+        job.draft = Some(Draft {
+            body: hostile.into(),
+            origin: "ollama-v1".into(),
+        });
+        job.analysis = Some(verified_analysis(&settings, &email, hostile));
+        let decision = automatic_policy(&job, &settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::DraftEscalationOrLink)
+        );
+        job.draft = Some(Draft {
+            body: body.clone(),
+            origin: "ollama-v1".into(),
+        });
+        job.analysis = Some(verified_analysis(&settings, &email, &body));
+
+        // Stale independent-verifier provenance blocks under the stale
+        // analysis-identity code.
+        let mut verifier_settings = settings.clone();
+        verifier_settings.independent_verifier_enabled = true;
+        verifier_settings.verifier_model = DEFAULT_VERIFIER_MODEL.into();
+        verifier_settings.verifier_model_digest = Some("b".repeat(64));
+        let decision = automatic_policy(&job, &verifier_settings, account, now);
+        assert!(
+            decision
+                .blocks
+                .iter()
+                .any(|b| b.code == AutomaticPolicyCode::AnalysisIdentityStale)
+        );
+    }
+
+    /// Settings changes must revalidate every send gate and disarm unattended
+    /// delivery whenever the model or task context moves.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn update_settings_revalidates_and_disarms_on_context_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+
+        let mut rejected = e.settings.clone();
+        rejected.api_allow_writes = true;
+        assert!(e.update_settings(rejected).is_err());
+
+        // Enabling delivery without send scope is refused.
+        let mut send = e.settings.clone();
+        send.sending_enabled = true;
+        let error = e.update_settings(send).unwrap_err().to_string();
+        assert!(
+            error.contains("Reconnect Gmail"),
+            "unexpected error: {error}"
+        );
+
+        // Entering Automatic records the enrollment time once every gate
+        // passes; leaving Automatic clears the consent again.
+        let server = crate::test_support::MockServer::new(|_, _| None);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &server.url,
+            &server.url,
+        ));
+        e.settings.model_digest = Some("a".repeat(64));
+        e.settings.task_qualification = Some(TaskQualification {
+            model: e.settings.model.clone(),
+            digest: "a".repeat(64),
+            prompt_version: PROMPT_VERSION.into(),
+            context_hash: crate::config::settings_context_hash(&e.settings),
+            suite_hash: crate::config::evaluation_suite_hash(),
+            ollama_runtime_version: "0.35.1".into(),
+            task_score: 96.0,
+            fixture_count: 40,
+            qualified_at: Utc::now(),
+        });
+        let mut automatic = e.settings.clone();
+        automatic.mode = Mode::Automatic;
+        automatic.automatic_confirmed = true;
+        automatic.sending_enabled = true;
+        e.update_settings(automatic).unwrap();
+        assert_eq!(e.settings.mode, Mode::Automatic);
+        assert!(e.settings.automatic_since.is_some());
+        let mut manual = e.settings.clone();
+        manual.mode = Mode::HumanReview;
+        e.update_settings(manual).unwrap();
+        assert!(!e.settings.automatic_confirmed);
+
+        // A model change drops the digest pin and any task qualification.
+        e.settings.model_digest = Some("a".repeat(64));
+        let mut changed = e.settings.clone();
+        changed.model = "other:model".into();
+        e.update_settings(changed).unwrap();
+        assert!(e.settings.model_digest.is_none());
+        assert!(e.settings.task_qualification.is_none());
+
+        // An unrelated edit keeps the pin.
+        e.settings.model_digest = Some("a".repeat(64));
+        let mut unrelated = e.settings.clone();
+        unrelated.retention_days = 120;
+        e.update_settings(unrelated).unwrap();
+        assert_eq!(
+            e.settings.model_digest.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+
+        // A tightened age window defers review items outside it.
+        e.account = "applicant@example.invalid".into();
+        let mut job = seed_ready_job(&mut e, 9, Utc::now());
+        job.email.as_mut().unwrap().received_at = Utc::now() - chrono::Duration::days(20);
+        e.db.save(&mut job, "test.age", "aged").unwrap();
+        let mut tightened = e.settings.clone();
+        tightened.lookback_days = 1;
+        tightened.candidate_context = "changed".into();
+        e.update_settings(tightened).unwrap();
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Deferred);
+    }
+
+    /// Seed a Ready job with a complete, verified analysis payload.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn seed_ready_job(e: &mut Engine, n: u64, now: DateTime<Utc>) -> Job {
+        let account = e.account.clone();
+        let email = gmail_email(
+            &account,
+            n,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let body = draft_body(&e.settings.signature);
+        let mut job = Job::new(email.stub.clone(), now);
+        job.analysis = Some(verified_analysis(&e.settings, &email, &body));
+        job.email = Some(email);
+        job.draft = Some(Draft {
+            body,
+            origin: "ollama-v1".into(),
+        });
+        job.drafted_at = Some(now - chrono::Duration::hours(1));
+        job.state = JobState::Ready;
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+        job
+    }
+
+    /// Model qualification and status flows must pin digests and surface
+    /// stale pins instead of silently continuing with changed weights.
+    #[test]
+    fn model_status_and_qualification_track_the_local_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = demo(dir.path());
+        let server = runtime(usize::MAX);
+        e.settings.ollama_url = server.url.clone();
+        e.settings.signature = "Test Applicant".into();
+
+        // Qualify pins the digest and keeps unattended delivery disabled.
+        e.qualify().unwrap();
+        assert_eq!(
+            e.settings.model_digest.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(e.settings.task_qualification.is_none());
+
+        // The pinned model reports full residency; a changed install is stale.
+        e.inspect_model_status().unwrap();
+        assert!(e.model.gpu_resident);
+        e.settings.model_digest = Some("c".repeat(64));
+        e.inspect_model_status().unwrap();
+        assert!(!e.model.gpu_resident);
+        assert!(e.model.message.contains("qualify again"));
+
+        // Verifier status follows the same pin semantics.
+        e.settings.model = DEFAULT_VERIFIER_MODEL.into();
+        e.settings.model_digest = None;
+        e.inspect_verifier_model_status().unwrap();
+        assert_eq!(e.verifier_model.digest, "b".repeat(64));
+        e.settings.verifier_model = DEFAULT_VERIFIER_MODEL.into();
+        e.settings.verifier_model_digest = Some("c".repeat(64));
+        e.inspect_verifier_model_status().unwrap();
+        assert!(!e.verifier_model.gpu_resident);
+        assert!(e.verifier_model.message.contains("qualify again"));
+    }
+
+    /// Automatic dispatch drives the full send gate for a qualified queue and
+    /// holds (never silently skips) the message when a gate fails.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn automatic_tick_dispatches_and_holds_on_preflight_failures() {
+        use crate::test_support::eligible_job;
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        crate::test_support::arm_automatic(&mut e.settings);
+        let server = runtime(usize::MAX);
+        e.settings.ollama_url = server.url.clone();
+        e.account = "applicant@example.invalid".into();
+
+        let now = Utc::now();
+        let job = eligible_job(&e.settings, &e.account, 1, now);
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        let mut job = job;
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+
+        // Without a provider client the dispatch is held for review.
+        let error = e.automatic_tick().unwrap_err().to_string();
+        assert!(error.contains("Gmail"), "unexpected error: {error}");
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Attention);
+        assert!(
+            after
+                .flags
+                .iter()
+                .any(|f| f.contains("Automatic dispatch held"))
+        );
+    }
+
+    /// Manual dispatch enforces the human-review pipeline end to end and maps
+    /// every provider outcome onto the durable delivery state machine.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn manual_send_walks_the_durable_state_machine() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let now = Utc::now();
+        let job = seed_ready_job(&mut e, 1, now);
+
+        // A demo-less engine without a provider refuses cleanly.
+        let error = e
+            .send(
+                &job.id,
+                job.revision,
+                &hash(&job.draft.as_ref().unwrap().body),
+                false,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Gmail"), "unexpected error: {error}");
+
+        // Wrong approval hashes and stale revisions never reach the provider.
+        let error = e
+            .send(&job.id, job.revision, "bad-hash", false)
+            .unwrap_err();
+        assert!(error.to_string().contains("Reply changed"));
+        let error = e.send(&job.id, job.revision + 3, "bad", false).unwrap_err();
+        assert!(error.to_string().contains("stale"));
     }
 }

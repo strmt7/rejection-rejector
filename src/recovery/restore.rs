@@ -28,6 +28,51 @@ fn rollback_files(moved: &[(PathBuf, PathBuf)]) -> Result<()> {
     Ok(())
 }
 
+/// Test-only fault seam for the post-install validation step.
+///
+/// The post-install rollback path protects a candidate image that verifies in
+/// staging but fails to reopen after installation. No natural input reaches it
+/// (every image is checksummed and re-verified before the first rename), so
+/// tests inject the failure here and assert the quarantine/rollback behavior.
+#[cfg(test)]
+pub(crate) mod failpoints {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL_POST_INSTALL_VALIDATION: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Run `body` with the post-install validation forced to fail on this thread.
+    pub(crate) fn with_post_install_validation_failure<T>(body: impl FnOnce() -> T) -> T {
+        FAIL_POST_INSTALL_VALIDATION.with(|flag| flag.set(true));
+        let result = body();
+        FAIL_POST_INSTALL_VALIDATION.with(|flag| flag.set(false));
+        result
+    }
+
+    /// Whether the post-install validation must fail on this thread.
+    pub(crate) fn post_install_validation_failing() -> bool {
+        FAIL_POST_INSTALL_VALIDATION.with(|flag| flag.get())
+    }
+}
+
+/// Persist the optional restore report next to the rollback material.
+///
+/// Inputs: `rollback_dir` — recovery directory for this restore; `report` —
+/// report to persist. Output: none; a write failure is appended to
+/// `report.note` so the restore itself still succeeds with full disclosure.
+fn write_optional_restore_report(rollback_dir: &Path, report: &mut RestoreReport) {
+    let report_path = rollback_dir.join("restore-report.json");
+    if let Err(error) = serde_json::to_vec_pretty(report)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| write_new_private(&report_path, &bytes))
+    {
+        report.note.push_str(&format!(
+            " The optional local restore-report file could not be written: {error}"
+        ));
+    }
+}
+
 pub(super) fn restore_backup_with_vault(
     data_dir: &Path,
     backup_dir: &Path,
@@ -150,6 +195,11 @@ pub(super) fn restore_backup_with_vault(
     }
 
     let final_validation = (|| -> Result<()> {
+        #[cfg(test)]
+        ensure!(
+            !failpoints::post_install_validation_failing(),
+            "Injected post-install validation failure"
+        );
         let restored = Store::open(&live, vault.clone())?;
         restored.integrity_check()?;
         let verification = restored.verify_backup_file(&live)?;
@@ -204,15 +254,7 @@ pub(super) fn restore_backup_with_vault(
         }),
         note: "Restore completed after original-image authentication, isolated migration and post-install verification. Previous database files are retained under the recovery directory when present; delivery must be reauthorized.".into(),
     };
-    let report_path = rollback_dir.join("restore-report.json");
-    if let Err(error) = serde_json::to_vec_pretty(&report)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| write_new_private(&report_path, &bytes))
-    {
-        report.note.push_str(&format!(
-            " The optional local restore-report file could not be written: {error}"
-        ));
-    }
+    write_optional_restore_report(&rollback_dir, &mut report);
     Ok(report)
 }
 
@@ -358,5 +400,125 @@ mod tests {
         assert_eq!(fs::read(&original).unwrap(), b"previous state");
         assert!(rollback_files(&[(original.clone(), saved)]).is_err());
         assert_eq!(fs::read(&original).unwrap(), b"previous state");
+    }
+
+    #[test]
+    fn regular_or_absent_only_accepts_missing_or_regular_files() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"x").unwrap();
+        regular_or_absent(&file).unwrap();
+        regular_or_absent(&root.path().join("missing")).unwrap();
+    }
+
+    /// A lookup failure other than "not found" must not be treated as absence,
+    /// or an unreadable live sidecar could silently vanish from the pre-move
+    /// validation and be left behind while the database is replaced.
+    #[cfg(unix)]
+    #[test]
+    fn io_errors_below_a_regular_file_are_not_treated_as_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(regular_or_absent(&file.join("child")).is_err());
+    }
+
+    /// Same contract as the unix case: a live entry whose metadata cannot even
+    /// be queried (invalid Win32 name) aborts the restore instead of being
+    /// skipped as absent.
+    #[cfg(windows)]
+    #[test]
+    fn unqueryable_live_names_are_not_treated_as_absent() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(regular_or_absent(&root.path().join("inva*lid")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refused_sidecar_rename_rolls_back_the_moved_live_database() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (data, backup, vault, manifest) = fixture(root.path());
+        let wal = data.join(format!("{DATABASE_NAME}-wal"));
+        fs::write(&wal, b"stale wal").unwrap();
+        let before = fs::read(data.join(DATABASE_NAME)).unwrap();
+
+        // Deny delete sharing on the sidecar: metadata validation still sees a
+        // regular file, but the OS must refuse the rename into the rollback
+        // directory mid-install, forcing the rollback of the moved database.
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2) // FILE_SHARE_READ | FILE_SHARE_WRITE, deny delete
+            .open(&wal)
+            .unwrap();
+        let error = restore_backup_with_vault(&data, &backup, &manifest, vault)
+            .expect_err("a refused sidecar rename must abort the restore");
+        assert!(
+            error.to_string().contains("Restore installation failed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(data.join(DATABASE_NAME)).unwrap(), before);
+        assert_eq!(fs::read(&wal).unwrap(), b"stale wal");
+        assert_no_staging(&data);
+        crate::session::ensure_restore_complete(&data).unwrap();
+        drop(locked);
+    }
+
+    #[test]
+    fn failed_post_install_validation_quarantines_and_rolls_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, backup, vault, manifest) = fixture(root.path());
+        let before = fs::read(data.join(DATABASE_NAME)).unwrap();
+
+        let error = failpoints::with_post_install_validation_failure(|| {
+            restore_backup_with_vault(&data, &backup, &manifest, vault)
+        })
+        .expect_err("the injected validation failure must abort the restore");
+        assert!(
+            error.to_string().contains("Restore validation failed"),
+            "unexpected error: {error}"
+        );
+        // The failed restored image is quarantined so its leftover state can
+        // never overwrite the originals, and the originals are back in place.
+        assert_eq!(fs::read(data.join(DATABASE_NAME)).unwrap(), before);
+        let recovery = data.join("recovery");
+        let quarantined = std::fs::read_dir(&recovery)
+            .unwrap()
+            .filter(std::result::Result::is_ok)
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_dir())
+            .any(|dir| {
+                dir.join("failed-restored-image")
+                    .join(DATABASE_NAME)
+                    .exists()
+            });
+        assert!(quarantined, "failed restored image must be quarantined");
+        assert_no_staging(&data);
+        crate::session::ensure_restore_complete(&data).unwrap();
+    }
+
+    #[test]
+    fn restore_report_write_failure_is_disclosed_in_the_note() {
+        let root = tempfile::tempdir().unwrap();
+        // A regular file where the report's parent directory must be makes the
+        // optional report write fail; the restore result must disclose it.
+        let blocked = root.path().join("not-a-directory");
+        fs::write(&blocked, b"x").unwrap();
+        let mut report = RestoreReport {
+            format_version: 1,
+            restored_at: Utc::now(),
+            source_backup_created_at: Utc::now(),
+            source_database_sha256: "a".repeat(64),
+            source_audit_head: "b".repeat(64),
+            restored_schema_version: 5,
+            rollback_directory: None,
+            note: "base note".into(),
+        };
+        write_optional_restore_report(&blocked, &mut report);
+        assert!(
+            report.note.contains("could not be written"),
+            "note: {}",
+            report.note
+        );
     }
 }

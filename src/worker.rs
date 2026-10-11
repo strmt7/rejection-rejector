@@ -525,6 +525,22 @@ fn record_current_operation(journal: &Option<RuntimeJournal>, shared: &Arc<Mutex
     }
 }
 
+/// Run the Ollama installer for `Command::InstallOllama`.
+///
+/// Tests substitute a stand-in through
+/// `crate::test_support::with_installer` so the dispatch arm can be
+/// exercised without spawning the real installer, which prompts for
+/// elevation on the host.
+fn install_ollama() -> anyhow::Result<()> {
+    #[cfg(test)]
+    {
+        if let Some(runner) = crate::test_support::installer_override() {
+            return runner();
+        }
+    }
+    ollama::install()
+}
+
 fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
     pulse.progress();
     if let Ok(mut s) = shared.lock() {
@@ -901,10 +917,24 @@ fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> Opera
 }
 
 fn protect_audit_boundary<T>(engine: &Engine, result: Result<T>) -> Result<T> {
-    match engine.checkpoint_audit_protection() {
+    protect_audit_boundary_with(&engine.paused, result, engine.checkpoint_audit_protection())
+}
+
+/// Combine an operation result with a protected-audit checkpoint outcome.
+///
+/// Inputs: `paused` — fail-closed worker pause flag; `result` — operation
+/// outcome; `checkpoint` — protected-audit checkpoint outcome. Output: the
+/// operation result when the checkpoint succeeded; otherwise an error that
+/// names both failures and pauses the worker fail-closed.
+fn protect_audit_boundary_with<T>(
+    paused: &AtomicBool,
+    result: Result<T>,
+    checkpoint: Result<()>,
+) -> Result<T> {
+    match checkpoint {
         Ok(()) => result,
         Err(anchor_error) => {
-            engine.paused.store(true, Ordering::SeqCst);
+            paused.store(true, Ordering::SeqCst);
             match result {
                 Ok(_) => Err(anchor_error
                     .context("OS-protected audit checkpoint failed; worker paused fail-closed")),
@@ -1099,7 +1129,7 @@ fn run(
                             &pulse,
                             "Running the Ollama installer. Approve its Windows prompts.",
                         );
-                        ollama::install()
+                        install_ollama()
                     }
                     Command::StartOllama => Ollama::new(&e.settings).and_then(|o| o.start()),
                     Command::PullModel => {
@@ -1284,9 +1314,11 @@ fn run(
                     }
                     Command::Reconcile(id) => e.reconcile(&id),
                     Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
-                    Command::RevealApiToken => anyhow::bail!(
+                    // A rejected reveal is a typed operation failure, never a
+                    // reason to tear down the whole background worker.
+                    Command::RevealApiToken => Err(anyhow::anyhow!(
                         "Existing API credentials are intentionally non-recoverable. Rotate the API token to receive a new plaintext credential once."
-                    ),
+                    )),
                     Command::HideApiToken => {
                         if let Ok(mut s) = shared.lock() {
                             s.api_token = None;
@@ -2386,6 +2418,676 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+
         assert!(worker.shutdown(Duration::from_secs(2)));
+    }
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    use super::*;
+    use crate::engine::Engine;
+    use crate::gmail::{FetchFailure, FetchFailureKind};
+    use crate::test_support::MockServer;
+    use crate::web::{AutomaticArmAction, WriteRequest};
+    use std::sync::atomic::AtomicBool;
+
+    fn demo_engine(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    fn ctx<'a>(
+        shared: &'a Arc<Mutex<Snapshot>>,
+        pulse: &'a WorkerPulse,
+        journal: &'a Option<RuntimeJournal>,
+    ) -> WriteContext<'a> {
+        WriteContext {
+            shared,
+            pulse,
+            journal,
+            selected: None,
+            review: true,
+            page: 0,
+        }
+    }
+
+    /// The lifecycle helpers must publish one consistent typed operation
+    /// status so every surface (desktop, terminal, web) reports identically.
+    #[test]
+    fn operation_lifecycle_helpers_publish_typed_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::new();
+        assert_eq!(
+            WorkerPulse::default().snapshot(Utc::now()).schema_version,
+            1
+        );
+        pulse.progress();
+
+        begin_operation(&shared, &pulse, OperationKind::Refresh, "Working locally…");
+        busy(&shared, &pulse, "Halfway there…");
+        {
+            let snapshot = shared.lock().unwrap();
+            assert_eq!(snapshot.busy, "Halfway there…");
+            assert_eq!(snapshot.operation.state, OperationState::Running);
+            assert_eq!(snapshot.operation.message, "Halfway there…");
+        }
+        assert_eq!(current_operation(&shared).kind, OperationKind::Refresh);
+
+        let journal = RuntimeJournal::open(dir.path()).ok();
+        record_current_operation(&journal, &shared);
+        record_current_operation(&None, &shared);
+
+        report(&shared, &pulse, OperationKind::Refresh, &Ok(()));
+        {
+            let snapshot = shared.lock().unwrap();
+            assert_eq!(snapshot.operation.state, OperationState::Succeeded);
+            assert!(snapshot.busy.is_empty());
+        }
+
+        report(
+            &shared,
+            &pulse,
+            OperationKind::Refresh,
+            &Err(anyhow::anyhow!("synthetic failure")),
+        );
+        {
+            let snapshot = shared.lock().unwrap();
+            assert_eq!(snapshot.operation.state, OperationState::Failed);
+            assert!(snapshot.error.contains("synthetic failure"));
+            assert!(snapshot.notice.is_empty());
+        }
+
+        report_silent_success(
+            &shared,
+            &pulse,
+            OperationKind::ReconcileDelivery,
+            "quiet success",
+        );
+        {
+            let snapshot = shared.lock().unwrap();
+            assert_eq!(snapshot.operation.state, OperationState::Succeeded);
+            assert_eq!(snapshot.operation.message, "quiet success");
+        }
+    }
+
+    /// A poisoned snapshot lock must degrade to the default liveness record
+    /// instead of panicking across the worker boundary.
+    #[test]
+    fn poisoned_pulse_reports_the_unresponsive_default() {
+        let pulse = WorkerPulse::new();
+        let inner = pulse.inner.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = inner.lock().unwrap();
+            panic!("poison the pulse state");
+        });
+        let _ = handle.join();
+        let liveness = pulse.snapshot(Utc::now());
+        assert!(!liveness.worker_responsive);
+        assert_eq!(liveness.progress_age_seconds, 0);
+    }
+
+    #[test]
+    fn classify_operation_failure_maps_gmail_fetch_failures() {
+        let infrastructure = anyhow::Error::new(FetchFailure {
+            kind: FetchFailureKind::Infrastructure,
+            message: "transport".into(),
+        });
+        assert_eq!(
+            classify_operation_failure(OperationKind::Refresh, &infrastructure),
+            ("retryable_gmail_fetch".into(), true)
+        );
+        let malformed = anyhow::Error::new(FetchFailure {
+            kind: FetchFailureKind::MalformedMessage,
+            message: "bad message".into(),
+        });
+        assert_eq!(
+            classify_operation_failure(OperationKind::Refresh, &malformed),
+            ("review_required_malformed_message".into(), false)
+        );
+    }
+
+    #[test]
+    fn engine_write_errors_keep_the_retry_semantics() {
+        let retryable = anyhow::Error::new(crate::engine::DispatchFailure::retryable("later"));
+        let error = engine_write_error(OperationKind::SendReply, &retryable);
+        assert_eq!(error.status, 503);
+        assert!(error.retryable);
+        let rejected = anyhow::Error::new(crate::engine::DispatchFailure::review("blocked"));
+        let error = engine_write_error(OperationKind::SendReply, &rejected);
+        assert_eq!(error.status, 409);
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn protected_audit_failure_pauses_the_worker_fail_closed() {
+        let paused = AtomicBool::new(false);
+        let result: Result<()> = Ok(());
+        let checked =
+            protect_audit_boundary_with(&paused, result, Err(anyhow::anyhow!("anchor down")));
+        assert!(checked.is_err());
+        assert!(
+            checked.unwrap_err().to_string().contains("worker paused"),
+            "error must name the fail-closed pause"
+        );
+        assert!(paused.load(Ordering::SeqCst));
+
+        // Both failures are reported together so neither is masked.
+        let checked: Result<()> = protect_audit_boundary_with(
+            &AtomicBool::new(false),
+            Err(anyhow::anyhow!("operation broke")),
+            Err(anyhow::anyhow!("anchor down")),
+        );
+        let message = checked.unwrap_err().to_string();
+        assert!(message.contains("operation broke"), "{message}");
+        assert!(message.contains("anchor down"), "{message}");
+
+        // A healthy checkpoint passes the operation result through.
+        let checked = protect_audit_boundary_with(&AtomicBool::new(false), Ok(7), Ok(()));
+        assert_eq!(checked.unwrap(), 7);
+    }
+
+    #[test]
+    fn circuit_transitions_are_journaled_only_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(dir.path()).ok();
+        record_circuit_transition(
+            &journal,
+            CircuitTransition::Opened,
+            RuntimeSignal::GmailCircuitOpened,
+            RuntimeSignal::GmailCircuitClosed,
+        );
+        record_circuit_transition(
+            &journal,
+            CircuitTransition::Closed,
+            RuntimeSignal::GmailCircuitOpened,
+            RuntimeSignal::GmailCircuitClosed,
+        );
+        record_circuit_transition(
+            &journal,
+            CircuitTransition::None,
+            RuntimeSignal::GmailCircuitOpened,
+            RuntimeSignal::GmailCircuitClosed,
+        );
+        record_circuit_transition(
+            &None,
+            CircuitTransition::Opened,
+            RuntimeSignal::LocalAiCircuitOpened,
+            RuntimeSignal::LocalAiCircuitClosed,
+        );
+    }
+
+    #[test]
+    fn api_write_surface_runs_the_shared_write_machinery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = demo_engine(dir.path());
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::new();
+        let journal = RuntimeJournal::open(dir.path()).ok();
+        let context = ctx(&shared, &pulse, &journal);
+        let mut gate: Option<AutomaticArmGate> = None;
+        let items = e.db.list(&e.account, true, 0, 25).unwrap();
+        let id = items[0].id.clone();
+        let revision = items[0].revision;
+
+        // Unknown ids come back typed without recording an operation.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::EditDraft {
+                id: "00".repeat(32),
+                revision,
+                body: "Please explain the specific criteria used.".into(),
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 404);
+        assert_eq!(outcome.body["code"], web::CODE_ITEM_NOT_FOUND);
+
+        // A stale revision is refused by the shared edit gate.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::EditDraft {
+                id: id.clone(),
+                revision: revision + 5,
+                body: "Please explain the specific criteria used.".into(),
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 409);
+
+        // A valid edit runs the begin/report/refresh machinery end to end.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::EditDraft {
+                id: id.clone(),
+                revision,
+                body: "Please explain the specific criteria used.".into(),
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200);
+
+        // Demo regeneration is refused and reported as a typed failure.
+        let job = e.owned(&id).unwrap();
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Regenerate {
+                id: id.clone(),
+                revision: job.revision,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 409);
+
+        // Dismissal succeeds and records the operation.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Dismiss {
+                id: id.clone(),
+                revision: job.revision,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200);
+
+        // Send rejects unknown ids before touching anything.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Send {
+                id: "11".repeat(32),
+                revision: 0,
+                confirm_reply: "x".into(),
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 404);
+
+        // The automatic-arm flow opens, cancels and confirms through the gate.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Open,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200);
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Cancel,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200);
+        // Confirming without an open gate is typed, not executed.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Confirm,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 409);
+    }
+
+    /// The web confirm path must only arm Automatic after the cooldown and a
+    /// configuration that passes every send gate.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn automatic_arm_confirm_only_arms_a_qualified_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        // A real (non-demo) workspace: demo mode can never enable sending.
+        let mut e = Engine::open(
+            dir.path().to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let _cleanup = CredentialCleanup(crate::vault::vault_id(dir.path()).unwrap());
+        // Arm the engine as a qualified Automatic workspace with send scope.
+        crate::test_support::arm_automatic(&mut e.settings);
+        let server = MockServer::new(|_, _| None);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &server.url,
+            &server.url,
+        ));
+        e.db.set_meta("settings", &e.settings).unwrap();
+
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::new();
+        let journal = RuntimeJournal::open(dir.path()).ok();
+        let context = ctx(&shared, &pulse, &journal);
+        // A gate whose cooldown elapsed long ago may be confirmed now.
+        let mut gate = Some(AutomaticArmGate::open(
+            Utc::now() - chrono::Duration::seconds(3600),
+        ));
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Confirm,
+            },
+            &mut gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200, "body: {}", outcome.body);
+        assert!(gate.is_none(), "the confirmed gate must be consumed");
+        assert_eq!(e.settings.mode, crate::config::Mode::Automatic);
+    }
+
+    /// Every command the dispatch loop recognizes must route to its engine
+    /// operation (or stable refusal) without ever stalling or crashing the
+    /// worker. The model commands run against a scriptable local runtime and
+    /// the installer against an injected runner.
+    #[test]
+    fn dispatch_loop_executes_every_command_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = Worker::spawn(dir.path().into(), true);
+        let start = Instant::now();
+        while !worker.view().initialized {
+            assert!(!worker.view().fatal, "{}", worker.view().error);
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "worker did not initialize"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let runtime = crate::test_support::MockServer::new(|route, _| match route {
+            "/api/version" => Some(serde_json::json!({"version": "0.35.1"})),
+            "/api/pull" => Some(serde_json::json!({"status": "success"})),
+            _ => None,
+        });
+
+        let mut settings = worker.view().settings;
+        settings.ollama_url = runtime.url.clone();
+        settings.signature = "Test Applicant".into();
+        worker.command(Command::Settings(Box::new(settings)));
+
+        let items = worker.view().items.clone();
+        let (id, revision) = (items[0].id.clone(), items[0].revision);
+
+        let commands = vec![
+            Command::Refresh,
+            Command::CheckNow,
+            Command::List {
+                review: true,
+                page: 0,
+            },
+            Command::Select(id.clone()),
+            Command::Edit {
+                id: id.clone(),
+                revision,
+                body: "Please explain the specific criteria used.".into(),
+            },
+            Command::Regenerate {
+                id: id.clone(),
+                revision,
+            },
+            Command::Dismiss {
+                id: id.clone(),
+                revision,
+            },
+            Command::Send {
+                id: id.clone(),
+                revision,
+                body_hash: "deadbeef".into(),
+            },
+            Command::Reconcile(id.clone()),
+            Command::Purge,
+            Command::IntegrityCheck,
+            Command::CompactDatabase,
+            Command::Backup {
+                out: dir.path().join("backup-out"),
+            },
+            Command::ExportRecoveryKey {
+                out: dir.path().join("recovery-key.json"),
+                passphrase: Zeroizing::new("correct horse battery staple".into()),
+            },
+            Command::VerifyRecoveryKey {
+                backup: dir.path().join("missing-backup"),
+                recovery_key: dir.path().join("missing-key"),
+                passphrase: Zeroizing::new("correct horse battery staple".into()),
+            },
+            Command::Diagnostics {
+                out: dir.path().join("diagnostics.json"),
+            },
+            Command::InspectModel,
+            Command::InspectVerifierModel,
+            Command::QualifyModel,
+            Command::QualifyVerifierModel,
+            Command::ProfileModel,
+            Command::CompareModels,
+            Command::PullModel,
+            Command::PullVerifierModel,
+            Command::StartOllama,
+            Command::RevealApiToken,
+            Command::HideApiToken,
+            Command::RotateApiToken,
+            Command::Disconnect,
+            Command::Connect {
+                path: dir.path().join("missing-oauth.json"),
+                send: false,
+            },
+        ];
+        for command in commands {
+            // Completion is detected by the operation id advancing: a plain
+            // state check would race ahead of the queue while a command is
+            // still pending and overflow the bounded channel.
+            let before = worker.view().operation.operation_id.clone();
+            worker.command(command);
+            let start = Instant::now();
+            loop {
+                let snapshot = worker.view();
+                assert!(!snapshot.fatal, "{}", snapshot.error);
+                if snapshot.operation.operation_id != before
+                    && snapshot.operation.state != OperationState::Running
+                    && snapshot.busy.is_empty()
+                {
+                    break;
+                }
+                assert!(
+                    start.elapsed() < Duration::from_secs(30),
+                    "command did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        // API relay commands answer on their reply channels.
+        let snapshot = worker.view();
+        assert!(
+            !snapshot.fatal,
+            "worker died before the API relay: {}",
+            snapshot.error
+        );
+        let (reply_tx, reply_rx) = bounded(1);
+        worker.command(Command::Api {
+            path: "/v1/health".into(),
+            reply: reply_tx,
+        });
+        assert!(reply_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+        let (reply_tx, reply_rx) = bounded(1);
+        worker.command(Command::OpenMetrics { reply: reply_tx });
+        assert!(reply_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+        let (reply_tx, reply_rx) = bounded(1);
+        worker.command(Command::ApiWrite {
+            request: WriteRequest::Dismiss {
+                id: id.clone(),
+                revision,
+            },
+            reply: reply_tx,
+        });
+        assert!(reply_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+
+        // The installer command routes through the injected runner so the
+        // dispatch arm runs without spawning the real installer.
+        fn no_install() -> Result<()> {
+            anyhow::bail!("installer disabled in tests")
+        }
+        crate::test_support::with_installer(no_install, || {
+            let before = worker.view().operation.operation_id.clone();
+            worker.command(Command::InstallOllama);
+            let start = Instant::now();
+            loop {
+                let snapshot = worker.view();
+                assert!(!snapshot.fatal, "{}", snapshot.error);
+                if snapshot.operation.operation_id != before
+                    && snapshot.operation.state != OperationState::Running
+                {
+                    assert!(
+                        snapshot.operation.state == OperationState::Failed,
+                        "unexpected install outcome: {:?}",
+                        snapshot.operation
+                    );
+                    break;
+                }
+                assert!(start.elapsed() < Duration::from_secs(10));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        assert!(worker.shutdown(Duration::from_secs(5)));
+    }
+
+    /// A queue that is full or disconnected must surface the transport state
+    /// instead of silently dropping commands.
+    #[test]
+    fn command_dispatch_reports_queue_pressure() {
+        let (tx, rx) = bounded(1);
+        let worker = Worker {
+            tx,
+            snapshot: Arc::new(Mutex::new(Snapshot::default())),
+            paused: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            pulse: WorkerPulse::new(),
+            join: None,
+        };
+        // A full queue reports pressure without disturbing running operations.
+        let _ = worker.tx.send(Command::Refresh);
+        worker.command(Command::CheckNow);
+        assert!(worker.view().error.contains("full"));
+        // A disconnected queue reports that distinctly.
+        drop(rx);
+        worker.command(Command::Refresh);
+        assert!(worker.view().error.contains("disconnected"));
+        assert_eq!(worker.view().operation.state, OperationState::Failed);
+    }
+
+    /// A worker whose workspace cannot open must publish the typed fatal
+    /// state and journal the startup failure instead of hanging silently.
+    #[test]
+    fn failed_workspace_open_publishes_the_fatal_state() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("vault-id"), b"not-a-uuid").unwrap();
+        let mut worker = Worker::spawn(dir.path().into(), false);
+        let start = Instant::now();
+        loop {
+            let snapshot = worker.view();
+            if snapshot.fatal {
+                assert!(!snapshot.error.is_empty());
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "worker did not report the fatal startup failure"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(worker.shutdown(Duration::from_secs(2)));
+    }
+
+    /// Recovery commands must round-trip on a real keyring-backed workspace:
+    /// backup, isolated drill, key export and key verification all succeed
+    /// without stalling the worker.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn recovery_commands_round_trip_on_a_real_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = Worker::spawn(dir.path().into(), false);
+        let start = Instant::now();
+        while !worker.view().initialized {
+            assert!(!worker.view().fatal, "{}", worker.view().error);
+            assert!(start.elapsed() < Duration::from_secs(10), "no init");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let vault_id = crate::vault::vault_id(dir.path()).unwrap();
+        let _cleanup = CredentialCleanup(vault_id);
+
+        let bundle = dir.path().join("backup-out");
+        let key_file = dir.path().join("recovery-key.json");
+        let commands = vec![
+            Command::Backup {
+                out: bundle.clone(),
+            },
+            Command::RecoveryDrill {
+                backup: bundle.clone(),
+            },
+            Command::ExportRecoveryKey {
+                out: key_file.clone(),
+                passphrase: Zeroizing::new("correct horse battery staple".into()),
+            },
+            Command::VerifyRecoveryKey {
+                backup: bundle.clone(),
+                recovery_key: key_file.clone(),
+                passphrase: Zeroizing::new("correct horse battery staple".into()),
+            },
+        ];
+        for command in commands {
+            let before = worker.view().operation.operation_id.clone();
+            worker.command(command);
+            let start = Instant::now();
+            loop {
+                let snapshot = worker.view();
+                assert!(!snapshot.fatal, "{}", snapshot.error);
+                if snapshot.operation.operation_id != before
+                    && snapshot.operation.state != OperationState::Running
+                    && snapshot.busy.is_empty()
+                {
+                    assert_eq!(
+                        snapshot.operation.state,
+                        OperationState::Succeeded,
+                        "recovery command failed: {}",
+                        snapshot.error
+                    );
+                    break;
+                }
+                assert!(start.elapsed() < Duration::from_secs(60), "stalled");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(worker.shutdown(Duration::from_secs(5)));
+    }
+
+    /// Removes the OS credential minted for a test workspace even when an
+    /// assertion panics, so repeated runs never collide with stale keys.
+    #[cfg(any(windows, target_os = "macos"))]
+    struct CredentialCleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for CredentialCleanup {
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
     }
 }

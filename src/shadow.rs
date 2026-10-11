@@ -243,4 +243,157 @@ mod tests {
             );
         }
     }
+
+    use crate::types::{Job, JobState};
+
+    fn armed_engine(root: &std::path::Path) -> Engine {
+        let mut engine = Engine::open(
+            root.to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        crate::test_support::arm_automatic(&mut engine.settings);
+        engine
+    }
+
+    fn reviewable(engine: &Engine, n: u64, recipient: &str, now: chrono::DateTime<Utc>) -> Job {
+        let email = crate::test_support::gmail_email_to(
+            &engine.account,
+            n,
+            recipient,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let mut job = Job::new(email.stub.clone(), now);
+        job.email = Some(email);
+        job.state = JobState::Attention;
+        job
+    }
+
+    /// Insert the stub identity first (as sync does), then persist the payload.
+    fn persist(engine: &mut Engine, mut job: Job, now: chrono::DateTime<Utc>) -> Job {
+        engine.db.insert_stubs([job.stub.clone()], now).unwrap();
+        engine.db.save(&mut job, "test.seed", "seed").unwrap();
+        job
+    }
+
+    fn connected_mock(engine: &mut Engine) -> crate::test_support::MockServer {
+        let server = crate::test_support::MockServer::new(|_, _| None);
+        engine.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &server.url,
+            &server.url,
+        ));
+        server
+    }
+
+    /// The queue section must distinguish semantic eligibility from thread
+    /// blocks and per-recipient burst limits so operators see why dispatch is
+    /// held instead of a single opaque count.
+    #[test]
+    fn shadow_queue_classifies_thread_blocks_and_recipient_limits() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = armed_engine(root.path());
+        let _server = connected_mock(&mut engine);
+        let now = Utc::now();
+
+        let ready = crate::test_support::eligible_job(&engine.settings, &engine.account, 1, now);
+        persist(&mut engine, ready, now);
+
+        let shared = "thread-shared".to_string();
+        let mut blocked =
+            crate::test_support::eligible_job(&engine.settings, &engine.account, 2, now);
+        blocked.stub.thread_id = shared.clone();
+        blocked.email.as_mut().unwrap().stub.thread_id = shared.clone();
+        persist(&mut engine, blocked, now);
+        let mut sibling = reviewable(&engine, 21, "hr21@example.invalid", now);
+        sibling.stub.thread_id = shared.clone();
+        sibling.email.as_mut().unwrap().stub.thread_id = shared.clone();
+        let sibling = persist(&mut engine, sibling, now);
+        engine
+            .db
+            .reserve_send_with_recipient_limit(&sibling, 10, None, now)
+            .unwrap();
+
+        let limited = crate::test_support::eligible_job(&engine.settings, &engine.account, 3, now);
+        persist(&mut engine, limited, now);
+        for n in [31, 32] {
+            let attempt = reviewable(&engine, n, "hr3@example.invalid", now);
+            let attempt = persist(&mut engine, attempt, now);
+            engine
+                .db
+                .reserve_send_with_recipient_limit(&attempt, 10, None, now)
+                .unwrap();
+        }
+
+        let value = report(&engine).unwrap();
+        assert_eq!(value["queue"]["semantic_policy_eligible"], 3);
+        assert_eq!(value["queue"]["eligible_but_thread_blocked"], 1);
+        assert_eq!(value["queue"]["eligible_but_recipient_limited"], 1);
+        assert_eq!(
+            value["queue"]["locally_dispatchable_before_provider_preflight"],
+            1
+        );
+        assert_eq!(
+            value["queue"]["dispatchable_now_by_local_gates_and_daily_capacity"],
+            1
+        );
+        assert_eq!(value["global"]["gmail_connected"], true);
+        assert_eq!(value["global"]["gmail_send_scope"], true);
+        assert_eq!(value["global"]["task_qualification_current"], true);
+        assert_eq!(value["global"]["configuration_ready"], true);
+        assert_eq!(value["global"]["worker_paused"], false);
+        assert_eq!(value["global"]["daily_capacity_remaining"], 7);
+    }
+
+    /// A paused worker must clamp the dispatchable count to zero even when
+    /// every local gate passes; the queue numbers stay visible for the audit.
+    #[test]
+    fn shadow_dispatchable_is_zero_while_the_worker_is_paused() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = armed_engine(root.path());
+        let _server = connected_mock(&mut engine);
+        let now = Utc::now();
+        let ready = crate::test_support::eligible_job(&engine.settings, &engine.account, 4, now);
+        persist(&mut engine, ready, now);
+        engine.paused.store(true, Ordering::SeqCst);
+
+        let value = report(&engine).unwrap();
+        assert_eq!(
+            value["queue"]["locally_dispatchable_before_provider_preflight"],
+            1
+        );
+        assert_eq!(
+            value["queue"]["dispatchable_now_by_local_gates_and_daily_capacity"],
+            0
+        );
+        assert_eq!(value["global"]["worker_paused"], true);
+    }
+
+    /// Writing the report must create private parent directories and produce
+    /// parseable JSON without leaking queue content beyond aggregates.
+    #[test]
+    fn write_report_creates_parent_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let output = root.path().join("audit").join("shadow.json");
+        write_report(&engine, &output).unwrap();
+        assert!(output.is_file());
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value["report_version"], 1);
+    }
 }
