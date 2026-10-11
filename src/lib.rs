@@ -44,6 +44,8 @@ pub mod shadow;
 pub mod storage;
 pub mod store;
 pub mod sync;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tui;
 pub mod types;
 pub mod vault;

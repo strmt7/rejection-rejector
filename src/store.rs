@@ -395,8 +395,9 @@ fn verify_application_invariants_connection(
                 let expected_status = match job.state {
                     JobState::Sending => "reserved",
                     JobState::Uncertain => "uncertain",
-                    JobState::Sent => "sent",
-                    _ => anyhow::bail!("Internal delivery-state validation mismatch"),
+                    // The outer match has already excluded every state that is
+                    // not a delivery state, so the rest is exactly `Sent`.
+                    _ => "sent",
                 };
                 ensure!(
                     status == expected_status,
@@ -416,14 +417,15 @@ fn verify_application_invariants_connection(
                         );
                         sent_delivery_records += 1;
                     }
-                    JobState::Sending | JobState::Uncertain => {
+                    // The outer match has already excluded every state that is
+                    // not a delivery state, so the rest is Sending or Uncertain.
+                    _ => {
                         ensure!(
                             provider_payload.is_none() && job.provider_sent_id.is_none(),
                             "Unresolved delivery unexpectedly contains a provider identifier"
                         );
                         active_delivery_records += 1;
                     }
-                    _ => anyhow::bail!("Internal delivery-state validation mismatch"),
                 }
             }
             _ => {
@@ -2947,5 +2949,141 @@ mod tests {
         let p = d.path().join("db");
         drop(Store::open(&p, Vault::random()).unwrap());
         assert!(Store::open(&p, Vault::random()).is_err());
+    }
+
+    #[test]
+    fn cas_revision_overflow_is_rejected_not_wrapped() {
+        // A silently wrapped revision could collide with a different row's CAS
+        // guard, so out-of-range values must fail instead of truncating.
+        assert!(sql_i64(u64::MAX).is_err());
+        assert_eq!(sql_i64(7).unwrap(), 7);
+    }
+
+    #[test]
+    fn application_integrity_accepts_all_three_delivery_states() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let sent = ready(&mut db, "sent", "t-sent");
+        let uncertain = ready(&mut db, "uncertain", "t-uncertain");
+        let sending = ready(&mut db, "sending", "t-sending");
+        for job in [&sent, &uncertain, &sending] {
+            db.reserve_send_with_recipient_limit(job, 10, None, Utc::now())
+                .unwrap();
+        }
+        db.finish_send(&sent.id, Some("provider-1".into())).unwrap();
+        db.finish_send(&uncertain.id, None).unwrap();
+
+        let summary = db.application_integrity().unwrap();
+        assert_eq!(summary.sent_delivery_records, 1);
+        assert_eq!(summary.active_delivery_records, 2);
+        assert_eq!(summary.delivery_records, 3);
+
+        let counts = db.counts("me@example.com").unwrap();
+        assert_eq!(counts.sent, 1);
+        assert_eq!(counts.uncertain, 2);
+    }
+
+    #[test]
+    fn counts_bucket_non_delivery_states_under_stored() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut dismissed = ready(&mut db, "dis", "t-dis");
+        dismissed.state = JobState::Dismissed;
+        db.save(&mut dismissed, "test", "dismissed").unwrap();
+        let counts = db.counts("me@example.com").unwrap();
+        assert_eq!(counts.sent, 0);
+        assert_eq!(counts.uncertain, 0);
+        assert_eq!(counts.review, 0);
+    }
+
+    #[test]
+    fn ready_ids_orders_only_ready_jobs_by_receipt() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let first = ready(&mut db, "ra", "tra");
+        let second = ready(&mut db, "rb", "trb");
+        let mut attention = ready(&mut db, "rc", "trc");
+        attention.state = JobState::Attention;
+        db.save(&mut attention, "test", "attention").unwrap();
+        assert_eq!(
+            db.ready_ids("me@example.com").unwrap(),
+            vec![first.id.clone(), second.id.clone()]
+        );
+    }
+
+    #[test]
+    fn list_cursor_of_an_empty_snapshot_is_empty_and_terminal() {
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let page = db
+            .list_cursor("nobody@example.com", true, None, 50)
+            .unwrap();
+        assert!(page.items.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn pre_chain_backup_verifies_without_audit_head() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("db");
+        let vault = Vault::random();
+        let db = Store::open(&p, vault.clone()).unwrap();
+        let backup_path = d.path().join("legacy.sqlite3");
+        db.backup_to(&backup_path).unwrap();
+        let conn = rusqlite::Connection::open(&backup_path).unwrap();
+        conn.execute_batch("PRAGMA user_version=3;").unwrap();
+        drop(conn);
+        let summary = db.verify_backup_file(&backup_path).unwrap();
+        assert_eq!(summary.schema_version, 3);
+        assert!(summary.audit_head.is_none());
+    }
+
+    #[test]
+    fn dispatch_attempt_events_are_distinguished_from_reservations() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "da", "t-da");
+        // No delivery record at all: nothing has been attempted.
+        assert!(!db.has_dispatch_attempt_event(&job.id).unwrap());
+        db.reserve_send_with_recipient_limit(&job, 10, None, Utc::now())
+            .unwrap();
+        // A bare reservation is not yet a provider dispatch attempt.
+        assert!(!db.has_dispatch_attempt_event(&job.id).unwrap());
+        db.log(
+            "delivery.dispatch_attempt",
+            Some(&job.id),
+            "Initiating provider network request",
+        )
+        .unwrap();
+        assert!(db.has_dispatch_attempt_event(&job.id).unwrap());
+    }
+
+    #[test]
+    fn failed_pre_migration_backup_image_is_deleted() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("db");
+        let db = Store::open(&p, Vault::random()).unwrap();
+        // The source schema advanced past the planned migration version after
+        // the plan was computed; the consistency check must reject the image
+        // and delete the partial file so no stale "recovery" evidence remains.
+        db.conn
+            .execute_batch(&format!(
+                "PRAGMA user_version={};",
+                crate::store::DATABASE_SCHEMA_VERSION
+            ))
+            .unwrap();
+        let error = create_pre_migration_backup(&p, &db.conn, 4).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Could not create verified pre-migration recovery image"),
+            "unexpected error: {error}"
+        );
+        let migrations = d.path().join("recovery").join("migrations");
+        let leftovers = std::fs::read_dir(&migrations)
+            .unwrap()
+            .filter(std::result::Result::is_ok)
+            .count();
+        assert_eq!(leftovers, 0, "failed pre-migration image must be deleted");
     }
 }

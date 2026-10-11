@@ -272,4 +272,104 @@ mod tests {
         assert!(report["recent_audit"]["domains"].is_object());
         assert!(report["recent_audit"]["severities"].is_object());
     }
+
+    #[test]
+    fn report_binds_task_qualification_and_survives_unreachable_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        // A runtime below the supported version fails every model probe, so the
+        // report must still be produced with explicit null model fields.
+        let server = crate::test_support::MockServer::new(|route, _| match route {
+            "/api/version" => Some(json!({"version": "0.1.0"})),
+            _ => None,
+        });
+        let mut engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        engine.settings.ollama_url = server.url.clone();
+        engine.settings.task_qualification = Some(crate::config::TaskQualification {
+            model: engine.settings.model.clone(),
+            digest: "a".repeat(64),
+            prompt_version: crate::config::PROMPT_VERSION.into(),
+            context_hash: "b".repeat(64),
+            suite_hash: "c".repeat(64),
+            ollama_runtime_version: "0.35.1".into(),
+            task_score: 91.5,
+            fixture_count: 32,
+            qualified_at: chrono::Utc::now(),
+        });
+
+        let report = report(&engine).unwrap();
+        assert_eq!(report["local_ai"]["runtime_version"], Value::Null);
+        assert_eq!(report["local_ai"]["installed_model"], Value::Null);
+        let qualification = &report["local_ai"]["task_qualification"];
+        assert_eq!(qualification["model"], engine.settings.model);
+        assert_eq!(qualification["digest"], "a".repeat(64));
+        assert_eq!(
+            qualification["prompt_version"],
+            crate::config::PROMPT_VERSION
+        );
+        assert_eq!(qualification["context_hash"], "b".repeat(64));
+        assert_eq!(qualification["suite_hash"], "c".repeat(64));
+        assert_eq!(qualification["ollama_runtime_version"], "0.35.1");
+        assert_eq!(qualification["task_score"], 91.5);
+        assert_eq!(qualification["fixture_count"], 32);
+    }
+
+    #[test]
+    fn report_records_local_model_snapshot_when_runtime_reachable() {
+        let root = tempfile::tempdir().unwrap();
+        let digest = "d".repeat(64);
+        let model = crate::config::DEFAULT_MODEL.to_owned();
+        let tag_model = model.clone();
+        let tag_digest = digest.clone();
+        let server = crate::test_support::MockServer::new(move |route, _| match route {
+            "/api/version" => Some(crate::test_support::version_ok()),
+            "/api/tags" => Some(crate::test_support::tags_for(&tag_model, &tag_digest)),
+            "/api/show" => Some(crate::test_support::show_ok()),
+            _ => None,
+        });
+        let mut engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        engine.settings.ollama_url = server.url.clone();
+
+        let report = report(&engine).unwrap();
+        assert_eq!(report["local_ai"]["runtime_version"], "0.35.1");
+        let status = &report["local_ai"]["installed_model"];
+        assert_eq!(status["digest"], digest);
+        assert_eq!(status["size"], 7_200_000_000u64);
+        assert_eq!(
+            status["message"],
+            "Local model installed; capability checked; GPU residency not yet measured"
+        );
+    }
+
+    #[test]
+    fn write_report_creates_private_parent_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let output = root
+            .path()
+            .join("nested")
+            .join("dir")
+            .join("diagnostics.json");
+        write_report(&engine, &output).unwrap();
+        assert!(output.is_file());
+        let value: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(value["report_version"], 5);
+    }
 }
