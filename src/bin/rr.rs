@@ -852,6 +852,20 @@ mod tests {
     /// oversized files are refused before any crypto runs.
     #[test]
     fn recovery_passphrase_enforces_its_safety_envelope() {
+        // On unix the production gate refuses world-readable files before any
+        // content checks, so test fixtures must be owner-private to exercise
+        // the length/trim envelope itself (Windows has no POSIX mode gate).
+        #[cfg(unix)]
+        fn write_private(path: &std::path::Path, content: &[u8]) {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(path, content).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        #[cfg(not(unix))]
+        fn write_private(path: &std::path::Path, content: &[u8]) {
+            std::fs::write(path, content).unwrap();
+        }
+
         let root = tempfile::tempdir().unwrap();
         let missing = root.path().join("missing");
         assert!(
@@ -860,21 +874,21 @@ mod tests {
         );
 
         let short = root.path().join("short");
-        std::fs::write(&short, b"too short").unwrap();
+        write_private(&short, b"too short");
         assert!(
             recovery_passphrase(&short).is_err(),
             "short passphrases refused"
         );
 
         let oversized = root.path().join("oversized");
-        std::fs::write(&oversized, vec![b'a'; 4097]).unwrap();
+        write_private(&oversized, &vec![b'a'; 4097]);
         assert!(
             recovery_passphrase(&oversized).is_err(),
             "files above the 4 KiB limit refused"
         );
 
         let ok = root.path().join("ok");
-        std::fs::write(&ok, b"correct horse battery staple\r\n").unwrap();
+        write_private(&ok, b"correct horse battery staple\r\n");
         let passphrase = recovery_passphrase(&ok).unwrap();
         assert_eq!(
             passphrase.as_slice(),
