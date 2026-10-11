@@ -124,7 +124,7 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
 /// Inputs: `path` — Google Desktop-app OAuth JSON; `send` — whether the send
 /// scope is required; `cancelled` — cooperative cancellation flag. Output:
 /// the obtained [`Credentials`]. Opens the user's system browser with
-/// [`webbrowser::open`]; the launcher failure mapping lives in [`login_with`]
+/// [`webbrowser::open`]; the launcher failure mapping lives in the private `login_with`
 /// so it is exercised without launching a real browser.
 pub fn login(path: &Path, send: bool, cancelled: &AtomicBool) -> Result<Credentials> {
     login_with(
