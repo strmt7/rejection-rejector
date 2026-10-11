@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -1043,37 +1043,62 @@ impl Ollama {
         Ok(())
     }
     pub fn start(&self) -> Result<()> {
+        self.start_with(ollama_executable, Ollama::healthy, 30)
+    }
+
+    /// Start the local daemon with injectable discovery and readiness probes.
+    ///
+    /// Inputs: `find` — locates the Ollama executable; `ready` — readiness
+    /// probe polled after spawn; `wait_attempts` — 500ms polls before giving
+    /// up (production passes [`ollama_executable`], [`Ollama::healthy`] and 30;
+    /// tests inject all three so no real daemon is ever launched). Output:
+    /// `Ok(())` when a supported runtime answers the configured port.
+    pub fn start_with(
+        &self,
+        find: impl FnOnce() -> Result<PathBuf>,
+        ready: impl Fn(&Ollama) -> bool,
+        wait_attempts: u32,
+    ) -> Result<()> {
         if self.reachable() {
             // A daemon already owns the configured port. Never attempt to launch a
             // second process just because the existing runtime is obsolete.
             self.runtime_version()?;
             return Ok(());
         }
-        let executable = ollama_executable()?;
-        Command::new(executable)
-            .arg("serve")
-            .env(
-                "OLLAMA_HOST",
-                self.settings.ollama_url.trim_start_matches("http://"),
-            )
-            .env("OLLAMA_NO_CLOUD", "1")
-            .env("OLLAMA_NUM_PARALLEL", "1")
-            .env("OLLAMA_MAX_LOADED_MODELS", "1")
-            .env("OLLAMA_FLASH_ATTENTION", "1")
-            .env("OLLAMA_KV_CACHE_TYPE", "q8_0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Cannot start Ollama")?;
-        for _ in 0..30 {
+        let executable = find()?;
+        spawn_ollama_serve(
+            &executable,
+            self.settings.ollama_url.trim_start_matches("http://"),
+        )?;
+        for _ in 0..wait_attempts {
             std::thread::sleep(Duration::from_millis(500));
-            if self.healthy() {
+            if ready(self) {
                 return Ok(());
             }
         }
         anyhow::bail!("Ollama did not become ready; inspect its local logs")
     }
+}
+
+/// Launch the Ollama daemon bound to the local-only hardened environment.
+///
+/// Inputs: `executable` — the Ollama binary; `host` — `host:port` the daemon
+/// must bind. Output: `Ok(())` once the process spawned.
+fn spawn_ollama_serve(executable: &Path, host: &str) -> Result<()> {
+    Command::new(executable)
+        .arg("serve")
+        .env("OLLAMA_HOST", host)
+        .env("OLLAMA_NO_CLOUD", "1")
+        .env("OLLAMA_NUM_PARALLEL", "1")
+        .env("OLLAMA_MAX_LOADED_MODELS", "1")
+        .env("OLLAMA_FLASH_ATTENTION", "1")
+        .env("OLLAMA_KV_CACHE_TYPE", "q8_0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("Cannot start Ollama")?;
+    Ok(())
 }
 fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     let core = value
@@ -1120,47 +1145,117 @@ pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
     Ok(())
 }
 pub fn ollama_executable() -> Result<PathBuf> {
+    ollama_executable_from(std::env::var_os("LOCALAPPDATA").as_deref(), |name| {
+        Ok(which::which(name)?)
+    })
+}
+
+/// Locate the Ollama executable from injected discovery inputs.
+///
+/// Inputs: `local_app_data` — the user's local application-data root (from
+/// `LOCALAPPDATA` in production); `find` — PATH lookup fallback (production
+/// passes [`which::which`]). Output: the executable path, or an error naming
+/// the operator remedy when Ollama is not installed.
+fn ollama_executable_from(
+    local_app_data: Option<&std::ffi::OsStr>,
+    find: fn(&str) -> Result<PathBuf>,
+) -> Result<PathBuf> {
     #[cfg(windows)]
-    {
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            let p = PathBuf::from(local).join("Programs/Ollama/ollama.exe");
-            if p.is_file() {
-                return Ok(p);
-            }
+    if let Some(local) = local_app_data {
+        let p = PathBuf::from(local).join("Programs/Ollama/ollama.exe");
+        if p.is_file() {
+            return Ok(p);
         }
     }
-    which::which("ollama")
-        .context("Ollama is not installed; use Install Ollama in the Local AI tab")
-}
-pub fn install() -> Result<()> {
-    #[cfg(windows)]
-    {
-        let exe = which::which("winget").context(
-            "Install Microsoft App Installer or install Ollama from ollama.com/download/windows",
-        )?;
-        let status = Command::new(exe)
-            .args([
-                "install",
-                "--id",
-                "Ollama.Ollama",
-                "--exact",
-                "--source",
-                "winget",
-                "--accept-source-agreements",
-                "--accept-package-agreements",
-            ])
-            .status()?;
-        ensure!(
-            status.success(),
-            "Ollama installer did not complete successfully"
-        );
-        Ok(())
-    }
     #[cfg(not(windows))]
-    {
-        webbrowser::open("https://ollama.com/download")?;
-        Ok(())
-    }
+    let _ = local_app_data;
+    find("ollama").context("Ollama is not installed; use Install Ollama in the Local AI tab")
+}
+
+/// One installer invocation: the exact winget argument vector, returning the
+/// child's exit status or a spawn failure (mirrors `background::CommandRunner`).
+pub type InstallerRunner = fn(&[&str]) -> Result<std::process::ExitStatus>;
+
+// Installer seam: serialized test override of the package-manager runner.
+#[cfg(test)]
+static INSTALLER_LOCK: Mutex<()> = Mutex::new(());
+static INSTALLER: Mutex<Option<InstallerRunner>> = Mutex::new(None);
+
+/// The installer runner in effect; production resolves to [`winget`].
+fn active_installer() -> InstallerRunner {
+    INSTALLER
+        .lock()
+        .map(|value| *value)
+        .unwrap_or(None)
+        .unwrap_or(winget)
+}
+
+/// Test-only: run `body` with the installer replaced by `run`, so install
+/// flows (including worker-dispatched ones) never touch the real package
+/// manager. The seam is process-wide and serialized across tests.
+#[cfg(test)]
+pub(crate) fn with_installer<T>(run: InstallerRunner, body: impl FnOnce() -> T) -> T {
+    let _guard = INSTALLER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *INSTALLER.lock().unwrap_or_else(|error| error.into_inner()) = Some(run);
+    let result = body();
+    *INSTALLER.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    result
+}
+
+/// Invoke the Windows package manager with the given argument vector.
+#[cfg(windows)]
+pub fn winget(args: &[&str]) -> Result<std::process::ExitStatus> {
+    let exe = which::which("winget").context(
+        "Install Microsoft App Installer or install Ollama from ollama.com/download/windows",
+    )?;
+    winget_from(&exe, args)
+}
+
+/// Run one already-resolved installer executable with the given arguments.
+#[cfg(windows)]
+fn winget_from(exe: &Path, args: &[&str]) -> Result<std::process::ExitStatus> {
+    Ok(Command::new(exe).args(args).status()?)
+}
+
+#[cfg(not(windows))]
+pub fn winget(_args: &[&str]) -> Result<std::process::ExitStatus> {
+    anyhow::bail!("winget is available only on Windows")
+}
+
+/// Install Ollama through the platform's local installer flow.
+///
+/// Inputs: none (the installer runner is injectable for tests via
+/// the crate-internal `with_installer` helper). Output: `Ok(())` after a successful installation.
+#[cfg(windows)]
+pub fn install() -> Result<()> {
+    install_with(active_installer())
+}
+
+#[cfg(windows)]
+fn install_with(run: InstallerRunner) -> Result<()> {
+    let status = run(&[
+        "install",
+        "--id",
+        "Ollama.Ollama",
+        "--exact",
+        "--source",
+        "winget",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+    ])?;
+    ensure!(
+        status.success(),
+        "Ollama installer did not complete successfully"
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn install() -> Result<()> {
+    webbrowser::open("https://ollama.com/download")?;
+    Ok(())
 }
 pub fn sample_email(subject: &str, text: &str) -> Email {
     Email {
@@ -1384,5 +1479,803 @@ mod prompt_contract_tests {
             let text = tone.instruction();
             assert!(!text.contains("commit"), "no tone may suggest wrongdoing");
         }
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    use crate::config::{DEFAULT_MODEL, DEFAULT_VERIFIER_MODEL, evaluation_suite_hash};
+    use crate::test_support::{MockServer, show_ok, version_ok};
+    use serde_json::{Value, json};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, Mutex};
+
+    const PRIMARY_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const VERIFIER_DIGEST: &str =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn settings(url: &str) -> Settings {
+        Settings {
+            ollama_url: url.into(),
+            model_digest: Some(PRIMARY_DIGEST.into()),
+            signature: "Test Applicant".into(),
+            ..Settings::default()
+        }
+    }
+
+    fn draft_text(signature: &str, link: &str) -> String {
+        format!(
+            "Dear Recruitment Team,\n\nI would appreciate an individualized explanation of the specific criteria behind this decision and how my relevant experience was assessed against the advertised requirements. {link} Please share the concrete evaluation notes for each stage, the relative weighting of the listed qualifications, and the specific areas where my background was judged insufficient for this particular position.\n\nRegards,\n{}",
+            signature.trim()
+        )
+    }
+
+    fn verdict_content() -> Value {
+        json!({"category":"rejection","confidence":99,
+            "evidence":"We have decided not to move forward with your application.",
+            "explanation":"Explicit negative hiring decision","company":"","position":"","language":"en"})
+    }
+
+    fn verification_content(passed: bool) -> Value {
+        json!({"genuine_rejection":passed,"claims_supported":passed,
+            "professional":passed,"injection_free":true,"purpose_aligned":passed,
+            "reason":"Synthetic verification result"})
+    }
+
+    /// Scriptable local runtime: the loaded-model state follows the wire
+    /// protocol (warm requests load, `keep_alive: 0` unloads), so `/api/ps`
+    /// answers residency exactly like the real daemon.
+    struct Runtime {
+        server: MockServer,
+        loaded: Arc<Mutex<Option<String>>>,
+    }
+
+    impl Runtime {
+        fn new(
+            cpu_only_from_call: usize,
+            chat: impl Fn(&Value) -> Value + Send + Sync + 'static,
+        ) -> Self {
+            Self::with_body(cpu_only_from_call, move |payload, _| chat(payload))
+        }
+
+        /// Variant where the chat responder also sees the raw request body.
+        fn with_body(
+            cpu_only_from_call: usize,
+            chat: impl Fn(&Value, &Value) -> Value + Send + Sync + 'static,
+        ) -> Self {
+            let loaded: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let state = loaded.clone();
+            let ps_calls = Arc::new(AtomicUsize::new(0));
+            let server = MockServer::new(move |route, body| {
+                let body = body.unwrap_or(json!({}));
+                let model = body["model"].as_str().unwrap_or("").to_owned();
+                match route {
+                    "/api/version" => Some(version_ok()),
+                    "/api/tags" => Some(json!({"models": [
+                        {"name": DEFAULT_MODEL, "digest": PRIMARY_DIGEST, "size": 7_200_000_000u64},
+                        {"name": DEFAULT_VERIFIER_MODEL, "digest": VERIFIER_DIGEST, "size": 7_200_000_000u64}
+                    ]})),
+                    "/api/show" => Some(show_ok()),
+                    "/api/ps" => {
+                        let n = ps_calls.fetch_add(1, Ordering::SeqCst);
+                        let current = state.lock().unwrap().clone();
+                        let cpu = n >= cpu_only_from_call;
+                        Some(match current {
+                            Some(name) => json!({"models": [{
+                                "name": name,
+                                "digest": if name == DEFAULT_VERIFIER_MODEL { VERIFIER_DIGEST } else { PRIMARY_DIGEST },
+                                "size": 7_200_000_000u64,
+                                "size_vram": if cpu { 1_000_000_000u64 } else { 7_200_000_000u64 },
+                                "context_length": 32768u32
+                            }]}),
+                            None => json!({"models": []}),
+                        })
+                    }
+                    "/api/generate" => {
+                        if body["keep_alive"] == json!(0) {
+                            *state.lock().unwrap() = None;
+                        } else {
+                            *state.lock().unwrap() = Some(model);
+                        }
+                        Some(json!({"done":true,"prompt_eval_count":4,"eval_count":1}))
+                    }
+                    "/api/chat" => {
+                        *state.lock().unwrap() = Some(model);
+                        let payload: Value = serde_json::from_str(
+                            body["messages"][1]["content"].as_str().unwrap_or("{}"),
+                        )
+                        .unwrap_or(json!({}));
+                        let content = chat(&payload, &body);
+                        Some(
+                            json!({"model":"m","message":{"role":"assistant","content":content.to_string()},
+                            "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                        )
+                    }
+                    _ => None,
+                }
+            });
+            Self { server, loaded }
+        }
+
+        fn url(&self) -> String {
+            self.server.url.clone()
+        }
+
+        fn prime(&self, model: &str) {
+            *self.loaded.lock().unwrap() = Some(model.to_owned());
+        }
+    }
+
+    fn default_chat(payload: &Value) -> Value {
+        if payload.get("proposed_reply").is_some() {
+            verification_content(true)
+        } else if payload.get("tone").is_some() {
+            json!({"body": draft_text("Test Applicant", "")})
+        } else {
+            verdict_content()
+        }
+    }
+
+    #[test]
+    fn processing_failure_codes_cover_every_pipeline_stage() {
+        let stages = [
+            (
+                AnalysisFailureStage::Preflight,
+                ProcessingFailureCode::ModelPreflight,
+            ),
+            (
+                AnalysisFailureStage::Classification,
+                ProcessingFailureCode::Classification,
+            ),
+            (
+                AnalysisFailureStage::DraftGeneration,
+                ProcessingFailureCode::DraftGeneration,
+            ),
+            (
+                AnalysisFailureStage::VerificationRuntime,
+                ProcessingFailureCode::VerificationRuntime,
+            ),
+        ];
+        for (stage, expected) in stages {
+            let error = analysis_stage(stage, || -> Result<()> {
+                anyhow::bail!("synthetic stage failure")
+            })
+            .unwrap_err();
+            assert_eq!(processing_failure_code(&error), expected);
+        }
+        // Errors outside the pipeline are classified as unknown-analysis.
+        assert_eq!(
+            processing_failure_code(&anyhow::anyhow!("unclassified")),
+            ProcessingFailureCode::AnalysisUnknown
+        );
+    }
+
+    #[test]
+    fn predict_and_text_budgets_track_the_context_tier() {
+        let small = Ollama::new(&Settings {
+            num_ctx: 8192,
+            ..settings("http://127.0.0.1:1")
+        })
+        .unwrap();
+        assert_eq!(small.structured_predict(), 1536);
+        assert_eq!(small.draft_predict(), 2560);
+        assert_eq!(small.classify_text_budget(), 3500);
+
+        let medium = Ollama::new(&Settings {
+            num_ctx: 16384,
+            ..settings("http://127.0.0.1:1")
+        })
+        .unwrap();
+        assert_eq!(medium.classify_text_budget(), 5400);
+
+        let large = Ollama::new(&Settings {
+            num_ctx: 32768,
+            ..settings("http://127.0.0.1:1")
+        })
+        .unwrap();
+        assert_eq!(large.structured_predict(), 8192);
+        assert_eq!(large.draft_predict(), 8192);
+        assert_eq!(large.classify_text_budget(), 24000);
+    }
+
+    #[test]
+    fn counter_snapshot_reports_recorded_usage() {
+        let ai = Ollama::new(&settings("http://127.0.0.1:1")).unwrap();
+        assert_eq!(ai.counter_snapshot().requests, 0);
+        ai.record_usage(7, 3);
+        let counters = ai.counter_snapshot();
+        assert_eq!(counters.requests, 1);
+        assert_eq!(counters.prompt_tokens, 7);
+        assert_eq!(counters.completion_tokens, 3);
+    }
+
+    #[test]
+    fn reachable_and_healthy_track_the_version_endpoint() {
+        let runtime = Runtime::new(usize::MAX, |_| json!({}));
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        assert!(ai.reachable());
+        assert!(ai.healthy());
+
+        // A daemon answering without a usable version is reachable but not healthy.
+        let broken = MockServer::new(|_, _| Some(json!({"version": "0.1.0"})));
+        let ai = Ollama::new(&settings(&broken.url)).unwrap();
+        assert!(ai.reachable());
+        assert!(!ai.healthy());
+
+        let missing = MockServer::new(|_, _| None);
+        let ai = Ollama::new(&settings(&missing.url)).unwrap();
+        assert!(!ai.reachable());
+        assert!(!ai.healthy());
+    }
+
+    #[test]
+    fn analyze_flags_input_overflow_and_draft_escalation() {
+        // Oversized input blocks automatic sending without failing the analysis.
+        let runtime = Runtime::new(usize::MAX, default_chat);
+        let ai = Ollama::new(&Settings {
+            num_ctx: 8192,
+            // Pin the reply language: the synthetic overflow filler is not a
+            // reliable language-classification sample.
+            reply_language: crate::config::ReplyLanguage::English,
+            ..settings(&runtime.url())
+        })
+        .unwrap();
+        let mut email = sample_email("Your application", "");
+        email.text = format!(
+            "We have decided not to move forward with your application. {}",
+            "filler text ".repeat(300)
+        );
+        let (_analysis, _draft, flags) = ai.analyze(&email).unwrap();
+        assert!(
+            flags.iter().any(|f| f.contains("Input was too long")),
+            "flags: {flags:?}"
+        );
+
+        // A draft that escalates or links out is held for Human review.
+        let runtime = Runtime::new(usize::MAX, |payload| {
+            if payload.get("proposed_reply").is_some() {
+                verification_content(true)
+            } else if payload.get("tone").is_some() {
+                json!({"body": draft_text("Test Applicant", "See https://example.invalid for context.")})
+            } else {
+                verdict_content()
+            }
+        });
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (_analysis, draft, flags) = ai.analyze(&email).unwrap();
+        assert!(draft.is_some());
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("escalation, abusive language, or an unsolicited link")),
+            "flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn failed_local_verification_is_held_for_human_review() {
+        let runtime = Runtime::new(usize::MAX, |payload| {
+            if payload.get("proposed_reply").is_some() {
+                // Invalid structured output: the verification call errors.
+                json!("not schema json")
+            } else if payload.get("tone").is_some() {
+                json!({"body": draft_text("Test Applicant", "")})
+            } else {
+                verdict_content()
+            }
+        });
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (analysis, draft, flags) = ai.analyze(&email).unwrap();
+        assert!(draft.is_some());
+        assert!(analysis.verification.is_none());
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("Verification failed; human review required")),
+            "flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn independent_verifier_binds_secondary_model_provenance() {
+        let runtime = Runtime::new(usize::MAX, default_chat);
+        let ai = Ollama::new(&Settings {
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some(VERIFIER_DIGEST.into()),
+            ..settings(&runtime.url())
+        })
+        .unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (analysis, draft, flags) = ai.analyze(&email).unwrap();
+        assert!(draft.is_some());
+        assert!(flags.is_empty(), "flags: {flags:?}");
+        assert_eq!(analysis.verification_model, DEFAULT_VERIFIER_MODEL);
+        assert_eq!(analysis.verification_model_digest, VERIFIER_DIGEST);
+        assert_eq!(analysis.model_digest, PRIMARY_DIGEST);
+
+        // Pipeline profiling measures residency of the verification model
+        // when the independent verifier is enabled.
+        let profile = ai.profile_pipeline(&email).unwrap();
+        assert!(profile.gpu_resident);
+        assert_eq!(profile.size_vram, 7_200_000_000u64);
+    }
+
+    #[test]
+    fn independent_verifier_failures_surface_as_review_flags() {
+        // The verifier's verification call fails outright.
+        let runtime = Runtime::new(usize::MAX, |payload| {
+            if payload.get("proposed_reply").is_some() {
+                json!("not schema json")
+            } else if payload.get("tone").is_some() {
+                json!({"body": draft_text("Test Applicant", "")})
+            } else {
+                verdict_content()
+            }
+        });
+        let ai = Ollama::new(&Settings {
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some(VERIFIER_DIGEST.into()),
+            ..settings(&runtime.url())
+        })
+        .unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (_analysis, _draft, flags) = ai.analyze(&email).unwrap();
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("Independent verification failed")),
+            "flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn verifier_residency_loss_is_held_for_review() {
+        // ps calls: (0) verifier-client unload preflight, (1) primary preflight
+        // residency, (2) primary residency recheck, (3) unload preflight,
+        // (4) unload poll, (5) verifier preflight residency, (6) verifier
+        // residency recheck -> CPU-only, (7) final GPU check -> CPU-only.
+        let runtime = Runtime::new(6, default_chat);
+        let ai = Ollama::new(&Settings {
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some(VERIFIER_DIGEST.into()),
+            ..settings(&runtime.url())
+        })
+        .unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (_analysis, _draft, flags) = ai.analyze(&email).unwrap();
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("Independent verifier lost full GPU residency")),
+            "flags: {flags:?}"
+        );
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("Full GPU residency was lost during analysis")),
+            "flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn primary_residency_loss_is_held_for_review() {
+        // ps calls: (0) preflight residency (resident), (1) final GPU check
+        // (CPU-only) so only the loss flag fires.
+        let runtime = Runtime::new(1, default_chat);
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        let email = sample_email(
+            "Your application",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let (analysis, _draft, flags) = ai.analyze(&email).unwrap();
+        assert!(!analysis.gpu_resident);
+        assert!(
+            flags
+                .iter()
+                .any(|f| f.contains("Full GPU residency was lost during analysis")),
+            "flags: {flags:?}"
+        );
+    }
+
+    #[test]
+    fn qualify_requires_a_clean_flag_free_pipeline() {
+        // The pipeline runs but reports a lost-residency flag: qualification
+        // must fail closed and name the flag in the operator-facing message.
+        let runtime = Runtime::new(1, default_chat);
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        let error = ai.qualify().unwrap_err().to_string();
+        assert!(
+            error.contains("Full local pipeline qualification failed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn qualify_verifier_smoke_tests_the_secondary_model() {
+        let runtime = Runtime::new(usize::MAX, default_chat);
+        let ai = Ollama::new(&Settings {
+            model_digest: None,
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            ..settings(&runtime.url())
+        })
+        .unwrap();
+        let status = ai.qualify_verifier().unwrap();
+        assert_eq!(status.digest, VERIFIER_DIGEST);
+        assert!(status.gpu_resident);
+    }
+
+    #[test]
+    fn unload_and_wait_returns_when_the_model_is_absent() {
+        let runtime = Runtime::new(usize::MAX, |_| json!({}));
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        ai.unload_and_wait().unwrap();
+    }
+
+    #[test]
+    fn unload_and_wait_polls_until_the_model_leaves_gpu() {
+        let runtime = Runtime::new(usize::MAX, |_| json!({}));
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        runtime.prime(crate::config::DEFAULT_MODEL);
+        ai.unload_and_wait().unwrap();
+    }
+
+    #[test]
+    fn unload_and_wait_fails_when_the_daemon_never_releases() {
+        let server = MockServer::new(|route, _| match route {
+            "/api/ps" => Some(json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": PRIMARY_DIGEST,
+                "size": 7_200_000_000u64,
+                "size_vram": 7_200_000_000u64,
+                "context_length": 32768u32
+            }]})),
+            "/api/generate" => Some(json!({"done":true,"prompt_eval_count":1,"eval_count":1})),
+            _ => None,
+        });
+        let ai = Ollama::new(&settings(&server.url)).unwrap();
+        let error = ai.unload_and_wait().unwrap_err().to_string();
+        assert!(
+            error.contains("did not unload the selected model"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn chat_retries_once_after_a_transport_timeout() {
+        // The first chat request is answered after the 1s client timeout (a
+        // retryable transport error), the recovery unload and the retry are
+        // answered promptly.
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let seen = attempts.clone();
+        let server = MockServer::new(move |route, _| match route {
+            "/api/generate" => Some(json!({"done":true,"prompt_eval_count":1,"eval_count":1})),
+            "/api/chat" => {
+                let n = seen.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
+                Some(
+                    json!({"model":"m","message":{"role":"assistant","content":"{}"},
+                    "done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}),
+                )
+            }
+            _ => None,
+        });
+        // Bypass the constructor to shorten the transport timeout below the
+        // production floor; the retry classification must still apply.
+        let mut short = settings(&server.url);
+        short.llm_timeout_seconds = 1;
+        let ai = Ollama {
+            settings: short,
+            counters: Arc::new(Mutex::new(InferenceCounters::default())),
+        };
+        let value: Value = ai
+            .chat(
+                "system",
+                json!({"probe": true}),
+                json!({"type": "object"}),
+                16,
+            )
+            .unwrap();
+        assert!(value.is_object());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2, "exactly one retry");
+
+        // Protocol-level failures are surfaced directly without a retry.
+        let failing = MockServer::new(|route, _| match route {
+            "/api/chat" => Some(
+                json!({"model":"m","message":{"role":"assistant","content":"{}"},
+                "done":true,"done_reason":"length","prompt_eval_count":1,"eval_count":1}),
+            ),
+            _ => None,
+        });
+        let ai = Ollama::new(&settings(&failing.url)).unwrap();
+        let error = ai
+            .chat::<Value>("system", json!({}), json!({}), 16)
+            .unwrap_err();
+        assert!(!retryable_local_transport_error(&error));
+        assert!(
+            error.to_string().contains("Model response was incomplete"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn profile_synthetic_runtime_measures_cold_warm_and_near_context() {
+        let runtime = Runtime::new(usize::MAX, default_chat);
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        let profile = ai.profile_synthetic_runtime().unwrap();
+        assert_eq!(profile.schema_version, 1);
+        assert_eq!(profile.model, crate::config::DEFAULT_MODEL);
+        assert_eq!(profile.digest, PRIMARY_DIGEST);
+        assert_eq!(profile.prompt_version, PROMPT_VERSION);
+        assert_eq!(profile.evaluation_suite_hash, evaluation_suite_hash());
+        assert_eq!(profile.requested_context, 32768);
+        assert!(profile.cold_pipeline.request_count >= 3);
+        assert_eq!(profile.cold_pipeline.category, Category::Rejection);
+        assert!(profile.cold_pipeline.draft_generated);
+        assert!(profile.cold_pipeline.verification_passed);
+        assert!(profile.warm_repeat_pipeline.gpu_resident);
+        assert!(profile.near_context_pipeline.input_complete);
+        assert_eq!(profile.limitations.len(), 3);
+    }
+
+    fn pull_server(body: String) -> MockServer {
+        MockServer::new_raw(move |route, _| match route {
+            "/api/pull" => Some((200, body.clone())),
+            _ => None,
+        })
+    }
+
+    fn pull_settings(url: &str) -> Ollama {
+        Ollama::new(&settings(url)).unwrap()
+    }
+
+    #[test]
+    fn pull_streams_progress_and_requires_terminal_success() {
+        let runtime = pull_server(format!(
+            "{}\n{}\n",
+            json!({"status":"pulling","completed":5,"total":10}),
+            json!({"status":"success"})
+        ));
+        let ai = pull_settings(&runtime.url);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        ai.pull(&AtomicBool::new(false), move |line| {
+            sink.lock().unwrap().push(line);
+        })
+        .unwrap();
+        let lines = seen.lock().unwrap().clone();
+        assert_eq!(lines[0], "pulling: 50.0%");
+        assert_eq!(lines[1], "success");
+
+        // A stream without the terminal success record must not be trusted.
+        let runtime = pull_server(json!({"status":"pulling"}).to_string());
+        let ai = pull_settings(&runtime.url);
+        let error = ai
+            .pull(&AtomicBool::new(false), |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Download did not complete"),
+            "unexpected error: {error}"
+        );
+
+        // A reported download failure aborts monitoring immediately.
+        let runtime = pull_server(json!({"status":"pulling","error":"disk full"}).to_string());
+        let ai = pull_settings(&runtime.url);
+        let error = ai
+            .pull(&AtomicBool::new(false), |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("reported a model download failure"),
+            "unexpected error: {error}"
+        );
+
+        // Oversized progress records are rejected before parsing.
+        let runtime = pull_server(format!("{}\n", "x".repeat(40_000)));
+        let ai = pull_settings(&runtime.url);
+        let error = ai
+            .pull(&AtomicBool::new(false), |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Oversized Ollama progress record"),
+            "unexpected error: {error}"
+        );
+
+        // Cancellation aborts between records.
+        let runtime = pull_server(json!({"status":"pulling"}).to_string());
+        let ai = pull_settings(&runtime.url);
+        let cancelled = AtomicBool::new(true);
+        let error = ai.pull(&cancelled, |_| {}).unwrap_err().to_string();
+        assert!(
+            error.contains("Download monitoring cancelled"),
+            "unexpected error: {error}"
+        );
+
+        // A failing HTTP status blocks before any progress parsing.
+        let runtime = MockServer::new_raw(|route, _| match route {
+            "/api/pull" => Some((500, "{}".into())),
+            _ => None,
+        });
+        let ai = pull_settings(&runtime.url);
+        let error = ai
+            .pull(&AtomicBool::new(false), |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not start"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn executable_discovery_prefers_the_local_install_then_the_path() {
+        // A per-user install shadows PATH discovery.
+        let root = tempfile::tempdir().unwrap();
+        let install_dir = root.path().join("Programs/Ollama");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let exe = install_dir.join("ollama.exe");
+        std::fs::write(&exe, b"stub").unwrap();
+        let found = ollama_executable_from(Some(root.path().as_os_str()), |_| {
+            anyhow::bail!("PATH lookup must not run")
+        })
+        .unwrap();
+        assert_eq!(found, exe);
+
+        // Without a local install the PATH lookup decides, and its failure
+        // names the operator remedy.
+        let missing = ollama_executable_from(None, |_| anyhow::bail!("not on PATH"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing.contains("Install Ollama in the Local AI tab"),
+            "unexpected error: {missing}"
+        );
+
+        // The production entry point resolves without panicking either way.
+        let _ = ollama_executable();
+    }
+
+    #[cfg(windows)]
+    fn exit(code: u32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code)
+    }
+
+    #[cfg(unix)]
+    fn exit(code: u32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code as i32)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_flows_through_the_injected_runner_with_pinned_arguments() {
+        use std::sync::Mutex;
+        static ARGS: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
+        fn recording_runner(args: &[&str]) -> Result<std::process::ExitStatus> {
+            ARGS.lock()
+                .unwrap()
+                .push(args.iter().map(|a| a.to_string()).collect());
+            Ok(exit(0))
+        }
+        with_installer(recording_runner, install).unwrap();
+        let recorded = ARGS.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![vec![
+                "install",
+                "--id",
+                "Ollama.Ollama",
+                "--exact",
+                "--source",
+                "winget",
+                "--accept-source-agreements",
+                "--accept-package-agreements"
+            ]]
+        );
+
+        fn failing_runner(_args: &[&str]) -> Result<std::process::ExitStatus> {
+            Ok(exit(1))
+        }
+        let error = with_installer(failing_runner, install)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("did not complete successfully"),
+            "unexpected error: {error}"
+        );
+
+        fn broken_runner(_args: &[&str]) -> Result<std::process::ExitStatus> {
+            anyhow::bail!("spawn failed")
+        }
+        let error = with_installer(broken_runner, install)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("spawn failed"), "unexpected error: {error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn winget_invocation_reports_the_child_exit_status() {
+        // The resolved-executable entry point runs a real (harmless) process
+        // and forwards its exit status; discovery failure maps to the remedy.
+        let system = std::env::var("SystemRoot").unwrap();
+        let where_exe = PathBuf::from(system).join("System32").join("where.exe");
+        let status = winget_from(&where_exe, &["definitely-not-on-path-xyz"]).unwrap();
+        assert!(!status.success());
+        let status = winget_from(&where_exe, &["cmd"]).unwrap();
+        assert!(status.success());
+
+        // The PATH-discovery entry point resolves winget on Windows 11 or
+        // reports the App Installer remedy; either outcome exercises it.
+        let _ = winget(&["--version"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_spawns_the_daemon_and_reports_readiness_outcomes() {
+        // A runtime already answering the port is validated, never re-launched.
+        let runtime = Runtime::new(usize::MAX, |_| json!({}));
+        let ai = Ollama::new(&settings(&runtime.url())).unwrap();
+        ai.start().unwrap();
+
+        // Spawn failure surfaces the launch error.
+        let missing_port = MockServer::new(|_, _| None);
+        let ai = Ollama::new(&settings(&missing_port.url)).unwrap();
+        let error = ai
+            .start_with(|| anyhow::bail!("Ollama is not installed"), |_| true, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not installed"), "unexpected error: {error}");
+
+        // A spawn that never becomes ready times out with operator guidance.
+        let system = std::env::var("SystemRoot").unwrap();
+        let harmless = PathBuf::from(system).join("System32").join("where.exe");
+        let finder = move || -> Result<PathBuf> { Ok(harmless.clone()) };
+        let error = ai.start_with(finder, |_| false, 1).unwrap_err().to_string();
+        assert!(
+            error.contains("did not become ready"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn spawn_ollama_serve_launches_with_the_hardened_environment() {
+        let system = std::env::var("SystemRoot").unwrap();
+        let harmless = PathBuf::from(system).join("System32").join("where.exe");
+        spawn_ollama_serve(&harmless, "127.0.0.1:0").unwrap();
+        let error = spawn_ollama_serve(&PathBuf::from("definitely-not-here.exe"), "127.0.0.1:0")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Cannot start Ollama"),
+            "unexpected error: {error}"
+        );
     }
 }

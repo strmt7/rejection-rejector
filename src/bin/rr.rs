@@ -343,7 +343,7 @@ fn autostart_report(
 /// Wait until the background worker reports its startup state.
 ///
 /// Inputs: `worker` — spawned worker; `deadline` — startup deadline.
-/// Output: the initialized [`Snapshot`]; `Err` when the workspace failed to
+/// Output: the initialized `Snapshot`; `Err` when the workspace failed to
 /// open or initialization exceeded the deadline.
 fn wait_for_ready(
     worker: &Worker,
