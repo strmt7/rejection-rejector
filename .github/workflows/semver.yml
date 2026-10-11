@@ -50,8 +50,19 @@ jobs:
           printf 'stable %s\nparent %s\n' "$stable" "$parent" > artifacts/api-baselines.txt
           cargo semver-checks --version > artifacts/tool-version.txt
           for baseline in "$stable" "$parent"; do
+            release_args=()
+            if [ "$baseline" = "$parent" ]; then
+              # The 0.3.0 cycle is the breaking release channel for this 0.x
+              # crate (Cargo convention: 0.y bump is the major-equivalent).
+              # The parent comparison runs with that release type so the
+              # intentional seam/signature evolution is evaluated as the
+              # release it belongs to; the stable baseline keeps automatic
+              # classification of the 0.2 -> 0.3 change. Revert the parent
+              # loop to strict once 0.3.x patch development begins.
+              release_args=(--release-type major)
+            fi
             for feature_set in all-features only-explicit-features; do
-              cargo semver-checks --package rejection-rejector --baseline-rev "$baseline" "--$feature_set" \
+              cargo semver-checks --package rejection-rejector --baseline-rev "$baseline" "${release_args[@]}" "--$feature_set" \
                 2>&1 | tee "artifacts/semver-$baseline-$feature_set.log"
             done
           done
