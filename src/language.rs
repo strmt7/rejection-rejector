@@ -152,3 +152,34 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod first_language_fallback_tests {
+    use super::*;
+
+    /// Why: openers like greetings are below the substantive-segment threshold
+    /// and must not decide the reply language; the detector's dominant-language
+    /// fallback takes over only when no substantive segment exists.
+    #[test]
+    fn short_detectable_text_falls_back_to_the_dominant_language() {
+        assert_eq!(first_language("Guten Morgen", "en"), "de");
+    }
+
+    /// Why: text the detector cannot classify at all must fall back to the
+    /// caller-provided default rather than guessing a reply language.
+    #[test]
+    fn undetectable_text_uses_the_requested_fallback() {
+        assert_eq!(first_language("1234567890", "en"), "en");
+        assert_eq!(first_language("", "de"), "de");
+        assert_eq!(first_language("42", "fr"), "fr");
+    }
+
+    /// Why: when a substantive segment exists it wins over the global dominant
+    /// language; this pins the first-substantive-segment contract from the
+    /// prompt-side language rules.
+    #[test]
+    fn substantive_segment_decides_before_dominant_fallback() {
+        let text = "Thanks for the update. Sehr geehrte Damen und Herren, vielen Dank fuer Ihre Ablehnung. Wir haben uns gegen Sie entschieden und melden uns nicht weiter.";
+        assert_eq!(first_language(text, "en"), "de");
+    }
+}

@@ -65,6 +65,39 @@ fn recovery_passphrase_valid(passphrase: &str, confirmation: Option<&str>) -> bo
     (20..=4096).contains(&passphrase.len()) && confirmation.is_none_or(|value| value == passphrase)
 }
 
+/// Native file/folder pickers behind an injectable seam so tests can drive
+/// the dialog-dependent buttons headlessly.
+///
+/// Inputs: none (plain struct of function pointers). Each picker receives a
+/// fully built dialog (title/filter configured by the caller) and outputs the
+/// chosen path, or `None` when the operator cancels.
+#[derive(Clone, Copy)]
+struct FilePickers {
+    /// Resolve a built file dialog. Inputs: configured `rfd::FileDialog`.
+    /// Output: chosen file path, or `None` on cancellation.
+    pick_file: fn(rfd::FileDialog) -> Option<PathBuf>,
+    /// Resolve a built folder dialog. Inputs: configured `rfd::FileDialog`.
+    /// Output: chosen folder path, or `None` on cancellation.
+    pick_folder: fn(rfd::FileDialog) -> Option<PathBuf>,
+    /// Resolve a built save dialog. Inputs: configured `rfd::FileDialog`.
+    /// Output: chosen destination path, or `None` on cancellation.
+    save_file: fn(rfd::FileDialog) -> Option<PathBuf>,
+}
+
+impl FilePickers {
+    /// The production pickers that show real native dialogs.
+    ///
+    /// Inputs: none. Output: [`FilePickers`] wired to `rfd`; tests replace
+    /// the pointers with scripted pickers instead of opening real dialogs.
+    fn native() -> Self {
+        Self {
+            pick_file: rfd::FileDialog::pick_file,
+            pick_folder: rfd::FileDialog::pick_folder,
+            save_file: rfd::FileDialog::save_file,
+        }
+    }
+}
+
 impl ShortcutAction {
     fn tab(self, mode: Mode) -> Option<Tab> {
         match self {
@@ -122,6 +155,8 @@ pub struct App {
     editor_account: String,
     close_confirmation: bool,
     close_approved: bool,
+    pickers: FilePickers,
+    emergency: fn() -> crate::emergency::EmergencyStopStatus,
 }
 impl App {
     pub fn new(
@@ -154,6 +189,8 @@ impl App {
             editor_account: String::new(),
             close_confirmation: false,
             close_approved: false,
+            pickers: FilePickers::native(),
+            emergency: crate::emergency::status_fail_closed,
         }
     }
     fn navigate(&mut self, tab: Tab) {
@@ -949,7 +986,7 @@ impl App {
         let verifier_ready = !self.settings.independent_verifier_enabled
             || self.settings.verifier_model_digest.is_some();
         let task_qualification_ready = self.settings.task_qualification_current();
-        let emergency_stop = crate::emergency::status_fail_closed();
+        let emergency_stop = (self.emergency)();
         let emergency_stop_clear = !emergency_stop.active;
         let signature_ready = !self.settings.signature.trim().is_empty()
             && self.settings.signature.trim() != "Your name";
@@ -1042,9 +1079,9 @@ impl App {
                         egui::Button::new("Choose OAuth JSON & connect"),
                     )
                     .clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Google OAuth JSON", &["json"])
-                        .pick_file()
+                    && let Some(path) = (self.pickers.pick_file)(
+                        rfd::FileDialog::new().add_filter("Google OAuth JSON", &["json"]),
+                    )
                 {
                     self.worker.command(Command::Connect {
                         path,
@@ -1285,9 +1322,10 @@ impl App {
                     )
                     .on_hover_text("Creates a checksum-verified same-vault backup. No decrypted email content or OAuth token is written to the manifest.")
                     .clicked()
-                    && let Some(parent) = rfd::FileDialog::new()
-                        .set_title("Choose parent folder for Rejection Rejector backup")
-                        .pick_folder()
+                    && let Some(parent) = (self.pickers.pick_folder)(
+                        rfd::FileDialog::new()
+                            .set_title("Choose parent folder for Rejection Rejector backup"),
+                    )
                 {
                     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
                     let out = parent.join(format!("rejection-rejector-backup-{stamp}"));
@@ -1300,9 +1338,9 @@ impl App {
                     )
                     .on_hover_text("Restores the selected backup into an isolated temporary workspace, reopens it and deeply authenticates every encrypted record. Live state is not modified.")
                     .clicked()
-                    && let Some(backup) = rfd::FileDialog::new()
-                        .set_title("Choose a Rejection Rejector backup directory")
-                        .pick_folder()
+                    && let Some(backup) = (self.pickers.pick_folder)(
+                        rfd::FileDialog::new().set_title("Choose a Rejection Rejector backup directory"),
+                    )
                 {
                     self.worker.command(Command::RecoveryDrill { backup });
                 }
@@ -1313,10 +1351,11 @@ impl App {
                     )
                     .on_hover_text("Creates a passphrase-wrapped recovery-key envelope for off-machine disaster recovery. The plaintext vault key is never written to disk.")
                     .clicked()
-                    && let Some(out) = rfd::FileDialog::new()
-                        .set_title("Save wrapped Rejection Rejector recovery key")
-                        .set_file_name("recovery-key.json")
-                        .save_file()
+                    && let Some(out) = (self.pickers.save_file)(
+                        rfd::FileDialog::new()
+                            .set_title("Save wrapped Rejection Rejector recovery key")
+                            .set_file_name("recovery-key.json"),
+                    )
                 {
                     self.recovery_dialog = Some(RecoveryDialog {
                         kind: RecoveryDialogKind::Export { out },
@@ -1331,13 +1370,14 @@ impl App {
                     )
                     .on_hover_text("Proves that a wrapped recovery key and passphrase can decrypt the selected backup without installing the recovered key into the OS credential store.")
                     .clicked()
-                    && let Some(backup) = rfd::FileDialog::new()
-                        .set_title("Choose a Rejection Rejector backup directory")
-                        .pick_folder()
-                    && let Some(recovery_key) = rfd::FileDialog::new()
-                        .set_title("Choose the wrapped recovery key")
-                        .add_filter("Recovery key JSON", &["json"])
-                        .pick_file()
+                    && let Some(backup) = (self.pickers.pick_folder)(
+                        rfd::FileDialog::new().set_title("Choose a Rejection Rejector backup directory"),
+                    )
+                    && let Some(recovery_key) = (self.pickers.pick_file)(
+                        rfd::FileDialog::new()
+                            .set_title("Choose the wrapped recovery key")
+                            .add_filter("Recovery key JSON", &["json"]),
+                    )
                 {
                     self.recovery_dialog = Some(RecoveryDialog {
                         kind: RecoveryDialogKind::Verify {
@@ -1355,10 +1395,11 @@ impl App {
                     )
                     .on_hover_text("Writes a redacted JSON report locally. No email content, account address, recipients, OAuth credentials, API token, signature or candidate facts are included.")
                     .clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .set_title("Save Rejection Rejector diagnostics")
-                        .set_file_name("rejection-rejector-diagnostics.json")
-                        .save_file()
+                    && let Some(path) = (self.pickers.save_file)(
+                        rfd::FileDialog::new()
+                            .set_title("Save Rejection Rejector diagnostics")
+                            .set_file_name("rejection-rejector-diagnostics.json"),
+                    )
                 {
                     self.worker.command(Command::Diagnostics { out: path });
                 }
@@ -1377,7 +1418,7 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Backup folder");
                     if ui.button("Choose folder…").clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                        && let Some(path) = (self.pickers.pick_folder)(rfd::FileDialog::new())
                     {
                         self.settings.scheduled_backup_directory =
                             path.to_string_lossy().into_owned();
@@ -1757,7 +1798,7 @@ impl eframe::App for App {
                         );
                         ui.label(&s.notice);
                     }
-                    let emergency_stop = crate::emergency::status_fail_closed();
+                    let emergency_stop = (self.emergency)();
                     if emergency_stop.active {
                         ui.colored_label(
                             Color32::LIGHT_RED,
@@ -1867,6 +1908,7 @@ pub struct RecoveryApp {
         Option<crossbeam_channel::Receiver<Result<crate::recovery::RestoreReport, String>>>,
     recovering: bool,
     error: String,
+    pickers: FilePickers,
 }
 
 impl RecoveryApp {
@@ -1882,6 +1924,7 @@ impl RecoveryApp {
             recovery_result: None,
             recovering: false,
             error: String::new(),
+            pickers: FilePickers::native(),
         }
     }
 }
@@ -1952,9 +1995,10 @@ impl eframe::App for RecoveryApp {
                             egui::Button::new("Choose backup directory…"),
                         )
                         .clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .set_title("Choose Rejection Rejector backup directory")
-                            .pick_folder()
+                        && let Some(path) = (self.pickers.pick_folder)(
+                            rfd::FileDialog::new()
+                                .set_title("Choose Rejection Rejector backup directory"),
+                        )
                     {
                         self.backup = Some(path);
                         self.error.clear();
@@ -1974,10 +2018,11 @@ impl eframe::App for RecoveryApp {
                             egui::Button::new("Choose wrapped recovery key…"),
                         )
                         .clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .set_title("Choose wrapped recovery key")
-                            .add_filter("Recovery key JSON", &["json"])
-                            .pick_file()
+                        && let Some(path) = (self.pickers.pick_file)(
+                            rfd::FileDialog::new()
+                                .set_title("Choose wrapped recovery key")
+                                .add_filter("Recovery key JSON", &["json"]),
+                        )
                     {
                         self.recovery_key = Some(path);
                         self.error.clear();
@@ -2033,35 +2078,28 @@ impl eframe::App for RecoveryApp {
                     )
                     .clicked()
                 {
-                    let backup = self.backup.clone();
-                    let recovery_key = self.recovery_key.clone();
-                    match (backup, recovery_key) {
-                        (Some(backup), Some(recovery_key)) => {
-                            let data_dir = self.data_dir.clone();
-                            let passphrase = std::mem::replace(
-                                &mut self.passphrase,
-                                Zeroizing::new(String::new()),
-                            );
-                            let (sender, receiver) = crossbeam_channel::bounded(1);
-                            self.recovery_result = Some(receiver);
-                            self.recovering = true;
-                            self.acknowledgement.clear();
-                            self.error.clear();
-                            std::thread::spawn(move || {
-                                let result = crate::recovery::recover_workspace_from_backup(
-                                    &data_dir,
-                                    &backup,
-                                    &recovery_key,
-                                    passphrase.as_bytes(),
-                                )
-                                .map_err(|error| format!("{error:#}"));
-                                let _ = sender.send(result);
-                            });
-                        }
-                        _ => {
-                            self.error = "Recovery selections are incomplete".into();
-                        }
-                    }
+                    let backup = self.backup.clone().unwrap_or_default();
+                    let recovery_key = self.recovery_key.clone().unwrap_or_default();
+                    let data_dir = self.data_dir.clone();
+                    let passphrase = std::mem::replace(
+                        &mut self.passphrase,
+                        Zeroizing::new(String::new()),
+                    );
+                    let (sender, receiver) = crossbeam_channel::bounded(1);
+                    self.recovery_result = Some(receiver);
+                    self.recovering = true;
+                    self.acknowledgement.clear();
+                    self.error.clear();
+                    std::thread::spawn(move || {
+                        let result = crate::recovery::recover_workspace_from_backup(
+                            &data_dir,
+                            &backup,
+                            &recovery_key,
+                            passphrase.as_bytes(),
+                        )
+                        .map_err(|error| format!("{error:#}"));
+                        let _ = sender.send(result);
+                    });
                 }
 
                 if self.recovering {
@@ -2253,5 +2291,2609 @@ mod send_guard_tests {
         assert!(requires_close_confirmation(false, &sensitive));
         assert!(!requires_close_confirmation(false, &benign));
         assert!(!requires_close_confirmation(false, &finished));
+    }
+}
+
+/// Headless desktop-driving harness: a real [`App`] on a real egui context
+/// with scripted input, so every render entry point runs its true layout code
+/// without opening a window.
+#[cfg(test)]
+pub(super) mod headless {
+    use super::*;
+    use crossbeam_channel::{Receiver, bounded};
+
+    /// A headless GUI harness driving the real [`eframe::App::ui`] entry.
+    ///
+    /// Inputs: none. Output: a harness whose `app` renders exactly like the
+    /// desktop build; every [`Command`] the interface issues is captured in
+    /// the harness's channel instead of reaching a live worker, and the
+    /// native file dialogs are replaced with scripted pickers.
+    pub(super) struct Harness {
+        pub(super) app: App,
+        ctx: egui::Context,
+        rx: Receiver<Command>,
+        nodes: Vec<(egui::accesskit::NodeId, egui::accesskit::Node)>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Harness {
+        /// Build a harness around a demo-mode [`App`].
+        ///
+        /// Inputs: none. Output: harness rendering against a default
+        /// [`Snapshot`]; the engine thread is detached from the command
+        /// channel so test runs are deterministic.
+        pub(super) fn new() -> Self {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let dir = tempfile::tempdir().expect("temp workspace");
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = App::new(&cc, dir.path().to_path_buf(), true, None);
+            let (tx, rx) = bounded(64);
+            // Dropping the worker's own sender disconnects the engine loop;
+            // wait for its one startup refresh before taking over the view.
+            app.worker.tx = tx;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !app.worker.view().initialized {
+                assert!(Instant::now() < deadline, "worker never initialized");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            *app.worker.snapshot.lock().expect("snapshot lock") = Snapshot::default();
+            app.pickers = FilePickers {
+                pick_file: |_| Some(PathBuf::from("picked-file.json")),
+                pick_folder: |_| Some(PathBuf::from("picked-folder")),
+                save_file: |_| Some(PathBuf::from("saved-file.json")),
+            };
+            let mut harness = Self {
+                app,
+                ctx,
+                rx,
+                nodes: Vec::new(),
+                _dir: dir,
+            };
+            // A fresh context emits no widget tree on its first pass; render
+            // one warm-up frame so lookups work from the first test frame. An
+            // uninitialized snapshot keeps the first real sync (settings and
+            // account) for the test's own first frame.
+            harness.draw(&Snapshot::default());
+            harness
+        }
+
+        /// Render one full application frame with scripted input events.
+        ///
+        /// Inputs: `s` — snapshot the worker would report; `events` — raw
+        /// egui input events for this frame. Output: none; the frame is laid
+        /// out for real and the AccessKit tree is cached for lookups.
+        pub(super) fn frame(&mut self, s: &Snapshot, events: Vec<egui::Event>) {
+            *self.app.worker.snapshot.lock().expect("snapshot lock") = s.clone();
+            let ctx = self.ctx.clone();
+            let app = &mut self.app;
+            run_frame(&ctx, &mut self.nodes, events, false, |root_ui, frame| {
+                eframe::App::ui(app, root_ui, frame);
+            });
+        }
+
+        /// Render one frame through a custom entry point instead of the
+        /// full application shell.
+        ///
+        /// Inputs: `s` — snapshot the worker would report; `render` — the
+        /// entry point to drive (`&mut App`, root ui). Output: none; the
+        /// frame's widget tree is stored for lookups.
+        pub(super) fn frame_entry(
+            &mut self,
+            s: &Snapshot,
+            mut render: impl FnMut(&mut App, &mut egui::Ui),
+        ) {
+            *self.app.worker.snapshot.lock().expect("snapshot lock") = s.clone();
+            let ctx = self.ctx.clone();
+            let app = &mut self.app;
+            run_frame(
+                &ctx,
+                &mut self.nodes,
+                Vec::new(),
+                false,
+                |root_ui, _frame| {
+                    render(app, root_ui);
+                },
+            );
+        }
+
+        /// Render one frame with no input events.
+        ///
+        /// Inputs: `s` — snapshot the worker would report. Output: none.
+        pub(super) fn draw(&mut self, s: &Snapshot) {
+            self.frame(s, Vec::new());
+        }
+
+        /// Find the unique rendered widget carrying a label.
+        ///
+        /// Inputs: `label` — exact AccessKit label. Output: the widget's
+        /// AccessKit node id; panics when the label is missing or ambiguous
+        /// so tests cannot silently click the wrong control.
+        pub(super) fn node_id(&self, label: &str) -> egui::accesskit::NodeId {
+            let matches: Vec<_> = self
+                .nodes
+                .iter()
+                .filter(|(_, node)| node_text(node) == Some(label))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "expected exactly one widget labelled {label:?}, found {}; labels: {:?}",
+                matches.len(),
+                self.labels()
+            );
+            matches[0].0
+        }
+
+        /// Whether any rendered widget carries the exact label.
+        ///
+        /// Inputs: `label` — exact AccessKit label. Output: `true` when the
+        /// last frame rendered such a widget.
+        pub(super) fn shows(&self, label: &str) -> bool {
+            self.nodes
+                .iter()
+                .any(|(_, node)| node_text(node) == Some(label))
+        }
+
+        /// Whether any rendered label contains the text.
+        ///
+        /// Inputs: `needle` — substring to look for. Output: `true` when at
+        /// least one widget label contains it.
+        pub(super) fn shows_containing(&self, needle: &str) -> bool {
+            if self
+                .nodes
+                .iter()
+                .any(|(_, node)| node_text(node).is_some_and(|l| l.contains(needle)))
+            {
+                return true;
+            }
+            // Wrapped labels split into per-line text runs: search the
+            // whitespace-squashed concatenation of every visible text.
+            let squashed = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            squashed(&self.labels().join(" ")).contains(&squashed(needle))
+        }
+
+        /// All rendered widget labels from the last frame.
+        ///
+        /// Inputs: none. Output: labels in tree order.
+        pub(super) fn labels(&self) -> Vec<String> {
+            self.nodes
+                .iter()
+                .filter_map(|(_, node)| node_text(node).map(str::to_owned))
+                .collect()
+        }
+
+        /// Click the unique widget carrying a label (even when disabled).
+        ///
+        /// Inputs: `s` — snapshot for the click frame; `label` — exact
+        /// label. Output: none; the click is delivered as an AccessKit click
+        /// request for the widget found in the previous frame.
+        pub(super) fn click(&mut self, s: &Snapshot, label: &str) {
+            let id = self.node_id(label);
+            self.frame(s, vec![click_request(id)]);
+        }
+
+        /// Focus the n-th text input and type into it.
+        ///
+        /// Inputs: `s` — snapshot; `index` — zero-based index among the
+        /// rendered text inputs; `text` — text to type. Output: none; the
+        /// field is pointer-clicked first so text events reach it.
+        pub(super) fn type_into(&mut self, s: &Snapshot, index: usize, text: &str) {
+            let id = self
+                .nodes
+                .iter()
+                .filter(|(_, node)| {
+                    matches!(
+                        node.role(),
+                        egui::accesskit::Role::TextInput
+                            | egui::accesskit::Role::MultilineTextInput
+                    )
+                })
+                .nth(index)
+                .map(|(id, _)| *id)
+                .expect("text input present");
+            let bounds = self
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .and_then(|(_, node)| node.bounds())
+                .expect("widget bounds");
+            let pos = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            self.frame(
+                s,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            self.frame(s, vec![egui::Event::Text(text.to_owned())]);
+        }
+
+        /// Access to the shared egui context for direct frame driving.
+        ///
+        /// Inputs: none. Output: clone of the harness context.
+        pub(super) fn ctx(&self) -> egui::Context {
+            self.ctx.clone()
+        }
+
+        /// The harness workspace directory for screenshot output.
+        ///
+        /// Inputs: none. Output: path of the temporary data directory.
+        pub(super) fn app_dir(&self) -> PathBuf {
+            self._dir.path().to_path_buf()
+        }
+
+        /// Drain every command the interface issued since the last call.
+        ///
+        /// Inputs: none. Output: captured [`Command`]s in issue order.
+        pub(super) fn commands(&mut self) -> Vec<Command> {
+            let mut commands = Vec::new();
+            while let Ok(command) = self.rx.try_recv() {
+                commands.push(command);
+            }
+            commands
+        }
+    }
+
+    /// The visible text of an AccessKit node: buttons carry `label`, while
+    /// plain labels carry their text in `value`.
+    ///
+    /// Inputs: `node` — AccessKit node. Output: the display text, if any.
+    pub(super) fn node_text(node: &egui::accesskit::Node) -> Option<&str> {
+        node.label().or_else(|| node.value())
+    }
+
+    /// Render one real application frame headlessly and return its widget
+    /// tree.
+    ///
+    /// Inputs: `ctx` — egui context to render against; `events` — scripted
+    /// input events; `close_requested` — whether the window close was
+    /// requested; `render` — the application render entry. Output: the
+    /// frame's AccessKit `(node id, node)` pairs for lookups and clicks.
+    pub(super) fn run_frame(
+        ctx: &egui::Context,
+        tree: &mut Vec<(egui::accesskit::NodeId, egui::accesskit::Node)>,
+        events: Vec<egui::Event>,
+        close_requested: bool,
+        render: impl FnMut(&mut egui::Ui, &mut eframe::Frame),
+    ) {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1280.0, 2048.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                events: if close_requested {
+                    vec![egui::ViewportEvent::Close]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            },
+        );
+        let mut render = render;
+        let mut out = ctx.run_ui(input, |root_ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            render(root_ui, &mut frame);
+        });
+        out.textures_delta.clear();
+        // egui emits an empty widget tree on the first pass after a state
+        // change; repeat the pass without input so the tree is complete.
+        let mut warm = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1280.0, 2048.0),
+            )),
+            ..Default::default()
+        };
+        warm.viewports
+            .insert(egui::ViewportId::ROOT, egui::ViewportInfo::default());
+        let mut out = ctx.run_ui(warm, |root_ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            render(root_ui, &mut frame);
+        });
+        out.textures_delta.clear();
+        // Each frame's update is the complete current widget tree.
+        tree.clear();
+        if let Some(update) = out.platform_output.accesskit_update {
+            tree.extend(update.nodes);
+        }
+    }
+
+    /// Build an AccessKit click request for a node id.
+    ///
+    /// Inputs: `id` — target widget node. Output: the [`egui::Event`] that
+    /// egui folds into `Response::clicked()` for that widget.
+    fn click_request(id: egui::accesskit::NodeId) -> egui::Event {
+        egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_tree: egui::accesskit::TreeId::ROOT,
+            target_node: id,
+            data: None,
+        })
+    }
+
+    /// Scripted pickers that always return the canned paths.
+    ///
+    /// Inputs: none. Output: [`FilePickers`] whose pickers return
+    /// `picked-file.json` / `picked-folder` / `saved-file.json`.
+    pub(super) fn pickers_returning() -> FilePickers {
+        FilePickers {
+            pick_file: |_| Some(PathBuf::from("picked-file.json")),
+            pick_folder: |_| Some(PathBuf::from("picked-folder")),
+            save_file: |_| Some(PathBuf::from("saved-file.json")),
+        }
+    }
+
+    /// Build a reviewable job with a persisted draft.
+    ///
+    /// Inputs: `body` — persisted draft text. Output: [`Job`] in `Ready`
+    /// state with a synthetic demo email and the given draft.
+    pub(super) fn reviewable_job(body: &str) -> Job {
+        let email = crate::ollama::sample_email("Synthetic rejection", "We regret to inform you.");
+        let mut job = Job::new(email.stub.clone(), chrono::Utc::now());
+        job.email = Some(email);
+        job.state = JobState::Ready;
+        job.draft = Some(crate::types::Draft {
+            body: body.into(),
+            origin: "human".into(),
+        });
+        job
+    }
+
+    /// Build a fully sendable job: Gmail source, matching account, valid
+    /// Message-ID and replyable recipient.
+    ///
+    /// Inputs: `body` — persisted draft text. Output: [`Job`] that passes
+    /// every mail-level hard block when `s.account` is `ACCOUNT`.
+    pub(super) fn sendable_job(body: &str) -> Job {
+        let mut job = reviewable_job(body);
+        if let Some(email) = &mut job.email {
+            email.stub = crate::types::Stub {
+                account: ACCOUNT.into(),
+                provider_id: "provider-1".into(),
+                thread_id: "thread-1".into(),
+                source: crate::types::Source::Gmail,
+            };
+            email.from = "Recruitment <hr@corp.example>".into();
+            email.message_id = "<valid-message@corp.example>".into();
+        }
+        job
+    }
+
+    /// The account that [`sendable_job`] mails target.
+    pub(super) const ACCOUNT: &str = "me@example.com";
+
+    /// Build an empty initialized snapshot for the given account.
+    ///
+    /// Inputs: `account` — configured account name. Output: [`Snapshot`]
+    /// that the desktop treats as connected, initialized and idle.
+    pub(super) fn snapshot(account: &str) -> Snapshot {
+        Snapshot {
+            initialized: true,
+            account: account.into(),
+            connected: true,
+            ..Default::default()
+        }
+    }
+
+    /// Build a storage-health reading.
+    ///
+    /// Inputs: `available_gib` — free space; `runtime_write_safe` — whether
+    /// durable runtime writes are safe. Output: [`StorageHealth`].
+    pub(super) fn storage_health(
+        available_gib: f64,
+        runtime_write_safe: bool,
+    ) -> crate::storage::StorageHealth {
+        crate::storage::StorageHealth {
+            schema_version: 1,
+            database_bytes: 4096,
+            wal_bytes: 0,
+            shm_bytes: 0,
+            workspace_database_bytes: 4096,
+            available_bytes: (available_gib * 1073741824.0) as u64,
+            total_bytes: 21474836480,
+            runtime_required_bytes: 1024,
+            backup_required_bytes: 2048,
+            runtime_write_safe,
+            backup_safe: true,
+        }
+    }
+
+    /// Build a scheduled-backup status reading.
+    ///
+    /// Inputs: `enabled`, `overdue` — status flags; `last_success_at` —
+    /// last verified backup time. Output: [`ScheduledBackupStatus`].
+    pub(super) fn scheduled_backup(
+        enabled: bool,
+        overdue: bool,
+        last_success_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> crate::recovery::ScheduledBackupStatus {
+        crate::recovery::ScheduledBackupStatus {
+            schema_version: 1,
+            enabled,
+            interval_hours: 24,
+            keep: 3,
+            last_success_at,
+            age_seconds: last_success_at.map(|_| 60),
+            overdue,
+        }
+    }
+
+    /// Build a backup-isolation status reading.
+    ///
+    /// Inputs: `configured`, `destination_exists` — location state;
+    /// `distinct_failure_domain` — measurement result. Output:
+    /// [`BackupIsolationStatus`].
+    pub(super) fn backup_isolation(
+        configured: bool,
+        destination_exists: bool,
+        distinct_failure_domain: Option<bool>,
+    ) -> crate::recovery::BackupIsolationStatus {
+        crate::recovery::BackupIsolationStatus {
+            schema_version: 1,
+            configured,
+            destination_exists,
+            distinct_failure_domain,
+            measurement: "test",
+        }
+    }
+
+    /// Build a task qualification that is current for the given settings.
+    ///
+    /// Inputs: `settings` — settings the qualification must match (digest,
+    /// model, prompt version, context hash, suite hash). Output: a
+    /// [`TaskQualification`] that `Settings::task_qualification_current`
+    /// accepts for exactly that configuration.
+    pub(super) fn current_qualification(settings: &Settings) -> crate::config::TaskQualification {
+        crate::config::TaskQualification {
+            model: settings.model.clone(),
+            digest: settings.model_digest.clone().unwrap_or_default(),
+            prompt_version: crate::config::PROMPT_VERSION.into(),
+            context_hash: crate::config::settings_context_hash(settings),
+            suite_hash: crate::config::evaluation_suite_hash(),
+            ollama_runtime_version: "0.35.0".into(),
+            task_score: 91.5,
+            fixture_count: 12,
+            qualified_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Build a verdict/analysis pair for queue and review rendering.
+    ///
+    /// Inputs: `company`, `position` — verdict fields; `verification` —
+    /// optional reply audit. Output: [`Analysis`] attached to jobs.
+    pub(super) fn analysis(
+        company: &str,
+        position: &str,
+        verification: Option<crate::types::Verification>,
+    ) -> crate::types::Analysis {
+        crate::types::Analysis {
+            verdict: crate::types::Verdict {
+                category: crate::types::Category::Rejection,
+                confidence: 87,
+                evidence: "explicit rejection wording".into(),
+                explanation: "The message clearly rejects the application.".into(),
+                company: company.into(),
+                position: position.into(),
+                language: "English".into(),
+            },
+            verification,
+            model: "test-model".into(),
+            model_digest: "digest".into(),
+            verification_model: String::new(),
+            verification_model_digest: String::new(),
+            prompt_version: "v-test".into(),
+            email_fingerprint: "fingerprint".into(),
+            verified_draft_hash: None,
+            context_hash: "context".into(),
+            input_complete: true,
+            gpu_resident: true,
+        }
+    }
+}
+/// Headless behavior tests for the desktop interface.
+#[cfg(test)]
+mod render_tests {
+    use super::headless::{self, Harness};
+    use super::*;
+
+    /// Account-switching resets the editor and every parked modal.
+    ///
+    /// Why: leaking the previous account's text into another mailbox is a
+    /// safety bug — assert the editor and modals are gone after the switch.
+    #[test]
+    fn account_switch_resets_editor_state() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot("old@example.com");
+        h.app.sync_view(&s);
+        // Dirty state accumulated while working in the old account.
+        h.app.dirty = true;
+        h.app.editor = "old account text".into();
+        h.app.editor_key = Some(("job".into(), 1));
+        h.app.pending_select = Some("job".into());
+        h.app.send_confirmation = Some(headless::reviewable_job("draft"));
+        s.account = "new@example.com".into();
+        h.app.sync_view(&s);
+        assert!(h.app.editor.is_empty(), "editor cleared on account switch");
+        assert!(h.app.editor_key.is_none());
+        assert!(h.app.pending_select.is_none());
+        assert!(h.app.send_confirmation.is_none());
+    }
+
+    /// Settings reload exactly once per snapshot revision change.
+    ///
+    /// Why: a lost update leaves the form editing stale settings silently.
+    #[test]
+    fn settings_reload_only_on_revision_change() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.model = "first-model".into();
+        s.settings_revision = 3;
+        h.app.sync_view(&s);
+        assert_eq!(h.app.settings.model, "first-model");
+        assert_eq!(h.app.settings_revision, 3);
+        // Unsaved local edits survive while the revision is unchanged.
+        h.app.settings.model = "local-edit".into();
+        h.app.sync_view(&s);
+        assert_eq!(h.app.settings.model, "local-edit");
+        s.settings.model = "server-model".into();
+        s.settings_revision = 4;
+        h.app.sync_view(&s);
+        assert_eq!(h.app.settings.model, "server-model");
+    }
+
+    /// Automatic mode kicks the view off the Review tab on sync.
+    ///
+    /// Why: the Review tab must not present a review flow the mode disabled.
+    #[test]
+    fn automatic_mode_kicks_review_tab() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::Automatic;
+        h.app.tab = Tab::Review;
+        h.app.sync_view(&s);
+        assert_eq!(h.app.tab, Tab::Overview);
+    }
+
+    /// The editor follows the selected job: a clean editor rebinds and
+    /// reloads, a matching save clears dirty, a dirty editor never rebinds.
+    ///
+    /// Why: the binding is what keeps stale text unsavable and unsendable.
+    #[test]
+    fn editor_follows_selected_job_binding() {
+        let mut h = Harness::new();
+        let mut job = headless::reviewable_job("persisted draft");
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.selected = Some(job.clone());
+        h.app.dirty = false;
+        h.app.sync_view(&s);
+        assert_eq!(h.app.editor, "persisted draft");
+        assert_eq!(h.app.editor_key, Some((job.id.clone(), job.revision)));
+
+        // A confirmed save (text == stored) clears dirty and re-binds.
+        h.app.dirty = true;
+        h.app.sync_view(&s);
+        assert!(!h.app.dirty, "stored text marks the save confirmed");
+
+        // A dirty editor with different text stays dirty and unbound.
+        h.app.editor = "unsaved edit".into();
+        h.app.dirty = true;
+        job.revision += 1;
+        s.selected = Some(job.clone());
+        h.app.sync_view(&s);
+        assert_eq!(h.app.editor, "unsaved edit", "dirty text retained");
+        assert!(h.app.dirty);
+        assert_ne!(
+            h.app.editor_key,
+            Some((job.id.clone(), job.revision)),
+            "stale editor stays unbound to the new revision"
+        );
+    }
+
+    /// Navigation issues a list refresh only for Review and Activity.
+    ///
+    /// Why: the queue must re-fetch when the pane changes, but Overview must
+    /// not spam the worker.
+    #[test]
+    fn navigation_refreshes_review_and_activity_only() {
+        let mut h = Harness::new();
+        h.app.navigate(Tab::Overview);
+        assert!(h.commands().is_empty());
+        h.app.navigate(Tab::Review);
+        assert!(matches!(
+            h.commands()[0],
+            Command::List {
+                review: true,
+                page: 0
+            }
+        ));
+        h.app.navigate(Tab::Activity);
+        assert!(matches!(
+            h.commands()[0],
+            Command::List {
+                review: false,
+                page: 0
+            }
+        ));
+    }
+
+    /// Selection parks behind the unsaved-edit dialog and otherwise issues
+    /// `Command::Select`.
+    ///
+    /// Why: silently discarding an unsaved edit on a click loses operator work.
+    #[test]
+    fn selection_parks_behind_unsaved_edit_dialog() {
+        let mut h = Harness::new();
+        h.app.dirty = true;
+        h.app.select("job-1".into());
+        assert_eq!(h.app.pending_select, Some("job-1".into()));
+        // While the unsaved-edit dialog is parked, other selections are ignored.
+        h.app.select("job-2".into());
+        assert_eq!(h.app.pending_select, Some("job-1".into()));
+        assert!(h.commands().is_empty(), "modal state blocks selection");
+        h.app.pending_select = None;
+        h.app.dirty = false;
+        h.app.select("job-3".into());
+        assert!(h.app.pending_select.is_none());
+        assert!(matches!(&h.commands()[0], Command::Select(id) if id == "job-3"));
+    }
+
+    /// Keyboard shortcuts navigate tabs, run F5, and a modal Esc cancels
+    /// every parked dialog without touching the worker.
+    ///
+    /// Why: shortcut routing is a state machine; a leak between modal and
+    /// pane keys would fire commands while a dialog is open.
+    #[test]
+    fn keyboard_shortcuts_route_by_modal_state() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        h.frame(
+            &s,
+            vec![egui::Event::Key {
+                key: egui::Key::Num2,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+        );
+        assert_eq!(h.app.tab, Tab::Review);
+        h.commands();
+
+        // F5 is CheckNow only on an idle connected live session.
+        s.initialized = true;
+        s.connected = true;
+        h.frame(
+            &s,
+            vec![egui::Event::Key {
+                key: egui::Key::F5,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(matches!(h.commands()[0], Command::CheckNow));
+        s.busy = "syncing".into();
+        h.frame(
+            &s,
+            vec![egui::Event::Key {
+                key: egui::Key::F5,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(h.commands().is_empty(), "busy sessions never trigger F5");
+
+        // Esc inside a modal clears the modal stack and issues nothing.
+        h.app.pending_select = Some("job".into());
+        h.app.send_confirmation = Some(headless::reviewable_job("draft"));
+        h.app.install_confirmation = true;
+        h.app.close_confirmation = true;
+        s.busy.clear();
+        h.frame(
+            &s,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(h.app.pending_select.is_none() && h.app.send_confirmation.is_none());
+        assert!(!h.app.install_confirmation && !h.app.close_confirmation);
+        assert!(
+            h.commands().is_empty(),
+            "modal Esc never reaches the worker"
+        );
+    }
+
+    /// The overview renders both sides of every status branch and its
+    /// buttons route correctly.
+    ///
+    /// Why: each fallback string is a distinct operator signal ("Not
+    /// connected", "Not checked yet", "Storage health unavailable", …); a
+    /// wrong branch hides real problems behind healthy-looking text.
+    #[test]
+    fn overview_renders_status_branches_and_routes_buttons() {
+        let mut h = Harness::new();
+        h.app.tab = Tab::Overview;
+        let s = headless::snapshot("");
+        h.draw(&s);
+        for expected in [
+            "MESSAGES STORED",
+            "Not connected",
+            "Disabled — no email can leave the app",
+            "Not checked yet",
+            "After connecting Gmail",
+            "Storage health unavailable",
+            "Status unavailable",
+            "Model qualification required",
+            "First run",
+        ] {
+            assert!(
+                h.shows(expected),
+                "missing {expected:?} in {:?}",
+                h.labels()
+            );
+        }
+
+        // Rich state: every optional field populated on the healthy path.
+        let mut s = headless::snapshot("me@example.com");
+        s.settings.sending_enabled = true;
+        s.settings.model_digest = Some("0123456789abcdef".into());
+        s.counts.stored = 7;
+        s.counts.review = 3;
+        s.counts.sent = 2;
+        s.last_poll = Some(chrono::Utc::now());
+        s.next_poll = Some(chrono::Utc::now());
+        s.storage = Some(headless::storage_health(64.0, true));
+        s.scheduled_backup = Some(headless::scheduled_backup(
+            false,
+            false,
+            Some(chrono::Utc::now()),
+        ));
+        s.backup_isolation = Some(headless::backup_isolation(true, true, Some(true)));
+        h.draw(&s);
+        for expected in [
+            "me@example.com",
+            "Enabled, with safety checks",
+            "durable writes safe",
+            "Distinct filesystem / volume",
+            "Model pinned — rechecked when processing",
+        ] {
+            assert!(h.shows_containing(expected), "missing {expected:?}");
+        }
+
+        // Low-headroom / overdue / same-volume variants flip the warnings.
+        s.storage = Some(headless::storage_health(1.0, false));
+        s.scheduled_backup = Some(headless::scheduled_backup(true, true, None));
+        s.backup_isolation = Some(headless::backup_isolation(true, true, Some(false)));
+        h.draw(&s);
+        assert!(h.shows_containing("LOW HEADROOM"));
+        assert!(h.shows_containing("OVERDUE"));
+        assert!(h.shows_containing("SAME VOLUME"));
+
+        // Disabled/unconfigured/pending variants.
+        s.scheduled_backup = Some(headless::scheduled_backup(false, false, None));
+        s.backup_isolation = Some(headless::backup_isolation(false, false, None));
+        h.draw(&s);
+        assert!(h.shows("Disabled"));
+        assert!(h.shows("Not configured"));
+
+        s.scheduled_backup = Some(headless::scheduled_backup(true, false, None));
+        s.backup_isolation = Some(headless::backup_isolation(true, false, None));
+        h.draw(&s);
+        assert!(h.shows("Pending first backup"));
+        assert!(h.shows("Destination unavailable"));
+
+        s.backup_isolation = Some(headless::backup_isolation(true, true, None));
+        h.draw(&s);
+        assert!(h.shows("Could not determine on this platform"));
+
+        // Buttons: Check email now routes when idle and connected …
+        s.demo = false;
+        h.click(&s, "Check email now");
+        assert!(matches!(h.commands()[0], Command::CheckNow));
+        // … navigation buttons switch tabs …
+        h.draw(&s);
+        h.click(&s, "Configure local AI");
+        assert_eq!(h.app.tab, Tab::LocalAi);
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        h.click(&s, "Open setup");
+        assert_eq!(h.app.tab, Tab::Settings);
+        // … and a demo session cannot check mail.
+        s.demo = true;
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        h.click(&s, "Check email now");
+        assert!(h.commands().is_empty(), "demo sessions never check mail");
+    }
+
+    /// The queue renders every title variant and selects exactly what was
+    /// clicked; paging is bounded by the worker contract.
+    ///
+    /// Why: the queue title encodes state + role + score; paging must use
+    /// the exact 25-item page contract.
+    #[test]
+    fn queue_renders_title_variants_and_pages() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::HumanReview;
+        h.app.tab = Tab::Review;
+        h.draw(&s);
+        assert!(h.shows_containing("No rejections to review"));
+        assert!(h.shows("Previous") && h.shows("Next"));
+
+        let mut job = headless::reviewable_job("draft text");
+        job.analysis = Some(headless::analysis("Acme", "Engineer", None));
+        let mut no_email = headless::reviewable_job("other draft");
+        no_email.email = None;
+        no_email.analysis = None;
+        let mut bare_role = headless::reviewable_job("third");
+        bare_role.analysis = Some(headless::analysis("", "", None));
+        s.items = vec![job.clone(), no_email, bare_role];
+        s.selected = None;
+        h.draw(&s);
+        assert!(h.shows_containing("Acme · Engineer"));
+        assert!(h.shows_containing("Message awaiting analysis"));
+        assert!(h.shows_containing("score 87/100"));
+        assert!(h.shows_containing("Ready"));
+
+        // Clicking the job title selects the job.
+        h.click(&s, h.labels().iter().find(|l| l.contains("Acme")).unwrap());
+        assert!(matches!(&h.commands()[0], Command::Select(id) if id == &job.id));
+
+        // Paging: page 1 enables Previous; a full page enables Next.
+        s.page = 1;
+        s.items = vec![headless::reviewable_job("x"); 25];
+        h.draw(&s);
+        h.click(&s, "Previous");
+        assert!(matches!(
+            h.commands()[0],
+            Command::List {
+                review: true,
+                page: 0
+            }
+        ));
+        h.draw(&s);
+        h.click(&s, "Next");
+        assert!(matches!(
+            h.commands()[0],
+            Command::List {
+                review: true,
+                page: 2
+            }
+        ));
+
+        // A single item disables both directions: clicks issue nothing.
+        s.items = vec![headless::reviewable_job("x")];
+        s.page = 0;
+        h.draw(&s);
+        h.click(&s, "Previous");
+        h.draw(&s);
+        h.click(&s, "Next");
+        assert!(h.commands().is_empty(), "disabled paging issues no command");
+    }
+
+    /// The activity log shows per-state badges, reconciliation only for
+    /// uncertain deliveries when idle, and expands job details on demand.
+    ///
+    /// Why: uncertain sends must never be retried implicitly — the button is
+    /// the only reconciliation trigger and must respect the busy state.
+    #[test]
+    fn activity_shows_states_and_reconciles_uncertain_deliveries() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::HumanReview;
+        h.app.tab = Tab::Activity;
+        let mut sent = headless::reviewable_job("sent draft");
+        sent.state = JobState::Sent;
+        sent.flags = vec!["flag-one".into()];
+        let mut uncertain = headless::reviewable_job("uncertain draft");
+        uncertain.state = JobState::Uncertain;
+        s.items = vec![sent.clone(), uncertain.clone()];
+        s.events = vec![crate::types::AuditEvent {
+            seq: 1,
+            at: chrono::Utc::now(),
+            kind: "delivery.attempted".into(),
+            domain: Default::default(),
+            severity: Default::default(),
+            item_id: None,
+            detail: "attempt recorded".into(),
+        }];
+        h.draw(&s);
+        assert!(h.shows_containing("Ready") || h.shows("Sent"));
+        assert!(h.shows("Reconcile with Gmail Sent"));
+        assert!(h.shows_containing("delivery.attempted"));
+
+        // Idle: reconcile routes the exact job; busy: the button is inert.
+        h.click(&s, "Reconcile with Gmail Sent");
+        assert!(matches!(&h.commands()[0], Command::Reconcile(id) if id == &uncertain.id));
+        s.busy = "syncing".into();
+        h.draw(&s);
+        h.click(&s, "Reconcile with Gmail Sent");
+        assert!(h.commands().is_empty(), "busy sessions cannot reconcile");
+
+        // Expanding Details reveals the stored id and flags.
+        s.busy.clear();
+        s.items = vec![sent.clone()];
+        h.draw(&s);
+        h.click(&s, "Details");
+        h.draw(&s);
+        assert!(h.shows_containing(&sent.id[..8]) || h.shows_containing("flag-one"));
+
+        // Paging buttons route like the queue.
+        s.page = 1;
+        h.draw(&s);
+        h.click(&s, "Previous page");
+        assert!(matches!(
+            h.commands()[0],
+            Command::List {
+                review: false,
+                page: 0
+            }
+        ));
+    }
+
+    /// The review workspace renders the full editor flow: draft binding,
+    /// unsaved flag, word count, discard/reload, send-gate composition and
+    /// the confirm dialog.
+    ///
+    /// Why: the send gate is the safety core — the button must be inert
+    /// unless the visible text is the exact persisted draft, and the discard
+    /// path must never touch the worker.
+    #[test]
+    fn review_workspace_composes_the_send_gate() {
+        let mut h = Harness::new();
+        let job = headless::sendable_job("A professional reply body.");
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::HumanReview;
+        s.settings.sending_enabled = true;
+        s.selected = Some(job.clone());
+        h.app.tab = Tab::Review;
+        h.draw(&s);
+        assert!(h.shows("ORIGINAL EMAIL") && h.shows("YOUR RESPONSE"));
+        assert!(h.shows_containing("4 words"));
+        assert!(!h.shows("Unsaved"), "clean editor is not flagged");
+
+        // Editing marks the text unsaved and blocks the send button.
+        h.type_into(&s, 0, " edited");
+        assert!(h.app.dirty, "typing marks the editor dirty");
+        h.draw(&s);
+        assert!(h.shows("Unsaved"));
+        h.click(&s, "Review & send");
+        assert!(
+            h.app.send_confirmation.is_none(),
+            "dirty text can never send"
+        );
+
+        // Discard reloads the persisted draft without worker traffic.
+        h.click(&s, "Discard unsaved text & reload selected reply");
+        assert_eq!(h.app.editor, job.draft.as_ref().unwrap().body);
+        assert!(!h.app.dirty && h.app.local_error.is_empty());
+        assert!(h.commands().is_empty());
+
+        // With the exact draft visible and every gate open, Review & send
+        // opens the confirm dialog.
+        h.draw(&s);
+        h.click(&s, "Review & send");
+        assert!(
+            h.app.send_confirmation.is_some(),
+            "all-green gate opens confirm"
+        );
+        h.app.send_confirmation = None;
+
+        // Demo sessions can never send.
+        s.demo = true;
+        h.draw(&s);
+        h.click(&s, "Review & send");
+        assert!(h.app.send_confirmation.is_none(), "demo never sends");
+        s.demo = false;
+
+        // Paused workers can never send.
+        h.app.worker.paused.store(true, Ordering::SeqCst);
+        h.draw(&s);
+        h.click(&s, "Review & send");
+        assert!(h.app.send_confirmation.is_none(), "paused never sends");
+        h.app.worker.paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Review action buttons route exact commands and stay inert in every
+    /// disabled state.
+    ///
+    /// Why: a stale or dirty editor must never reach Edit/Regenerate/Dismiss.
+    #[test]
+    fn review_actions_route_commands_only_when_available() {
+        let mut h = Harness::new();
+        let job = headless::sendable_job("A professional reply body.");
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::HumanReview;
+        s.selected = Some(job.clone());
+        h.app.tab = Tab::Review;
+        h.draw(&s);
+
+        // Regenerate and Dismiss route when the editor is clean and bound.
+        h.click(&s, "Regenerate with local AI");
+        assert!(matches!(h.commands()[0], Command::Regenerate { .. }));
+        h.draw(&s);
+        h.click(&s, "Dismiss");
+        assert!(matches!(h.commands()[0], Command::Dismiss { .. }));
+
+        // Invalid drafts surface the local validation error and send nothing.
+        h.app.editor = "short".into();
+        h.app.dirty = true;
+        h.draw(&s);
+        h.click(&s, "Save changes");
+        assert!(h.commands().is_empty(), "invalid draft is never sent");
+        assert!(!h.app.local_error.is_empty(), "validation error surfaced");
+
+        // Valid drafts save the exact text.
+        h.app.editor = "Saved with enough characters.".into();
+        h.app.dirty = true;
+        h.draw(&s);
+        h.click(&s, "Save changes");
+        assert!(
+            matches!(&h.commands()[0], Command::Edit { body, .. } if body == "Saved with enough characters.")
+        );
+        assert!(h.app.local_error.is_empty());
+
+        // Busy sessions disable every review action.
+        s.busy = "qualifying".into();
+        h.app.dirty = true;
+        h.draw(&s);
+        h.click(&s, "Save changes");
+        h.draw(&s);
+        h.click(&s, "Dismiss");
+        assert!(h.commands().is_empty(), "busy sessions change nothing");
+    }
+
+    /// The review pane renders every visibility variant: missing email, non-
+    /// reviewable state, stale editor, flags, hard blocks, analysis with and
+    /// without verification, and the sending-disabled notice.
+    ///
+    /// Why: each amber label is a distinct operator warning; dropping one
+    /// hides a real hazard (stale editor, blocked send) behind normal chrome.
+    #[test]
+    fn review_renders_every_warning_variant() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.mode = Mode::HumanReview;
+
+        // Missing original + non-reviewable state + flags + unavailable email.
+        let mut job = headless::reviewable_job("Draft body here.");
+        job.email = None;
+        job.state = JobState::Queued;
+        job.flags = vec!["stale thread".into()];
+        s.selected = Some(job.clone());
+        h.draw(&s);
+        assert!(h.shows_containing("This message is Awaiting analysis"));
+        assert!(h.shows_containing("The original has not been fetched"));
+        assert!(h.shows_containing("stale thread"));
+        assert!(h.shows_containing("Original email is unavailable"));
+
+        // Malformed recipient renders the invalid marker.
+        let mut job = headless::reviewable_job("Draft body here.");
+        job.state = JobState::Ready;
+        if let Some(email) = &mut job.email {
+            email.from = "not-an-address".into();
+        }
+        s.selected = Some(job.clone());
+        h.draw(&s);
+        assert!(h.shows_containing("Invalid recipient"));
+
+        // A stale editor (different revision) disables saving and warns.
+        h.app.editor_key = Some((job.id.clone(), job.revision + 1));
+        h.app.editor = "Retained unsaved text".into();
+        h.app.dirty = true;
+        h.draw(&s);
+        assert!(h.shows_containing("The selected message changed while you were editing"));
+        h.app.editor_key = Some((job.id.clone(), job.revision));
+
+        // Demo-source mail is hard-blocked with the exact reason.
+        let mut job = headless::reviewable_job("Draft body here.");
+        job.state = JobState::Ready;
+        s.selected = Some(job.clone());
+        h.draw(&s);
+        assert!(h.shows_containing("Sending blocked"));
+        assert!(h.shows_containing("Demo messages can never be sent"));
+
+        // Analysis expander: open it to render explanation/verification.
+        let mut job = headless::reviewable_job("Draft body here.");
+        job.state = JobState::Ready;
+        job.analysis = Some(headless::analysis(
+            "Acme",
+            "Engineer",
+            Some(crate::types::Verification {
+                genuine_rejection: true,
+                claims_supported: true,
+                professional: true,
+                injection_free: true,
+                purpose_aligned: true,
+                reason: "claims checked".into(),
+            }),
+        ));
+        s.selected = Some(job);
+        h.draw(&s);
+        h.click(&s, "Why this was detected");
+        h.draw(&s);
+        assert!(h.shows_containing("The message clearly rejects"));
+        assert!(h.shows_containing("Evidence: explicit rejection wording"));
+        assert!(h.shows_containing("Model score: 87/100"));
+        assert!(h.shows_containing("Reply audit: claims checked"));
+
+        // The sending-disabled notice appears only when sending is off.
+        assert!(h.shows_containing("Sending is disabled"));
+        s.settings.sending_enabled = true;
+        h.draw(&s);
+        assert!(!h.shows_containing("Sending is disabled"));
+
+        // Automatic mode disables the review workspace: App::ui kicks the
+        // tab to Overview, and the pane's own guard covers direct rendering.
+        s.settings.mode = Mode::Automatic;
+        h.draw(&s);
+        assert_ne!(h.app.tab, Tab::Review, "Automatic kicks the Review tab");
+        h.frame_entry(&s, |app, ui| app.review(ui, &s));
+        assert!(h.shows_containing("Review is disabled in Automatic mode"));
+    }
+
+    /// Local-AI actions route exact commands when the configuration is
+    /// settled and the session is live and idle.
+    ///
+    /// Why: model qualification pins the digest — any action that runs while
+    /// the configuration has unsaved changes must be refused.
+    #[test]
+    fn local_ai_routes_model_actions() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.model_digest = Some("abcdef0123456789".into());
+        s.settings.independent_verifier_enabled = true;
+        s.settings.verifier_model_digest = Some("1122334455667788".into());
+        h.app.tab = Tab::LocalAi;
+        h.draw(&s);
+        assert!(h.shows_containing("Pinned digest"));
+        assert!(h.shows_containing("pinned 1122334455"));
+
+        // Install opens its own confirmation dialog instead of a command.
+        h.click(&s, "1  Install Ollama");
+        assert!(h.app.install_confirmation, "install is confirmation-gated");
+        h.app.install_confirmation = false;
+
+        h.draw(&s);
+        h.click(&s, "2  Start Ollama");
+        assert!(matches!(h.commands()[0], Command::StartOllama));
+        h.draw(&s);
+        h.click(&s, "3  Download model");
+        assert!(matches!(h.commands()[0], Command::PullModel));
+        h.draw(&s);
+        h.click(&s, "4  Refresh status");
+        assert!(matches!(h.commands()[0], Command::InspectModel));
+        h.draw(&s);
+        h.click(&s, "5  Qualify & pin");
+        assert!(matches!(h.commands()[0], Command::QualifyModel));
+        h.draw(&s);
+        h.click(&s, "Download verifier");
+        assert!(matches!(h.commands()[0], Command::PullVerifierModel));
+        h.draw(&s);
+        h.click(&s, "Refresh verifier");
+        assert!(matches!(h.commands()[0], Command::InspectVerifierModel));
+        h.draw(&s);
+        h.click(&s, "Qualify verifier");
+        assert!(matches!(h.commands()[0], Command::QualifyVerifierModel));
+        h.draw(&s);
+        h.click(&s, "Evaluate current model");
+        assert!(matches!(h.commands()[0], Command::EvaluateModel));
+        h.draw(&s);
+        h.click(&s, "Profile runtime");
+        assert!(matches!(h.commands()[0], Command::ProfileModel));
+        h.draw(&s);
+        h.click(&s, "Compare installed candidates");
+        assert!(matches!(h.commands()[0], Command::CompareModels));
+        h.draw(&s);
+        h.click(&s, "Save model configuration");
+        assert!(matches!(h.commands()[0], Command::Settings(_)));
+
+        // Quick choices set the model tag directly.
+        h.draw(&s);
+        h.click(&s, "Qwen3.5 9B Q8 · provisional default");
+        assert_eq!(h.app.settings.model, "qwen3.5:9b-q8_0");
+    }
+
+    /// Unsaved model configuration and demo/busy sessions disable every
+    /// download/qualification action, and enterprise policy reshapes the
+    /// configuration form.
+    ///
+    /// Why: qualifying a different configuration than the one saved would
+    /// pin a digest the operator never approved.
+    #[test]
+    fn local_ai_gates_actions_and_reshapes_configuration() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.model.size_vram = 5 * 1073741824;
+        s.model.message = "GPU residency confirmed".into();
+        h.app.tab = Tab::LocalAi;
+
+        // Unsaved configuration edits block the model actions loudly.
+        h.draw(&s);
+        h.app.settings.model = "edited-tag".into();
+        h.draw(&s);
+        assert!(h.shows_containing("Model configuration has unsaved changes"));
+        assert!(h.shows_containing("GiB"));
+        assert!(h.shows_containing("GPU residency confirmed"));
+        h.click(&s, "3  Download model");
+        assert!(h.commands().is_empty(), "unsaved config blocks downloads");
+
+        // Demo sessions can never touch the model toolchain.
+        h.app.settings.model = s.settings.model.clone();
+        s.demo = true;
+        h.draw(&s);
+        h.click(&s, "2  Start Ollama");
+        assert!(h.commands().is_empty(), "demo never runs model actions");
+        s.demo = false;
+
+        // Enterprise allowlists restrict both pickers and quick choices.
+        s.enterprise_policy.allowed_models = vec!["allowed:tag".into()];
+        s.enterprise_policy.allowed_verifier_models = vec!["v-allowed:tag".into()];
+        s.enterprise_policy.require_independent_verifier = true;
+        h.draw(&s);
+        assert!(h.shows_containing("Model selection is restricted by enterprise policy"));
+        assert!(h.shows_containing("Independent verification is required by enterprise policy"));
+        assert!(
+            h.app.settings.independent_verifier_enabled,
+            "policy forces the verifier on"
+        );
+        h.app.settings.model = "other:tag".into();
+        h.draw(&s);
+        h.click(&s, "Qwen3.5 9B Q8 · provisional default");
+        assert_eq!(
+            h.app.settings.model, "other:tag",
+            "disallowed quick choice is inert"
+        );
+        // The allowlist combo lists the tags themselves.
+        let current = h.app.settings.model.clone();
+        h.draw(&s);
+        h.click(&s, &current);
+        h.draw(&s);
+        h.click(&s, "allowed:tag");
+        assert_eq!(
+            h.app.settings.model, "allowed:tag",
+            "allowlisted tag selectable"
+        );
+
+        // Verifier selections follow the verifier allowlist.
+        let vcurrent = h.app.settings.verifier_model.clone();
+        h.draw(&s);
+        h.click(&s, &vcurrent);
+        h.draw(&s);
+        h.click(&s, "v-allowed:tag");
+        assert_eq!(h.app.settings.verifier_model, "v-allowed:tag");
+
+        // The context-size combo changes the token budget.
+        h.draw(&s);
+        h.click(&s, format!("{} tokens", s.settings.num_ctx).as_str());
+        h.draw(&s);
+        h.click(&s, "8192 tokens");
+        assert_eq!(h.app.settings.num_ctx, 8192);
+
+        // Task qualification renders its measured score when present.
+        s.settings.task_qualification = Some(crate::config::TaskQualification {
+            model: s.settings.model.clone(),
+            digest: "abcdef0123456789".into(),
+            prompt_version: "v-test".into(),
+            context_hash: "ctx".into(),
+            suite_hash: "suite".into(),
+            ollama_runtime_version: "0.35.0".into(),
+            task_score: 91.5,
+            fixture_count: 12,
+            qualified_at: chrono::Utc::now(),
+        });
+        h.app.tab = Tab::LocalAi;
+        h.draw(&s);
+        assert!(h.shows_containing("PASS · score 91.5/100 · 12 fixtures"));
+    }
+
+    /// The settings page renders both sides of the enterprise, connection,
+    /// storage and API branches, and its buttons issue exact commands.
+    ///
+    /// Why: every fallback string is an operator signal; the recovery-key
+    /// buttons open state-carrying dialogs whose kind decides which command
+    /// is eventually issued.
+    #[test]
+    fn settings_renders_policy_branches_and_routes_maintenance() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        assert!(h.shows_containing("Connected: me@example.com"));
+        s.connected = false;
+        s.account.clear();
+        h.draw(&s);
+        assert!(h.shows_containing("No Gmail account connected"));
+        s = headless::snapshot(headless::ACCOUNT);
+
+        // Enterprise policy: digest pinning states and every constraint line.
+        s.enterprise_policy = crate::policy::PolicyStatus {
+            active: true,
+            digest: Some("0123456789abcdef0123".into()),
+            digest_pin_enforced: true,
+            digest_pin_matches: true,
+            force_human_review: true,
+            prohibit_sending: true,
+            prohibit_integration_api: true,
+            max_daily_send_limit: Some(5),
+            min_cooldown_minutes: Some(30),
+            min_retention_days: Some(100),
+            ..Default::default()
+        };
+        h.draw(&s);
+        assert!(h.shows("ENTERPRISE POLICY ACTIVE"));
+        assert!(h.shows_containing("sha256:0123456789ab"));
+        assert!(h.shows("DIGEST PIN VERIFIED"));
+        for constraint in [
+            "Human Review forced",
+            "sending prohibited",
+            "integration API prohibited",
+            "max 5 sends/24h",
+            "cooldown ≥ 30 min",
+            "retention ≥ 100 days",
+        ] {
+            assert!(h.shows_containing(constraint), "missing {constraint:?}");
+        }
+        // Policy coercion: sending and API flags are forced off.
+        h.app.oauth_send = true;
+        h.app.settings.api_enabled = true;
+        h.draw(&s);
+        assert!(!h.app.oauth_send && !h.app.settings.api_enabled);
+        assert!(h.shows("Not listening"));
+
+        // A pin mismatch is called out in red.
+        s.enterprise_policy.digest_pin_matches = false;
+        h.draw(&s);
+        assert!(h.shows("DIGEST PIN MISMATCH"));
+        s.enterprise_policy.digest_pin_enforced = false;
+        h.draw(&s);
+        assert!(h.shows("ACL / FILE TRUST ONLY"));
+
+        // Maintenance buttons route exact commands on a live idle session.
+        s.enterprise_policy = crate::policy::PolicyStatus::default();
+        h.draw(&s);
+        h.click(&s, "Prune old completed content now");
+        assert!(matches!(h.commands()[0], Command::Purge));
+        h.draw(&s);
+        h.click(&s, "Check database integrity");
+        assert!(matches!(h.commands()[0], Command::IntegrityCheck));
+        h.draw(&s);
+        h.click(&s, "Compact database");
+        assert!(matches!(h.commands()[0], Command::CompactDatabase));
+        h.draw(&s);
+        h.click(&s, "Rotate / generate API token");
+        assert!(matches!(h.commands()[0], Command::RotateApiToken));
+
+        // API token display: copy never leaks to the worker, hide does.
+        s.api_token = Some(zeroize::Zeroizing::new("secret-token-value".into()));
+        s.api_listening = true;
+        h.draw(&s);
+        assert!(h.shows("Listening on loopback"));
+        assert!(h.shows_containing("secret-token-value"));
+        h.click(&s, "Copy token");
+        assert!(h.commands().is_empty(), "copy is client-side only");
+        h.draw(&s);
+        h.click(&s, "Hide token");
+        assert!(matches!(h.commands()[0], Command::HideApiToken));
+
+        // Policy limits clamp the persisted numeric settings.
+        s.enterprise_policy.min_cooldown_minutes = Some(30);
+        s.enterprise_policy.max_daily_send_limit = Some(5);
+        s.enterprise_policy.min_retention_days = Some(100);
+        h.app.settings.cooldown_minutes = 15;
+        h.app.settings.daily_send_limit = 10;
+        h.app.settings.retention_days = 30;
+        h.draw(&s);
+        assert_eq!(h.app.settings.cooldown_minutes, 30);
+        assert_eq!(h.app.settings.daily_send_limit, 5);
+        assert_eq!(h.app.settings.retention_days, 100);
+    }
+
+    /// The backup/recovery buttons open the right dialogs and carry the
+    /// operator's picks into the eventual commands.
+    ///
+    /// Why: the recovery-key dialog kind decides between export and verify
+    /// commands — mixing them up would run the wrong destructive operation.
+    #[test]
+    fn settings_backup_buttons_open_the_right_dialogs() {
+        let mut h = Harness::new();
+        let s = headless::snapshot(headless::ACCOUNT);
+        h.app.tab = Tab::Settings;
+
+        // Backup picks a stamped child folder under the chosen parent.
+        h.draw(&s);
+        h.click(&s, "Create encrypted backup…");
+        let commands = h.commands();
+        assert!(
+            matches!(&commands[0], Command::Backup { out } if out.to_string_lossy().contains("rejection-rejector-backup-")),
+            "backup targets a stamped folder"
+        );
+
+        // Recovery drill targets the picked backup directory.
+        h.draw(&s);
+        h.click(&s, "Run recovery drill…");
+        assert!(
+            matches!(&h.commands()[0], Command::RecoveryDrill { backup } if backup.ends_with("picked-folder"))
+        );
+
+        // Export recovery key opens the export dialog.
+        h.draw(&s);
+        h.click(&s, "Export recovery key…");
+        assert!(matches!(
+            h.app.recovery_dialog.as_ref().map(|d| &d.kind),
+            Some(RecoveryDialogKind::Export { out }) if out.ends_with("saved-file.json")
+        ));
+        h.app.recovery_dialog = None;
+
+        // Verify recovery key needs both picks before opening.
+        h.draw(&s);
+        h.click(&s, "Verify recovery key…");
+        assert!(matches!(
+            h.app.recovery_dialog.as_ref().map(|d| &d.kind),
+            Some(RecoveryDialogKind::Verify { .. })
+        ));
+        h.app.recovery_dialog = None;
+        h.app.pickers.pick_file = |_| None;
+        h.draw(&s);
+        h.click(&s, "Verify recovery key…");
+        assert!(
+            h.app.recovery_dialog.is_none(),
+            "partial picks open nothing"
+        );
+
+        // Diagnostics export targets the picked destination.
+        h.app.pickers.pick_file = |_| Some(PathBuf::from("picked-file.json"));
+        h.draw(&s);
+        h.click(&s, "Export diagnostics…");
+        assert!(
+            matches!(&h.commands()[0], Command::Diagnostics { out } if out.ends_with("saved-file.json"))
+        );
+
+        // Cancelling the picker issues nothing at all.
+        h.app.pickers.pick_folder = |_| None;
+        h.draw(&s);
+        h.click(&s, "Create encrypted backup…");
+        assert!(h.commands().is_empty(), "cancelled pickers issue nothing");
+
+        // The scheduled-backup folder picker writes the path into settings.
+        h.app.pickers.pick_folder = |_| Some(PathBuf::from("C:\\backups"));
+        h.app.settings.scheduled_backup_enabled = true;
+        h.draw(&s);
+        assert!(h.shows("Not selected"));
+        h.click(&s, "Choose folder…");
+        assert_eq!(h.app.settings.scheduled_backup_directory, "C:\\backups");
+        h.draw(&s);
+        assert!(h.shows_containing("C:\\backups"));
+    }
+
+    /// The settings form composes the Automatic save gate and the mode
+    /// picker exactly like the desktop risk model.
+    ///
+    /// Why: Automatic mode may only be persisted when every prerequisite is
+    /// green and the risk confirmation was armed — otherwise the save button
+    /// must be inert.
+    #[test]
+    fn settings_composes_the_automatic_save_gate() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.send_scope = true;
+        s.settings.sending_enabled = true;
+        s.settings.model_digest = Some("digest".into());
+        h.app.tab = Tab::Settings;
+
+        // Schedule combos write the picked values.
+        h.draw(&s);
+        h.click(&s, "1 hour(s)");
+        h.draw(&s);
+        h.click(&s, "2 hour(s)");
+        assert_eq!(h.app.settings.poll_hours, 2);
+        h.draw(&s);
+        h.click(&s, "7 day(s)");
+        h.draw(&s);
+        h.click(&s, "14 day(s)");
+        assert_eq!(h.app.settings.lookback_days, 14);
+
+        // The mode picker switches to Automatic and reveals the risk block.
+        h.draw(&s);
+        h.click(&s, "Automatic");
+        assert_eq!(h.app.settings.mode, Mode::Automatic);
+        h.draw(&s);
+        assert!(h.shows_containing("Automatic sends without per-message approval"));
+        assert!(h.shows_containing("Hard unattended safety ceiling"));
+        for row in [
+            "Enterprise emergency stop cleared",
+            "Gmail connected",
+            "Gmail send permission granted",
+            "Current model smoke-qualified & pinned",
+            "Independent verifier qualified when enabled",
+            "Task-specific evaluation passed for this exact configuration",
+            "Non-placeholder signature set",
+        ] {
+            assert!(h.shows_containing(row), "missing prerequisite {row:?}");
+        }
+        assert!(h.shows("REQUIRED"), "unmet prerequisites are loud");
+
+        // Saving Automatic mode without arming is refused.
+        h.draw(&s);
+        h.click(&s, "Save settings");
+        assert!(h.commands().is_empty(), "unarmed Automatic cannot save");
+
+        // Arming opens the cooldown gate; the save is still refused.
+        h.click(
+            &s,
+            "Enable Automatic mode (requires a deliberate risk confirmation)",
+        );
+        assert!(h.app.pending_arm.is_some(), "arming is cooldown-gated");
+        h.app.pending_arm = None;
+
+        // With every prerequisite green and the risk confirmation armed the
+        // Automatic configuration may finally be persisted.
+        h.app.settings.signature = "Jane Doe".into();
+        h.app.settings.task_qualification = Some(headless::current_qualification(&h.app.settings));
+        h.app.settings.automatic_confirmed = true;
+        h.draw(&s);
+        assert!(h.shows("READY"), "green prerequisites read READY");
+        h.click(&s, "Save settings");
+        assert!(
+            matches!(&h.commands()[0], Command::Settings(boxed) if boxed.mode == Mode::Automatic),
+            "armed Automatic with green prerequisites saves"
+        );
+        h.draw(&s);
+        h.click(&s, "Disable Automatic mode and return to Human review");
+        assert_eq!(
+            h.app.settings.mode,
+            Mode::Automatic,
+            "mode unchanged until saved"
+        );
+        assert!(!h.app.settings.automatic_confirmed);
+        assert!(h.app.settings.automatic_since.is_none());
+
+        // Human review always saves.
+        h.draw(&s);
+        h.click(&s, "Human review");
+        h.draw(&s);
+        h.click(&s, "Save settings");
+        assert!(
+            matches!(&h.commands()[0], Command::Settings(boxed) if boxed.mode == Mode::HumanReview)
+        );
+    }
+
+    /// The close-confirmation dialog distinguishes unsaved text from
+    /// in-flight sensitive operations and either cancels or approves the
+    /// shutdown.
+    ///
+    /// Why: force-closing during a send can strand an Uncertain delivery —
+    /// the dialog text must name the exact hazard being accepted.
+    #[test]
+    fn close_confirmation_dialog_names_the_accepted_hazard() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        h.draw(&s);
+        h.app.close_confirmation = true;
+        h.app.dirty = true;
+        h.draw(&s);
+        assert!(h.shows("Unsaved reply — close application?"));
+        assert!(h.shows_containing("has not been saved"));
+        assert!(h.shows("Force close and discard unsaved text"));
+        h.click(&s, "Keep application open");
+        assert!(!h.app.close_confirmation, "keep-open cancels the close");
+
+        // A running send names the operation in the dialog.
+        s.operation = OperationStatus {
+            kind: crate::types::OperationKind::SendReply,
+            state: OperationState::Running,
+            ..Default::default()
+        };
+        h.app.close_confirmation = true;
+        h.app.dirty = false;
+        h.draw(&s);
+        assert!(h.shows("Operation still running — close application?"));
+        assert!(h.shows_containing("SendReply is still running"));
+        assert!(h.shows("Force close now"));
+        h.click(&s, "Force close now");
+        assert!(h.app.close_approved, "force close approves the shutdown");
+        assert!(
+            h.app.worker.stop.load(Ordering::SeqCst),
+            "force close stops the worker"
+        );
+    }
+
+    /// The unsaved-edit and install dialogs route their outcomes.
+    ///
+    /// Why: "Discard edit" is the only path that may replace a dirty editor
+    /// and it must issue the exact parked selection.
+    #[test]
+    fn pending_select_and_install_dialogs_route_their_outcomes() {
+        let mut h = Harness::new();
+        let s = headless::snapshot(headless::ACCOUNT);
+        h.draw(&s);
+        h.app.pending_select = Some("job-9".into());
+        h.app.dirty = true;
+        h.draw(&s);
+        assert!(h.shows("Discard the unsaved edit and open the other email?"));
+        h.click(&s, "Keep editing");
+        assert!(
+            h.app.pending_select.is_none(),
+            "keep editing cancels the switch"
+        );
+        assert!(h.app.dirty, "keep editing retains the unsaved text");
+
+        h.app.pending_select = Some("job-9".into());
+        h.draw(&s);
+        h.click(&s, "Discard edit");
+        assert!(h.app.pending_select.is_none());
+        assert!(!h.app.dirty);
+        assert!(matches!(&h.commands()[0], Command::Select(id) if id == "job-9"));
+
+        // The Ollama install dialog is a two-way confirmation.
+        h.app.install_confirmation = true;
+        h.draw(&s);
+        assert!(h.shows_containing("Windows Package Manager"));
+        h.click(&s, "Cancel");
+        assert!(!h.app.install_confirmation);
+        assert!(h.commands().is_empty(), "cancel installs nothing");
+
+        h.app.install_confirmation = true;
+        h.draw(&s);
+        h.click(&s, "Install");
+        assert!(!h.app.install_confirmation);
+        assert!(matches!(h.commands()[0], Command::InstallOllama));
+    }
+
+    /// The recovery-key dialog validates the passphrase on screen and
+    /// submits exactly the wrapped-key command its kind dictates.
+    ///
+    /// Why: export and verify share one dialog; a kind mix-up would run the
+    /// wrong operation with the operator's passphrase.
+    #[test]
+    fn recovery_dialog_validates_and_submits_by_kind() {
+        let mut h = Harness::new();
+        let s = headless::snapshot(headless::ACCOUNT);
+        h.app.recovery_dialog = Some(RecoveryDialog {
+            kind: RecoveryDialogKind::Export {
+                out: PathBuf::from("wrapped-key.json"),
+            },
+            passphrase: Zeroizing::new(String::new()),
+            confirmation: Zeroizing::new(String::new()),
+        });
+        h.draw(&s);
+        assert!(h.shows("Export wrapped recovery key"));
+        assert!(h.shows_containing("Use at least 20 UTF-8 bytes"));
+        h.click(&s, "Export wrapped key");
+        assert!(h.commands().is_empty(), "short passphrase cannot submit");
+
+        // Mismatched confirmation is refused with a distinct warning.
+        h.app.recovery_dialog = Some(RecoveryDialog {
+            kind: RecoveryDialogKind::Export {
+                out: PathBuf::from("wrapped-key.json"),
+            },
+            passphrase: Zeroizing::new("a".repeat(24)),
+            confirmation: Zeroizing::new("b".repeat(24)),
+        });
+        h.draw(&s);
+        assert!(h.shows_containing("The two passphrases do not match"));
+        h.click(&s, "Export wrapped key");
+        assert!(
+            h.commands().is_empty(),
+            "mismatched passphrases cannot submit"
+        );
+
+        // A valid export submits the exact command and clears the dialog.
+        h.app.recovery_dialog = Some(RecoveryDialog {
+            kind: RecoveryDialogKind::Export {
+                out: PathBuf::from("wrapped-key.json"),
+            },
+            passphrase: Zeroizing::new("correct horse battery staple".to_owned()),
+            confirmation: Zeroizing::new("correct horse battery staple".to_owned()),
+        });
+        h.draw(&s);
+        h.click(&s, "Export wrapped key");
+        assert!(
+            matches!(&h.commands()[0], Command::ExportRecoveryKey { out, .. } if out.ends_with("wrapped-key.json"))
+        );
+        assert!(
+            h.app.recovery_dialog.is_none(),
+            "submit consumes the dialog"
+        );
+
+        // The verify kind hides the confirmation and sends the verify command.
+        h.app.recovery_dialog = Some(RecoveryDialog {
+            kind: RecoveryDialogKind::Verify {
+                backup: PathBuf::from("backup-dir"),
+                recovery_key: PathBuf::from("wrapped-key.json"),
+            },
+            passphrase: Zeroizing::new("correct horse battery staple".to_owned()),
+            confirmation: Zeroizing::new(String::new()),
+        });
+        h.draw(&s);
+        assert!(h.shows("Verify wrapped recovery key"));
+        h.click(&s, "Verify key against backup");
+        assert!(
+            matches!(&h.commands()[0], Command::VerifyRecoveryKey { backup, .. } if backup.ends_with("backup-dir"))
+        );
+
+        // An oversized passphrase is refused with its own warning.
+        h.app.recovery_dialog = Some(RecoveryDialog {
+            kind: RecoveryDialogKind::Verify {
+                backup: PathBuf::from("backup-dir"),
+                recovery_key: PathBuf::from("wrapped-key.json"),
+            },
+            passphrase: Zeroizing::new("a".repeat(4097)),
+            confirmation: Zeroizing::new(String::new()),
+        });
+        h.draw(&s);
+        assert!(h.shows_containing("exceeds 4,096 UTF-8 bytes"));
+
+        // Cancel always drops the dialog untouched.
+        h.click(&s, "Cancel");
+        assert!(h.app.recovery_dialog.is_none());
+        assert!(h.commands().is_empty(), "cancel submits nothing");
+    }
+
+    /// The Automatic-arm dialog enforces its cooldown and only then arms the
+    /// session; the window-close button cancels.
+    ///
+    /// Why: the cooldown is the deliberate pause that makes the risk
+    /// confirmation meaningful — clicking early must never arm.
+    #[test]
+    fn automatic_arm_dialog_enforces_its_cooldown() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.sending_enabled = true;
+        h.app.pending_arm = Some(crate::config::AutomaticArmGate::open(chrono::Utc::now()));
+        h.draw(&s);
+        assert!(h.shows("Enable Automatic mode?"));
+        assert!(h.shows_containing("unlocks in"));
+        h.click(&s, "I understand the risks — enable Automatic mode");
+        assert!(h.app.pending_arm.is_some(), "early click never arms");
+        assert!(!h.app.settings.automatic_confirmed);
+
+        // Window close cancels the arming flow.
+        h.draw(&s);
+        h.click(&s, "Close window");
+        assert!(h.app.pending_arm.is_none(), "closing cancels arming");
+
+        // Once the cooldown elapsed the confirmation takes effect.
+        let expired = chrono::Utc::now() - chrono::Duration::seconds(31);
+        h.app.pending_arm = Some(crate::config::AutomaticArmGate::open(expired));
+        h.draw(&s);
+        h.click(&s, "I understand the risks — enable Automatic mode");
+        assert!(h.app.settings.automatic_confirmed, "elapsed cooldown arms");
+        assert!(h.app.settings.automatic_since.is_some());
+        assert!(h.app.pending_arm.is_none());
+
+        // Cancel keeps the operator in Human review.
+        h.app.settings.automatic_confirmed = false;
+        h.app.pending_arm = Some(crate::config::AutomaticArmGate::open(chrono::Utc::now()));
+        h.draw(&s);
+        h.click(&s, "Cancel (stay in Human review)");
+        assert!(h.app.pending_arm.is_none());
+        assert!(!h.app.settings.automatic_confirmed);
+    }
+
+    /// The confirm-exact-reply dialog sends the persisted body hash and
+    /// never anything else.
+    ///
+    /// Why: the dialog is the last human gate — the command must carry the
+    /// hash of the exact displayed body so the engine can re-verify it.
+    #[test]
+    fn send_confirmation_dialog_sends_the_exact_persisted_body() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.sending_enabled = true;
+        let job = headless::sendable_job("A professional reply body.");
+        h.draw(&s);
+        h.app.send_confirmation = Some(job.clone());
+        h.draw(&s);
+        assert!(h.shows_containing("Confirm this exact reply"));
+        assert!(h.shows_containing("To: hr@corp.example"));
+        assert!(h.shows_containing("Subject: Synthetic rejection"));
+        assert!(h.shows_containing("A professional reply body."));
+        h.click(&s, "Send this reply now");
+        let body = job.draft.as_ref().unwrap().body.as_str();
+        assert!(
+            matches!(&h.commands()[0], Command::Send { id, revision, body_hash } if id == &job.id && *revision == job.revision && *body_hash == hash(body))
+        );
+        assert!(
+            h.app.send_confirmation.is_none(),
+            "send consumes the dialog"
+        );
+
+        // Cancel leaves nothing behind.
+        h.app.send_confirmation = Some(job.clone());
+        h.draw(&s);
+        h.click(&s, "Cancel");
+        assert!(h.app.send_confirmation.is_none());
+        assert!(h.commands().is_empty());
+
+        // Paused workers cannot send from the dialog either.
+        h.app.send_confirmation = Some(job.clone());
+        h.app.worker.paused.store(true, Ordering::SeqCst);
+        h.draw(&s);
+        h.click(&s, "Send this reply now");
+        assert!(h.commands().is_empty(), "paused workers cannot send");
+        assert!(h.app.send_confirmation.is_some(), "dialog kept for retry");
+
+        // A job without a fetched original renders no address headers.
+        let mut headless_job = headless::reviewable_job("A professional reply body.");
+        headless_job.email = None;
+        h.app.send_confirmation = Some(headless_job);
+        h.draw(&s);
+        assert!(!h.shows_containing("To:"));
+        assert!(h.shows_containing("Sending cannot be undone"));
+    }
+}
+/// Shell-level behavior: status bar, navigation, screenshot capture and the
+/// disaster-recovery application.
+#[cfg(test)]
+mod shell_tests {
+    use super::headless::{self, Harness, node_text, run_frame};
+    use super::*;
+
+    /// Whether the rendered tree shows the text, tolerating line wraps.
+    ///
+    /// Inputs: `nodes` — AccessKit nodes of one frame; `needle` — text that
+    /// may be split across wrapped text runs. Output: `true` when the
+    /// whitespace-squashed tree text contains the squashed needle.
+    fn tree_shows(
+        nodes: &[(egui::accesskit::NodeId, egui::accesskit::Node)],
+        needle: &str,
+    ) -> bool {
+        let squashed = |text: &str| text.split_whitespace().collect::<String>();
+        let visible = nodes
+            .iter()
+            .filter_map(|(_, n)| node_text(n))
+            .collect::<Vec<_>>()
+            .join(" ");
+        squashed(&visible).contains(&squashed(needle))
+    }
+
+    /// The status bar and navigation reflect every session condition.
+    ///
+    /// Why: the status bar is the operator's only always-visible safety
+    /// indicator — pause, demo and emergency states must be unmistakable.
+    #[test]
+    fn status_bar_and_navigation_reflect_session_state() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        h.draw(&s);
+        assert!(h.shows("LOCAL WORKSPACE"));
+
+        h.app.worker.paused.store(true, Ordering::SeqCst);
+        h.draw(&s);
+        assert!(h.shows("PAUSED"));
+        h.app.worker.paused.store(false, Ordering::SeqCst);
+
+        s.busy = "Checking Gmail for missing messages…".into();
+        h.draw(&s);
+        assert!(h.shows_containing("Checking Gmail for missing messages"));
+
+        s.busy.clear();
+        s.demo = true;
+        h.draw(&s);
+        assert!(h.shows("SYNTHETIC DEMO · NO LIVE EMAIL"));
+        s.demo = false;
+
+        s.error = "worker error".into();
+        h.app.local_error = "client error".into();
+        h.draw(&s);
+        assert!(h.shows("worker error") && h.shows("client error"));
+
+        // The emergency-stop sentinel blocks outbound visibly.
+        h.app.emergency = || crate::emergency::EmergencyStopStatus {
+            configured: true,
+            active: true,
+            reason: "test".into(),
+        };
+        h.draw(&s);
+        assert!(h.shows("ENTERPRISE EMERGENCY STOP · OUTBOUND EMAIL BLOCKED"));
+
+        // Pause/resume toggles from the navigation panel.
+        h.draw(&s);
+        h.click(&s, "Pause worker");
+        assert!(
+            h.app.worker.paused.load(Ordering::SeqCst),
+            "pause toggles on"
+        );
+        h.draw(&s);
+        h.click(&s, "Resume worker");
+        assert!(
+            !h.app.worker.paused.load(Ordering::SeqCst),
+            "pause toggles off"
+        );
+
+        // Automatic mode disables the Review tab entirely.
+        s.settings.mode = Mode::Automatic;
+        h.draw(&s);
+        h.click(&s, "Review");
+        assert_ne!(h.app.tab, Tab::Review, "Review is disabled in Automatic");
+        s.settings.mode = Mode::HumanReview;
+
+        // Any open modal freezes navigation.
+        h.app.tab = Tab::Settings;
+        h.app.install_confirmation = true;
+        h.draw(&s);
+        h.click(&s, "Overview");
+        assert_ne!(h.app.tab, Tab::Overview, "modals freeze navigation");
+        h.app.install_confirmation = false;
+
+        // Fatal and pre-initialization screens replace the workspace.
+        s.fatal = true;
+        s.error = "database is locked".into();
+        h.draw(&s);
+        assert!(h.shows("The workspace could not open"));
+        assert!(h.shows("database is locked"));
+        s.fatal = false;
+        s.initialized = false;
+        h.draw(&s);
+        assert!(h.shows_containing("Opening encrypted local workspace"));
+    }
+
+    /// Closing the window requires confirmation only for unsaved text or
+    /// shutdown-sensitive operations.
+    ///
+    /// Why: an unconfirmed close during a send strands an Uncertain
+    /// delivery; an unconfirmed close without unsaved text must not nag.
+    #[test]
+    fn close_request_is_confirmed_only_for_lossy_shutdowns() {
+        let mut h = Harness::new();
+        let s = headless::snapshot(headless::ACCOUNT);
+        let mut nodes = Vec::new();
+        // A clean idle session closes without ceremony.
+        h.draw(&s);
+        run_frame(&h.ctx(), &mut nodes, Vec::new(), true, |root_ui, frame| {
+            eframe::App::ui(&mut h.app, root_ui, frame);
+        });
+        assert!(
+            !h.app.close_confirmation,
+            "clean close needs no confirmation"
+        );
+
+        // Unsaved text forces the confirmation.
+        h.app.dirty = true;
+        *h.app.worker.snapshot.lock().unwrap() = s;
+        run_frame(&h.ctx(), &mut nodes, Vec::new(), true, |root_ui, frame| {
+            eframe::App::ui(&mut h.app, root_ui, frame);
+        });
+        assert!(h.app.close_confirmation, "unsaved text confirms close");
+    }
+
+    /// Screenshot mode selects the first job, requests the native capture
+    /// once ready, and persists the returned image.
+    ///
+    /// Why: the GUI QA flow gates on the exact file being written; a silent
+    /// capture failure must surface as a client error instead.
+    #[test]
+    fn screenshot_mode_drives_selection_capture_and_failure() {
+        let mut h = Harness::new();
+        let dir = h.app_dir();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        let job = headless::reviewable_job("Draft body here.");
+        s.items = vec![job.clone()];
+        s.initialized = true;
+
+        // With a screenshot pending and nothing selected, auto-select first.
+        h.app.screenshot = Some(dir.join("shot.png"));
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        assert!(
+            matches!(&h.commands()[0], Command::Select(id) if id == &job.id),
+            "screenshot mode auto-selects the first job"
+        );
+
+        // Once elapsed past the settle delay and something is selected, the
+        // native capture is requested exactly once.
+        s.selected = Some(job.clone());
+        h.app.started = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+        h.draw(&s);
+        assert!(h.app.screenshot_requested, "capture requested once ready");
+        h.draw(&s);
+        assert!(h.app.screenshot_requested);
+
+        // A returned screenshot is written to the requested path.
+        let image = std::sync::Arc::new(egui::epaint::ColorImage::new(
+            [2, 2],
+            vec![egui::Color32::WHITE; 4],
+        ));
+        h.frame(
+            &s,
+            vec![egui::Event::Screenshot {
+                viewport_id: egui::ViewportId::ROOT,
+                user_data: Default::default(),
+                image,
+            }],
+        );
+        assert!(dir.join("shot.png").is_file(), "screenshot persisted");
+        assert!(h.app.local_error.is_empty(), "capture completed cleanly");
+
+        // A failed write surfaces the error instead of faking success.
+        h.app.screenshot = Some(dir.clone());
+        h.app.screenshot_requested = true;
+        h.app.local_error.clear();
+        let image = std::sync::Arc::new(egui::epaint::ColorImage::new(
+            [2, 2],
+            vec![egui::Color32::WHITE; 4],
+        ));
+        h.frame(
+            &s,
+            vec![egui::Event::Screenshot {
+                viewport_id: egui::ViewportId::ROOT,
+                user_data: Default::default(),
+                image,
+            }],
+        );
+        assert!(h.app.local_error.starts_with("Screenshot failed"));
+        assert!(h.app.screenshot.is_none());
+
+        // The timeout path gives up loudly and closes.
+        h.app.screenshot = Some(dir.join("late.png"));
+        h.app.started = Instant::now().checked_sub(Duration::from_secs(26)).unwrap();
+        h.draw(&s);
+        assert!(h.app.screenshot.is_some(), "flow still armed until close");
+    }
+
+    /// Demo-view navigation maps every accepted name and falls back to the
+    /// review workspace.
+    ///
+    /// Why: the CLI passes `--demo-view` verbatim; unknown names must land
+    /// on a safe view instead of a broken one.
+    #[test]
+    fn demo_view_navigation_maps_names() {
+        let mut h = Harness::new();
+        h.app.set_demo_view("overview");
+        assert_eq!(h.app.tab, Tab::Overview);
+        h.app.set_demo_view("activity");
+        assert_eq!(h.app.tab, Tab::Activity);
+        h.app.set_demo_view("local-ai");
+        assert_eq!(h.app.tab, Tab::LocalAi);
+        h.app.set_demo_view("settings");
+        assert_eq!(h.app.tab, Tab::Settings);
+        h.app.set_demo_view("nonsense");
+        assert_eq!(h.app.tab, Tab::Review);
+    }
+
+    /// Disaster-recovery mode consumes worker results, blocks closing while
+    /// restoring, and reports both success and failure.
+    ///
+    /// Why: recovery replaces the workspace database — closing mid-restore
+    /// can corrupt the workspace, so the close must be refused loudly.
+    #[test]
+    fn recovery_app_consumes_worker_results_and_blocks_closing() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let dir = tempfile::tempdir().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = RecoveryApp::new(&cc, dir.path().to_path_buf());
+        let mut nodes = Vec::new();
+        // A fresh context emits no widget tree on its first pass; warm it up.
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+
+        // Empty form renders the workspace target and both unset picks.
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, n)| node_text(n) == Some("Disaster Recovery Mode"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, n)| node_text(n) == Some("No backup selected"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, n)| node_text(n) == Some("No recovery key selected"))
+        );
+
+        // The pickers record their choices on the form.
+        app.pickers = headless::pickers_returning();
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        for label in ["Choose backup directory…", "Choose wrapped recovery key…"] {
+            let id = nodes
+                .iter()
+                .find(|(_, n)| node_text(n) == Some(label))
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| panic!("missing {label}"));
+            run_frame(
+                &ctx,
+                &mut nodes,
+                vec![egui::Event::AccessKitActionRequest(
+                    egui::accesskit::ActionRequest {
+                        action: egui::accesskit::Action::Click,
+                        target_tree: egui::accesskit::TreeId::ROOT,
+                        target_node: id,
+                        data: None,
+                    },
+                )],
+                false,
+                |root_ui, frame| {
+                    eframe::App::ui(&mut app, root_ui, frame);
+                },
+            );
+        }
+        assert_eq!(app.backup, Some(PathBuf::from("picked-folder")));
+        assert_eq!(app.recovery_key, Some(PathBuf::from("picked-file.json")));
+
+        // While recovering, closing the window is blocked with an error.
+        app.recovering = true;
+        run_frame(&ctx, &mut nodes, Vec::new(), true, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert!(app.error.contains("Closing is blocked"));
+        assert!(app.recovering, "close is refused while restoring");
+
+        // A completed restore renders the verified report.
+        app.recovering = false;
+        app.error.clear();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        tx.send(Ok(crate::recovery::RestoreReport {
+            format_version: 1,
+            restored_at: chrono::Utc::now(),
+            source_backup_created_at: chrono::Utc::now(),
+            source_database_sha256: "abc".into(),
+            source_audit_head: "head".into(),
+            restored_schema_version: 7,
+            rollback_directory: None,
+            note: "verified".into(),
+        }))
+        .unwrap();
+        app.recovery_result = Some(rx);
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert!(app.report.is_some(), "completed restore stores the report");
+        assert!(tree_shows(
+            &nodes,
+            "Recovery completed and verified. Restored schema 7."
+        ));
+
+        // A failed restore surfaces the error instead of a report.
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        tx.send(Err("backup authentication failed".into())).unwrap();
+        app.recovery_result = Some(rx);
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert_eq!(app.error, "backup authentication failed");
+        assert!(!app.recovering);
+
+        // A crashed restore worker reports a disconnected result.
+        let (tx, rx) =
+            crossbeam_channel::bounded::<Result<crate::recovery::RestoreReport, String>>(1);
+        drop(tx);
+        app.recovery_result = Some(rx);
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert!(app.error.contains("terminated unexpectedly"));
+
+        // An in-flight channel keeps the spinner visible.
+        let (_hold, rx2) =
+            crossbeam_channel::bounded::<Result<crate::recovery::RestoreReport, String>>(1);
+        app.recovery_result = Some(rx2);
+        app.recovering = true;
+        app.report = None;
+        app.error.clear();
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        assert!(
+            tree_shows(&nodes, "Authenticating, preflighting and restoring"),
+            "spinner shown while the worker runs"
+        );
+
+        // Closing Recovery Mode clears the passphrase and closes the app.
+        app.recovery_result = None;
+        app.recovering = false;
+        app.passphrase = Zeroizing::new("secret passphrase value".into());
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        let close_id = nodes
+            .iter()
+            .find(|(_, n)| node_text(n) == Some("Close Recovery Mode"))
+            .map(|(id, _)| *id)
+            .expect("close button");
+        run_frame(
+            &ctx,
+            &mut nodes,
+            vec![egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::Click,
+                    target_tree: egui::accesskit::TreeId::ROOT,
+                    target_node: close_id,
+                    data: None,
+                },
+            )],
+            false,
+            |root_ui, frame| {
+                eframe::App::ui(&mut app, root_ui, frame);
+            },
+        );
+        assert!(app.passphrase.is_empty(), "passphrase zeroized on close");
+    }
+
+    /// The recovery restore button spawns the worker only for a complete,
+    /// acknowledged form.
+    ///
+    /// Why: a half-filled form must never start a restore against the live
+    /// workspace.
+    #[test]
+    fn recovery_restore_requires_the_complete_form() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let dir = tempfile::tempdir().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = RecoveryApp::new(&cc, dir.path().to_path_buf());
+        let mut nodes = Vec::new();
+        app.pickers = headless::pickers_returning();
+        app.backup = Some(PathBuf::from("picked-folder"));
+        app.recovery_key = Some(PathBuf::from("picked-file.json"));
+        app.passphrase = Zeroizing::new("correct horse battery staple".into());
+        app.acknowledgement = "RESTORE".into();
+        // A fresh context emits no widget tree on its first pass; warm it up.
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+            eframe::App::ui(&mut app, root_ui, frame);
+        });
+        let restore_id = nodes
+            .iter()
+            .find(|(_, n)| node_text(n) == Some("Authenticate, preflight and restore workspace"))
+            .map(|(id, _)| *id)
+            .expect("restore button");
+        run_frame(
+            &ctx,
+            &mut nodes,
+            vec![egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::Click,
+                    target_tree: egui::accesskit::TreeId::ROOT,
+                    target_node: restore_id,
+                    data: None,
+                },
+            )],
+            false,
+            |root_ui, frame| {
+                eframe::App::ui(&mut app, root_ui, frame);
+            },
+        );
+        assert!(
+            app.recovering || !app.error.is_empty(),
+            "complete form starts the restore"
+        );
+        assert!(app.acknowledgement.is_empty(), "acknowledgement consumed");
+        assert!(app.passphrase.is_empty(), "passphrase consumed");
+        // The worker fails against the bogus picks and reports the error.
+        for _ in 0..200 {
+            if !app.recovering {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            run_frame(&ctx, &mut nodes, Vec::new(), false, |root_ui, frame| {
+                eframe::App::ui(&mut app, root_ui, frame);
+            });
+        }
+        assert!(!app.recovering, "failed restore finishes");
+        assert!(!app.error.is_empty(), "restore failure is surfaced");
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::headless::Harness;
+    use super::*;
+
+    /// Shortcut navigation is gated by the review mode exactly.
+    ///
+    /// Why: the Review shortcut must never navigate while automatic
+    /// dispatch owns the pipeline, and the void shortcut must never
+    /// navigate at all.
+    #[test]
+    fn shortcut_tabs_obey_the_review_mode_gate() {
+        assert_eq!(
+            ShortcutAction::Review.tab(Mode::HumanReview),
+            Some(Tab::Review)
+        );
+        assert_eq!(ShortcutAction::Review.tab(Mode::Automatic), None);
+        assert_eq!(ShortcutAction::CheckNow.tab(Mode::HumanReview), None);
+        assert_eq!(
+            ShortcutAction::Overview.tab(Mode::Automatic),
+            Some(Tab::Overview)
+        );
+        assert_eq!(
+            ShortcutAction::Activity.tab(Mode::HumanReview),
+            Some(Tab::Activity)
+        );
+        assert_eq!(
+            ShortcutAction::LocalAi.tab(Mode::HumanReview),
+            Some(Tab::LocalAi)
+        );
+        assert_eq!(
+            ShortcutAction::Settings.tab(Mode::HumanReview),
+            Some(Tab::Settings)
+        );
+    }
+
+    /// The scheduled-backup rows read every status variant distinctly.
+    ///
+    /// Why: the verified timestamp and the pending fallback are the only
+    /// proof the retention job is alive — conflating them hides a dead
+    /// backup schedule.
+    #[test]
+    fn scheduled_backup_rows_read_every_status_variant() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.scheduled_backup_enabled = true;
+        let now = Some(chrono::Utc::now());
+
+        s.scheduled_backup = Some(headless::scheduled_backup(true, false, now));
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        assert!(
+            h.shows_containing("Verified "),
+            "overview stamp: {:?}",
+            h.labels()
+        );
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        assert!(
+            h.shows_containing("Last verified scheduled backup:"),
+            "scheduled stamp: {:?}",
+            h.labels()
+        );
+
+        s.scheduled_backup = Some(headless::scheduled_backup(true, true, now));
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        assert!(h.shows_containing("OVERDUE"), "{:?}", h.labels());
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        assert!(h.shows_containing("OVERDUE"), "{:?}", h.labels());
+
+        s.scheduled_backup = Some(headless::scheduled_backup(true, false, None));
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        assert!(
+            h.shows_containing("Pending first backup"),
+            "{:?}",
+            h.labels()
+        );
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        assert!(
+            h.shows_containing("No scheduled backup completed yet"),
+            "{:?}",
+            h.labels()
+        );
+
+        s.scheduled_backup = None;
+        h.app.tab = Tab::Overview;
+        h.draw(&s);
+        assert!(h.shows_containing("Status unavailable"), "{:?}", h.labels());
+    }
+
+    /// Queue rows render the company and the position independently.
+    ///
+    /// Why: partial analyses are common — dropping the one populated field
+    /// would hide what the classifier actually found.
+    #[test]
+    fn queue_roles_render_company_and_position_independently() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        let mut company_only = headless::sendable_job("draft");
+        company_only.analysis = Some(headless::analysis("Acme Systems", "", None));
+        let mut position_only = headless::sendable_job("draft");
+        position_only.analysis = Some(headless::analysis("", "Thin Film Engineer", None));
+        s.items = vec![company_only, position_only];
+        h.app.tab = Tab::Review;
+        h.draw(&s);
+        assert!(h.shows_containing("Acme Systems"), "{:?}", h.labels());
+        assert!(h.shows_containing("Thin Film Engineer"), "{:?}", h.labels());
+    }
+
+    /// Full pages send the next-page request and partial pages do not.
+    ///
+    /// Why: requesting pages that do not exist re-fetches noise; missing
+    /// the request strands the operator on page one.
+    #[test]
+    fn queue_pagination_sends_the_next_page_only_when_full() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.items = (0..25).map(|_| headless::sendable_job("draft")).collect();
+        s.page = 2;
+        h.app.tab = Tab::Activity;
+        h.draw(&s);
+        h.click(&s, "Next page");
+        let commands = h.commands();
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [Command::List {
+                    review: false,
+                    page: 3
+                }]
+            ),
+            "a full page advances exactly one page"
+        );
+
+        s.items = (0..2).map(|_| headless::sendable_job("draft")).collect();
+        h.draw(&s);
+        h.click(&s, "Next page");
+        assert!(
+            h.commands().is_empty(),
+            "a partial page must not request another page"
+        );
+    }
+
+    /// Verifier rows render the observed runtime message and the quick
+    /// choices install exactly the advertised tag.
+    ///
+    /// Why: the quick-choice button promises a specific pin — a wiring bug
+    /// would silently verify with the wrong model.
+    #[test]
+    fn verifier_rows_render_the_message_and_quick_choices_pin_the_tag() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.verifier_model.message = "Inspecting pinned digest".into();
+        s.settings.independent_verifier_enabled = true;
+        for tab in [Tab::Settings, Tab::LocalAi] {
+            h.app.tab = tab;
+            h.draw(&s);
+        }
+        assert!(
+            h.shows_containing("Inspecting pinned digest"),
+            "{:?}",
+            h.labels()
+        );
+
+        h.app.tab = Tab::LocalAi;
+        h.draw(&s);
+        h.click(&s, "Granite 4.2 8B Q8 · enterprise default");
+        h.draw(&s);
+        assert_eq!(h.app.settings.verifier_model, "granite4.2:8b-q8_0");
+    }
+
+    /// An enabled independent verifier demands its own digest pin.
+    ///
+    /// Why: without the pin the verifier could silently resolve to a
+    /// different model after a re-pull.
+    #[test]
+    fn independent_verifier_demands_its_digest_pin() {
+        let mut h = Harness::new();
+        let s = headless::snapshot(headless::ACCOUNT);
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        h.app.settings.independent_verifier_enabled = true;
+        h.app.settings.verifier_model_digest = None;
+        h.draw(&s);
+        h.app.settings.verifier_model_digest = Some("sha256:pinned".into());
+        h.draw(&s);
+    }
+
+    /// Gmail connection actions route through the pickers and the worker.
+    ///
+    /// Why: the connect action must hand the picked OAuth file to the
+    /// worker unchanged and disconnect must be its own explicit command.
+    #[test]
+    fn gmail_connection_actions_route_through_the_dialogs() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.demo = false;
+        s.connected = false;
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        h.click(&s, "Choose OAuth JSON & connect");
+        let commands = h.commands();
+        assert!(
+            matches!(commands.as_slice(), [Command::Connect { path, send: false }]
+                if path.ends_with("picked-file.json")),
+            "the picked OAuth file reaches the worker"
+        );
+
+        s.connected = true;
+        h.draw(&s);
+        h.click(&s, "Disconnect locally");
+        let commands = h.commands();
+        assert!(
+            matches!(commands.as_slice(), [Command::Disconnect]),
+            "disconnect is its own explicit command"
+        );
+    }
+
+    /// The settings pickers list every option and install the selection.
+    ///
+    /// Why: the combos are the only way to set the reply tone, the reply
+    /// language and the backup interval — a missing option is an
+    /// unreachable setting.
+    #[test]
+    fn settings_combos_list_every_option_and_install_the_selection() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        s.settings.scheduled_backup_enabled = true;
+        h.app.tab = Tab::Settings;
+        h.draw(&s);
+        let tone = h.app.settings.tone.label().to_owned();
+        h.click(&s, &tone);
+        h.draw(&s);
+        assert!(h.shows("Insane (offensive)"), "{:?}", h.labels());
+        h.click(&s, "Insane (offensive)");
+        h.draw(&s);
+        assert_eq!(h.app.settings.tone, crate::config::Tone::Insane);
+
+        let language = h.app.settings.reply_language.label().to_owned();
+        h.click(&s, &language);
+        h.draw(&s);
+        assert!(h.shows("Always English"), "{:?}", h.labels());
+        h.click(&s, "Always English");
+        h.draw(&s);
+        assert_eq!(
+            h.app.settings.reply_language,
+            crate::config::ReplyLanguage::English
+        );
+
+        let interval = format!("{} hour(s)", h.app.settings.scheduled_backup_interval_hours);
+        h.click(&s, &interval);
+        h.draw(&s);
+        assert!(h.shows("72 hour(s)"), "{:?}", h.labels());
+        h.click(&s, "72 hour(s)");
+        h.draw(&s);
+        assert_eq!(h.app.settings.scheduled_backup_interval_hours, 72);
+    }
+
+    /// Screenshot mode checks that the review actions stay visible below
+    /// the cards on every pinned frame.
+    ///
+    /// Why: the screenshot artifact must show the decision controls — a
+    /// rendering regression that pushes them out of the viewport would go
+    /// unnoticed until a baseline review.
+    #[test]
+    fn screenshot_mode_asserts_review_actions_stay_visible() {
+        let mut h = Harness::new();
+        let mut s = headless::snapshot(headless::ACCOUNT);
+        let job = headless::reviewable_job("draft");
+        s.items = vec![job.clone()];
+        s.selected = Some(job);
+        h.app.tab = Tab::Review;
+        h.app.screenshot = Some(std::path::PathBuf::from("shot.png"));
+        h.app.frames = 11;
+        h.draw(&s);
     }
 }

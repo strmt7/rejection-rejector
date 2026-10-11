@@ -798,3 +798,51 @@ mod tests {
         assert!(RuntimeJournal::open_with_limits(root.path(), 256, 16).is_ok());
     }
 }
+
+#[cfg(test)]
+mod rotation_and_status_tests {
+    use super::*;
+
+    /// Why: archive accounting must count every retained archive and rotation
+    /// must shift history even when the live journal is absent (e.g. right
+    /// after a crash), otherwise a stale archive could be double-counted or
+    /// silently overwritten.
+    #[test]
+    fn status_counts_archives_and_rotation_shifts_history_without_a_current_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("runtime.1.jsonl"), b"aaa").unwrap();
+        std::fs::write(dir.path().join("runtime.2.jsonl"), b"bbbb").unwrap();
+
+        let status = status_for(dir.path(), 1024, 3).unwrap();
+        assert_eq!(status.archive_count, 2);
+        assert_eq!(status.archive_bytes, 7);
+        assert_eq!(status.total_bytes, 7);
+        assert!(!status.available, "no live journal exists");
+
+        rotate(dir.path(), 3).unwrap();
+        assert!(!dir.path().join("runtime.1.jsonl").exists());
+        assert_eq!(
+            std::fs::read(dir.path().join("runtime.2.jsonl")).unwrap(),
+            b"aaa"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("runtime.3.jsonl")).unwrap(),
+            b"bbbb"
+        );
+
+        std::fs::write(dir.path().join(CURRENT_FILE), b"ccccc").unwrap();
+        rotate(dir.path(), 3).unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("runtime.1.jsonl")).unwrap(),
+            b"ccccc"
+        );
+        assert!(
+            !dir.path().join("runtime.2.jsonl").exists(),
+            "the oldest archive must be dropped to honor max_archives"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("runtime.3.jsonl")).unwrap(),
+            b"aaa"
+        );
+    }
+}

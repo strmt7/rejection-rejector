@@ -48,13 +48,10 @@ fn read_small_regular_file(path: &Path) -> Result<Vec<u8>> {
         "{} must not be a symlink",
         path.display()
     );
-    let metadata = fs::metadata(path)?;
-    ensure!(
-        metadata.len() <= MAX_ANCHOR_BYTES,
-        "{} exceeds the audit-anchor size limit",
-        path.display()
-    );
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    // The authoritative size gate runs on the bytes actually read (at most one
+    // byte over the limit), so growth between metadata and read can never slip
+    // past the check.
+    let mut bytes = Vec::new();
     fs::File::open(path)?
         .take(MAX_ANCHOR_BYTES + 1)
         .read_to_end(&mut bytes)?;
@@ -173,7 +170,18 @@ fn interpret_os_anchor_required(raw: Option<&str>) -> Result<bool> {
 }
 
 pub fn os_anchor_required() -> Result<bool> {
-    match std::env::var(OS_AUDIT_ANCHOR_ENV) {
+    os_anchor_required_from(std::env::var(OS_AUDIT_ANCHOR_ENV))
+}
+
+/// Interpret the raw OS audit-anchor environment lookup.
+///
+/// Inputs: `value` — the raw `RR_OS_AUDIT_ANCHOR` lookup result. Output:
+/// `Ok(true)` only for the exact required literal, `Ok(false)` when unset, and
+/// an error for invalid values or an unreadable environment. Test seam: the
+/// raw lookup is injected so non-Unicode environment values are exercised
+/// deterministically.
+fn os_anchor_required_from(value: std::result::Result<String, std::env::VarError>) -> Result<bool> {
+    match value {
         Ok(value) => interpret_os_anchor_required(Some(&value)),
         Err(std::env::VarError::NotPresent) => interpret_os_anchor_required(None),
         Err(error) => Err(anyhow::anyhow!(
@@ -192,7 +200,21 @@ fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
 #[cfg(any(windows, target_os = "macos"))]
 fn read_os_anchor(data_dir: &Path) -> Result<Option<AuditAnchor>> {
     let entry = os_anchor_entry(data_dir)?;
-    match entry.get_password() {
+    parse_os_credential(entry.get_password())
+}
+
+/// Parse the OS credential-store audit-anchor lookup result.
+///
+/// Inputs: `lookup` — the raw credential-store read result. Output: the stored
+/// anchor, `None` when no anchor has been bootstrapped yet, or an error for a
+/// store outage (an unavailable store must never look like "not required").
+/// Test seam: the lookup result is injected so the store-outage arm is
+/// exercised deterministically.
+#[cfg(any(windows, target_os = "macos"))]
+fn parse_os_credential(
+    lookup: std::result::Result<String, keyring::Error>,
+) -> Result<Option<AuditAnchor>> {
+    match lookup {
         Ok(serialized) => parse_anchor(serialized.as_bytes()).map(Some),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(anyhow::anyhow!(
@@ -217,7 +239,18 @@ fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
 /// explicitly required. An empty credential is allowed only for first-time
 /// bootstrap; unsupported platforms fail closed rather than claiming coverage.
 pub fn verify_os_anchor_if_required(store: &Store, data_dir: &Path) -> Result<Option<AuditAnchor>> {
-    if !os_anchor_required()? {
+    verify_os_anchor(store, data_dir, os_anchor_required()?)
+}
+
+/// Verify the OS credential-store anchor when `required`.
+///
+/// Inputs: `store` — open workspace store; `data_dir` — workspace directory;
+/// `required` — whether protected rollback anchoring is explicitly required.
+/// Output: the verified anchor, `None` when not required or not yet
+/// bootstrapped. Test seam: the requirement decision is injected because the
+/// process environment cannot be mutated from tests.
+fn verify_os_anchor(store: &Store, data_dir: &Path, required: bool) -> Result<Option<AuditAnchor>> {
+    if !required {
         return Ok(None);
     }
 
@@ -246,7 +279,21 @@ pub fn checkpoint_os_anchor_if_required(
     store: &Store,
     data_dir: &Path,
 ) -> Result<Option<AuditAnchor>> {
-    if !os_anchor_required()? {
+    checkpoint_os_anchor(store, data_dir, os_anchor_required()?)
+}
+
+/// Advance the OS-protected anchor when `required`.
+///
+/// Inputs: `store` — open workspace store; `data_dir` — workspace directory;
+/// `required` — whether protected rollback anchoring is explicitly required.
+/// Output: the current trusted anchor. Test seam: the requirement decision is
+/// injected because the process environment cannot be mutated from tests.
+fn checkpoint_os_anchor(
+    store: &Store,
+    data_dir: &Path,
+    required: bool,
+) -> Result<Option<AuditAnchor>> {
+    if !required {
         return Ok(None);
     }
 
@@ -296,7 +343,21 @@ pub fn checkpoint_os_anchor_if_required(
 /// detection. The anchor must be stored outside the rollback domain for this to
 /// provide meaningful protection.
 pub fn verify_configured_anchor(store: &Store, data_dir: &Path) -> Result<Option<AuditAnchor>> {
-    let Some(value) = std::env::var_os(AUDIT_ANCHOR_ENV) else {
+    verify_configured_anchor_from(store, data_dir, std::env::var_os(AUDIT_ANCHOR_ENV))
+}
+
+/// Verify the configured external anchor from an injected environment value.
+///
+/// Inputs: `store` — open workspace store; `data_dir` — workspace directory;
+/// `value` — the raw `RR_AUDIT_ANCHOR_FILE` value. Output: the verified anchor,
+/// `None` when no external anchor is configured. Test seam: the raw value is
+/// injected so relative-path rejection is exercised deterministically.
+fn verify_configured_anchor_from(
+    store: &Store,
+    data_dir: &Path,
+    value: Option<std::ffi::OsString>,
+) -> Result<Option<AuditAnchor>> {
+    let Some(value) = value else {
         return Ok(None);
     };
     let path = PathBuf::from(value);
@@ -381,6 +442,22 @@ mod tests {
         let (store_b, dir_b) = workspace(other_root.path());
         assert!(verify_anchor(&store_b, &dir_b, &anchor).is_err());
     }
+
+    /// Why: `rr anchor write anchor.json` resolves a bare filename against the
+    /// current directory, which has no parent directory to create or harden.
+    /// The parent gate must pass such destinations through untouched — an
+    /// unfiltered parent lookup errors on the empty parent and would make
+    /// relative anchor paths unusable — and the anchor must still round-trip.
+    #[test]
+    fn write_anchor_accepts_a_bare_filename_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let name = format!("rr-audit-anchor-test-{}.json", uuid::Uuid::new_v4());
+        let anchor = write_anchor(&store, &dir, Path::new(&name)).unwrap();
+        let stored = read_anchor(Path::new(&name)).unwrap();
+        std::fs::remove_file(&name).unwrap();
+        assert_eq!(stored, anchor);
+    }
 }
 
 #[cfg(test)]
@@ -436,6 +513,263 @@ mod anchor_boundary_tests {
         std::fs::write(&target, b"trusted").unwrap();
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_small_regular_file(&link).is_err());
+    }
+}
+
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod os_anchor_tests {
+    use super::*;
+    use crate::store::Store;
+    use crate::vault::{
+        Vault, private_dir, test_support::lock_credential_store, vault_id, write_new_private,
+    };
+
+    /// Removes this test's audit-anchor credential even when an assertion
+    /// panics, so repeated runs never collide with stale anchors.
+    struct CredentialCleanup(String);
+    impl Drop for CredentialCleanup {
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    fn workspace() -> (tempfile::TempDir, Store, PathBuf, CredentialCleanup) {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("workspace");
+        private_dir(&dir).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_new_private(&dir.join("vault-id"), id.as_bytes()).unwrap();
+        let store = Store::open(&dir.join("state.sqlite3"), Vault::random()).unwrap();
+        let cleanup = CredentialCleanup(id);
+        (root, store, dir, cleanup)
+    }
+
+    fn anchor_fixture() -> AuditAnchor {
+        AuditAnchor {
+            format_version: 1,
+            application_version: "0.0.0-test".into(),
+            created_at: Utc::now(),
+            workspace_fingerprint: "a".repeat(64),
+            audit_sequence: 0,
+            audit_head: "b".repeat(64),
+        }
+    }
+
+    /// Why: the credential entry is bound to the workspace vault identifier;
+    /// without one, no OS-protected anchor may be created or read.
+    #[test]
+    fn os_anchor_entry_requires_a_workspace_identifier() {
+        let bare = tempfile::tempdir().unwrap();
+        assert!(os_anchor_entry(bare.path()).is_err());
+        let (_root, _store, dir, _cleanup) = workspace();
+        assert!(os_anchor_entry(&dir).is_ok());
+    }
+
+    /// Why: a credential-store outage must never be interpreted as "no anchor
+    /// required" — only a genuine empty store bootstraps, and malformed anchor
+    /// content is rejected instead of silently resetting trust.
+    #[test]
+    fn credential_lookup_outcomes_fail_closed_except_bootstrap_and_valid_reads() {
+        let anchor = anchor_fixture();
+        let serialized = serde_json::to_string(&anchor).unwrap();
+        assert_eq!(
+            parse_os_credential(Ok(serialized)).unwrap().unwrap(),
+            anchor
+        );
+        assert!(parse_os_credential(Ok("{}".to_owned())).is_err());
+        assert!(
+            parse_os_credential(Err(keyring::Error::NoEntry))
+                .unwrap()
+                .is_none()
+        );
+        let error = parse_os_credential(Err(keyring::Error::BadEncoding(vec![]))).unwrap_err();
+        assert!(
+            error.to_string().contains("unavailable"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: the OS-protected anchor must round-trip through the real credential
+    /// store and reject tampered (unparseable) content on read.
+    #[test]
+    fn os_anchor_round_trips_through_the_credential_store() {
+        let _lock = lock_credential_store();
+        let (_root, store, dir, _cleanup) = workspace();
+        assert!(read_os_anchor(&dir).unwrap().is_none());
+        let anchor = current(&store, &dir).unwrap();
+        write_os_anchor(&dir, &anchor).unwrap();
+        assert_eq!(read_os_anchor(&dir).unwrap().unwrap(), anchor);
+
+        keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &vault_id(&dir).unwrap())
+            .unwrap()
+            .set_password("garbage")
+            .unwrap();
+        assert!(
+            read_os_anchor(&dir).is_err(),
+            "malformed stored anchors must be rejected, not treated as empty"
+        );
+    }
+
+    /// Why: the protected anchor is a monotonic trust root — checkpoints may
+    /// only advance it, verification must catch both journal tampering and
+    /// anchors from another workspace, and an unchanged journal keeps the
+    /// trusted anchor untouched.
+    #[test]
+    fn verify_and_checkpoint_track_the_trusted_head_monotonically() {
+        let _lock = lock_credential_store();
+        let (_root, mut store, dir, _cleanup) = workspace();
+        assert!(verify_os_anchor(&store, &dir, false).unwrap().is_none());
+        assert!(
+            verify_os_anchor_if_required(&store, &dir)
+                .unwrap()
+                .is_none()
+        );
+        // Why: a workspace that has never checkpointed an OS anchor must
+        // verify as "not yet bootstrapped" (None) instead of failing — that is
+        // the only state allowed to lack a protected anchor.
+        assert_eq!(
+            verify_os_anchor(&store, &dir, true).unwrap(),
+            None,
+            "an unbootstrapped workspace must verify as None"
+        );
+        // Why: the environment-driven wrapper must forward the requirement
+        // decision unchanged — a no-op without `RR_OS_AUDIT_ANCHOR=required`,
+        // and exactly the seeded checkpoint when it is required.
+        match os_anchor_required() {
+            Ok(required) => assert_eq!(
+                checkpoint_os_anchor_if_required(&store, &dir)
+                    .unwrap()
+                    .is_some(),
+                required,
+                "the env wrapper must apply the requirement decision verbatim"
+            ),
+            Err(_) => assert!(
+                checkpoint_os_anchor_if_required(&store, &dir).is_err(),
+                "an invalid requirement value must fail closed through the wrapper"
+            ),
+        }
+        assert!(checkpoint_os_anchor(&store, &dir, false).unwrap().is_none());
+
+        let first = checkpoint_os_anchor(&store, &dir, true)
+            .unwrap()
+            .expect("first checkpoint bootstraps the anchor");
+        assert_eq!(
+            verify_os_anchor(&store, &dir, true).unwrap().unwrap(),
+            first
+        );
+
+        let unchanged = checkpoint_os_anchor(&store, &dir, true).unwrap().unwrap();
+        assert_eq!(
+            unchanged.audit_sequence, first.audit_sequence,
+            "an unchanged journal must not rewrite the trusted anchor"
+        );
+
+        store.log("test.extension", None, "later event").unwrap();
+        let advanced = checkpoint_os_anchor(&store, &dir, true).unwrap().unwrap();
+        assert!(advanced.audit_sequence > first.audit_sequence);
+        assert_eq!(
+            verify_os_anchor(&store, &dir, true).unwrap().unwrap(),
+            advanced
+        );
+
+        let forged = AuditAnchor {
+            workspace_fingerprint: workspace_fingerprint(&dir).unwrap(),
+            audit_head: "c".repeat(64),
+            audit_sequence: advanced.audit_sequence + 5,
+            ..anchor_fixture()
+        };
+        write_os_anchor(&dir, &forged).unwrap();
+        assert!(
+            verify_os_anchor(&store, &dir, true).is_err(),
+            "a forged anchor must fail verification"
+        );
+
+        let foreign = AuditAnchor {
+            workspace_fingerprint: "f".repeat(64),
+            ..first
+        };
+        write_os_anchor(&dir, &foreign).unwrap();
+        assert!(
+            checkpoint_os_anchor(&store, &dir, true).is_err(),
+            "an anchor from another workspace must be rejected"
+        );
+    }
+
+    /// Why: the external anchor path must be absolute, must match the live
+    /// journal, and failures must carry the configured-path context so
+    /// operators can find the broken trust root.
+    #[test]
+    fn configured_external_anchor_resolution_is_fail_closed() {
+        let (_root, store, dir, _cleanup) = workspace();
+        assert!(
+            verify_configured_anchor_from(&store, &dir, None)
+                .unwrap()
+                .is_none()
+        );
+
+        let error =
+            verify_configured_anchor_from(&store, &dir, Some("relative.json".into())).unwrap_err();
+        assert!(
+            error.to_string().contains("absolute"),
+            "unexpected error: {error}"
+        );
+
+        let anchor_path = dir.join("external-anchor.json");
+        write_anchor(&store, &dir, &anchor_path).unwrap();
+        let verified =
+            verify_configured_anchor_from(&store, &dir, Some(anchor_path.clone().into_os_string()))
+                .unwrap()
+                .expect("valid anchor must verify");
+        assert_eq!(
+            verified.workspace_fingerprint,
+            workspace_fingerprint(&dir).unwrap()
+        );
+
+        let broken = dir.join("broken-anchor.json");
+        std::fs::write(&broken, b"not json").unwrap();
+        let error =
+            verify_configured_anchor_from(&store, &dir, Some(broken.into_os_string())).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Configured external audit anchor failed"),
+            "unexpected error: {error:#}"
+        );
+        assert!(verify_configured_anchor(&store, &dir).is_ok());
+    }
+
+    /// Why: the environment lookup must fail closed on unreadable values and
+    /// accept only the exact required literal.
+    #[test]
+    fn os_anchor_environment_lookup_fails_closed() {
+        assert!(!os_anchor_required_from(Err(std::env::VarError::NotPresent)).unwrap());
+        assert!(os_anchor_required_from(Ok("required".to_owned())).unwrap());
+        assert!(os_anchor_required_from(Ok("REQUIRED".to_owned())).is_err());
+        let error = os_anchor_required_from(Err(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from("x"),
+        )))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("Could not read"),
+            "unexpected error: {error}"
+        );
+        assert!(os_anchor_required().is_ok());
+    }
+
+    /// Why: symlinked anchors can redirect the trust root to attacker-controlled
+    /// content and must be rejected outright on Windows as well.
+    #[cfg(windows)]
+    #[test]
+    fn anchor_file_reader_rejects_symlinks_on_windows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("target");
+        std::fs::write(&target, b"trusted").unwrap();
+        let link = dir.path().join("link");
+        if std::os::windows::fs::symlink_file(&target, &link).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix variant of this test covers the same guard there.
+            return;
+        }
         assert!(read_small_regular_file(&link).is_err());
     }
 }

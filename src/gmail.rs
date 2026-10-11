@@ -198,7 +198,7 @@ impl Gmail {
     /// traffic goes to the given endpoints instead of Google's, so the
     /// request/refresh failure modes can be exercised deterministically.
     #[cfg(test)]
-    fn with_endpoints(creds: Credentials, root: &str, token_url: &str) -> Self {
+    pub(crate) fn with_endpoints(creds: Credentials, root: &str, token_url: &str) -> Self {
         Self {
             creds,
             token: None,

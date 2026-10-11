@@ -139,6 +139,19 @@ mod tests {
         );
     }
 
+    /// Why: the WCAG formula has a linear segment for near-black channels
+    /// (below 0.03928); measuring a very dark surface must take that branch,
+    /// not the gamma curve.
+    #[test]
+    fn near_black_channels_use_the_linear_luminance_segment() {
+        let dark = Color32::from_rgb(5, 255, 0);
+        let expected = 0.2126 * (5.0_f64 / 255.0 / 12.92) + 0.7152 * 1.0;
+        assert!(
+            (relative_luminance(dark) - expected).abs() < 1e-9,
+            "linear segment required for near-black channels"
+        );
+    }
+
     /// Why: a wiring error that installs the wrong size into a text slot
     /// silently breaks hierarchy — assert the INSTALLED style, not the
     /// constants, so a swapped slot fails this test.

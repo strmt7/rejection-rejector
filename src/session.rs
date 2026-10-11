@@ -323,3 +323,76 @@ mod tests {
         assert!(read_bounded(&marker).is_err());
     }
 }
+
+#[cfg(test)]
+mod session_drop_guard_tests {
+    use super::*;
+
+    /// Why: the session marker is the unclean-shutdown evidence that later
+    /// disarms unattended delivery; a panic is exactly when that evidence
+    /// matters most, so cleanup must never run during unwind.
+    #[test]
+    fn session_marker_survives_panic_unwind() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker_path = dir.path().join(MARKER_NAME);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = SessionLease::begin(dir.path()).unwrap();
+            panic!("simulated crash while holding the session lease");
+        }));
+        assert!(result.is_err());
+        assert!(
+            marker_path.exists(),
+            "marker must survive panic unwind as crash evidence"
+        );
+    }
+
+    /// Why: a lease whose marker path has no parent directory must not attempt
+    /// any cleanup work; inventing a working directory could delete unrelated
+    /// state.
+    #[test]
+    fn drop_without_a_marker_directory_performs_no_cleanup() {
+        let orphan = SessionLease {
+            marker_path: PathBuf::from(""),
+            session_id: "orphan".into(),
+            previous_unclean: false,
+        };
+        drop(orphan);
+    }
+
+    /// Why: cleanup must tolerate a marker that disappeared (removed by an
+    /// authorized restore) instead of panicking during drop.
+    #[test]
+    fn drop_with_a_missing_marker_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = SessionLease::begin(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join(MARKER_NAME)).unwrap();
+        drop(lease);
+    }
+
+    /// Why: a marker that cannot be authenticated as this session's is
+    /// preserved untouched — corrupt evidence must never be deleted by a
+    /// process that cannot prove ownership.
+    #[test]
+    fn drop_with_a_corrupt_marker_preserves_it_as_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = SessionLease::begin(dir.path()).unwrap();
+        let marker_path = dir.path().join(MARKER_NAME);
+        std::fs::write(&marker_path, b"{corrupt").unwrap();
+        drop(lease);
+        assert_eq!(std::fs::read(&marker_path).unwrap(), b"{corrupt");
+    }
+
+    /// Why: an I/O failure other than "not found" must propagate fail-closed
+    /// from the restore/session markers; silently treating an unreadable marker
+    /// as "nothing pending" could skip required recovery. Windows rejects
+    /// reserved characters before touching the filesystem, which is a
+    /// deterministic non-NotFound I/O error.
+    #[cfg(windows)]
+    #[test]
+    fn io_errors_other_than_absence_propagate_instead_of_being_treated_as_clean() {
+        let bogus = Path::new("rr<invalid-marker-dir");
+        assert!(ensure_restore_complete(bogus).is_err());
+        assert!(begin_restore_transaction(bogus).is_err());
+        assert!(reject_symlink_if_present(&bogus.join(RESTORE_MARKER_NAME)).is_err());
+    }
+}

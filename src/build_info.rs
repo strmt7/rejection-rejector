@@ -120,3 +120,44 @@ mod tests {
         assert_ne!(base, changed);
     }
 }
+
+#[cfg(test)]
+mod commit_verification_tests {
+    use super::*;
+
+    /// Why: `source_commit_verified` must only be true for a full lowercase
+    /// hexadecimal git object id; short ids, uppercase hex, non-hex text and
+    /// the local-build marker must all stay unverified so build provenance
+    /// cannot be faked by a well-formed-looking string.
+    #[test]
+    fn verified_commit_requires_a_full_lowercase_hex_object_id() {
+        assert!(verified_commit("0123456789abcdef0123456789abcdef01234567"));
+        assert!(verified_commit(&"a".repeat(40)));
+        assert!(verified_commit(&"0".repeat(40)));
+        assert!(
+            !verified_commit(&"A".repeat(40)),
+            "uppercase hex is rejected"
+        );
+        assert!(
+            !verified_commit("0123456789abcdef0123456789abcdef0123456"),
+            "non-hex letters are rejected"
+        );
+        assert!(!verified_commit(&"a".repeat(39)), "short ids are rejected");
+        assert!(!verified_commit(&"a".repeat(41)), "long ids are rejected");
+        assert!(!verified_commit(UNVERIFIED_COMMIT));
+        assert!(!verified_commit(""));
+    }
+
+    /// Why: `current()` must classify the actually embedded build commit with
+    /// the same rule the tests pin above, so a real release build can never
+    /// claim verification for a non-conforming commit string.
+    #[test]
+    fn current_build_info_agrees_with_the_commit_verdict() {
+        let info = current();
+        assert_eq!(
+            info.source_commit_verified,
+            verified_commit(&info.source_commit)
+        );
+        assert_eq!(info.source_commit, env!("RR_BUILD_COMMIT"));
+    }
+}

@@ -858,3 +858,227 @@ mod job_state_tests {
         assert_eq!(JobState::from_db("unknown"), None);
     }
 }
+
+#[cfg(test)]
+mod stable_string_mapping_tests {
+    use super::*;
+
+    /// Why: these strings are persisted in the database and consumed by the
+    /// integration API; every variant must keep its exact stable code and every
+    /// code must decode back, so a renamed arm fails here instead of silently
+    /// breaking stored records.
+    #[test]
+    fn processing_failure_codes_round_trip_with_exact_stable_strings() {
+        for (code, expected) in [
+            (ProcessingFailureCode::MessageMalformed, "message_malformed"),
+            (ProcessingFailureCode::ModelPreflight, "model_preflight"),
+            (ProcessingFailureCode::Classification, "classification"),
+            (ProcessingFailureCode::DraftGeneration, "draft_generation"),
+            (
+                ProcessingFailureCode::VerificationRuntime,
+                "verification_runtime",
+            ),
+            (ProcessingFailureCode::AnalysisUnknown, "analysis_unknown"),
+        ] {
+            assert_eq!(code.as_str(), expected);
+            assert_eq!(ProcessingFailureCode::from_db(expected), Some(code));
+        }
+        assert_eq!(ProcessingFailureCode::from_db("unknown_code"), None);
+        assert_eq!(ProcessingFailureCode::from_db(""), None);
+    }
+
+    /// Why: operator-facing queue labels are shown verbatim in every interface;
+    /// renaming one silently changes the product surface.
+    #[test]
+    fn job_state_labels_are_pinned() {
+        for (state, label) in [
+            (JobState::Queued, "Awaiting analysis"),
+            (JobState::Ready, "Ready"),
+            (JobState::Attention, "Needs attention"),
+            (JobState::Other, "Not a rejection"),
+            (JobState::Deferred, "Outside current scope"),
+            (JobState::Dismissed, "Dismissed"),
+            (JobState::Sending, "Sending"),
+            (JobState::Sent, "Sent"),
+            (JobState::Uncertain, "Delivery uncertain"),
+        ] {
+            assert_eq!(state.label(), label);
+        }
+    }
+
+    /// Why: failure codes reach the operations journal and liveness endpoint;
+    /// the exact code strings and their lowercase contract are API-visible.
+    #[test]
+    fn every_operation_kind_has_a_stable_failure_code() {
+        for (kind, code) in [
+            (OperationKind::Idle, "operation_idle"),
+            (OperationKind::Refresh, "refresh_failed"),
+            (OperationKind::SyncMailbox, "mailbox_sync_failed"),
+            (OperationKind::ConnectGmail, "gmail_connect_failed"),
+            (OperationKind::DisconnectGmail, "gmail_disconnect_failed"),
+            (OperationKind::UpdateSettings, "settings_update_failed"),
+            (OperationKind::InstallOllama, "ollama_install_failed"),
+            (OperationKind::StartOllama, "ollama_start_failed"),
+            (OperationKind::PullModel, "model_download_failed"),
+            (OperationKind::InspectModel, "model_inspection_failed"),
+            (
+                OperationKind::QualifyModel,
+                "model_smoke_qualification_failed",
+            ),
+            (OperationKind::EvaluateModel, "model_task_evaluation_failed"),
+            (OperationKind::ProfileModel, "model_runtime_profile_failed"),
+            (OperationKind::CompareModels, "model_comparison_failed"),
+            (OperationKind::IntegrityCheck, "database_integrity_failed"),
+            (OperationKind::CompactDatabase, "database_compaction_failed"),
+            (OperationKind::Backup, "backup_failed"),
+            (OperationKind::RecoveryDrill, "recovery_drill_failed"),
+            (
+                OperationKind::RecoveryKeyExport,
+                "recovery_key_export_failed",
+            ),
+            (
+                OperationKind::RecoveryKeyVerify,
+                "recovery_key_verification_failed",
+            ),
+            (OperationKind::Diagnostics, "diagnostics_export_failed"),
+            (OperationKind::ListItems, "item_listing_failed"),
+            (OperationKind::SelectItem, "item_selection_failed"),
+            (OperationKind::EditDraft, "draft_edit_failed"),
+            (OperationKind::RegenerateDraft, "draft_regeneration_failed"),
+            (OperationKind::DismissItem, "item_dismissal_failed"),
+            (OperationKind::SendReply, "reply_send_failed"),
+            (
+                OperationKind::ReconcileDelivery,
+                "delivery_reconciliation_failed",
+            ),
+            (OperationKind::PurgeRetention, "retention_purge_failed"),
+            (OperationKind::RevealApiToken, "api_token_reveal_failed"),
+            (OperationKind::HideApiToken, "api_token_hide_failed"),
+            (OperationKind::RotateApiToken, "api_token_rotation_failed"),
+            (OperationKind::ApiRequest, "integration_api_request_failed"),
+            (
+                OperationKind::EnterprisePolicyReload,
+                "enterprise_policy_reload_failed",
+            ),
+            (OperationKind::AnalyzeQueuedMail, "mail_analysis_failed"),
+            (
+                OperationKind::AutomaticDispatch,
+                "automatic_dispatch_failed",
+            ),
+        ] {
+            assert_eq!(kind.failure_code(), code);
+        }
+    }
+
+    /// Why: stall budgets are the liveness thresholds that decide when an
+    /// operator is told an operation may be stuck; every variant keeps its
+    /// explicit budget so a merge cannot silently retune one operation's
+    /// watchdog.
+    #[test]
+    fn stall_budgets_are_pinned_per_operation() {
+        for (kind, seconds) in [
+            (OperationKind::Refresh, 30),
+            (OperationKind::ListItems, 30),
+            (OperationKind::ApiRequest, 30),
+            (OperationKind::UpdateSettings, 60),
+            (OperationKind::DisconnectGmail, 60),
+            (OperationKind::StartOllama, 120),
+            (OperationKind::InspectModel, 120),
+            (OperationKind::EnterprisePolicyReload, 120),
+            (OperationKind::SendReply, 300),
+            (OperationKind::AutomaticDispatch, 300),
+            (OperationKind::ReconcileDelivery, 300),
+            (OperationKind::ConnectGmail, 600),
+            (OperationKind::SyncMailbox, 600),
+            (OperationKind::RecoveryKeyExport, 600),
+            (OperationKind::RecoveryKeyVerify, 600),
+            (OperationKind::Diagnostics, 600),
+            (OperationKind::PurgeRetention, 600),
+            (OperationKind::QualifyModel, 1_800),
+            (OperationKind::AnalyzeQueuedMail, 1_800),
+            (OperationKind::IntegrityCheck, 1_800),
+            (OperationKind::InstallOllama, 3_600),
+            (OperationKind::CompactDatabase, 3_600),
+            (OperationKind::Backup, 3_600),
+            (OperationKind::RecoveryDrill, 3_600),
+            (OperationKind::PullModel, 7_200),
+            (OperationKind::EvaluateModel, 7_200),
+            (OperationKind::ProfileModel, 7_200),
+            (OperationKind::CompareModels, 21_600),
+        ] {
+            assert_eq!(kind.stall_budget_seconds(), seconds);
+        }
+    }
+
+    /// Why: audit domains and severities are stored with every journal row and
+    /// drive retention/escalation filters; the wire strings must not drift.
+    #[test]
+    fn audit_domain_and_severity_strings_are_pinned() {
+        for (domain, name) in [
+            (AuditDomain::Mail, "mail"),
+            (AuditDomain::Delivery, "delivery"),
+            (AuditDomain::Model, "model"),
+            (AuditDomain::Settings, "settings"),
+            (AuditDomain::Policy, "policy"),
+            (AuditDomain::Security, "security"),
+            (AuditDomain::Recovery, "recovery"),
+            (AuditDomain::Integration, "integration"),
+            (AuditDomain::Retention, "retention"),
+            (AuditDomain::Storage, "storage"),
+            (AuditDomain::Worker, "worker"),
+            (AuditDomain::Other, "other"),
+        ] {
+            assert_eq!(domain.as_str(), name);
+        }
+        for (severity, name) in [
+            (AuditSeverity::Info, "info"),
+            (AuditSeverity::Warning, "warning"),
+            (AuditSeverity::Error, "error"),
+            (AuditSeverity::Security, "security"),
+        ] {
+            assert_eq!(severity.as_str(), name);
+        }
+    }
+
+    /// Why: journal routing must classify every operational area; a kind that
+    /// falls into `Other`/`Info` by accident hides failures from operators.
+    #[test]
+    fn audit_attributes_cover_every_domain_and_error_severity() {
+        assert_eq!(
+            audit_attributes("settings.changed"),
+            (AuditDomain::Settings, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("policy.reloaded"),
+            (AuditDomain::Policy, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("enterprise.enforced"),
+            (AuditDomain::Policy, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("api.token_rotated"),
+            (AuditDomain::Integration, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("integration.request"),
+            (AuditDomain::Integration, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("worker.stalled"),
+            (AuditDomain::Worker, AuditSeverity::Info)
+        );
+        assert_eq!(
+            audit_attributes("backup.failed"),
+            (AuditDomain::Recovery, AuditSeverity::Error)
+        );
+        assert_eq!(
+            audit_attributes("db.error"),
+            (AuditDomain::Other, AuditSeverity::Error)
+        );
+        assert_eq!(
+            audit_attributes("job.fatal"),
+            (AuditDomain::Other, AuditSeverity::Error)
+        );
+    }
+}

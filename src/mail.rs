@@ -710,3 +710,80 @@ mod tests {
         assert!(s.split("\r\n").all(|line| line.len() < 78));
     }
 }
+
+#[cfg(test)]
+mod hard_block_failure_tests {
+    use super::*;
+    use crate::ollama::sample_email;
+    use crate::types::Source;
+
+    fn deliverable() -> Email {
+        let mut email = sample_email("Offer update", "We have decided not to move forward.");
+        email.stub.account = "me@example.com".into();
+        email.stub.source = Source::Gmail;
+        email.message_id = "<abc@example.invalid>".into();
+        email
+    }
+
+    /// Why: hard blocks are the last line of defense before a send; a clean
+    /// replyable Gmail message must pass with zero blocks, and each malformed
+    /// envelope property must independently block sending.
+    #[test]
+    fn envelope_defects_each_block_sending() {
+        assert!(hard_blocks(&deliverable(), "me@example.com").is_empty());
+
+        let mut bad_id = deliverable();
+        bad_id.message_id = "not-a-message-id".into();
+        assert_eq!(
+            hard_blocks(&bad_id, "me@example.com"),
+            vec!["Missing or invalid original Message-ID"]
+        );
+
+        let mut long_subject = deliverable();
+        long_subject.subject = "x".repeat(1001);
+        assert_eq!(
+            hard_blocks(&long_subject, "me@example.com"),
+            vec!["Invalid subject header"]
+        );
+
+        let mut control_subject = deliverable();
+        control_subject.subject = "Bad\u{0007}subject".into();
+        assert_eq!(
+            hard_blocks(&control_subject, "me@example.com"),
+            vec!["Invalid subject header"]
+        );
+
+        let mut own_agent = deliverable();
+        own_agent
+            .headers
+            .insert("x-rejection-rejector".into(), vec!["1".into()]);
+        assert_eq!(
+            hard_blocks(&own_agent, "me@example.com"),
+            vec!["Own agent message"]
+        );
+    }
+
+    /// Why: unknown provenance (demo mail), account mismatch and folder markers
+    /// must stay unsendable even when the envelope itself looks well formed.
+    #[test]
+    fn provenance_account_and_folder_defects_block_sending() {
+        let mut demo = deliverable();
+        demo.stub.source = Source::Demo;
+        assert_eq!(
+            hard_blocks(&demo, "me@example.com"),
+            vec!["Demo messages can never be sent"]
+        );
+
+        assert_eq!(
+            hard_blocks(&deliverable(), "other@example.com"),
+            vec!["Connected account does not match"]
+        );
+
+        let mut filed = deliverable();
+        filed.labels.push("SENT".into());
+        assert_eq!(
+            hard_blocks(&filed, "me@example.com"),
+            vec!["Message is sent, draft, trashed or spam"]
+        );
+    }
+}
