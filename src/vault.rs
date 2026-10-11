@@ -76,6 +76,73 @@ fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
+/// Resolve the vault key from an OS credential-store lookup.
+///
+/// Inputs: `lookup` — the raw credential-store read result; `is_new` — whether
+/// this vault identifier was just created (so a missing credential may be
+/// minted exactly once); `mint` — persists a freshly generated key. Output:
+/// the 32-byte vault key, or an error that never silently mints a replacement
+/// for an existing vault. Test seam: the lookup result is injected so every
+/// credential-store failure mode is exercised deterministically.
+#[cfg(any(windows, target_os = "macos"))]
+fn key_from_credential_store(
+    lookup: std::result::Result<String, keyring::Error>,
+    is_new: bool,
+    mint: impl FnOnce(&str) -> Result<()>,
+) -> Result<Zeroizing<[u8; 32]>> {
+    match lookup {
+        Ok(encoded) => {
+            let encoded = Zeroizing::new(encoded);
+            let bytes = Zeroizing::new(STANDARD.decode(encoded.as_bytes())?);
+            ensure!(bytes.len() == 32, "Invalid OS credential-store key");
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.copy_from_slice(&bytes);
+            Ok(key)
+        }
+        Err(keyring::Error::NoEntry) if is_new => {
+            let mut key = Zeroizing::new([0u8; 32]);
+            key.as_mut().copy_from_slice(&rand::random::<[u8; 32]>());
+            let encoded = Zeroizing::new(STANDARD.encode(key.as_ref()));
+            mint(encoded.as_str())?;
+            Ok(key)
+        }
+        Err(keyring::Error::NoEntry) => Err(anyhow::anyhow!(
+            "Existing vault identifier has no OS credential. Refusing to generate a replacement key; import verified recovery material or restore the original credential"
+        )),
+        Err(error) => Err(anyhow::anyhow!(
+            "OS credential store unavailable or original key missing: {error}"
+        )),
+    }
+}
+
+/// Install a recovered vault key into the OS credential store exactly once.
+///
+/// Inputs: `lookup` — the raw credential-store read result; `key` — the
+/// recovered 32-byte vault key; `store` — persists the encoded key. Output:
+/// `Ok(())` after one install; an existing credential is never overwritten and
+/// credential-store failures surface as errors. Test seam: the lookup result
+/// is injected so the error arms are exercised deterministically.
+#[cfg(any(windows, target_os = "macos"))]
+fn install_key_into_credential_store(
+    lookup: std::result::Result<String, keyring::Error>,
+    key: &[u8],
+    store: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    match lookup {
+        Ok(_) => anyhow::bail!(
+            "An OS credential already exists for this vault; refusing to overwrite it"
+        ),
+        Err(keyring::Error::NoEntry) => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Cannot inspect the OS credential store: {error}"
+            ));
+        }
+    }
+    let encoded = Zeroizing::new(STANDARD.encode(key));
+    store(encoded.as_str())
+}
+
 pub fn vault_id(dir: &Path) -> Result<String> {
     let id = fs::read_to_string(dir.join("vault-id")).context("Vault identifier is missing")?;
     let id = id.trim().to_owned();
@@ -116,29 +183,12 @@ impl Vault {
         #[cfg(any(windows, target_os = "macos"))]
         {
             let entry = keyring::Entry::new("rejection-rejector.v1", id.trim())?;
-            match entry.get_password() {
-                Ok(encoded) => {
-                    let encoded = Zeroizing::new(encoded);
-                    let bytes = Zeroizing::new(STANDARD.decode(encoded.as_bytes())?);
-                    ensure!(bytes.len() == 32, "Invalid OS credential-store key");
-                    let mut key = Zeroizing::new([0u8; 32]);
-                    key.copy_from_slice(&bytes);
-                    Ok(Self::from_zeroizing_key(key))
-                }
-                Err(keyring::Error::NoEntry) if is_new => {
-                    let mut key = Zeroizing::new([0u8; 32]);
-                    key.as_mut().copy_from_slice(&rand::random::<[u8; 32]>());
-                    let encoded = Zeroizing::new(STANDARD.encode(key.as_ref()));
-                    entry.set_password(encoded.as_str()).context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")?;
-                    Ok(Self::from_zeroizing_key(key))
-                }
-                Err(keyring::Error::NoEntry) => Err(anyhow::anyhow!(
-                    "Existing vault identifier has no OS credential. Refusing to generate a replacement key; import verified recovery material or restore the original credential"
-                )),
-                Err(e) => Err(anyhow::anyhow!(
-                    "OS credential store unavailable or original key missing: {e}"
-                )),
-            }
+            let key = key_from_credential_store(entry.get_password(), is_new, |encoded| {
+                entry
+                    .set_password(encoded)
+                    .context("Cannot save encryption key to the OS credential store; no plaintext fallback exists")
+            })?;
+            Ok(Self::from_zeroizing_key(key))
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
@@ -274,22 +324,15 @@ impl Vault {
     pub fn install_os_key_if_missing(&self, dir: &Path) -> Result<()> {
         let id = vault_id(dir)?;
         let entry = keyring::Entry::new("rejection-rejector.v1", &id)?;
-        match entry.get_password() {
-            Ok(_) => anyhow::bail!(
-                "An OS credential already exists for this vault; refusing to overwrite it"
-            ),
-            Err(keyring::Error::NoEntry) => {}
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "Cannot inspect the OS credential store: {error}"
-                ));
-            }
-        }
-        let encoded = Zeroizing::new(STANDARD.encode(self.key.as_ref().as_ref()));
-        entry
-            .set_password(encoded.as_str())
-            .context("Cannot install the recovered vault key in the OS credential store")?;
-        Ok(())
+        install_key_into_credential_store(
+            entry.get_password(),
+            self.key.as_ref().as_ref(),
+            |encoded| {
+                entry
+                    .set_password(encoded)
+                    .context("Cannot install the recovered vault key in the OS credential store")
+            },
+        )
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -603,5 +646,88 @@ pub(crate) mod test_support {
             .expect("open credential-store test lock");
         fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
         file
+    }
+}
+
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod credential_store_seam_tests {
+    use super::*;
+
+    fn store_error() -> keyring::Error {
+        keyring::Error::BadEncoding(vec![1, 2, 3])
+    }
+
+    /// Why: every credential-store outcome must fail closed except the two
+    /// documented ones — reading an existing key and minting exactly once on
+    /// first open. A store outage must surface as an error and never mint a
+    /// replacement key, which would orphan all previously sealed records.
+    #[test]
+    fn key_lookup_outcomes_fail_closed_except_read_and_first_open_mint() {
+        let payload = Zeroizing::new(STANDARD.encode([7u8; 32]));
+        let key = key_from_credential_store(Ok(payload.as_str().to_owned()), true, |_| {
+            panic!("an existing credential must never be overwritten")
+        })
+        .unwrap();
+        assert_eq!(key.as_slice(), &[7u8; 32][..]);
+
+        assert!(key_from_credential_store(Ok("not base64 !".into()), true, |_| Ok(())).is_err());
+        let short = Zeroizing::new(STANDARD.encode([1u8; 16]));
+        assert!(
+            key_from_credential_store(Ok(short.as_str().to_owned()), true, |_| Ok(())).is_err(),
+            "non-32-byte keys are rejected"
+        );
+
+        let mut minted: Option<String> = None;
+        let fresh = key_from_credential_store(Err(keyring::Error::NoEntry), true, |encoded| {
+            minted = Some(encoded.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        let stored = minted.expect("first open must mint exactly one key");
+        let decoded = STANDARD.decode(stored.as_str()).unwrap();
+        assert_eq!(fresh.as_slice(), decoded.as_slice());
+
+        assert!(
+            key_from_credential_store(Err(keyring::Error::NoEntry), false, |_| {
+                panic!("an existing vault must never mint a replacement key")
+            })
+            .is_err()
+        );
+        assert!(
+            key_from_credential_store(Err(store_error()), true, |_| Ok(())).is_err(),
+            "credential-store outages must fail closed"
+        );
+    }
+
+    /// Why: recovery-key import must install exactly once, refuse to overwrite
+    /// an existing credential, and surface credential-store inspection failures
+    /// instead of silently skipping the install.
+    #[test]
+    fn recovered_key_install_refuses_overwrite_and_surfaces_store_errors() {
+        let mut stored: Option<String> = None;
+        install_key_into_credential_store(Err(keyring::Error::NoEntry), &[3u8; 32], |encoded| {
+            stored = Some(encoded.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        let encoded = stored.expect("missing credential must be installed");
+        assert_eq!(STANDARD.decode(encoded).unwrap().len(), 32);
+
+        assert!(
+            install_key_into_credential_store(Ok("existing".into()), &[3u8; 32], |_| {
+                panic!("existing credential must not be overwritten")
+            })
+            .is_err()
+        );
+        let error = install_key_into_credential_store(Err(store_error()), &[3u8; 32], |_| {
+            panic!("store errors must not install anything")
+        })
+        .expect_err("an unavailable credential store must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot inspect the OS credential store"),
+            "unexpected error: {error}"
+        );
     }
 }

@@ -145,9 +145,15 @@ impl App {
                     }
                 }).response;
                 if self.screenshot.is_some() && self.frames > 10 {
-                    assert!(review_actions_visible(cards.rect, actions.rect, ui.clip_rect()),
-                        "Review controls are not below the cards and visible: cards={:?}, actions={:?}, viewport={:?}",
-                        cards.rect, actions.rect, ui.clip_rect());
+                    let geometry = (cards.rect, actions.rect, ui.clip_rect());
+                    let detail = format!(
+                        "cards={:?}, actions={:?}, viewport={:?}",
+                        geometry.0, geometry.1, geometry.2
+                    );
+                    assert!(
+                        review_actions_visible(geometry.0, geometry.1, geometry.2),
+                        "Review controls are not below the cards and visible: {detail}"
+                    );
                 }
                 if !s.settings.sending_enabled {
                     ui.label(RichText::new("Sending is disabled. Enable it explicitly in Settings after connecting Gmail with send permission.").small().color(MUTED));

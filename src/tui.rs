@@ -20,7 +20,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 use ratatui::{
-    DefaultTerminal, Frame,
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -582,6 +582,8 @@ struct Tui {
     send_confirmation: Option<SendConfirmation>,
     /// Open Automatic-arm cooldown gate.
     pending_arm: Option<AutomaticArmGate>,
+    /// Emergency-stop sentinel reader (injectable for tests).
+    emergency: fn() -> crate::emergency::EmergencyStopStatus,
     /// Whether the quit-with-unsaved-work confirmation is open.
     close_confirmation: bool,
     /// Whether the operator confirmed quitting.
@@ -617,6 +619,7 @@ impl Tui {
             pending_select: None,
             send_confirmation: None,
             pending_arm: None,
+            emergency: crate::emergency::status_fail_closed,
             close_confirmation: false,
             quit: false,
             local_error: String::new(),
@@ -1089,22 +1092,79 @@ impl Tui {
 /// stop before the process returns. The interface itself never opens the
 /// database or Gmail: it renders [`Snapshot`]s and issues [`Command`]s.
 pub fn run(worker: Worker) -> Result<()> {
-    let mut terminal = ratatui::try_init()?;
-    let mut tui = Tui::new(worker);
-    let outcome = run_loop(&mut terminal, &mut tui);
+    let tui = Tui::new(worker);
+    let restore = ratatui::try_restore;
+    let mut keys: fn() -> Result<Option<KeyEvent>> = poll_key;
+    run_session(ratatui::try_init()?, tui, restore, &mut keys)
+}
+
+/// Run one interactive terminal session around the presentation state.
+///
+/// Inputs: `terminal` — initialized ratatui terminal; `tui` — presentation
+/// state mutated by events; `restore` — terminal teardown to run on every
+/// exit path; `next_key` — event pump returning at most one key press per
+/// call. Output: `Ok(())` once the operator confirmed the quit; `Err` on
+/// terminal I/O failure. The worker is asked to stop before returning and
+/// the terminal is restored through `restore`.
+fn run_session<B: ratatui::backend::Backend>(
+    mut terminal: ratatui::Terminal<B>,
+    mut tui: Tui,
+    restore: fn() -> std::io::Result<()>,
+    next_key: &mut dyn FnMut() -> Result<Option<KeyEvent>>,
+) -> Result<()>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let outcome = run_loop(&mut terminal, &mut tui, next_key);
     tui.worker.request_stop();
-    ratatui::try_restore()?;
+    restore()?;
     outcome
+}
+
+/// Wait briefly for one key event from the real terminal.
+///
+/// Inputs: none. Output: `Ok(Some(key))` for a key press, `Ok(None)` when
+/// the 200 ms window passed without one (so countdowns and busy states keep
+/// refreshing), or `Err` on terminal I/O failure.
+fn poll_key() -> Result<Option<KeyEvent>> {
+    poll_next_key(poll, read, Duration::from_millis(200))
+}
+
+/// Wait for one key event from an injected terminal event source.
+///
+/// Inputs: `ready` — poll function; `read` — event read function; `timeout`
+/// — wait budget. Output: `Some(key)` when a key event arrives within the
+/// budget, `None` on timeout or a non-key event. Terminal errors propagate.
+fn poll_next_key<R, D>(mut ready: R, mut read: D, timeout: Duration) -> Result<Option<KeyEvent>>
+where
+    R: FnMut(Duration) -> std::io::Result<bool>,
+    D: FnMut() -> std::io::Result<Event>,
+{
+    Ok(
+        if ready(timeout)?
+            && let Event::Key(key) = read()?
+        {
+            Some(key)
+        } else {
+            None
+        },
+    )
 }
 
 /// Draw and event-loop body of [`run`].
 ///
 /// Inputs: `terminal` — initialized ratatui terminal; `tui` — presentation
-/// state mutated by events. Output: `Ok(())` once the operator confirmed the
-/// quit; `Err` on terminal I/O failure. Each iteration renders the latest
-/// snapshot, then waits up to 200 ms for a key event so the countdown,
-/// busy state and worker notices keep refreshing.
-fn run_loop(terminal: &mut DefaultTerminal, tui: &mut Tui) -> Result<()> {
+/// state mutated by events; `next_key` — event pump. Output: `Ok(())` once
+/// the operator confirmed the quit; `Err` on terminal I/O failure. Each
+/// iteration renders the latest snapshot, then asks the pump for a key.
+fn run_loop<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    tui: &mut Tui,
+    next_key: &mut dyn FnMut() -> Result<Option<KeyEvent>>,
+) -> Result<()>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     loop {
         let snapshot = tui.worker.view();
         tui.sync_view(&snapshot);
@@ -1112,9 +1172,7 @@ fn run_loop(terminal: &mut DefaultTerminal, tui: &mut Tui) -> Result<()> {
         if tui.quit {
             return Ok(());
         }
-        if poll(Duration::from_millis(200))?
-            && let Event::Key(key) = read()?
-        {
+        if let Some(key) = next_key()? {
             tui.handle_key(key, &snapshot);
         }
     }
@@ -1140,10 +1198,11 @@ fn draw(frame: &mut Frame, tui: &Tui, s: &Snapshot) {
         draw_help(frame);
     } else if tui.close_confirmation {
         draw_close_confirmation(frame, tui, s);
-    } else if tui.send_confirmation.is_some() {
-        draw_confirm_send(frame, tui, s);
-    } else if tui.pending_arm.is_some() {
-        draw_arm_dialog(frame, tui);
+    } else if let Some(confirmation) = tui.send_confirmation.as_ref() {
+        let send_ready = s.busy.is_empty() && !tui.worker.paused.load(Ordering::SeqCst);
+        draw_confirm_send(frame, confirmation, send_ready);
+    } else if let Some(gate) = tui.pending_arm.as_ref() {
+        draw_arm_dialog(frame, gate);
     } else if tui.pending_select.is_some() {
         draw_pending_select(frame);
     }
@@ -1496,7 +1555,7 @@ fn draw_status(frame: &mut Frame, area: Rect, tui: &Tui, s: &Snapshot) {
             Style::default().fg(Color::Yellow),
         ));
     }
-    if crate::emergency::status_fail_closed().active {
+    if (tui.emergency)().active {
         top.push(Span::styled(
             "  ENTERPRISE EMERGENCY STOP · OUTBOUND EMAIL BLOCKED",
             Style::default().fg(Color::Red),
@@ -1580,10 +1639,7 @@ fn draw_help(frame: &mut Frame) {
 /// the recipient, subject and the exact persisted draft body plus the
 /// irreversibility warning. `y` sends through `Command::Send`, `n`/`Esc`
 /// cancels and clears the dialog.
-fn draw_confirm_send(frame: &mut Frame, tui: &Tui, s: &Snapshot) {
-    let Some(confirmation) = tui.send_confirmation.as_ref() else {
-        return;
-    };
+fn draw_confirm_send(frame: &mut Frame, confirmation: &SendConfirmation, send_ready: bool) {
     let job = &confirmation.job;
     let area = centered_rect(64, 74, frame.area());
     frame.render_widget(Clear, area);
@@ -1612,7 +1668,6 @@ fn draw_confirm_send(frame: &mut Frame, tui: &Tui, s: &Snapshot) {
         "Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.",
         Style::default().fg(Color::Yellow),
     )));
-    let send_ready = s.busy.is_empty() && !tui.worker.paused.load(Ordering::SeqCst);
     lines.push(Line::raw(format!(
         "y/Enter send this reply now{} · n/Esc cancel",
         if send_ready {
@@ -1633,10 +1688,7 @@ fn draw_confirm_send(frame: &mut Frame, tui: &Tui, s: &Snapshot) {
 /// open [`AutomaticArmGate`]). Output: none; shows the risk warning text and
 /// the cooldown countdown. The confirmation is only actionable after the
 /// cooldown; `n`/`Esc` cancels and stays in Human review.
-fn draw_arm_dialog(frame: &mut Frame, tui: &Tui) {
-    let Some(gate) = tui.pending_arm.as_ref() else {
-        return;
-    };
+fn draw_arm_dialog(frame: &mut Frame, gate: &AutomaticArmGate) {
     let status = arm_gate_status(gate, Utc::now());
     let area = centered_rect(64, 60, frame.area());
     frame.render_widget(Clear, area);
@@ -2048,17 +2100,19 @@ mod tests {
         let mut state = Some(SendConfirmation { job });
         let command = accept_send_confirmation(&mut state, true);
         assert!(state.is_none(), "accepting must clear the dialog state");
-        match command {
-            Some(Command::Send {
-                id: sent_id,
-                revision: sent_revision,
-                body_hash,
-            }) => {
-                assert_eq!(sent_id, id);
-                assert_eq!(sent_revision, revision);
-                assert_eq!(body_hash, hash("Persisted reply"));
-            }
-            _ => panic!("expected Command::Send for an accepted confirmation"),
+        assert!(
+            matches!(command, Some(Command::Send { .. })),
+            "accepted confirmations only send"
+        );
+        if let Some(Command::Send {
+            id: sent_id,
+            revision: sent_revision,
+            body_hash,
+        }) = command
+        {
+            assert_eq!(sent_id, id);
+            assert_eq!(sent_revision, revision);
+            assert_eq!(body_hash, hash("Persisted reply"));
         }
     }
 
@@ -2181,5 +2235,1326 @@ mod tests {
         let cursor = editor_backspace(&mut text, 3);
         assert_eq!(text, "a\u{00e9}b");
         assert_eq!(cursor, 1);
+    }
+
+    /// A worker whose commands are captured by the test instead of a live
+    /// engine.
+    ///
+    /// Inputs: none. Output: `(tui, rx)` — presentation state around a
+    /// stopped demo worker; every issued [`Command`] lands in `rx`.
+    fn test_tui() -> (Tui, crossbeam_channel::Receiver<Command>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = Worker::spawn(dir.path().to_path_buf(), true);
+        let (tx, rx) = crossbeam_channel::bounded(64);
+        // Dropping the worker's own sender disconnects the engine loop;
+        // wait for its one startup refresh before taking over the view.
+        worker.tx = tx;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !worker.view().initialized {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker never initialized"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        *worker.snapshot.lock().expect("snapshot lock") = Snapshot::default();
+        std::mem::forget(dir);
+        (Tui::new(worker), rx)
+    }
+
+    /// Build a job that passes every mail-level hard block.
+    ///
+    /// Inputs: `body` — persisted draft text. Output: [`Job`] with a Gmail
+    /// source, matching account and replyable recipient.
+    fn sendable_job(body: &str) -> Job {
+        let mut job = reviewable_job(body);
+        if let Some(email) = &mut job.email {
+            email.stub = crate::types::Stub {
+                account: "me@example.com".into(),
+                provider_id: "p".into(),
+                thread_id: "t".into(),
+                source: crate::types::Source::Gmail,
+            };
+            email.from = "Recruitment <hr@corp.example>".into();
+            email.message_id = "<valid-message@corp.example>".into();
+        }
+        job
+    }
+
+    /// An initialized snapshot with a connected account.
+    ///
+    /// Inputs: none. Output: [`Snapshot`] the interface treats as live and
+    /// idle.
+    fn live_snapshot() -> Snapshot {
+        Snapshot {
+            initialized: true,
+            account: "me@example.com".into(),
+            connected: true,
+            settings: Settings {
+                sending_enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Render one full frame to text for content assertions.
+    ///
+    /// Inputs: `tui` — presentation state; `s` — snapshot. Output: the
+    /// visible screen text, row by row.
+    fn render_text(tui: &Tui, s: &Snapshot) -> String {
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, tui, s))
+            .expect("draw frame");
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer.cell((x, y)).expect("cell").symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Flatten one rendered line to plain text.
+    ///
+    /// Inputs: `line` — rendered line. Output: concatenation of its spans.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect()
+    }
+
+    /// Render the status bar alone into a generous area.
+    ///
+    /// Inputs: `tui` — presentation state; `s` — snapshot. Output: the full
+    /// status text, including the error and hint lines the fixed-height
+    /// bottom bar clips in the composed frame.
+    fn render_status_text(tui: &Tui, s: &Snapshot) -> String {
+        let backend = ratatui::backend::TestBackend::new(120, 8);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                draw_status(frame, area, tui, s);
+            })
+            .expect("draw status");
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer.cell((x, y)).expect("cell").symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Build a key press event.
+    ///
+    /// Inputs: `code` — key. Output: [`KeyEvent`] in press state.
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    /// Dropping an unsaved edit is explicit and the text survives until the
+    /// rebind replaces it.
+    ///
+    /// Why: `abandon_edit` must clear only the dirty flag — losing the text
+    /// here would silently discard operator work on a mode switch.
+    #[test]
+    fn abandon_edit_clears_dirty_but_keeps_text() {
+        let mut editor = EditorState::default();
+        editor.edit("unsaved text".into());
+        assert!(editor.dirty);
+        editor.abandon_edit();
+        assert!(!editor.dirty);
+        assert_eq!(editor.text, "unsaved text");
+    }
+
+    /// Missing originals and mail-level blocks are reported verbatim.
+    ///
+    /// Why: these reasons feed the shared send gate's visible "Sending
+    /// blocked" line — dropping a reason hides a real delivery hazard.
+    #[test]
+    fn hard_blocks_for_reports_the_exact_reasons() {
+        let mut job = reviewable_job("draft body");
+        let blocks = hard_blocks_for(&job, "me@example.com");
+        assert!(
+            blocks.contains(&"Demo messages can never be sent".to_string()),
+            "demo sources are hard-blocked: {blocks:?}"
+        );
+        job.email = None;
+        assert_eq!(
+            hard_blocks_for(&job, "me@example.com"),
+            vec!["Original email is unavailable".to_string()]
+        );
+    }
+
+    /// The editor renders its caret as a reversed cell at the exact cursor
+    /// position, including multi-byte text and end-of-line.
+    ///
+    /// Why: a misdrawn caret makes the operator edit the wrong character.
+    #[test]
+    fn editor_lines_place_the_caret_on_the_right_cell() {
+        let plain = editor_lines("ab\ncd", None);
+        assert_eq!(plain.len(), 2);
+        assert!(plain.iter().all(|line| {
+            line.spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::REVERSED))
+        }));
+
+        // Cursor at offset 1 ('b') in the first line.
+        let caret = editor_lines("ab\ncd", Some(1));
+        assert_eq!(caret[0].spans.len(), 3, "head, caret, tail");
+        assert!(
+            caret[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert_eq!(caret[0].spans[1].content, "b");
+        // Cursor at the end of the first line renders a reversed space.
+        let end = editor_lines("ab\ncd", Some(2));
+        assert_eq!(end[0].spans[1].content, " ");
+        // A cursor past the end renders no caret at all.
+        let beyond = editor_lines("ab", Some(99));
+        assert!(
+            beyond[0]
+                .spans
+                .iter()
+                .all(|span| !span.style.add_modifier.contains(Modifier::REVERSED))
+        );
+    }
+
+    /// Dialog overlays are centered inside the frame and never exceed it.
+    ///
+    /// Why: every dialog is positioned through this helper; off-screen
+    /// dialogs make actions invisible.
+    #[test]
+    fn centered_rect_stays_inside_the_parent_area() {
+        let area = Rect::new(10, 20, 100, 80);
+        let centered = centered_rect(50, 50, area);
+        assert!(centered.left() >= area.left() && centered.right() <= area.right());
+        assert!(centered.top() >= area.top() && centered.bottom() <= area.bottom());
+        assert_eq!(centered.width, 50);
+        assert_eq!(centered.height, 40);
+        assert_eq!(centered.x, 10 + 25);
+        assert_eq!(centered.y, 20 + 20);
+    }
+
+    /// Sync mirrors account switches, enterprise policy and selection.
+    ///
+    /// Why: leaking editor text across accounts or keeping Automatic mode
+    /// under a Human-review policy are both safety bugs.
+    #[test]
+    fn sync_view_enforces_accounts_policy_and_selection() {
+        let (mut tui, _rx) = test_tui();
+        tui.queue_selection = Some(9);
+        let mut s = live_snapshot();
+        s.items = vec![reviewable_job("a"), reviewable_job("b")];
+        tui.sync_view(&s);
+        assert_eq!(tui.queue_selection, Some(1), "selection clamps to the list");
+
+        // Account switch resets the editor and every parked dialog.
+        tui.editor.edit("other account text".into());
+        tui.pending_select = Some("job".into());
+        tui.send_confirmation = Some(SendConfirmation {
+            job: reviewable_job("draft"),
+        });
+        s.account = "other@example.com".into();
+        tui.sync_view(&s);
+        assert!(tui.editor.text.is_empty(), "editor cleared on switch");
+        assert!(tui.pending_select.is_none() && tui.send_confirmation.is_none());
+
+        // Enterprise policy coerces the local settings copy.
+        let mut s = live_snapshot();
+        s.enterprise_policy.force_human_review = true;
+        s.enterprise_policy.prohibit_sending = true;
+        tui.settings.mode = Mode::Automatic;
+        tui.settings.sending_enabled = true;
+        tui.sync_view(&s);
+        assert_eq!(tui.settings.mode, Mode::HumanReview);
+        assert!(!tui.settings.sending_enabled);
+
+        // A selected job rebinds a clean editor and drops editing mode.
+        let job = reviewable_job("persisted draft");
+        let mut s = live_snapshot();
+        s.selected = Some(job.clone());
+        tui.editing = true;
+        tui.sync_view(&s);
+        assert_eq!(tui.editor.text, "persisted draft");
+        assert!(tui.editor.bound_to(&job));
+        assert!(!tui.editing, "clean editors leave editing mode");
+    }
+
+    /// Selection requests respect the unsaved-edit guard.
+    ///
+    /// Why: switching jobs with unsaved text must park behind the explicit
+    /// discard dialog instead of silently dropping the edit.
+    #[test]
+    fn request_select_parks_dirty_edits_and_blocks_on_modals() {
+        let (mut tui, rx) = test_tui();
+        tui.editor.edit("unsaved".into());
+        tui.request_select("job-1".into());
+        assert_eq!(tui.pending_select, Some("job-1".into()));
+        assert!(rx.try_recv().is_err(), "dirty switches are parked");
+
+        // Open modals absorb every selection requests.
+        tui.editor.abandon_edit();
+        tui.pending_select = None;
+        tui.request_select("job-2".into());
+        assert!(rx.try_recv().is_ok());
+        tui.close_confirmation = true;
+        tui.request_select("job-3".into());
+        assert!(rx.try_recv().is_err(), "modals block selection");
+    }
+
+    /// Action enablement routes through the shared send gate exactly.
+    ///
+    /// Why: the terminal must offer "review & send" under exactly the same
+    /// conditions as the desktop — a divergence splits the safety model.
+    #[test]
+    fn review_enablement_mirrors_the_desktop_send_gate() {
+        let (mut tui, _rx) = test_tui();
+        let job = sendable_job("A professional reply body.");
+        let mut s = live_snapshot();
+        s.selected = Some(job.clone());
+        tui.editor.load(&job);
+        let enabled = tui.review_enablement(Some(&job), &s);
+        assert!(enabled.send, "bound clean editor with exact draft sends");
+        assert!(enabled.regenerate && enabled.dismiss && !enabled.save);
+
+        // An edited (unsaved) body flips save on and send off.
+        tui.editor.edit("A professional reply body. edited".into());
+        let enabled = tui.review_enablement(Some(&job), &s);
+        assert!(enabled.save && !enabled.send && !enabled.regenerate);
+
+        // Demo sessions can never send.
+        tui.editor.load(&job);
+        s.demo = true;
+        assert!(!tui.review_enablement(Some(&job), &s).send);
+        s.demo = false;
+
+        // Missing originals block sending through the shared hard blocks.
+        let mut blocked = job.clone();
+        blocked.email = None;
+        assert!(!tui.review_enablement(Some(&blocked), &s).send);
+    }
+
+    /// Global keys route before pane keys and dialogs take priority.
+    ///
+    /// Why: the key router is the only input surface — a leak between the
+    /// modal, help and pane layers fires the wrong action.
+    #[test]
+    fn handle_key_routes_globals_help_and_panes() {
+        let (mut tui, rx) = test_tui();
+        let s = live_snapshot();
+        // Key releases are ignored entirely.
+        let mut release = key(KeyCode::Char('q'));
+        release.kind = KeyEventKind::Release;
+        tui.handle_key(release, &s);
+        assert!(!tui.quit && !tui.close_confirmation);
+
+        // Pause toggles the worker's dispatch gate.
+        tui.handle_key(key(KeyCode::Char('p')), &s);
+        assert!(tui.worker.paused.load(Ordering::SeqCst));
+        tui.handle_key(key(KeyCode::Char('p')), &s);
+        assert!(!tui.worker.paused.load(Ordering::SeqCst));
+
+        // Number keys and Tab own pane navigation.
+        tui.handle_key(key(KeyCode::Char('2')), &s);
+        assert_eq!(tui.pane, Pane::Review);
+        tui.handle_key(key(KeyCode::Tab), &s);
+        assert_eq!(tui.pane, Pane::Activity);
+        tui.handle_key(key(KeyCode::Char('4')), &s);
+        assert_eq!(tui.pane, Pane::Settings);
+        tui.handle_key(key(KeyCode::Char('1')), &s);
+        assert_eq!(tui.pane, Pane::Queue);
+
+        // The help overlay swallows pane keys until closed.
+        tui.handle_key(key(KeyCode::Char('?')), &s);
+        assert!(tui.help_open);
+        tui.handle_key(key(KeyCode::Char('r')), &s);
+        assert!(rx.try_recv().is_err(), "help swallows pane keys");
+        tui.handle_key(key(KeyCode::Esc), &s);
+        assert!(!tui.help_open);
+
+        // 'q' quits cleanly only when nothing would be lost.
+        tui.handle_key(key(KeyCode::Char('q')), &s);
+        assert!(tui.quit, "clean sessions quit immediately");
+    }
+
+    /// Dialog keys confirm or cancel each flow and nothing else.
+    ///
+    /// Why: the confirm-exact-reply dialog is the last human gate — `y`
+    /// must issue exactly `Command::Send` with the persisted body hash.
+    #[test]
+    fn dialog_keys_own_the_confirmation_flows() {
+        let (mut tui, rx) = test_tui();
+        let s = live_snapshot();
+        let job = reviewable_job("A professional reply body.");
+
+        // Quit confirmation: y quits, n cancels.
+        tui.close_confirmation = true;
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('n')), &s));
+        assert!(!tui.close_confirmation && !tui.quit);
+        tui.close_confirmation = true;
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('y')), &s));
+        assert!(tui.quit && !tui.close_confirmation);
+        tui.quit = false;
+
+        // Confirm-exact-reply: Enter sends the exact hash; Esc cancels.
+        tui.send_confirmation = Some(SendConfirmation { job: job.clone() });
+        assert!(tui.handle_dialog_key(key(KeyCode::Esc), &s));
+        assert!(tui.send_confirmation.is_none(), "cancel clears the dialog");
+        assert!(rx.try_recv().is_err());
+        tui.send_confirmation = Some(SendConfirmation { job: job.clone() });
+        assert!(tui.handle_dialog_key(key(KeyCode::Enter), &s));
+        let body = job.draft.as_ref().unwrap().body.as_str();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::Send { revision, body_hash, .. })
+                if revision == job.revision && body_hash == hash(body)
+        ));
+        assert!(tui.send_confirmation.is_none(), "send consumes the dialog");
+
+        // A busy worker refuses the send and keeps the dialog.
+        tui.send_confirmation = Some(SendConfirmation { job: job.clone() });
+        let mut busy = live_snapshot();
+        busy.busy = "syncing".into();
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('y')), &busy));
+        assert!(rx.try_recv().is_err(), "busy workers cannot send");
+        assert!(tui.send_confirmation.is_some(), "dialog kept for retry");
+        tui.send_confirmation = None;
+
+        // Automatic arming: early confirmations are refused by the gate.
+        tui.pending_arm = Some(AutomaticArmGate::open(Utc::now()));
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('y')), &s));
+        assert!(tui.pending_arm.is_some(), "cooldown blocks early arming");
+        assert!(!tui.settings.automatic_confirmed);
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('n')), &s));
+        assert!(tui.pending_arm.is_none(), "cancel drops the gate");
+
+        // An elapsed gate arms the session.
+        let expired = Utc::now() - chrono::Duration::seconds(31);
+        tui.pending_arm = Some(AutomaticArmGate::open(expired));
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('y')), &s));
+        assert!(tui.settings.automatic_confirmed);
+        assert!(tui.pending_arm.is_none());
+
+        // Unsaved-edit switch: y discards and selects, n keeps editing.
+        tui.editor.edit("unsaved".into());
+        tui.pending_select = Some("job-9".into());
+        assert!(tui.handle_dialog_key(key(KeyCode::Char('n')), &s));
+        assert!(tui.pending_select.is_none(), "n keeps the edit parked");
+        assert!(tui.editor.dirty);
+        tui.pending_select = Some("job-9".into());
+        assert!(tui.handle_dialog_key(key(KeyCode::Enter), &s));
+        assert!(matches!(rx.try_recv(), Ok(Command::Select(id)) if id == "job-9"));
+        assert!(!tui.editor.dirty, "discard drops the unsaved edit");
+
+        // Without dialogs the router reports no consumption.
+        assert!(!tui.handle_dialog_key(key(KeyCode::Char('z')), &s));
+    }
+
+    /// Queue keys move the clamped selection and route list commands.
+    ///
+    /// Why: selection must never leave the list and Enter must open exactly
+    /// the highlighted job.
+    #[test]
+    fn queue_keys_move_select_and_refresh() {
+        let (mut tui, rx) = test_tui();
+        let mut s = live_snapshot();
+        s.items = vec![
+            reviewable_job("a"),
+            reviewable_job("b"),
+            reviewable_job("c"),
+        ];
+        tui.handle_key(key(KeyCode::Down), &s);
+        assert_eq!(tui.queue_selection, Some(0));
+        tui.handle_key(key(KeyCode::Down), &s);
+        tui.handle_key(key(KeyCode::Char('k')), &s);
+        assert_eq!(tui.queue_selection, Some(0));
+        tui.handle_key(key(KeyCode::Char('G')), &s);
+        assert_eq!(tui.queue_selection, Some(2));
+        tui.handle_key(key(KeyCode::Char('g')), &s);
+        assert_eq!(tui.queue_selection, Some(0));
+
+        // Enter opens the highlighted job.
+        tui.handle_key(key(KeyCode::Enter), &s);
+        assert!(matches!(rx.try_recv(), Ok(Command::Select(id)) if id == s.items[0].id));
+
+        // r and c route Refresh and CheckNow.
+        tui.handle_key(key(KeyCode::Char('r')), &s);
+        assert!(matches!(rx.try_recv(), Ok(Command::Refresh)));
+        tui.handle_key(key(KeyCode::Char('c')), &s);
+        assert!(matches!(rx.try_recv(), Ok(Command::CheckNow)));
+    }
+
+    /// Review keys drive the editor, the analysis expander and the review
+    /// actions through the shared enablement.
+    ///
+    /// Why: each action key must be refused for stale or dirty editors and
+    /// route the exact command otherwise.
+    #[test]
+    fn review_keys_drive_the_review_workspace() {
+        let (mut tui, rx) = test_tui();
+        let job = sendable_job("A professional reply body.");
+        let mut s = live_snapshot();
+        s.selected = Some(job.clone());
+        tui.pane = Pane::Review;
+        tui.editor.load(&job);
+
+        // Scrolling and the analysis expander are free state changes.
+        tui.handle_key(key(KeyCode::Down), &s);
+        tui.handle_key(key(KeyCode::PageDown), &s);
+        tui.handle_key(key(KeyCode::Char('a')), &s);
+        assert!(tui.analysis_open);
+
+        // e enters editing mode with the caret at the end.
+        tui.handle_key(key(KeyCode::Char('e')), &s);
+        assert!(tui.editing);
+        assert_eq!(tui.editor_cursor, tui.editor.text.len());
+
+        // Typing marks the editor dirty; Esc leaves editing.
+        tui.handle_key(key(KeyCode::Char('!')), &s);
+        assert!(tui.editor.dirty);
+        tui.handle_key(key(KeyCode::Esc), &s);
+        assert!(!tui.editing);
+
+        // s saves the exact text; invalid drafts surface a local error.
+        tui.handle_key(key(KeyCode::Char('s')), &s);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::Edit { body, .. }) if body.ends_with('!')
+        ));
+        tui.editor.edit("short".into());
+        tui.handle_key(key(KeyCode::Char('s')), &s);
+        assert!(!tui.local_error.is_empty(), "invalid drafts are refused");
+        assert!(rx.try_recv().is_err());
+
+        // D discards the unsaved text back to the persisted draft.
+        tui.handle_key(key(KeyCode::Char('D')), &s);
+        assert_eq!(tui.editor.text, "A professional reply body.");
+        assert!(!tui.editor.dirty);
+
+        // g and d route Regenerate and Dismiss on a clean editor.
+        tui.handle_key(key(KeyCode::Char('g')), &s);
+        assert!(matches!(rx.try_recv(), Ok(Command::Regenerate { .. })));
+        tui.handle_key(key(KeyCode::Char('d')), &s);
+        assert!(matches!(rx.try_recv(), Ok(Command::Dismiss { .. })));
+
+        // w opens the confirm dialog only when the gate passes.
+        tui.handle_key(key(KeyCode::Char('w')), &s);
+        assert!(
+            tui.send_confirmation.is_some(),
+            "all-green gate opens confirm"
+        );
+        tui.send_confirmation = None;
+
+        // Dirty editors cannot regenerate or dismiss.
+        tui.editor.edit("unsaved edit".into());
+        tui.handle_key(key(KeyCode::Char('g')), &s);
+        tui.handle_key(key(KeyCode::Char('d')), &s);
+        assert!(rx.try_recv().is_err(), "dirty editors block actions");
+    }
+
+    /// Editor keys mutate the text through the pure cursor helpers.
+    ///
+    /// Why: the editor path is the only place text changes — every key must
+    /// leave the caret on a character boundary and mark the text dirty.
+    #[test]
+    fn editor_keys_edit_text_and_move_the_caret() {
+        let (mut tui, _rx) = test_tui();
+        tui.editing = true;
+        tui.editor.edit("abc".into());
+        tui.editor_cursor = 3;
+        tui.handle_editor_key(KeyCode::Char('X'));
+        assert_eq!(tui.editor.text, "abcX");
+        assert_eq!(tui.editor_cursor, 4);
+        tui.handle_editor_key(KeyCode::Enter);
+        assert_eq!(tui.editor.text, "abcX\n");
+        tui.handle_editor_key(KeyCode::Backspace);
+        assert_eq!(tui.editor.text, "abcX");
+        tui.handle_editor_key(KeyCode::Left);
+        assert_eq!(tui.editor_cursor, 3);
+        tui.handle_editor_key(KeyCode::Home);
+        assert_eq!(tui.editor_cursor, 0);
+        tui.handle_editor_key(KeyCode::Right);
+        assert_eq!(tui.editor_cursor, 1);
+        tui.handle_editor_key(KeyCode::End);
+        assert_eq!(tui.editor_cursor, 4);
+        // Unmapped keys are ignored.
+        tui.handle_editor_key(KeyCode::PageUp);
+        assert_eq!(tui.editor_cursor, 4);
+        tui.handle_editor_key(KeyCode::Esc);
+        assert!(!tui.editing);
+    }
+
+    /// Activity keys scroll the log without touching worker state.
+    ///
+    /// Why: the audit log is read-only — any key that mutates state here is
+    /// a bug.
+    #[test]
+    fn activity_keys_only_scroll() {
+        let (mut tui, rx) = test_tui();
+        tui.handle_activity_key(KeyCode::Down);
+        tui.handle_activity_key(KeyCode::PageDown);
+        assert_eq!(tui.activity_scroll, 11);
+        tui.handle_activity_key(KeyCode::Up);
+        tui.handle_activity_key(KeyCode::PageUp);
+        assert_eq!(tui.activity_scroll, 0);
+        tui.handle_activity_key(KeyCode::Char('z'));
+        assert_eq!(tui.activity_scroll, 0);
+        assert!(rx.try_recv().is_err(), "activity never commands the worker");
+    }
+
+    /// Settings keys edit the local copy and persist only through Save.
+    ///
+    /// Why: policy-locked rows must stay inert and Save must be refused
+    /// until an Automatic configuration is fully armed.
+    #[test]
+    fn settings_keys_edit_rows_and_save() {
+        let (mut tui, rx) = test_tui();
+        let s = live_snapshot();
+        tui.pane = Pane::Settings;
+
+        // Row navigation clamps at both ends.
+        tui.handle_key(key(KeyCode::Up), &s);
+        assert_eq!(tui.settings_row, 0);
+        tui.handle_key(key(KeyCode::Down), &s);
+        assert_eq!(tui.settings_row, 1);
+
+        // Mode row: forward opens Automatic only when policy allows.
+        tui.settings_row = 0;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert_eq!(tui.settings.mode, Mode::Automatic);
+        tui.handle_key(key(KeyCode::Left), &s);
+        assert_eq!(tui.settings.mode, Mode::HumanReview);
+        let mut locked = live_snapshot();
+        locked.enterprise_policy.force_human_review = true;
+        tui.handle_key(key(KeyCode::Right), &locked);
+        assert_eq!(
+            tui.settings.mode,
+            Mode::HumanReview,
+            "policy locks the mode"
+        );
+
+        // Tone and language pickers step through their orders.
+        tui.settings_row = 1;
+        let tone = tui.settings.tone;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert_eq!(tui.settings.tone, cycle_tone(tone, true));
+        tui.settings_row = 2;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert_eq!(tui.settings.reply_language, ReplyLanguage::English);
+        tui.handle_key(key(KeyCode::Char('h')), &s);
+        assert_eq!(tui.settings.reply_language, ReplyLanguage::Auto);
+
+        // Sending toggle flips unless policy prohibits sending.
+        tui.settings_row = 3;
+        let sending = tui.settings.sending_enabled;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert_eq!(tui.settings.sending_enabled, !sending);
+        let mut prohibit = live_snapshot();
+        prohibit.enterprise_policy.prohibit_sending = true;
+        tui.handle_key(key(KeyCode::Right), &prohibit);
+        assert_eq!(
+            tui.settings.sending_enabled, !sending,
+            "policy locks sending"
+        );
+
+        // Automatic arm row opens the cooldown gate only in Automatic mode.
+        tui.settings_row = 4;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert!(tui.pending_arm.is_none(), "Human review never arms");
+        tui.settings.mode = Mode::Automatic;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert!(
+            tui.pending_arm.is_some(),
+            "Automatic opens the cooldown gate"
+        );
+        tui.pending_arm = None;
+        tui.settings.automatic_confirmed = true;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert!(
+            !tui.settings.automatic_confirmed,
+            "confirmed row disables the mode"
+        );
+        assert!(tui.pending_arm.is_none());
+
+        // Save persists only a fully armed Automatic configuration.
+        tui.settings_row = 5;
+        tui.settings.mode = Mode::Automatic;
+        tui.handle_key(key(KeyCode::Right), &s);
+        assert!(rx.try_recv().is_err(), "unarmed Automatic cannot save");
+        tui.settings.mode = Mode::HumanReview;
+        tui.handle_key(key(KeyCode::Enter), &s);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Command::Settings(boxed)) if boxed.mode == Mode::HumanReview
+        ));
+
+        // Busy sessions never save.
+        let mut busy = live_snapshot();
+        busy.busy = "working".into();
+        tui.handle_key(key(KeyCode::Right), &busy);
+        assert!(rx.try_recv().is_err(), "busy sessions cannot save");
+
+        // Unmapped keys and non-steering keys are ignored.
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// The event loop renders, pumps keys and restores the terminal on the
+    /// quit path exactly once.
+    ///
+    /// Why: the loop must stop the worker and restore the terminal even for
+    /// a plain quit — leaving raw mode behind corrupts the shell.
+    #[test]
+    fn run_session_drives_events_until_quit_and_restores() {
+        static RESTORES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn fake_restore() -> std::io::Result<()> {
+            RESTORES.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        let (tui, _rx) = test_tui();
+        let mut script =
+            vec![Some(key(KeyCode::Char('3'))), Some(key(KeyCode::Char('q')))].into_iter();
+        let mut next_key = || -> Result<Option<KeyEvent>> { Ok(script.next().flatten()) };
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let terminal = ratatui::Terminal::new(backend).expect("terminal");
+        run_session(terminal, tui, fake_restore, &mut next_key).expect("session ends cleanly");
+        assert_eq!(RESTORES.load(Ordering::SeqCst), 1, "restored exactly once");
+    }
+
+    /// The terminal event pump returns no key when none arrives.
+    ///
+    /// Why: the pump drives the refresh cadence — a blocking or panicking
+    /// pump would freeze countdowns and busy states.
+    #[test]
+    fn poll_key_returns_no_key_without_input() {
+        let _ = poll_key();
+    }
+
+    /// The queue pane shows per-job state, subject and flags.
+    ///
+    /// Why: the list line is the operator's triage surface — missing flags
+    /// hide processing problems.
+    #[test]
+    fn draw_queue_renders_states_subjects_and_flags() {
+        let (mut tui, _rx) = test_tui();
+        let mut s = live_snapshot();
+        let mut job = reviewable_job("draft");
+        job.flags = vec!["needs manual review".into()];
+        s.items = vec![job.clone()];
+        let mut bare = reviewable_job("other");
+        bare.email = None;
+        s.items.push(bare);
+        tui.queue_selection = Some(0);
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Ready"), "state label shown");
+        assert!(text.contains("[Ready] Synthetic"), "subject shown");
+        assert!(text.contains("needs manual review"), "flags shown");
+        assert!(
+            text.contains("(original not fetched)"),
+            "missing email shown"
+        );
+    }
+
+    /// The review pane renders every workspace variant.
+    ///
+    /// Why: the review screen is where sends originate — its warnings must
+    /// render for stale editors, blocked sends and missing originals.
+    #[test]
+    fn draw_review_renders_the_full_workspace_and_warnings() {
+        let (mut tui, _rx) = test_tui();
+        tui.pane = Pane::Review;
+        let mut s = live_snapshot();
+
+        // Automatic mode replaces the workspace with a notice.
+        s.settings.mode = Mode::Automatic;
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Review is disabled in Automatic mode"));
+        s.settings.mode = Mode::HumanReview;
+
+        // No selection renders the empty hint.
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Select a message"));
+
+        // A full job renders both columns plus footer details.
+        let job = reviewable_job("A professional reply body.");
+        s.selected = Some(job.clone());
+        tui.editor.load(&job);
+        tui.analysis_open = true;
+        tui.local_error = "draft failed validation".into();
+        let text = render_text(&tui, &s);
+        assert!(text.contains("ORIGINAL EMAIL"));
+        assert!(text.contains("REPLY · 4 words"));
+        assert!(text.contains("draft failed validation"));
+        assert!(
+            text.contains("No analysis is stored"),
+            "missing analysis is spelled out"
+        );
+
+        // Editing and dirty states are spelled out in the editor title.
+        tui.editing = true;
+        tui.editor.edit("unsaved".into());
+        let text = render_text(&tui, &s);
+        assert!(text.contains("editing"), "editing mode is visible");
+        assert!(text.contains("Unsaved"), "dirty state is visible");
+
+        // Demo-source mail is shown as a hard block.
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Sending blocked"), "hard blocks are visible");
+    }
+
+    /// The review footer carries analysis, flags, blocks and errors.
+    ///
+    /// Why: the footer is the only place the verdict explanation surfaces —
+    /// dropping it hides why the model flagged the message.
+    #[test]
+    fn review_footer_lines_carry_analysis_flags_and_blocks() {
+        let mut job = reviewable_job("draft body");
+        job.flags = vec!["flag".into()];
+        job.analysis = Some(crate::types::Analysis {
+            verdict: crate::types::Verdict {
+                category: crate::types::Category::Rejection,
+                confidence: 71,
+                evidence: "explicit rejection".into(),
+                explanation: "clear rejection".into(),
+                company: "Acme".into(),
+                position: "Engineer".into(),
+                language: "English".into(),
+            },
+            verification: Some(crate::types::Verification {
+                genuine_rejection: true,
+                claims_supported: true,
+                professional: true,
+                injection_free: true,
+                purpose_aligned: true,
+                reason: "claims hold".into(),
+            }),
+            model: "m".into(),
+            model_digest: "d".into(),
+            verification_model: String::new(),
+            verification_model_digest: String::new(),
+            prompt_version: "v".into(),
+            email_fingerprint: "f".into(),
+            verified_draft_hash: None,
+            context_hash: "c".into(),
+            input_complete: true,
+            gpu_resident: true,
+        });
+        let s = live_snapshot();
+        let mut tui2 = test_tui().0;
+        tui2.analysis_open = true;
+        let lines = review_footer_lines(&tui2, &s);
+        let text: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(
+            !text.contains("Why this was detected"),
+            "no job, no analysis"
+        );
+
+        let mut with_job = live_snapshot();
+        with_job.selected = Some(job.clone());
+        let lines = review_footer_lines(&tui2, &with_job);
+        let text: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Why this was detected"));
+        assert!(text.contains("clear rejection"));
+        assert!(text.contains("Evidence: explicit rejection"));
+        assert!(text.contains("Model score: 71/100"));
+        assert!(text.contains("Reply audit: claims hold"));
+        assert!(text.contains("flag"));
+        assert!(text.contains("Sending blocked"));
+
+        // Collapsed analysis renders nothing; missing analysis says so.
+        tui2.analysis_open = false;
+        let lines = review_footer_lines(&tui2, &with_job);
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line_text(line).contains("Why this was detected"))
+        );
+        let mut bare_job = reviewable_job("draft body");
+        bare_job.analysis = None;
+        let mut bare = live_snapshot();
+        bare.selected = Some(bare_job);
+        tui2.analysis_open = true;
+        let lines = review_footer_lines(&tui2, &bare);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line_text(line).contains("No analysis is stored"))
+        );
+    }
+
+    /// The activity pane renders one line per audit event.
+    ///
+    /// Why: the audit trail is the delivery record — formatting must keep
+    /// timestamp, kind and detail together.
+    #[test]
+    fn draw_activity_renders_the_audit_trail() {
+        let (mut tui, _rx) = test_tui();
+        tui.pane = Pane::Activity;
+        let mut s = live_snapshot();
+        s.events = vec![crate::types::AuditEvent {
+            seq: 4,
+            at: Utc::now(),
+            kind: "delivery.sent".into(),
+            domain: Default::default(),
+            severity: Default::default(),
+            item_id: None,
+            detail: "message dispatched".into(),
+        }];
+        let text = render_text(&tui, &s);
+        assert!(text.contains("delivery.sent"));
+        assert!(text.contains("message dispatched"));
+    }
+
+    /// The settings pane renders every row and its warning states.
+    ///
+    /// Why: the Automatic warning and arm countdown are the terminal's risk
+    /// disclosures — they must render exactly when the state demands.
+    #[test]
+    fn draw_settings_renders_rows_warnings_and_countdowns() {
+        let (mut tui, _rx) = test_tui();
+        tui.pane = Pane::Settings;
+        let mut s = live_snapshot();
+        s.demo = true;
+        let text = render_text(&tui, &s);
+        for row in [
+            "Reply mode",
+            "Reply tone",
+            "Reply language",
+            "Enable sending from this application",
+            "Enable Automatic mode",
+            "Save settings",
+        ] {
+            assert!(text.contains(row), "missing row {row:?}");
+        }
+        assert!(text.contains("SYNTHETIC DEMO"));
+
+        // Automatic mode adds the risk warning and ceiling text.
+        tui.settings.mode = Mode::Automatic;
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Warning: in Automatic mode"));
+        assert!(text.contains("Hard unattended safety ceiling"));
+
+        // A pending arm gate shows its countdown.
+        tui.pending_arm = Some(AutomaticArmGate::open(Utc::now()));
+        let text = render_text(&tui, &s);
+        assert!(text.contains("unlocks in"));
+
+        // An armed session flips the row to the disable action.
+        tui.settings.automatic_confirmed = true;
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Disable Automatic mode and return to Human review"));
+    }
+
+    /// The status bar shows every session condition.
+    ///
+    /// Why: pause, demo, emergency and error states must be unmistakable —
+    /// the bar is the always-visible safety indicator.
+    #[test]
+    fn draw_status_shows_busy_pause_demo_and_errors() {
+        let (mut tui, _rx) = test_tui();
+        let mut s = live_snapshot();
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("LOCAL WORKSPACE"));
+        assert!(text.contains("q quit · ? help · p pause/resume dispatch"));
+
+        s.busy = "Checking Gmail".into();
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("Working: Checking Gmail"));
+
+        s.busy.clear();
+        tui.worker.paused.store(true, Ordering::SeqCst);
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("PAUSED"));
+        tui.worker.paused.store(false, Ordering::SeqCst);
+
+        s.demo = true;
+        s.notice = "connected".into();
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("SYNTHETIC DEMO · NO LIVE EMAIL"));
+        assert!(text.contains("connected"));
+
+        s.error = "workspace error".into();
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("workspace error"));
+        s.error.clear();
+        tui.local_error = "client error".into();
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("client error"));
+
+        tui.emergency = || crate::emergency::EmergencyStopStatus {
+            configured: true,
+            active: true,
+            reason: "test".into(),
+        };
+        let text = render_status_text(&tui, &s);
+        assert!(text.contains("ENTERPRISE EMERGENCY STOP"));
+    }
+
+    /// The help overlay renders the full keymap.
+    ///
+    /// Why: the keymap documents the only input surface — it must match the
+    /// router.
+    #[test]
+    fn draw_help_renders_the_keymap() {
+        let (mut tui, _rx) = test_tui();
+        tui.help_open = true;
+        let s = live_snapshot();
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Help (Esc to close)"));
+        assert!(text.contains("1 Queue · 2 Review · 3 Activity · 4 Settings"));
+        assert!(text.contains("Sending always requires the confirm-exact-reply dialog."));
+    }
+
+    /// The confirm dialog shows the exact persisted reply and its hazards.
+    ///
+    /// Why: the operator approves the exact body — the dialog must show the
+    /// recipient, subject and body verbatim and flag a blocked send.
+    #[test]
+    fn draw_confirm_send_shows_the_exact_reply() {
+        let (mut tui, _rx) = test_tui();
+        let job = reviewable_job("A professional reply body.");
+        let s = live_snapshot();
+        tui.send_confirmation = Some(SendConfirmation { job: job.clone() });
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Confirm this exact reply"));
+        assert!(text.contains("To: hr@example.invalid"));
+        assert!(text.contains("Subject: Synthetic"));
+        assert!(text.contains("A professional reply body."));
+        assert!(text.contains("Sending cannot be undone"));
+
+        // A paused worker blocks the send key visibly.
+        tui.worker.paused.store(true, Ordering::SeqCst);
+        let text = render_text(&tui, &s);
+        assert!(text.contains("blocked: worker busy or paused"));
+        tui.worker.paused.store(false, Ordering::SeqCst);
+
+        // A job without a fetched original renders no address headers.
+        let mut bare = reviewable_job("A professional reply body.");
+        bare.email = None;
+        tui.send_confirmation = Some(SendConfirmation { job: bare });
+        let text = render_text(&tui, &s);
+        assert!(!text.contains("To:"));
+    }
+
+    /// The arm dialog locks its confirmation until the cooldown elapses.
+    ///
+    /// Why: the countdown is the deliberate pause — the terminal must show
+    /// the lock state distinctly from the actionable one.
+    #[test]
+    fn draw_arm_dialog_shows_the_countdown_lock() {
+        let (mut tui, _rx) = test_tui();
+        tui.pending_arm = Some(AutomaticArmGate::open(Utc::now()));
+        let s = live_snapshot();
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Enable Automatic mode?"));
+        assert!(text.contains("This confirmation unlocks in"));
+        assert!(text.contains("Confirmation is locked until the countdown elapses"));
+
+        let expired = Utc::now() - chrono::Duration::seconds(31);
+        tui.pending_arm = Some(AutomaticArmGate::open(expired));
+        let text = render_text(&tui, &s);
+        assert!(text.contains("y/Enter I understand the risks"));
+    }
+
+    /// The quit confirmation names the exact hazard being accepted.
+    ///
+    /// Why: force-closing during a send can strand an Uncertain delivery —
+    /// the dialog text must differ from a harmless unsaved-edit close.
+    #[test]
+    fn draw_close_confirmation_names_the_hazard() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        tui.close_confirmation = true;
+        tui.editor.edit("unsaved".into());
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Unsaved reply"));
+        assert!(text.contains("has not been saved"));
+        assert!(text.contains("y force close and discard unsaved text"));
+
+        tui.editor.abandon_edit();
+        let mut running = live_snapshot();
+        running.operation = OperationStatus {
+            kind: crate::types::OperationKind::SendReply,
+            state: OperationState::Running,
+            ..Default::default()
+        };
+        let text = render_text(&tui, &running);
+        assert!(text.contains("Operation still running"));
+        assert!(text.contains("SendReply is still running"));
+        assert!(text.contains("y force close now"));
+    }
+
+    /// The unsaved-edit switch dialog renders its prompt.
+    ///
+    /// Why: this dialog guards against silently replacing operator text.
+    #[test]
+    fn draw_pending_select_renders_the_switch_prompt() {
+        let (mut tui, _rx) = test_tui();
+        tui.pending_select = Some("job".into());
+        let s = live_snapshot();
+        let text = render_text(&tui, &s);
+        assert!(text.contains("Unsaved reply"));
+        assert!(text.contains("Discard the unsaved edit and open the other email?"));
+    }
+
+    /// The frame dispatcher renders each pane and exactly one overlay.
+    ///
+    /// Why: overlay priority (help > quit > send > arm > switch) decides
+    /// which confirmation the operator sees first.
+    #[test]
+    fn draw_dispatches_every_pane_and_overlay() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        for pane in [Pane::Queue, Pane::Review, Pane::Activity, Pane::Settings] {
+            tui.pane = pane;
+            let text = render_text(&tui, &s);
+            assert!(!text.is_empty(), "pane {pane:?} renders");
+        }
+        tui.help_open = true;
+        tui.close_confirmation = true;
+        let text = render_text(&tui, &s);
+        assert!(
+            text.contains("Help (Esc to close)"),
+            "help wins the overlay stack"
+        );
+        tui.help_open = false;
+        tui.send_confirmation = Some(SendConfirmation {
+            job: reviewable_job("draft"),
+        });
+        let text = render_text(&tui, &s);
+        assert!(
+            text.contains("close application?"),
+            "quit confirmation outranks the send dialog"
+        );
+        tui.close_confirmation = false;
+        tui.pending_arm = Some(AutomaticArmGate::open(Utc::now()));
+        let text = render_text(&tui, &s);
+        assert!(
+            text.contains("Confirm this exact reply"),
+            "send dialog outranks the arm dialog"
+        );
+        tui.send_confirmation = None;
+        tui.pending_select = Some("job".into());
+        let text = render_text(&tui, &s);
+        assert!(
+            text.contains("Enable Automatic mode?"),
+            "arm outranks the switch"
+        );
+        tui.pending_arm = None;
+        let text = render_text(&tui, &s);
+        assert!(
+            text.contains("Discard the unsaved edit"),
+            "switch renders last"
+        );
+    }
+
+    /// Dialog keys are consumed before any pane key can fire.
+    ///
+    /// Why: a `y` meant for a confirmation must never leak into the queue
+    /// and open or move things behind the dialog, and unknown keys must
+    /// leave every dialog exactly where it was.
+    #[test]
+    fn dialog_keys_are_consumed_before_pane_keys() {
+        let (mut tui, rx) = test_tui();
+        let s = live_snapshot();
+
+        // Unknown keys leave the close confirmation parked.
+        tui.close_confirmation = true;
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(tui.close_confirmation, "unknown keys change nothing");
+        tui.handle_key(key(KeyCode::Char('y')), &s);
+        assert!(tui.quit, "y force-closes from the confirmation");
+
+        // Unknown keys leave the send confirmation parked; y sends.
+        let job = reviewable_job("Persisted reply");
+        let id = job.id.clone();
+        tui.send_confirmation = Some(SendConfirmation { job });
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(
+            tui.send_confirmation.is_some(),
+            "unknown keys change nothing"
+        );
+        tui.handle_key(key(KeyCode::Char('y')), &s);
+        assert!(
+            tui.send_confirmation.is_none(),
+            "accepting clears the dialog"
+        );
+        let commands: Vec<Command> = rx.try_iter().collect();
+        assert!(
+            matches!(commands.as_slice(), [Command::Send { id: sent, .. }] if *sent == id),
+            "y sends exactly the parked job"
+        );
+
+        // Unknown keys leave the arm gate parked; n cancels it.
+        tui.pending_arm = Some(AutomaticArmGate::open(Utc::now()));
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(tui.pending_arm.is_some(), "unknown keys change nothing");
+        tui.handle_key(key(KeyCode::Char('n')), &s);
+        assert!(tui.pending_arm.is_none(), "n cancels the arm gate");
+
+        // Unknown keys leave the switch confirmation parked; y selects.
+        tui.pending_select = Some(id.clone());
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(tui.pending_select.is_some(), "unknown keys change nothing");
+        tui.handle_key(key(KeyCode::Char('y')), &s);
+        assert!(tui.pending_select.is_none(), "accepting clears the dialog");
+        let commands: Vec<Command> = rx.try_iter().collect();
+        assert!(
+            matches!(commands.as_slice(), [Command::Select(selected)] if *selected == id),
+            "y opens the parked email"
+        );
+    }
+
+    /// Tab walks the panes in a fixed ring and lands back on the start.
+    ///
+    /// Why: the pane order is the keyboard workflow — a shuffled ring makes
+    /// keyboard-only triage unpredictable.
+    #[test]
+    fn tab_cycles_through_every_pane_in_ring_order() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        let order = [Pane::Queue, Pane::Review, Pane::Activity, Pane::Settings];
+        for expected in order.iter().skip(1).chain(order.iter().take(1)) {
+            tui.handle_key(key(KeyCode::Tab), &s);
+            assert_eq!(&tui.pane, expected);
+        }
+    }
+
+    /// Per-pane fallback keys are ignored instead of triggering actions.
+    ///
+    /// Why: an unmapped keystroke must never fire a command by accident.
+    #[test]
+    fn unmapped_keys_are_ignored_in_every_pane() {
+        let (mut tui, rx) = test_tui();
+        let s = live_snapshot();
+        for pane in [Pane::Queue, Pane::Review, Pane::Activity, Pane::Settings] {
+            tui.pane = pane;
+            tui.handle_key(key(KeyCode::Char('z')), &s);
+        }
+        // The same holds inside the reply editor.
+        tui.pane = Pane::Review;
+        tui.editing = true;
+        tui.handle_key(key(KeyCode::Char('z')), &s);
+        assert!(tui.editing, "unmapped editor keys change nothing");
+        assert!(rx.try_iter().next().is_none(), "unmapped keys fire nothing");
+    }
+
+    /// The review pane scrolls the original text and the reply editor.
+    ///
+    /// Why: the scroll steps are the only way to read long threads on the
+    /// small terminal surface.
+    #[test]
+    fn review_pane_scrolls_the_original_and_the_editor() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        tui.pane = Pane::Review;
+        // Without a selection the save key is inert.
+        let mut bare = live_snapshot();
+        bare.selected = None;
+        tui.handle_key(key(KeyCode::Char('s')), &bare);
+
+        tui.handle_key(key(KeyCode::Down), &s);
+        tui.handle_key(key(KeyCode::Down), &s);
+        assert_eq!(tui.original_scroll, 2);
+        tui.handle_key(key(KeyCode::Up), &s);
+        assert_eq!(tui.original_scroll, 1);
+        tui.handle_key(key(KeyCode::PageDown), &s);
+        assert_eq!(tui.editor_scroll, 10);
+        tui.handle_key(key(KeyCode::PageUp), &s);
+        assert_eq!(tui.editor_scroll, 0);
+    }
+
+    /// Saving an invalid draft surfaces the validator message instead of
+    /// sending a command.
+    ///
+    /// Why: the validation error is the operator only signal that the reply
+    /// was not persisted.
+    #[test]
+    fn saving_an_invalid_draft_surfaces_the_validator_message() {
+        let (mut tui, rx) = test_tui();
+        let mut s = live_snapshot();
+        let job = reviewable_job("Persisted reply");
+        tui.editor.load(&job);
+        tui.editor.text.clear();
+        tui.editor.dirty = true;
+        s.selected = Some(job);
+        tui.pane = Pane::Review;
+        tui.handle_key(key(KeyCode::Char('s')), &s);
+        assert!(
+            !tui.local_error.is_empty(),
+            "the validator message is shown"
+        );
+        assert!(rx.try_iter().next().is_none(), "nothing is persisted");
+    }
+
+    /// An unsaved reply parks the quit request behind the confirmation.
+    ///
+    /// Why: a single stray `q` must never discard typed text.
+    #[test]
+    fn quitting_with_unsaved_text_parks_the_confirmation() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        let job = reviewable_job("Persisted reply");
+        tui.editor.load(&job);
+        tui.editor.text.push_str(" edited");
+        tui.editor.dirty = true;
+        tui.pane = Pane::Queue;
+        tui.handle_key(key(KeyCode::Char('q')), &s);
+        assert!(tui.close_confirmation, "the confirmation is required");
+        assert!(!tui.quit, "nothing is closed before the confirmation");
+    }
+
+    /// The sending toggle reads On and Off in the settings row.
+    ///
+    /// Why: the row is the send-scope indicator — a stuck label hides that
+    /// delivery is armed.
+    #[test]
+    fn settings_label_reads_the_sending_toggle_both_ways() {
+        let (mut tui, _rx) = test_tui();
+        let s = live_snapshot();
+        tui.pane = Pane::Settings;
+        tui.settings.sending_enabled = true;
+        let on = render_text(&tui, &s);
+        tui.settings.sending_enabled = false;
+        let off = render_text(&tui, &s);
+        assert!(
+            on.contains("Enable sending from this application: On"),
+            "on: {on}"
+        );
+        assert!(
+            off.contains("Enable sending from this application: Off"),
+            "off: {off}"
+        );
+    }
+
+    /// The event pump returns the arriving key and drops other events.
+    ///
+    /// Why: only key events may drive the interface — resize or focus noise
+    /// must not be interpreted as commands.
+    #[test]
+    fn event_pump_returns_keys_and_drops_other_events() {
+        let pressed = KeyEvent::new(KeyCode::Char('x'), crossterm::event::KeyModifiers::NONE);
+        let got =
+            poll_next_key(|_| Ok(true), || Ok(Event::Key(pressed)), Duration::ZERO).expect("pump");
+        assert_eq!(got, Some(pressed), "key events arrive");
+        let got =
+            poll_next_key(|_| Ok(true), || Ok(Event::FocusGained), Duration::ZERO).expect("pump");
+        assert!(got.is_none(), "non-key events are dropped");
+        let got =
+            poll_next_key(|_| Ok(false), || Ok(Event::Key(pressed)), Duration::ZERO).expect("pump");
+        assert!(got.is_none(), "a timed-out wait yields nothing");
     }
 }

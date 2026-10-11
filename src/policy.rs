@@ -86,7 +86,10 @@ impl EnterprisePolicy {
                     && self.expires_at.is_none(),
                 "Policy v1 cannot contain v2 lifecycle fields"
             ),
-            2 | 3 => {
+            // Versions 2 and 3 share the v2 lifecycle contract; the guard
+            // above already rejected every other version, so there is no
+            // unreachable fallback arm to pad with tests.
+            _ => {
                 let policy_id = self
                     .policy_id
                     .as_deref()
@@ -110,7 +113,6 @@ impl EnterprisePolicy {
                     );
                 }
             }
-            _ => anyhow::bail!("Unsupported enterprise policy version"),
         }
         if self.version < 3 {
             ensure!(
@@ -454,9 +456,16 @@ fn normalize_digest_pin_os(value: std::ffi::OsString) -> Result<String> {
 }
 
 fn configured_digest_pin() -> Result<Option<String>> {
-    std::env::var_os("RR_ENTERPRISE_POLICY_SHA256")
-        .map(normalize_digest_pin_os)
-        .transpose()
+    digest_pin_from(std::env::var_os("RR_ENTERPRISE_POLICY_SHA256"))
+}
+
+/// Digest-pin resolution over an injected environment value.
+///
+/// Inputs: `value` — the raw environment value, `None` when unset. Output:
+/// the normalized pin, or an error for non-Unicode/invalid content. Test
+/// seam: the raw value is injected so every parsing failure is deterministic.
+fn digest_pin_from(value: Option<std::ffi::OsString>) -> Result<Option<String>> {
+    value.map(normalize_digest_pin_os).transpose()
 }
 
 fn normalize_public_key(value: &str) -> Result<Vec<u8>> {
@@ -503,8 +512,25 @@ fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Res
 }
 
 fn configured_signature_requirement(policy_path: &Path) -> Result<Option<SignatureRequirement>> {
-    let key = std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY");
-    let signature_override = std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE");
+    signature_requirement_from(
+        policy_path,
+        std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY"),
+        std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE"),
+    )
+}
+
+/// Signature requirement resolution over injected environment values.
+///
+/// Inputs: `policy_path` — active policy file; `key` — raw configured Ed25519
+/// public key; `signature_override` — raw configured signature-file path.
+/// Output: the requirement to enforce, `None` when no key is configured, or an
+/// error for any incomplete/invalid configuration. Test seam: the raw values
+/// are injected so every misconfiguration is exercised deterministically.
+fn signature_requirement_from(
+    policy_path: &Path,
+    key: Option<std::ffi::OsString>,
+    signature_override: Option<std::ffi::OsString>,
+) -> Result<Option<SignatureRequirement>> {
     let Some(key) = key else {
         ensure!(
             signature_override.is_none(),
@@ -589,19 +615,36 @@ fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
 }
 
 pub fn default_policy_path() -> Result<Option<PathBuf>> {
-    if let Some(explicit) = std::env::var_os("RR_ENTERPRISE_POLICY") {
+    policy_path_from(
+        std::env::var_os("RR_ENTERPRISE_POLICY"),
+        std::env::var_os("PROGRAMDATA"),
+    )
+}
+
+/// Policy-path resolution over injected environment values.
+///
+/// Inputs: `explicit` — raw `RR_ENTERPRISE_POLICY` value; `program_data` — raw
+/// Windows `PROGRAMDATA` root. Output: the absolute policy path to load, or
+/// `None` when no location is available. Test seam: the raw values are injected
+/// so explicit-path validation is exercised deterministically.
+fn policy_path_from(
+    explicit: Option<std::ffi::OsString>,
+    program_data: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>> {
+    if let Some(explicit) = explicit {
         return Ok(Some(validate_explicit_policy_path(PathBuf::from(
             explicit,
         ))?));
     }
     #[cfg(windows)]
     {
-        Ok(std::env::var_os("PROGRAMDATA")
+        Ok(program_data
             .map(PathBuf::from)
             .map(|root| root.join("RejectionRejector").join("policy.json")))
     }
     #[cfg(not(windows))]
     {
+        let _ = program_data;
         Ok(Some(PathBuf::from("/etc/rejection-rejector/policy.json")))
     }
 }
@@ -611,7 +654,30 @@ pub fn load_optional() -> Result<Option<LoadedPolicy>> {
     let signature_configured = std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY")
         .is_some()
         || std::env::var_os("RR_ENTERPRISE_POLICY_SIGNATURE").is_some();
-    let Some(path) = default_policy_path()? else {
+    load_optional_from(
+        default_policy_path()?,
+        expected_digest,
+        signature_configured,
+        configured_signature_requirement,
+    )
+}
+
+/// Optional policy loading over injected configuration.
+///
+/// Inputs: `path` — resolved policy location (`None` when unavailable);
+/// `expected_digest` — configured digest pin; `signature_configured` — whether
+/// any signature control is set; `requirement` — resolves the signature
+/// requirement for an existing policy file. Output: the loaded policy, `None`
+/// when no policy exists, or an error when integrity controls reference a
+/// missing policy. Test seam: the resolution closure is injected so signature
+/// resolution failures are exercised deterministically.
+fn load_optional_from(
+    path: Option<PathBuf>,
+    expected_digest: Option<String>,
+    signature_configured: bool,
+    requirement: impl FnOnce(&Path) -> Result<Option<SignatureRequirement>>,
+) -> Result<Option<LoadedPolicy>> {
+    let Some(path) = path else {
         ensure!(
             expected_digest.is_none() && !signature_configured,
             "Enterprise policy integrity controls are configured but no policy path is available"
@@ -625,7 +691,7 @@ pub fn load_optional() -> Result<Option<LoadedPolicy>> {
         );
         return Ok(None);
     }
-    let signature_requirement = configured_signature_requirement(&path)?;
+    let signature_requirement = requirement(&path)?;
     load_file_with_controls(&path, expected_digest, signature_requirement).map(Some)
 }
 
@@ -1129,5 +1195,322 @@ mod tests {
         assert_eq!(settings.mode, Mode::HumanReview);
         managed.version = 2;
         assert!(managed.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod configuration_seam_tests {
+    use super::*;
+    use crate::config::Settings;
+
+    fn v3_policy() -> EnterprisePolicy {
+        EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            ..Default::default()
+        }
+    }
+
+    fn key_os() -> std::ffi::OsString {
+        std::ffi::OsString::from(STANDARD.encode([9u8; 32]))
+    }
+
+    /// Why: the digest pin must normalize uppercase hex, reject anything that
+    /// is not exactly 64 hex characters, and fail closed on non-Unicode
+    /// environment values instead of silently disabling the pin.
+    #[cfg(windows)]
+    #[test]
+    fn digest_pin_normalization_fails_closed_on_every_malformed_value() {
+        assert_eq!(digest_pin_from(None).unwrap(), None);
+        assert_eq!(
+            digest_pin_from(Some("A".repeat(64).into())).unwrap(),
+            Some("a".repeat(64))
+        );
+        assert!(digest_pin_from(Some("short".into())).is_err());
+        assert!(digest_pin_from(Some("z".repeat(64).into())).is_err());
+        assert!(
+            configured_digest_pin().is_ok(),
+            "unset pin must read cleanly"
+        );
+
+        let non_unicode: std::ffi::OsString =
+            std::os::windows::ffi::OsStringExt::from_wide(&[0xD800]);
+        let error = digest_pin_from(Some(non_unicode.clone())).unwrap_err();
+        assert!(
+            error.to_string().contains("valid Unicode"),
+            "unexpected error: {error}"
+        );
+        assert!(normalize_digest_pin_os(non_unicode).is_err());
+    }
+
+    /// Why: enterprise signature enforcement must fail closed on every partial
+    /// configuration — a signature override without a key, a relative
+    /// signature path, a signature that aliases the policy file or a malformed
+    /// key are all administrator errors that must never silently disable
+    /// signature enforcement.
+    #[cfg(windows)]
+    #[test]
+    fn signature_requirement_resolution_fails_closed_on_every_misconfiguration() {
+        let policy = std::env::temp_dir().join("rr-policy-under-test.json");
+        assert!(
+            signature_requirement_from(&policy, None, None)
+                .unwrap()
+                .is_none()
+        );
+
+        let error =
+            signature_requirement_from(&policy, None, Some("C:\\x.sig".into())).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY"),
+            "unexpected error: {error}"
+        );
+
+        let error =
+            signature_requirement_from(&policy, Some(key_os()), Some("relative.sig".into()))
+                .unwrap_err();
+        assert!(error.to_string().contains("absolute path"));
+
+        let error = signature_requirement_from(
+            &policy,
+            Some(key_os()),
+            Some(policy.clone().into_os_string()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("distinct"));
+
+        let default_req = signature_requirement_from(&policy, Some(key_os()), None)
+            .unwrap()
+            .expect("key without override must derive the .sig path");
+        assert!(
+            default_req
+                .signature_path
+                .to_string_lossy()
+                .ends_with(".sig")
+        );
+        assert_eq!(default_req.public_key.len(), 32);
+        assert_eq!(default_req.signer_key_sha256.len(), 64);
+
+        let explicit_sig = policy.clone().with_extension("sig");
+        let req = signature_requirement_from(
+            &policy,
+            Some(key_os()),
+            Some(explicit_sig.clone().into_os_string()),
+        )
+        .unwrap()
+        .expect("a valid absolute distinct signature path is accepted");
+        assert_eq!(req.signature_path, explicit_sig);
+
+        let non_unicode: std::ffi::OsString =
+            std::os::windows::ffi::OsStringExt::from_wide(&[0xD800]);
+        assert!(signature_requirement_from(&policy, Some(non_unicode), None).is_err());
+        assert!(signature_requirement_from(&policy, Some("!!not-base64!!".into()), None).is_err());
+        let short = std::ffi::OsString::from(STANDARD.encode([9u8; 16]));
+        assert!(signature_requirement_from(&policy, Some(short), None).is_err());
+
+        assert!(configured_signature_requirement(&policy).is_ok());
+    }
+
+    /// Why: the explicit `RR_ENTERPRISE_POLICY` location wins and must be
+    /// absolute; otherwise Windows resolves under `PROGRAMDATA` and machines
+    /// without one simply have no policy to load.
+    #[cfg(windows)]
+    #[test]
+    fn policy_path_resolution_prefers_the_explicit_absolute_path() {
+        let explicit = std::env::temp_dir().join("explicit-policy.json");
+        assert_eq!(
+            policy_path_from(
+                Some(explicit.clone().into_os_string()),
+                Some("C:\\ProgramData".into())
+            )
+            .unwrap(),
+            Some(explicit)
+        );
+        assert!(policy_path_from(Some("relative.json".into()), None).is_err());
+        assert_eq!(
+            policy_path_from(None, Some("C:\\ProgramData".into())).unwrap(),
+            Some(
+                std::path::PathBuf::from("C:\\ProgramData")
+                    .join("RejectionRejector")
+                    .join("policy.json")
+            )
+        );
+        assert_eq!(policy_path_from(None, None).unwrap(), None);
+        assert!(default_policy_path().is_ok());
+    }
+
+    /// Why: integrity controls (digest pin, signature) that reference no
+    /// policy at all are administrator errors; loading must fail instead of    /// returning "no policy configured" and silently running unpinned.
+    #[test]
+    fn optional_loading_fails_closed_when_integrity_controls_reference_nothing() {
+        assert!(
+            load_optional_from(None, None, false, |_| Ok(None))
+                .unwrap()
+                .is_none()
+        );
+
+        let error =
+            load_optional_from(None, Some("a".repeat(64)), false, |_| Ok(None)).unwrap_err();
+        assert!(
+            error.to_string().contains("no policy path is available"),
+            "unexpected error: {error}"
+        );
+
+        let missing =
+            std::env::temp_dir().join(format!("rr-missing-policy-{}.json", uuid::Uuid::new_v4()));
+        let error = load_optional_from(Some(missing), None, true, |_| Ok(None)).unwrap_err();
+        assert!(
+            error.to_string().contains("policy file is missing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: an existing policy file loads with its digest and without forced
+    /// signature enforcement, while signature-resolution failures propagate
+    /// instead of downgrading to unsigned loading.
+    #[test]
+    fn optional_loading_reads_policy_files_and_propagates_signature_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+        std::fs::write(&path, serde_json::to_vec(&v3_policy()).unwrap()).unwrap();
+
+        let loaded = load_optional_from(Some(path.clone()), None, false, |_| Ok(None))
+            .unwrap()
+            .expect("existing policy must load");
+        assert_eq!(loaded.policy.policy_id.as_deref(), Some("corp"));
+        assert_eq!(loaded.policy.revision, Some(1));
+        assert!(!loaded.signature_enforced);
+
+        let error = load_optional_from(Some(path), None, true, |_| {
+            Err(anyhow::anyhow!("signature resolution failed"))
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("signature resolution failed"),
+            "unexpected error: {error}"
+        );
+        assert!(load_optional().is_ok());
+    }
+
+    /// Why: an explicit settings update must reject unapproved verifier models
+    /// outright rather than silently swapping models the operator did not pick.
+    #[test]
+    fn enforce_rejects_unapproved_verifier_models_during_explicit_updates() {
+        let policy = EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            allowed_verifier_models: vec!["approved-verifier:1".into()],
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            verifier_model: "other-verifier:1".into(),
+            ..Default::default()
+        };
+        let error = policy.enforce(&mut settings, false).unwrap_err();
+        assert!(
+            error.to_string().contains("verifier model is not approved"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: an explicit update may never arm an independent verifier that uses
+    /// the same model tag as the primary — that would defeat the independence
+    /// guarantee, so it must be rejected, not auto-corrected.
+    #[test]
+    fn enforce_requires_a_distinct_verifier_tag_in_explicit_updates() {
+        let policy = EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            require_independent_verifier: true,
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            model: "shared:1".into(),
+            verifier_model: "shared:1".into(),
+            ..Default::default()
+        };
+        let error = policy.enforce(&mut settings, false).unwrap_err();
+        assert!(
+            error.to_string().contains("different model tag"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: at startup a same-tag verifier is replaced by the first distinct
+    /// allowed tag (fail-closed auto-repair), and if the allow-list offers no
+    /// distinct tag startup must fail instead of running without an
+    /// independent verifier.
+    #[test]
+    fn enforce_startup_repairs_the_verifier_tag_or_fails_without_an_alternative() {
+        let repairable = EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            require_independent_verifier: true,
+            allowed_verifier_models: vec!["shared:1".into(), "distinct:1".into()],
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            model: "shared:1".into(),
+            verifier_model: "shared:1".into(),
+            ..Default::default()
+        };
+        assert!(repairable.enforce(&mut settings, true).unwrap());
+        assert_eq!(settings.verifier_model, "distinct:1");
+
+        let stuck = EnterprisePolicy {
+            allowed_verifier_models: vec!["shared:1".into()],
+            ..repairable
+        };
+        let mut settings = Settings {
+            model: "shared:1".into(),
+            verifier_model: "shared:1".into(),
+            ..Default::default()
+        };
+        let error = stuck.enforce(&mut settings, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no distinct permitted verifier model"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: the revision floor only tracks policies with an explicit v2+
+    /// identity; v1 policies must neither be tracked nor change the floor.
+    #[test]
+    fn revision_floor_ignores_policies_without_a_revision_identity() {
+        let mut floor = PolicyRevisionFloor::default();
+        let loaded = LoadedPolicy {
+            policy: EnterprisePolicy {
+                version: 1,
+                ..Default::default()
+            },
+            digest: "d".repeat(64),
+            expected_digest: None,
+            signature_enforced: false,
+            signature_verified: false,
+            signer_key_sha256: None,
+        };
+        assert!(!floor.observe(&loaded).unwrap());
+        assert!(floor.policies.is_empty());
+    }
+
+    /// Why: `connect` consults `allows_send_scope` before requesting Gmail send
+    /// permission; only the explicit prohibit control may block it.
+    #[test]
+    fn send_scope_follows_only_the_prohibit_sending_control() {
+        assert!(EnterprisePolicy::default().allows_send_scope());
+        assert!(
+            !EnterprisePolicy {
+                prohibit_sending: true,
+                ..Default::default()
+            }
+            .allows_send_scope()
+        );
     }
 }

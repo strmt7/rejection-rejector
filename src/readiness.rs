@@ -409,3 +409,71 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod operational_indicator_tests {
+    use super::*;
+    use crate::config::{
+        PROMPT_VERSION, TaskQualification, evaluation_suite_hash, settings_context_hash,
+    };
+
+    /// Why: degradation reporting must name every failed domain — integrity,
+    /// storage, backup, connectivity and stale task qualification — and still
+    /// compute the qualification age, so operators can see exactly why
+    /// unattended work is degraded instead of a single opaque flag.
+    #[test]
+    fn degraded_contexts_report_every_reason_and_the_stale_qualification_age() {
+        let mut settings = Settings {
+            mode: Mode::Automatic,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            automatic_since: Some(Utc::now()),
+            scheduled_backup_enabled: true,
+            signature: "Test Applicant".into(),
+            model_digest: Some("a".repeat(64)),
+            ..Settings::default()
+        };
+        settings.task_qualification = Some(TaskQualification {
+            model: settings.model.clone(),
+            // Deliberately different from the pinned digest: the qualification
+            // is stale and must be reported as such.
+            digest: "b".repeat(64),
+            prompt_version: PROMPT_VERSION.into(),
+            context_hash: settings_context_hash(&settings),
+            suite_hash: evaluation_suite_hash(),
+            ollama_runtime_version: "0.35.0".into(),
+            task_score: 100.0,
+            fixture_count: 32,
+            qualified_at: Utc::now(),
+        });
+        let counts = Counts::default();
+        let indicators = operational_indicators(OperationalContext {
+            settings: &settings,
+            counts: &counts,
+            last_poll: None,
+            database_integrity_ok: false,
+            storage_write_safe: false,
+            scheduled_backup_overdue: true,
+            backup_distinct_failure_domain: Some(false),
+            connected: false,
+            now: Utc::now(),
+        });
+        assert!(indicators.degraded);
+        for reason in [
+            "database_integrity_failed",
+            "storage_headroom_low",
+            "scheduled_backup_overdue",
+            "scheduled_backup_same_failure_domain",
+            "gmail_disconnected",
+            "task_qualification_missing_or_stale",
+        ] {
+            assert!(
+                indicators.degradation_reasons.contains(&reason),
+                "missing degradation reason {reason}: {:?}",
+                indicators.degradation_reasons
+            );
+        }
+        assert!(indicators.task_qualification_age_seconds.is_some());
+        assert!(!indicators.sync_fresh);
+    }
+}

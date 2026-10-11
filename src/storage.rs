@@ -152,3 +152,31 @@ mod tests {
         assert!(health.backup_required_bytes >= MIN_BACKUP_HEADROOM_BYTES);
     }
 }
+
+#[cfg(test)]
+mod runtime_headroom_tests {
+    use super::*;
+
+    /// Why: the durable-write gate must hand back the measured health numbers
+    /// that justified the write; a regression that skips the measurement would
+    /// let sends proceed without recorded evidence of headroom.
+    #[test]
+    fn runtime_write_headroom_returns_measured_health_when_the_volume_is_safe() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("state.sqlite3"), vec![0u8; 4096]).unwrap();
+        let health = ensure_runtime_write_headroom(root.path()).unwrap();
+        assert!(health.runtime_write_safe);
+        assert_eq!(health.database_bytes, 4096);
+        assert!(health.runtime_required_bytes >= MIN_RUNTIME_HEADROOM_BYTES);
+    }
+
+    /// Why: a missing or symlinked workspace directory must fail the gate with    /// an error rather than silently reporting safe headroom.
+    #[test]
+    fn runtime_write_headroom_rejects_a_missing_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            ensure_runtime_write_headroom(&root.path().join("absent")).is_err(),
+            "missing workspace must not be reported as write-safe"
+        );
+    }
+}

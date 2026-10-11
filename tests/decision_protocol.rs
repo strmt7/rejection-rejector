@@ -20,13 +20,42 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::configured(&["nimble:9b-q8_0"], false, false, &[], &[])
+    }
+
+    /// Deterministic fake decision runtime.
+    ///
+    /// Inputs: `installed` — models listed in `/api/tags`; `oracle` — answer
+    /// with each bundled fixture's expected category (perfect scoring);
+    /// `broken_probabilities` — answer with probabilities that violate the
+    /// contract; `unresident` — models whose `/api/ps` entry reports partial
+    /// VRAM residency; `unavailable` — models whose `/v1/systemone` answers
+    /// HTTP 500.
+    fn configured(
+        installed: &[&str],
+        oracle: bool,
+        broken_probabilities: bool,
+        unresident: &[&str],
+        unavailable: &[&str],
+    ) -> Self {
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let flag = stop.clone();
         let calls = requests.clone();
+        let tracked_model = Arc::new(Mutex::new(
+            installed.first().copied().unwrap_or_default().to_owned(),
+        ));
+        let tracked = tracked_model.clone();
+        let installed_models: Vec<String> =
+            installed.iter().map(|name| (*name).to_owned()).collect();
+        let unresident_models: Vec<String> =
+            unresident.iter().map(|name| (*name).to_owned()).collect();
+        let unavailable_models: Vec<String> =
+            unavailable.iter().map(|name| (*name).to_owned()).collect();
         let handle = thread::spawn(move || {
+            let tracked_model = tracked;
             while !flag.load(Ordering::SeqCst) {
                 let Some(mut request) = server.recv_timeout(Duration::from_millis(50)).unwrap()
                 else {
@@ -35,49 +64,90 @@ impl Fixture {
                 let answer = match request.url() {
                     "/api/version" => json!({"version":"0.35.1"}),
                     "/api/tags" => json!({
-                        "models":[{
-                            "name":"nimble:9b-q8_0",
+                        "models": installed_models.iter().map(|name| json!({
+                            "name": name,
                             "digest":"d".repeat(64),
                             "size":9_500_000_000u64
-                        }]
-                    }),
-                    "/api/show" => json!({
-                        "details":{"format":"gguf"},
-                        "model_info":{"general.architecture":"qwen35"},
-                        "capabilities":["decision"]
+                        })).collect::<Vec<_>>()
                     }),
                     "/v1/systemone" => {
                         let mut body = String::new();
                         request.as_reader().read_to_string(&mut body).unwrap();
                         let payload: Value = serde_json::from_str(&body).unwrap();
-                        calls.lock().unwrap().push(payload);
+                        let model = payload["model"].as_str().unwrap_or_default().to_owned();
+                        calls.lock().unwrap().push(payload.clone());
+                        if unavailable_models.contains(&model) {
+                            let response =
+                                Response::from_string("{\"error\":\"injected failure\"}")
+                                    .with_status_code(500);
+                            let _ = request.respond(response);
+                            continue;
+                        }
+                        let probs = if broken_probabilities {
+                            json!({
+                                "rejection":0.5,"opportunity":0.1,"other":0.1,"uncertain":0.1
+                            })
+                        } else if oracle {
+                            let expected = oracle_category(&payload);
+                            json!({
+                                "rejection": if expected=="rejection" {1.0} else {0.0},
+                                "opportunity": if expected=="opportunity" {1.0} else {0.0},
+                                "other": if expected=="other" {1.0} else {0.0},
+                                "uncertain": if expected=="uncertain" {1.0} else {0.0}
+                            })
+                        } else {
+                            json!({
+                                "rejection":0.05,"opportunity":0.05,"other":0.85,"uncertain":0.05
+                            })
+                        };
+                        let choice = ["rejection", "opportunity", "other", "uncertain"]
+                            .into_iter()
+                            .max_by(|a, b| {
+                                probs[*a]
+                                    .as_f64()
+                                    .unwrap()
+                                    .total_cmp(&probs[*b].as_f64().unwrap())
+                            })
+                            .unwrap();
                         json!({
-                            "model":"nimble:9b-q8_0",
+                            "model": model,
                             "answers":{
                                 "category":{
                                     "type":"choice",
-                                    "choice":"other",
-                                    "probabilities":{
-                                        "rejection":0.05,
-                                        "opportunity":0.05,
-                                        "other":0.85,
-                                        "uncertain":0.05
-                                    },
+                                    "choice": choice,
+                                    "probabilities": probs,
                                     "confidence":0.80
                                 }
                             },
                             "usage":{"input_tokens":128,"output_tokens":1}
                         })
                     }
-                    "/api/ps" => json!({
-                        "models":[{
-                            "name":"nimble:9b-q8_0",
-                            "digest":"d".repeat(64),
-                            "size":10_000_000_000u64,
-                            "size_vram":10_000_000_000u64,
-                            "context_length":8192
-                        }]
-                    }),
+                    "/api/show" => {
+                        let mut body = String::new();
+                        request.as_reader().read_to_string(&mut body).unwrap();
+                        let payload: Value = serde_json::from_str(&body).unwrap();
+                        if let Some(model) = payload["model"].as_str() {
+                            *tracked_model.lock().unwrap() = model.to_owned();
+                        }
+                        json!({
+                            "details":{"format":"gguf"},
+                            "model_info":{"general.architecture":"qwen35"},
+                            "capabilities":["decision"]
+                        })
+                    }
+                    "/api/ps" => {
+                        let model = tracked_model.lock().unwrap().clone();
+                        let resident = !unresident_models.contains(&model);
+                        json!({
+                            "models":[{
+                                "name": model,
+                                "digest":"d".repeat(64),
+                                "size":10_000_000_000u64,
+                                "size_vram": if resident {10_000_000_000u64} else {2_000_000_000u64},
+                                "context_length":32768
+                            }]
+                        })
+                    }
                     path => panic!("Unexpected decision-model route {path}"),
                 };
                 let response = Response::from_string(answer.to_string())
@@ -167,4 +237,120 @@ fn decision_evaluation_uses_typed_local_protocol_without_fixture_text_in_report(
             "Decision report leaked fixture text"
         );
     }
+}
+
+const FIXTURES: &str = include_str!("fixtures/classification.json");
+
+/// Deterministic oracle: the bundled fixture's expected category for the case
+/// identified by the request's subject and de-quoted current message.
+fn oracle_category(payload: &Value) -> String {
+    let subject = payload
+        .pointer("/state/subject")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let current = payload
+        .pointer("/state/current_message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let cases: Value = serde_json::from_str(FIXTURES).unwrap();
+    for case in cases.as_array().unwrap() {
+        let text = case["text"].as_str().unwrap_or_default();
+        if case["subject"].as_str() == Some(subject)
+            && rejection_rejector::mail::current_text(text) == current
+        {
+            return case["expected"].as_str().unwrap().to_owned();
+        }
+    }
+    panic!("no bundled fixture matches the decision request");
+}
+
+/// Why: a probability vector that violates the decision contract must fail
+/// closed per case: the case is recorded as a contract failure with its error,
+/// never scored, and the summary must reflect zero completed cases so an
+/// ineligible report cannot be produced from garbage probabilities.
+#[test]
+fn probability_contract_violations_fail_closed_per_case() {
+    let fixture = Fixture::configured(&["nimble:9b-q8_0"], false, true, &[], &[]);
+    let directory = tempfile::tempdir().unwrap();
+    let report_path = directory.path().join("decision-report.json");
+
+    let report = decision::evaluate(&fixture.settings(), "nimble:9b-q8_0", &report_path).unwrap();
+    assert_eq!(report["summary"]["fixture_count"], 74);
+    assert_eq!(report["summary"]["completed"], 0);
+    assert_eq!(report["summary"]["probability_contract_failures"], 74);
+    assert_eq!(report["summary"]["recommendation_eligible"], false);
+    assert!(report["summary"]["mean_multiclass_brier"].is_null());
+    let rows = report["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 74);
+    for row in rows {
+        assert_eq!(row["matched"], false);
+        assert_eq!(row.get("rejection_probability"), None);
+        assert!(
+            row["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("probabilit")),
+            "unexpected contract error: {row}"
+        );
+    }
+}
+
+/// Why: the bake-off must rank only recommendation-eligible candidates, keep
+/// ineligible evaluated models visible with their evidence, and record models
+/// that could not be evaluated as skipped instead of silently dropping them.
+#[test]
+fn compare_installed_skips_uninstalled_models_and_ranks_only_eligible() {
+    let fixture = Fixture::configured(
+        &["nimble:9b-q8_0", "clef-flash:9b-q8_0"],
+        true,
+        false,
+        &["clef-flash:9b-q8_0"],
+        &[],
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let out = directory.path().join("decision-compare.json");
+
+    let report = decision::compare_installed(&fixture.settings(), &out).unwrap();
+    assert_eq!(report["contract_version"], "rr-decision-compare-v1");
+    assert_eq!(report["recommended_model"], "nimble:9b-q8_0");
+    let candidates = report["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 3);
+
+    let tev = candidates
+        .iter()
+        .find(|candidate| candidate["model"] == "tev1:4b")
+        .expect("uninstalled candidate must be listed as skipped");
+    assert_eq!(tev["skipped"], true);
+    assert!(
+        tev["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("not installed")),
+        "unexpected skip reason: {tev}"
+    );
+
+    let clef = candidates
+        .iter()
+        .find(|candidate| candidate["model"] == "clef-flash:9b-q8_0")
+        .unwrap();
+    assert_eq!(clef.get("skipped"), None);
+    assert_eq!(clef["report"]["summary"]["recommendation_eligible"], false);
+
+    let nimble = candidates
+        .iter()
+        .find(|candidate| candidate["model"] == "nimble:9b-q8_0")
+        .unwrap();
+    assert_eq!(nimble["report"]["summary"]["recommendation_eligible"], true);
+    assert!(
+        (nimble["report"]["summary"]["rejection_recall"]
+            .as_f64()
+            .unwrap()
+            - 1.0)
+            .abs()
+            < 1e-12
+    );
+    assert!(report["ranking_policy"].as_array().is_some());
+    assert!(
+        std::fs::read_to_string(&out)
+            .unwrap()
+            .contains("rr-decision-compare-v1")
+    );
 }

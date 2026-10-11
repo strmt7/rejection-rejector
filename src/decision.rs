@@ -472,6 +472,44 @@ fn report_metric(report: &Value, pointer: &str) -> Option<f64> {
     report.pointer(pointer).and_then(Value::as_f64)
 }
 
+/// Rank candidate comparison rows against their evaluation reports.
+///
+/// Inputs: `candidates` — the JSON rows built by [`compare_installed`], each
+/// carrying a `model` tag and a full evaluation `report`, or only a `skipped`
+/// marker. Output: one rank tuple per candidate whose report is
+/// recommendation-eligible and complete. Rows without a report, with an
+/// ineligible report, with a non-string model tag, or missing any of the four
+/// ranking metrics are dropped — a partial report is never ranked with
+/// fabricated numbers. Test seam: the rows are injected so every
+/// incomplete-report arm is exercised deterministically.
+fn ranked_candidates(candidates: &[Value]) -> Vec<CandidateRank> {
+    let mut ranked = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let report = candidate.get("report")?;
+            if !report
+                .pointer("/summary/recommendation_eligible")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some((
+                candidate.get("model")?.as_str()?.to_owned(),
+                report_metric(report, "/summary/rejection_recall")?,
+                report_metric(report, "/summary/mean_rejection_brier")?,
+                report_metric(
+                    report,
+                    "/summary/critical_negative_max_rejection_probability",
+                )?,
+                report_metric(report, "/summary/mean_seconds")?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(rank_candidates);
+    ranked
+}
+
 /// Compare curated typed decision models that are already installed.
 ///
 /// Nothing is downloaded and no delivery authorization changes. Ranking is
@@ -499,32 +537,7 @@ pub fn compare_installed(settings: &Settings, out: &Path) -> Result<Value> {
         }
     }
 
-    let mut ranked = candidates
-        .iter()
-        .filter_map(|candidate| {
-            let report = candidate.get("report")?;
-            if !report
-                .pointer("/summary/recommendation_eligible")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                return None;
-            }
-            Some((
-                candidate.get("model")?.as_str()?.to_owned(),
-                report_metric(report, "/summary/rejection_recall")?,
-                report_metric(report, "/summary/mean_rejection_brier")?,
-                report_metric(
-                    report,
-                    "/summary/critical_negative_max_rejection_probability",
-                )?,
-                report_metric(report, "/summary/mean_seconds")?,
-            ))
-        })
-        .collect::<Vec<_>>();
-
-    ranked.sort_by(rank_candidates);
-
+    let ranked = ranked_candidates(&candidates);
     let recommendation = ranked.first().map(|row| row.0.clone());
     let report = json!({
         "contract_version": "rr-decision-compare-v1",
@@ -725,6 +738,77 @@ mod ranking_and_eligibility_tests {
         assert_eq!(report_metric(&report, "/summary/name"), None);
         assert_eq!(report_metric(&report, "/summary/missing"), None);
     }
+
+    /// Why: a comparison row may only be ranked from a complete, eligible
+    /// report. Each missing ranking metric — including the critical-negative
+    /// rejection probability — must independently drop the row instead of
+    /// letting a partial report rank on fabricated numbers, and rows without a
+    /// report or without a usable model tag must never reach the ranking.
+    #[test]
+    fn incomplete_or_ineligible_reports_never_reach_the_ranking() {
+        fn row(report: Value) -> Value {
+            serde_json::json!({"label": "label", "model": "model", "report": report})
+        }
+        fn eligible_report() -> Value {
+            serde_json::json!({"summary": {
+                "recommendation_eligible": true,
+                "rejection_recall": 0.95,
+                "mean_rejection_brier": 0.10,
+                "critical_negative_max_rejection_probability": 0.20,
+                "mean_seconds": 2.0
+            }})
+        }
+        fn drop_metric(report: &mut Value, pointer: &str) {
+            let key = pointer.rsplit('/').next().unwrap();
+            report
+                .pointer_mut("/summary")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+        }
+
+        let complete = row(eligible_report());
+        assert_eq!(
+            ranked_candidates(&[complete]),
+            vec![("model".to_string(), 0.95, 0.10, 0.20, 2.0)]
+        );
+
+        for pointer in [
+            "/summary/rejection_recall",
+            "/summary/mean_rejection_brier",
+            "/summary/critical_negative_max_rejection_probability",
+            "/summary/mean_seconds",
+        ] {
+            let mut report = eligible_report();
+            drop_metric(&mut report, pointer);
+            assert!(
+                ranked_candidates(&[row(report)]).is_empty(),
+                "a report missing {pointer} must be dropped, not ranked"
+            );
+        }
+
+        let mut non_numeric = eligible_report();
+        non_numeric["summary"]["critical_negative_max_rejection_probability"] =
+            serde_json::json!("not a number");
+        assert!(ranked_candidates(&[row(non_numeric)]).is_empty());
+
+        let mut ineligible = eligible_report();
+        ineligible["summary"]["recommendation_eligible"] = serde_json::json!(false);
+        assert!(ranked_candidates(&[row(ineligible)]).is_empty());
+        assert!(
+            ranked_candidates(&[serde_json::json!({
+                "label": "label", "model": "model", "skipped": true, "reason": "down"
+            })])
+            .is_empty()
+        );
+        assert!(
+            ranked_candidates(&[serde_json::json!({
+                "label": "label", "model": 7, "report": eligible_report()
+            })])
+            .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -791,5 +875,72 @@ mod brier_scoring_tests {
             confidence: None,
         };
         assert!(probability_scores(&partial, Category::Rejection).is_err());
+    }
+}
+
+#[cfg(test)]
+mod probability_contract_extreme_tests {
+    use super::*;
+
+    fn answer(confidence: Option<f64>, probs: [f64; 4]) -> DecisionAnswer {
+        let keys = ["rejection", "opportunity", "other", "uncertain"];
+        DecisionAnswer {
+            choice: "rejection".to_string(),
+            probabilities: keys
+                .iter()
+                .zip(probs)
+                .map(|(key, value)| (key.to_string(), value))
+                .collect(),
+            confidence,
+        }
+    }
+
+    /// Why: probability extremes are the boundary of the scoring contract —
+    /// one-hot mass at 0.0/1.0 must pass with and without an explicit
+    /// confidence, while out-of-range, non-finite and non-normalized values
+    /// must be rejected before any score is computed from them.
+    #[test]
+    fn probability_validation_admits_extremes_and_rejects_invalid_mass() {
+        assert!(validate_probabilities(&answer(None, [1.0, 0.0, 0.0, 0.0])).is_ok());
+        assert!(validate_probabilities(&answer(Some(0.0), [0.0, 0.0, 0.0, 1.0])).is_ok());
+        assert!(validate_probabilities(&answer(Some(1.0), [0.25, 0.25, 0.25, 0.25])).is_ok());
+
+        for probs in [
+            [-0.1, 0.1, 0.1, 0.9],
+            [1.1, -0.1, 0.0, 0.0],
+            [f64::NAN, 0.0, 0.0, 1.0],
+            [f64::INFINITY, 0.0, 0.0, 0.0],
+            [0.5, 0.1, 0.1, 0.1],
+            [0.0, 0.0, 0.0, 0.0],
+        ] {
+            assert!(
+                validate_probabilities(&answer(None, probs)).is_err(),
+                "invalid probabilities accepted: {probs:?}"
+            );
+        }
+        for confidence in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            assert!(
+                validate_probabilities(&answer(Some(confidence), [1.0, 0.0, 0.0, 0.0])).is_err(),
+                "invalid confidence accepted: {confidence}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_destination_tests {
+    use super::*;
+
+    /// Why: report writing must also work for a bare filename (no parent
+    /// directory to create); failing there would lose operator evidence for
+    /// tooling that writes into the current directory.
+    #[test]
+    fn write_report_accepts_a_bare_filename_destination() {
+        let name = format!("rr-decision-report-test-{}.json", uuid::Uuid::new_v4());
+        let report = serde_json::json!({"contract_version": "test"});
+        write_report(Path::new(&name), &report).unwrap();
+        let stored: Value = serde_json::from_str(&std::fs::read_to_string(&name).unwrap()).unwrap();
+        std::fs::remove_file(&name).unwrap();
+        assert_eq!(stored, report);
     }
 }
