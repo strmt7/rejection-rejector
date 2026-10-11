@@ -4,7 +4,10 @@
 //! Every subcommand variant is driven as a real process so the exit codes,
 //! machine-readable output and fail-closed error paths are pinned exactly as
 //! deployment tooling observes them. All workspaces are temporary; the
-//! Windows vault credential each one creates is deleted when its test ends.
+//! Windows vault credential each one creates is deleted when its test ends,
+//! and on hosts without an OS credential store every spawned `rr` carries the
+//! documented headless vault seam (`RR_VAULT_PASSPHRASE`, docs/SETUP.md) so
+//! the fleet command contract stays covered on headless Linux.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -14,11 +17,40 @@ use std::process::{Command, Output};
 /// Inputs: `args` — command-line arguments. Output: the spawned process
 /// result (status, stdout, stderr).
 fn rr(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_rr"))
-        .args(args)
-        .output()
-        .expect("run rr")
+    rr_command().args(args).output().expect("run rr")
 }
+
+/// Build one `rr` process command with its workspace vault seam provisioned.
+///
+/// Inputs: none. Output: the process command; on hosts without an OS
+/// credential store it carries the documented headless vault input
+/// (`RR_VAULT_PASSPHRASE`, docs/SETUP.md) that `Vault::open` derives the
+/// workspace key from — exactly what a real fleet deployment supplies.
+fn rr_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rr"));
+    headless_vault_seam(&mut command);
+    command
+}
+
+/// Attach the documented headless vault input to one spawned process.
+///
+/// Inputs: `command` — the process command. Output: none; on non-Windows the
+/// process environment gains `RR_VAULT_PASSPHRASE` (20+ characters, the
+/// minimum `Vault::open` accepts). Windows resolves the key from Credential
+/// Manager automatically and never reads the variable.
+#[cfg(not(windows))]
+fn headless_vault_seam(command: &mut Command) {
+    command.env(
+        "RR_VAULT_PASSPHRASE",
+        "rr-cli-test-headless-vault-passphrase",
+    );
+}
+
+/// Non-Windows seam counterpart: Windows needs no injected vault input.
+///
+/// Inputs: ignored. Output: none.
+#[cfg(windows)]
+fn headless_vault_seam(_command: &mut Command) {}
 
 /// Run the `rr` binary against one data directory.
 ///
@@ -157,6 +189,28 @@ fn workspace(name: &str) -> (PathBuf, ()) {
     ));
     std::fs::create_dir_all(&dir).expect("workspace dir");
     (dir, ())
+}
+
+/// Write one test fixture owner-private.
+///
+/// Inputs: `path` — destination; `content` — fixture bytes. Output: none; on
+/// unix the file lands 0600 so the production recovery-passphrase permission
+/// gate (which is correct) sees a realistic operator file instead of a
+/// umask-default 0644 fixture that would be rejected before the length
+/// checks under test.
+#[cfg(unix)]
+fn write_private(path: &Path, content: impl AsRef<[u8]>) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, content).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// Non-unix counterpart: there is no POSIX mode gate to satisfy.
+///
+/// Inputs: `path` — destination; `content` — fixture bytes. Output: none.
+#[cfg(not(unix))]
+fn write_private(path: &Path, content: impl AsRef<[u8]>) {
+    std::fs::write(path, content).unwrap();
 }
 
 /// Readiness and status surfaces report machine-readable JSON.
@@ -305,7 +359,7 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
 
     let pass = out_root.join("passphrase.txt");
     std::fs::create_dir_all(&out_root).unwrap();
-    std::fs::write(&pass, b"correct horse battery staple\n").unwrap();
+    write_private(&pass, b"correct horse battery staple\n");
 
     // The passphrase reader refuses its unsafe inputs before any crypto.
     let missing = rr_in(
@@ -322,7 +376,7 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
     assert!(String::from_utf8_lossy(&missing.stderr).contains("passphrase file is missing"));
 
     let short = out_root.join("short.txt");
-    std::fs::write(&short, b"tiny").unwrap();
+    write_private(&short, b"tiny");
     let short = rr_in(
         &dir,
         &[
@@ -337,7 +391,7 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
     assert!(String::from_utf8_lossy(&short.stderr).contains("at least 20 bytes"));
 
     let oversized = out_root.join("oversized.txt");
-    std::fs::write(&oversized, vec![b'a'; 5000]).unwrap();
+    write_private(&oversized, vec![b'a'; 5000]);
     let oversized = rr_in(
         &dir,
         &[
@@ -400,7 +454,7 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
     // The acknowledged import installs the recovered key after the old OS
     // credential is gone — the exact disaster-recovery scenario.
     delete_vault_credential(&dir);
-    let imported = json_stdout(&rr_in(
+    let imported = rr_in(
         &dir,
         &[
             "import-recovery-key",
@@ -413,14 +467,35 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
             "--confirm",
             "IMPORT",
         ],
-    ));
-    assert_eq!(imported.get("imported"), Some(&serde_json::json!(true)));
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        json_stdout(&imported).get("imported"),
+        Some(&serde_json::json!(true))
+    );
+    #[cfg(not(windows))]
+    {
+        // The OS-credential install half of the import is genuinely
+        // platform-bound: without a credential store there is nothing to
+        // install into, so on Linux the import must fail closed and name the
+        // documented recovery path (RR_VAULT_PASSPHRASE + vault-id,
+        // docs/SETUP.md) instead of pretending to succeed.
+        assert!(
+            !imported.status.success(),
+            "import without an OS credential store must fail closed"
+        );
+        assert!(
+            String::from_utf8_lossy(&imported.stderr).contains("RR_VAULT_PASSPHRASE"),
+            "the refusal names the passphrase recovery path: {}",
+            String::from_utf8_lossy(&imported.stderr)
+        );
+    }
 
     // A configured enterprise policy that allows export still exports.
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config")
         .join("enterprise-policy.example.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_rr"))
+    let output = rr_command()
         .env("RR_ENTERPRISE_POLICY", &example)
         .args([
             "--data-dir",
@@ -686,8 +761,11 @@ fn model_commands_fail_closed_without_the_local_runtime() {
 ///
 /// Why: the native launcher must open the demo workspace, capture the
 /// requested screen and close itself — hanging past the capture would hang
-/// every scripted screenshot run.
-#[cfg(feature = "gui")]
+/// every scripted screenshot run. Genuinely display-bound: winit needs a
+/// display server (DISPLAY/WAYLAND_DISPLAY) and aborts before any app code
+/// runs on a headless host, so the flow is exercised on Windows desktop
+/// sessions only while the `rr` fleet surface stays covered everywhere.
+#[cfg(all(feature = "gui", windows))]
 #[test]
 fn desktop_launcher_completes_the_screenshot_flow() {
     for extra in [vec![], vec!["--data-dir", "placeholder"]] {
