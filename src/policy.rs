@@ -1212,6 +1212,7 @@ mod configuration_seam_tests {
         }
     }
 
+    #[cfg(windows)]
     fn key_os() -> std::ffi::OsString {
         std::ffi::OsString::from(STANDARD.encode([9u8; 32]))
     }
