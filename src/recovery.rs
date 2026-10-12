@@ -778,6 +778,10 @@ pub fn recover_workspace_from_backup(
         )?;
     }
 
+    // Windows/macOS only: portable recovery installs or verifies the OS
+    // credential here (the keyring crate is a target-scoped dependency and
+    // Linux has no credential store). Linux recovery has no OS-key import
+    // path and is served by the `cfg(not(...))` arm below.
     #[cfg(any(windows, target_os = "macos"))]
     {
         match Vault::open(data_dir) {
@@ -1656,6 +1660,8 @@ mod tests {
             !error.to_string().is_empty(),
             "fail-closed restore errors must carry an explanation"
         );
+        // Windows/macOS wording: the fail-closed error comes from the OS
+        // credential path; Linux fails with the RR_VAULT_PASSPHRASE wording.
         #[cfg(any(windows, target_os = "macos"))]
         assert!(
             error
@@ -1848,32 +1854,38 @@ mod tests {
 
     /// Removes a test credential from the OS credential store even when an
     /// assertion panics, so repeated runs never collide with stale keys.
-    #[cfg(any(windows, target_os = "macos"))]
     struct CredentialCleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for CredentialCleanup {
-        /// Deletes the credential bound to this test's vault identifier.
+        /// Delete the credential bound to this test's vault identifier, where
+        /// the platform has one.
         /// Inputs: `self.0` holds the vault identifier used as account name.
         /// Output: none; deletion errors are ignored during teardown.
         fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+            let _id = &self.0;
+            // Only Windows/macOS vault opens mint an OS credential; headless
+            // hosts derive the key from the passphrase and have nothing to
+            // remove.
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
                 .and_then(|entry| entry.delete_credential());
         }
     }
 
     /// Why: the full recovery-key export path must work against a real
-    /// OS-credential workspace: the exported envelope has to authenticate the
-    /// backup, wrong passphrases must be rejected, and the same key must drive
-    /// the drill and a transactional restore. Exercises the production export,
-    /// drill and restore entry points end to end.
-    /// Inputs: keyring-backed workspace with one stub record and its backup.
+    /// workspace: the exported envelope has to authenticate the backup, wrong
+    /// passphrases must be rejected, and the same key must drive the drill and
+    /// a transactional restore. Exercises the production export, drill and
+    /// restore entry points end to end.
+    /// Inputs: real workspace with one stub record and its backup.
     /// Output: envelope round-trips, drill and restore succeed against the
     /// recovered state, and re-exporting never overwrites the existing file.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn recovery_key_export_roundtrip_drives_drill_and_transactional_restore() {
         // Serialize OS credential-store access (see `vault::test_support`).
         let _lock = lock_credential_store();
+        // Arm the documented headless vault input so `Vault::open` derives the
+        // workspace key on hosts without an OS credential store.
+        crate::test_support::headless_vault_seam();
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
         private_dir(&data).unwrap();
@@ -1945,6 +1957,9 @@ mod tests {
     /// Inputs: backup plus its envelope against four target directories.
     /// Output: cross-vault and non-authenticating imports error with cleanup;
     /// the clean import installs a credential that opens the backup key.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn import_recovery_key_for_backup_enforces_identity_and_rolls_back_failures() {
@@ -2025,6 +2040,9 @@ mod tests {
     /// Inputs: backup plus envelope; three target directories. Output: fresh
     /// target restored with key installation, same-vault target restored through
     /// the existing credential, foreign target untouched after refusal.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn recover_workspace_from_backup_installs_key_and_preserves_foreign_targets() {
@@ -2091,6 +2109,9 @@ mod tests {
     /// matches but whose OS credential was minted for a different key.
     /// Output: authentication error from the credential check and no database
     /// installed in the target.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn recover_workspace_refuses_a_mismatched_os_credential() {
@@ -2151,6 +2172,9 @@ mod tests {
     /// Why: a failed restore must never leave a fresh workspace looking
     /// authentic; the vault identifier minted for the attempt is rolled back
     /// together with the error, so no half-restored identity can hold a key.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn failed_restore_rolls_back_the_minted_vault_identifier() {
@@ -2185,6 +2209,9 @@ mod tests {
     /// Why: portable recovery must fail closed on a corrupt OS credential —
     /// it neither overwrites the credential nor leaves a minted vault
     /// identifier behind that could later masquerade as an authentic workspace.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn corrupt_os_credential_aborts_recovery_and_rolls_back_the_vault_id() {

@@ -84,6 +84,9 @@ fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2
 /// the 32-byte vault key, or an error that never silently mints a replacement
 /// for an existing vault. Test seam: the lookup result is injected so every
 /// credential-store failure mode is exercised deterministically.
+// Windows/macOS only: encodes the OS credential-store protocol and speaks
+// `keyring::Error`; the keyring crate is a target-scoped dependency and Linux
+// derives vault keys from RR_VAULT_PASSPHRASE instead.
 #[cfg(any(windows, target_os = "macos"))]
 fn key_from_credential_store(
     lookup: std::result::Result<String, keyring::Error>,
@@ -558,6 +561,9 @@ mod tests {
         assert!(Vault::from_recovery_envelope(&expensive, passphrase).is_err());
     }
 
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn existing_vault_id_without_credential_never_mints_a_replacement_key() {
@@ -627,6 +633,9 @@ mod tests {
     /// seal/open round trip across two independently opened vaults.
     /// Inputs: fresh directory. Output: both vault handles decrypt each other's
     /// sealed records; the credential is removed on teardown.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn vault_open_mints_and_reuses_the_os_credential_key() {
@@ -657,6 +666,9 @@ mod tests {
     /// Inputs: directory with a vault identifier and a recovered vault.
     /// Output: first install succeeds, second install errors, an opened vault
     /// reads the installed key, and a directory without identifier errors.
+    // Windows/macOS only: this test drives the real OS credential store,
+    // which is exactly what it asserts; the keyring crate is a target-scoped
+    // dependency and Linux has no credential store to test against.
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn install_os_key_if_missing_installs_once_and_refuses_overwrite() {
@@ -736,6 +748,10 @@ pub(crate) mod test_support {
     }
 }
 
+// Windows/macOS only: the seam functions under test take injected
+// `keyring::Error` values (they never touch a live store themselves), but the
+// keyring crate is a target-scoped dependency, so this module cannot compile
+// where the crate is absent.
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod credential_store_seam_tests {
     use super::*;

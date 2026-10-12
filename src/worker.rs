@@ -2792,11 +2792,15 @@ mod orchestration_tests {
 
     /// The web confirm path must only arm Automatic after the cooldown and a
     /// configuration that passes every send gate.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_arm_confirm_only_arms_a_qualified_configuration() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let dir = tempfile::tempdir().unwrap();
         // A real (non-demo) workspace: demo mode can never enable sending.
+        // Arm the headless vault seam first so the live open derives its key
+        // on hosts without an OS credential store.
+        crate::test_support::headless_vault_seam();
         let mut e = Engine::open(
             dir.path().to_path_buf(),
             false,
@@ -3062,16 +3066,19 @@ mod orchestration_tests {
         assert!(worker.shutdown(Duration::from_secs(2)));
     }
 
-    /// Recovery commands must round-trip on a real keyring-backed workspace:
+    /// Recovery commands must round-trip on a real (non-demo) workspace:
     /// backup, isolated drill, key export and key verification all succeed
     /// without stalling the worker.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn recovery_commands_round_trip_on_a_real_workspace() {
         // Share the cross-test credential-store lock: parallel in-process
         // tests use the same OS credential store, and this workspace round
         // trip must not observe another test's transient vault identifiers.
         let _credential_store = crate::vault::test_support::lock_credential_store();
+        // Arm the headless vault seam before the spawn so the worker thread's
+        // workspace open derives the same key on hosts without an OS
+        // credential store.
+        crate::test_support::headless_vault_seam();
         let dir = tempfile::tempdir().unwrap();
         let mut worker = Worker::spawn(dir.path().into(), false);
         let start = Instant::now();
@@ -3130,12 +3137,15 @@ mod orchestration_tests {
 
     /// Removes the OS credential minted for a test workspace even when an
     /// assertion panics, so repeated runs never collide with stale keys.
-    #[cfg(any(windows, target_os = "macos"))]
     struct CredentialCleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for CredentialCleanup {
         fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+            let _id = &self.0;
+            // Only Windows/macOS vault opens mint an OS credential; headless
+            // hosts derive the key from the passphrase and have nothing to
+            // remove.
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
                 .and_then(|entry| entry.delete_credential());
         }
     }
