@@ -3186,6 +3186,40 @@ mod orchestration_tests {
         false
     }
 
+    /// Operation kinds published to the runtime journal so far.
+    ///
+    /// Why: the runtime journal is the durable record every operation outcome
+    /// is published to, so reading it observes scheduled work deterministically
+    /// while sampling the live snapshot races the scheduler and silently misses
+    /// short operations.
+    /// Inputs: `dir` — workspace directory. Output: Debug names of every
+    /// operation kind recorded in `logs/runtime.jsonl` and its archives.
+    fn journaled_operation_kinds(dir: &std::path::Path) -> std::collections::BTreeSet<String> {
+        let mut kinds = std::collections::BTreeSet::new();
+        let Ok(entries) = std::fs::read_dir(dir.join("logs")) else {
+            return kinds;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                if record["event"] != "operation" {
+                    continue;
+                }
+                if let Ok(kind) =
+                    serde_json::from_value::<OperationKind>(record["operation"].clone())
+                {
+                    kinds.insert(format!("{kind:?}"));
+                }
+            }
+        }
+        kinds
+    }
+
     /// Every read-only integration API route answers its contracted payload
     /// and rejects malformed queries or identifiers.
     #[test]
@@ -3543,21 +3577,26 @@ mod orchestration_tests {
                     "a prohibited API surface must be marked closed"
                 );
                 // The recurring timered operations run and publish their
-                // outcomes (the mail poll parks on its cursor after the first
-                // pass and is exercised through CheckNow below).
-                let mut kinds = std::collections::BTreeSet::new();
-                for _ in 0..300 {
-                    kinds.insert(format!("{:?}", w.view().operation.kind));
-                    if kinds.len() >= 3 {
+                // outcomes to the runtime journal (the mail poll parks on its
+                // cursor after the first pass and is exercised through CheckNow
+                // below).
+                // Why: observe the journal's durable operation records instead
+                // of sampling the live snapshot; snapshot sampling races the
+                // scheduler and misses short operations.
+                let start = Instant::now();
+                loop {
+                    let kinds = journaled_operation_kinds(dir.path());
+                    if ["PurgeRetention", "AutomaticDispatch"]
+                        .iter()
+                        .all(|expected| kinds.iter().any(|k| k.contains(expected)))
+                    {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                for expected in ["PurgeRetention", "AutomaticDispatch"] {
                     assert!(
-                        kinds.iter().any(|k| k.contains(expected)),
-                        "scheduled {expected} never ran; saw {kinds:?}"
+                        start.elapsed() < Duration::from_secs(30),
+                        "scheduled timered operations never ran; journaled kinds: {kinds:?}"
                     );
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 // A manual provider check succeeds against the scripted API.
                 // A manual provider check refreshes the poll cursor.
