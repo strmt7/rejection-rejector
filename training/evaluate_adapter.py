@@ -101,7 +101,7 @@ def main() -> int:
 
     results = []
     confusion: dict[str, Counter] = defaultdict(Counter)
-    progress_path = args.out.with_suffix(".progress.json")
+    progress_path = args.out.with_name(args.out.name + ".progress.json")
     began = time.time()
     for i, row in enumerate(rows):
         expected = json.loads(row["messages"][2]["content"])
