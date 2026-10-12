@@ -120,12 +120,20 @@ fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
     fs::File::open(path)?
         .take(limit + 1)
         .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= limit,
-        "{} exceeds size limit",
-        path.display()
-    );
+    ensure_read_within_limit(bytes.len() as u64, limit, path)?;
     Ok(bytes)
+}
+
+/// Enforce the small-read size bound on the bytes actually read.
+///
+/// Inputs: `read_len` — bytes observed after reading; `limit` — maximum
+/// accepted size; `path` — the file being read (named in errors). Output:
+/// `Ok(())` within the bound, otherwise an error naming the path; this is the
+/// second-line defence against a file that grows past the limit between the
+/// size check and the read.
+fn ensure_read_within_limit(read_len: u64, limit: u64, path: &Path) -> Result<()> {
+    ensure!(read_len <= limit, "{} exceeds size limit", path.display());
+    Ok(())
 }
 
 /// An offline restore may bring back an old Automatic/sending permission.
@@ -327,10 +335,11 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
         "Backup parent directory must not be a symlink"
     );
     let workspace_storage = crate::storage::inspect(data_dir)?;
-    crate::storage::ensure_backup_destination_headroom(
+    let headroom = crate::storage::ensure_backup_destination_headroom(
         parent,
         workspace_storage.backup_required_bytes,
-    )?;
+    );
+    headroom?;
 
     let name = destination
         .file_name()
@@ -369,10 +378,11 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
             portable: false,
             recovery_note: "Same-vault backup. Restoring on another machine requires the original OS-protected master key; this directory does not contain that key.".into(),
         };
-        write_new_private(
+        let written = write_new_private(
             &temporary.join(MANIFEST_NAME),
             &serde_json::to_vec_pretty(&manifest)?,
-        )?;
+        );
+        written?;
         verify_backup(store, &temporary)?;
         Ok(manifest)
     })();
@@ -2211,5 +2221,82 @@ mod tests {
             "the minted vault identifier must be rolled back"
         );
         assert!(!target.join(DATABASE_NAME).exists());
+    }
+
+    fn downgrade_bundle_to_format_v1(bundle: &Path) -> BackupManifest {
+        let manifest_path = bundle.join(MANIFEST_NAME);
+        let mut manifest: BackupManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.format_version = 1;
+        manifest.audit_head = String::new();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        manifest
+    }
+
+    /// Why: format-1 backup bundles written before audit-chain verification
+    /// existed must remain verifiable and rehearsable — a backup that can no
+    /// longer be verified is no backup at all — and the compatibility path must
+    /// skip exactly the audit-head comparison and nothing else.
+    /// Inputs: a fresh bundle whose manifest is downgraded to format 1 without
+    /// an audit head. Output: `verify_backup` and `recovery_drill_with_vault`
+    /// both succeed on it.
+    #[test]
+    fn v1_backup_bundle_without_audit_chain_still_verifies_and_drills() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, vault, store) = seeded_workspace(root.path(), "data");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let manifest = downgrade_bundle_to_format_v1(&backup);
+        assert_eq!(manifest.format_version, 1);
+        assert!(manifest.audit_head.is_empty());
+        let verified = verify_backup(&store, &backup).unwrap();
+        assert_eq!(verified.format_version, 1);
+        let report = recovery_drill_with_vault(&data, &backup, vault).unwrap();
+        assert!(report.isolated_restore_succeeded);
+        assert_eq!(report.item_records, 1);
+    }
+
+    /// Why: restoring a format-1 bundle must complete without the audit-head
+    /// anchors format 2 added, otherwise archives taken by older releases
+    /// become unrestorable exactly when an operator needs them.
+    /// Inputs: a v1-downgraded bundle restored into a same-vault target
+    /// workspace. Output: `restore_backup_with_vault` succeeds and the live
+    /// database is replaced by the backup copy.
+    #[test]
+    fn restore_accepts_a_v1_bundle_without_audit_head() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        create_backup(&store, &source, &backup).unwrap();
+        let manifest = downgrade_bundle_to_format_v1(&backup);
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        write_new_private(&target.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
+        restore_backup_with_vault(&target, &backup, &manifest, vault).unwrap();
+        assert!(target.join(DATABASE_NAME).is_file());
+    }
+
+    /// Why: the post-read size check is the second line of defence for the
+    /// small-file bound — a file that grows between the stat and the read must
+    /// still be refused — and the refusal must name the path so operators can
+    /// find the offending file.
+    /// Inputs: read lengths under, at and over a limit with a known path.
+    /// Output: `Ok` within the bound; the over-limit error names the path.
+    #[test]
+    fn post_read_size_bound_names_the_path_when_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("manifest.json");
+        assert!(ensure_read_within_limit(0, 100, &path).is_ok());
+        assert!(ensure_read_within_limit(100, 100, &path).is_ok());
+        let error = ensure_read_within_limit(101, 100, &path)
+            .expect_err("bytes past the limit must be refused");
+        assert!(
+            error.to_string().contains("manifest.json"),
+            "unexpected error: {error}"
+        );
     }
 }

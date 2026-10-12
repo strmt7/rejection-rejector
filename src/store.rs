@@ -881,22 +881,17 @@ impl Store {
     pub fn backup_to(&self, path: &Path) -> Result<()> {
         self.integrity_check()?;
         ensure!(!path.exists(), "Backup destination already exists");
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-            ensure!(
-                !std::fs::symlink_metadata(parent)?.file_type().is_symlink(),
-                "Backup parent directory must not be a symlink"
-            );
-        }
+        prepare_backup_parent(path)?;
         write_new_private(path, b"")?;
         let mut destination = Connection::open(path)?;
         {
             let backup = Backup::new(&self.conn, &mut destination)?;
             backup.run_to_completion(64, Duration::from_millis(10), None)?;
         }
-        destination.execute_batch(
+        let hardened = destination.execute_batch(
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
-        )?;
+        );
+        hardened?;
         check_connection_integrity(&destination)?;
         let source_version = self.schema_version()?;
         let backup_version: i64 =
@@ -1303,11 +1298,14 @@ impl Store {
         let account_key = hash(account);
         let snapshot_rowid = match cursor {
             Some(cursor) => cursor.snapshot_rowid,
-            None => self.conn.query_row(
-                "SELECT COALESCE(MAX(rowid),0) FROM items WHERE account_key=?1",
-                [&account_key],
-                |row| row.get(0),
-            )?,
+            None => {
+                let highest = self.conn.query_row(
+                    "SELECT COALESCE(MAX(rowid),0) FROM items WHERE account_key=?1",
+                    [&account_key],
+                    |row| row.get(0),
+                );
+                highest?
+            }
         };
         if snapshot_rowid == 0 {
             return Ok(ItemCursorPage {
@@ -1317,7 +1315,7 @@ impl Store {
         }
 
         let before_rowid = cursor.map(|value| value.last_rowid);
-        let mut statement = self.conn.prepare(
+        let prepared = self.conn.prepare(
             "SELECT rowid,id,payload,revision,state
              FROM items
              WHERE account_key=?1
@@ -1326,8 +1324,9 @@ impl Store {
                AND (?4 IS NULL OR rowid<?4)
              ORDER BY rowid DESC
              LIMIT ?5",
-        )?;
-        let rows = statement.query_map(
+        );
+        let mut statement = prepared?;
+        let mapped = statement.query_map(
             params![
                 account_key,
                 snapshot_rowid,
@@ -1344,7 +1343,8 @@ impl Store {
                     row.get::<_, String>(4)?,
                 ))
             },
-        )?;
+        );
+        let rows = mapped?;
         let mut raw = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         let has_more = raw.len() > limit as usize;
         if has_more {
@@ -1614,20 +1614,22 @@ impl Store {
                 "Automatic recipient 24-hour attempt limit reached"
             );
         }
-        let item_taken: bool = tx.query_row(
+        let taken = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM deliveries WHERE item_id=?1)",
             [&j.id],
             |r| r.get(0),
-        )?;
+        );
+        let item_taken: bool = taken?;
         ensure!(
             !item_taken,
             "This rejection message already has a delivery record; it will not be sent twice"
         );
-        let thread_blocked: bool = tx.query_row(
+        let blocked = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1 AND status IN ('reserved','uncertain'))",
             [j.stub.thread_key()],
             |r| r.get(0),
-        )?;
+        );
+        let thread_blocked: bool = blocked?;
         ensure!(
             !thread_blocked,
             "Conversation has an active or uncertain delivery; reconcile it before replying again"
@@ -1636,7 +1638,7 @@ impl Store {
         j.state = JobState::Sending;
         j.revision += 1;
         j.updated_at = now;
-        tx.execute(
+        let updated = tx.execute(
             "UPDATE items SET state='sending',revision=?2,updated_at=?3,payload=?4 WHERE id=?1",
             params![
                 j.id,
@@ -1644,15 +1646,17 @@ impl Store {
                 now.timestamp(),
                 self.vault.seal(&format!("item/{}", j.id), &j)?
             ],
-        )?;
-        event(
+        );
+        updated?;
+        let logged = event(
             &tx,
             &self.vault,
             "delivery.reserved",
             Some(&j.id),
             "Durable reservation before network dispatch",
             now,
-        )?;
+        );
+        logged?;
         tx.commit()?;
         Ok(j)
     }
@@ -1918,6 +1922,26 @@ impl Store {
         Ok(n)
     }
 }
+/// Prepare the destination parent directory for a new backup copy.
+///
+/// Inputs: `path` — backup destination file. Output: `Ok(())` once any real
+/// parent directory exists as a genuine directory; destinations without a
+/// parent component (bare filenames, `..`) perform no directory work at all,
+/// and a symlinked parent is refused so a backup can never be redirected.
+/// IO failures propagate unchanged.
+fn prepare_backup_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+        ensure!(
+            !std::fs::symlink_metadata(parent)?.file_type().is_symlink(),
+            "Backup parent directory must not be a symlink"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3239,5 +3263,47 @@ mod tests {
                 .is_err()
         );
         assert!(db.processing_failure_summary("me@example.com").is_err());
+    }
+
+    /// Why: backup destinations at the path boundary must be handled without
+    /// error — a bare filename has no directory work to do (mirroring the
+    /// diagnostics writer) and a `..`-terminated destination has no parent at
+    /// all — while nested destinations must materialize their parents, so a
+    /// regression that rejects simple CLI destinations or skips parent
+    /// creation is caught before it strands an operator mid-backup.
+    /// Inputs: bare filename, parent-less `..` path, and a nested tempdir path.
+    /// Output: `Ok` for all three with the nested parent created.
+    #[test]
+    fn prepare_backup_parent_handles_boundary_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        prepare_backup_parent(Path::new("state-backup.sqlite3")).unwrap();
+        prepare_backup_parent(Path::new("..")).unwrap();
+        let nested = root.path().join("a").join("b").join("backup.sqlite3");
+        prepare_backup_parent(&nested).unwrap();
+        assert!(
+            nested.parent().unwrap().is_dir(),
+            "nested backup parents must be created"
+        );
+    }
+
+    /// Why: a symlinked backup parent would silently redirect the encrypted
+    /// copy outside the chosen location, so it must be refused even though the
+    /// directory is creatable.
+    /// Inputs: symlink pointing at a real directory, destination inside it.
+    /// Output: error; the symlinked parent is never used.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_backup_parent_refuses_a_symlinked_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let error = prepare_backup_parent(&link.join("backup.sqlite3"))
+            .expect_err("symlinked backup parents must be refused");
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "unexpected error: {error}"
+        );
     }
 }

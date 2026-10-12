@@ -1295,11 +1295,12 @@ fn run(
                         )
                         .map(|_| ());
                         if result.is_ok() {
-                            e.db.log(
+                            let logged = e.db.log(
                                 "recovery.key_exported",
                                 None,
                                 "Passphrase-wrapped recovery key exported",
-                            )?;
+                            );
+                            logged?;
                         }
                         result
                     }
@@ -1320,11 +1321,12 @@ fn run(
                         )
                         .map(|_| ());
                         if result.is_ok() {
-                            e.db.log(
+                            let logged = e.db.log(
                                 "recovery.key_verified",
                                 None,
                                 "Recovery key authenticated against an encrypted backup",
-                            )?;
+                            );
+                            logged?;
                         }
                         result
                     }
@@ -1876,10 +1878,9 @@ fn api_query_with_operation(
                 query.is_empty(),
                 "Metrics endpoint takes no query parameters"
             );
-            Ok(serde_json::to_value(crate::metrics::collect(
-                e,
-                Utc::now(),
-            )?)?)
+            let collected = crate::metrics::collect(e, Utc::now());
+            let collected = collected?;
+            Ok(serde_json::to_value(collected)?)
         }
         "/v1/settings" => {
             ensure!(
@@ -1963,12 +1964,8 @@ fn api_query_with_operation(
                 .trim_end_matches('/');
             validate_api_item_id(id)?;
             let job = e.owned(id)?;
-            Ok(serde_json::to_value(automatic_policy(
-                &job,
-                &e.settings,
-                &e.account,
-                Utc::now(),
-            ))?)
+            let decision = automatic_policy(&job, &e.settings, &e.account, Utc::now());
+            Ok(serde_json::to_value(decision)?)
         }
         path if path.starts_with("/v1/items/") => {
             ensure!(query.is_empty(), "Item endpoint takes no query parameters");
@@ -3687,6 +3684,92 @@ mod orchestration_tests {
                 drop(listener);
                 w.shutdown(Duration::from_secs(10));
             },
+        );
+    }
+
+    /// Why: every web-write error arm must answer through the stable error
+    /// envelope with its exact code — unknown messages 404, stale approvals
+    /// are `stale_revision` without touching state, switching to Automatic
+    /// without arming is `automatic_not_armed`, and confirming the arm dialog
+    /// can never enable sending while sending is disabled. Each of these is a
+    /// contract the desktop UI and API clients branch on.
+    /// Inputs: an unknown id, a stale-revision dismissal, an un-armed
+    /// Automatic settings write, and an aged arm confirmation while sending is
+    /// disabled. Output: 404/409 envelopes with the stable codes and no state
+    /// change.
+    #[test]
+    fn handle_api_write_error_arms_use_the_stable_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live_engine(dir.path());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::new();
+        let journal = None;
+        let mut arm_gate = None;
+        let now = Utc::now();
+
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Regenerate {
+                id: "f".repeat(64),
+                revision: 1,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 404);
+        assert_eq!(outcome.body["code"], crate::web::CODE_ITEM_NOT_FOUND);
+
+        let mut job = crate::test_support::eligible_job(&e.settings, &e.account, 1, now);
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Dismiss {
+                id: job.id.clone(),
+                revision: job.revision + 1,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 409);
+        assert_eq!(outcome.body["code"], crate::web::CODE_STALE_REVISION);
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Ready);
+
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::UpdateSettings {
+                mode: Some(Mode::Automatic),
+                tone: None,
+                reply_language: None,
+                sending_enabled: Some(false),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 409);
+        assert_eq!(outcome.body["code"], crate::web::CODE_AUTOMATIC_NOT_ARMED);
+
+        e.settings.sending_enabled = false;
+        e.db.set_meta("settings", &e.settings).unwrap();
+        arm_gate = Some(AutomaticArmGate::open(now - chrono::Duration::seconds(60)));
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Confirm,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 409);
+        assert_eq!(outcome.body["code"], crate::web::CODE_AUTOMATIC_NOT_ARMED);
+        assert_ne!(
+            e.settings.mode,
+            Mode::Automatic,
+            "arming must never bypass the sending-disabled guard"
         );
     }
 }
