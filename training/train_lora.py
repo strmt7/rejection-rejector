@@ -157,6 +157,7 @@ def main() -> int:
             self.began = time.time()
             self._time = time
             self.vram_probe = vram_probe
+            self._probe_errors = 0
 
         def on_train_begin(self, args, state, control, **kwargs):
             self._write(state, "running")
@@ -168,8 +169,16 @@ def main() -> int:
             if self.vram_probe is not None:
                 try:
                     self.vram_probe()
-                except Exception:
-                    pass  # keep last known value; the watchdog ages it out
+                except Exception as exc:
+                    # Keep the last reading, but never silence the cause:
+                    # rate-limited evidence for root-cause analysis.
+                    self._probe_errors += 1
+                    if self._probe_errors <= 3 or self._probe_errors % 50 == 0:
+                        print(
+                            f"resource-guard: vram probe failed "
+                            f"({self._probe_errors}x): {exc!r}",
+                            file=sys.stderr,
+                        )
             self._write(state, "running")
 
         def on_train_end(self, args, state, control, **kwargs):
@@ -303,19 +312,12 @@ def main() -> int:
         use_cpu=device == "cpu",
         bf16=args.bf16,
     )
-    progress_path = args.progress_file or (args_out / "progress.json")
-    trainer = Trainer(
-        model=model,
-        args=train_args,
-        train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
-        data_collator=make_causal_collator(tokenizer),
-        callbacks=[ProgressCallback(progress_path, vram_probe=sample_vram)],
-    )
     vram_state = {"reading": None, "at": 0.0}
 
     def sample_vram():
-        import torch
         import time as _t
+
+        import torch
 
         free, total = torch.cuda.mem_get_info()
         vram_state["reading"] = (int(free), int(total))
@@ -329,6 +331,14 @@ def main() -> int:
             raise RuntimeError("no fresh main-thread VRAM reading")
         return reading
 
+    progress_path = args.progress_file or (args_out / "progress.json")
+    trainer = Trainer(
+        model=model,
+        args=train_args,
+        train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
+        data_collator=make_causal_collator(tokenizer),
+        callbacks=[ProgressCallback(progress_path, vram_probe=sample_vram)],
+    )
     def stop_on_resource_breach(v):
         """Stop training before any resource limit is reached. Inputs:
         `v` — the first guard violation. Output: none; sets the trainer's
@@ -345,6 +355,7 @@ def main() -> int:
     # output growth, ends the run BEFORE anything approaches a limit.
     with rg.ResourceWatchdog(
         limits=rg.Thresholds(require_vram=(device == "cuda")),
+        soft_resources=frozenset({"vram"}),
         vram_probe=vram_reading_or_raise,
         on_violation=stop_on_resource_breach,
         disk_path=str(args.output_dir.parent),
