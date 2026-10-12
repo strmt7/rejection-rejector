@@ -1499,7 +1499,7 @@ mod tests {
         let response = raw_exchange(port, &exact);
         assert!(
             response.contains(" 400 ") && response.contains("invalid_request"),
-            "exact-cap body must reach the parser: {response}"
+            "exact-cap body must reach the parser: {response:?}"
         );
         assert!(!response.contains("request_body_too_large"));
         // One byte over the cap: stopped at the stream limit, never dispatched.
@@ -1510,7 +1510,7 @@ mod tests {
         let response = raw_exchange(port, &over);
         assert!(
             response.contains(" 413 ") && response.contains("request_body_too_large"),
-            "over-cap body must be refused: {response}"
+            "over-cap body must be refused: {response:?}"
         );
         assert!(receiver.try_recv().is_err());
         stop.store(true, Ordering::SeqCst);

@@ -220,6 +220,22 @@ impl Gmail {
             token_url: token_url.into(),
         }
     }
+    /// Refuse cleartext endpoints except loopback. Inputs: `url` - endpoint
+    /// to validate. Output: `Ok(())` for `https://` or loopback `http://`
+    /// (the OAuth redirect and test mocks); `Err` for anything else, so
+    /// credentials can never travel over a cleartext remote connection.
+    fn ensure_safe_endpoint(url: &str) -> Result<()> {
+        let parsed = reqwest::Url::parse(url).context("invalid endpoint URL")?;
+        let host = parsed.host_str().unwrap_or_default();
+        let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
+        if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
+            return Err(anyhow::anyhow!(
+                "refusing non-HTTPS endpoint scheme: {}",
+                parsed.scheme()
+            ));
+        }
+        Ok(())
+    }
     /// Whether these credentials hold send scope.
     ///
     /// Inputs: none beyond the client. Output: `true` only with send scope.
@@ -232,6 +248,7 @@ impl Gmail {
         {
             return Ok(token.clone());
         }
+        Self::ensure_safe_endpoint(self.token_url.as_str())?;
         let response = net::client(30, false)?
             .post(self.token_url.as_str())
             .form(&[
@@ -257,8 +274,10 @@ impl Gmail {
         params: &[(&str, String)],
     ) -> Result<reqwest::blocking::Response> {
         let token = self.access()?;
+        let url = format!("{}{path}", self.root);
+        Self::ensure_safe_endpoint(&url)?;
         net::client(45, false)?
-            .get(format!("{}{path}", self.root))
+            .get(url)
             .bearer_auth(token.as_str())
             .query(params)
             .send()
@@ -640,6 +659,17 @@ pub fn stub(account: &str, m: MessageRef) -> Result<Stub> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn endpoint_safety_admits_https_and_loopback_only() {
+        // Why: credentials must never travel cleartext except over loopback
+        // (the OAuth redirect and test mocks). One control, exact alphabet.
+        assert!(Gmail::ensure_safe_endpoint("https://gmail.googleapis.com/gmail/v1").is_ok());
+        assert!(Gmail::ensure_safe_endpoint("http://127.0.0.1:9/mock").is_ok());
+        assert!(Gmail::ensure_safe_endpoint("http://localhost:9/mock").is_ok());
+        assert!(Gmail::ensure_safe_endpoint("http://evil.example.com/x").is_err());
+        assert!(Gmail::ensure_safe_endpoint("ftp://evil.example.com/x").is_err());
+        assert!(Gmail::ensure_safe_endpoint("not a url").is_err());
+    }
     use super::*;
     #[test]
     fn retry_after_header_supports_seconds_and_clamps() {
