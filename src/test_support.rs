@@ -317,6 +317,24 @@ pub(crate) fn recipient_limit() -> u64 {
     u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H)
 }
 
+/// Install the documented headless vault input for tests that open a live
+/// (non-demo) workspace.
+///
+/// Why: `Vault::open` derives the workspace key from `RR_VAULT_PASSPHRASE`
+/// (docs/SETUP.md) on hosts without an OS credential store and from the OS
+/// credential store on Windows and macOS. In-process tests cannot carry the
+/// seam `tests/cli_workspace.rs` attaches to spawned commands, and mutating the
+/// process environment mid-run would race concurrent environment readers in
+/// parallel tests, so the vault keeps a one-shot test seam instead. The
+/// installed value is constant and installation is idempotent, so worker
+/// threads opening the same vault on their own threads derive the same key.
+/// Inputs: none. Output: none; on Windows and macOS this is a no-op because
+/// the OS credential store answers instead.
+pub(crate) fn headless_vault_seam() {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    crate::vault::test_support::install_headless_passphrase();
+}
+
 /// Process-wide stand-in for the Ollama installer command.
 ///
 /// Worker dispatch runs commands on its own thread, so the substitution must

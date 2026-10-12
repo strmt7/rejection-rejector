@@ -3114,7 +3114,15 @@ mod orchestration_tests {
         }
     }
 
+    /// Open a live (non-demo) workspace for orchestration tests.
+    ///
+    /// Why: non-demo opens derive the vault key from the OS credential store on
+    /// Windows and macOS and from the documented `RR_VAULT_PASSPHRASE` input on
+    /// headless hosts; arming the headless vault seam here keeps both the test
+    /// thread's own open and the worker thread's later open deriving the same
+    /// key on every platform.
     fn live_engine(dir: &std::path::Path) -> Engine {
+        crate::test_support::headless_vault_seam();
         Engine::open(
             dir.to_path_buf(),
             false,
@@ -3203,6 +3211,7 @@ mod orchestration_tests {
     #[test]
     fn handle_api_write_arms_execute_their_engine_operations() {
         let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live_engine(dir.path());
         e.settings.signature = "Test Applicant".into();
@@ -3436,6 +3445,7 @@ mod orchestration_tests {
     #[test]
     fn worker_loop_timers_drive_scheduled_operations() {
         let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let api_port = listener.local_addr().unwrap().port();
@@ -3526,6 +3536,7 @@ mod orchestration_tests {
     fn worker_policy_rollback_pauses_fail_closed() {
         use crate::policy::{PolicyRevisionFloor, PolicyRevisionRecord};
         let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mock = crate::test_support::gmail_server(
             "applicant@example.invalid",
@@ -3589,6 +3600,7 @@ mod orchestration_tests {
     #[test]
     fn worker_reports_integration_api_startup_failures() {
         let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let busy_port = listener.local_addr().unwrap().port();
