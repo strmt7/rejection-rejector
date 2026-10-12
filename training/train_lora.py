@@ -119,6 +119,11 @@ def main() -> int:
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--model-billions", type=float, default=9.0,
+        help="Base model size in billions of parameters; used only by the "
+             "fail-closed resource guard to estimate peak VRAM before start",
+    )
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
     parser.add_argument("--progress-file", type=Path, help="Heartbeat JSON for live probing (default: output-dir/progress.json)")
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
@@ -133,9 +138,10 @@ def main() -> int:
         BitsAndBytesConfig,
         Trainer,
         TrainingArguments,
+        TrainerCallback,
     )
 
-    class ProgressCallback:
+    class ProgressCallback(TrainerCallback):
         """Training heartbeat for live probing.
 
         Inputs: `path` — heartbeat file; trainer callbacks receive the run
@@ -179,6 +185,31 @@ def main() -> int:
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
 
+    # Fail-closed resource gate: never start a run that could push VRAM, RAM
+    # or storage toward a limit. tools/resource_guard.py is exhaustively
+    # tested and its peak estimator is deliberately pessimistic, so an
+    # under-sized host refuses to start instead of crashing mid-run.
+    args.output_dir.parent.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import resource_guard as rg
+
+    need = rg.estimate_training_vram(
+        param_billions=args.model_billions, seq_len=args.max_seq_len
+    )
+    gate = rg.preflight(
+        limits=rg.Thresholds(min_free_vram=need, require_vram=(device == "cuda")),
+        disk_path=str(args.output_dir.parent),
+    )
+    if not gate.ok:
+        for violation in gate.violations:
+            print(
+                f"resource-guard: {violation.resource}: "
+                f"{violation.reason}: {violation.detail}",
+                file=sys.stderr,
+            )
+        print("resource-guard: refusing to start (fail-closed)", file=sys.stderr)
+        return 2
+
     rows = load_jsonl(args.dataset)
     if not rows:
         print("empty dataset", file=sys.stderr)
@@ -204,7 +235,25 @@ def main() -> int:
         dtype=torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float32,
     )
     if args.load_in_4bit:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+        if args.bf16:
+            # Memory-lean path: peft's prepare casts embeddings/lm-head to
+            # fp32 (~3.8 GiB peak), which OOMs a 16 GiB GPU immediately after
+            # load. In bf16 mode skip that cast and enable checkpointing
+            # directly; inputs require grads for LoRA and activations stay
+            # checkpointed, so training is stable without the fp32 peak.
+            model.gradient_checkpointing_enable()
+            model.enable_input_require_grads()
+        else:
+            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+        # peft's prepare casts every non-quantized parameter to fp32; on a
+        # 16 GiB GPU the embeddings/lm-head cast alone peaks ~3.8 GiB and
+        # OOMs right after load. Norms stay fp32 (stability), but the large
+        # tensors are held in the compute dtype, halving that peak. Inputs:
+        # `model` (in place). Output: none.
+        for _name, param in model.named_parameters():
+            if param.dtype == torch.float32 and param.numel() > 10_000_000:
+                target = torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float16
+                param.data = param.data.to(target)
 
     lora = LoraConfig(
         r=args.lora_rank,
@@ -251,7 +300,27 @@ def main() -> int:
         data_collator=make_causal_collator(tokenizer),
         callbacks=[ProgressCallback(progress_path)],
     )
-    result = trainer.train()
+    def stop_on_resource_breach(v):
+        """Stop training before any resource limit is reached. Inputs:
+        `v` — the first guard violation. Output: none; sets the trainer's
+        cooperative stop flag so the run ends cleanly and the adapter
+        checkpoint from the last completed step survives."""
+        print(
+            f"resource-guard: stopping training: {v.resource}: "
+            f"{v.reason}: {v.detail}",
+            file=sys.stderr,
+        )
+        trainer.control.should_training_stop = True
+
+    # Continuous observation: a second process eating VRAM/RAM, or runaway
+    # output growth, ends the run BEFORE anything approaches a limit.
+    with rg.ResourceWatchdog(
+        limits=rg.Thresholds(min_free_vram=rg.GIB,
+                             require_vram=(device == "cuda")),
+        on_violation=stop_on_resource_breach,
+        disk_path=str(args.output_dir.parent),
+    ):
+        result = trainer.train()
 
     model.save_pretrained(args_out)
     tokenizer.save_pretrained(args_out)
