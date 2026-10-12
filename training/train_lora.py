@@ -299,9 +299,6 @@ def main() -> int:
         train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
         data_collator=make_causal_collator(tokenizer),
         callbacks=[ProgressCallback(progress_path)],
-        save_strategy="steps",
-        save_steps=25,
-        save_total_limit=2,
     )
     def stop_on_resource_breach(v):
         """Stop training before any resource limit is reached. Inputs:
