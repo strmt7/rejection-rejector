@@ -12,20 +12,26 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// Serialize every spawned workspace process in this file.
-///
-/// Why: the test binary runs its tests in parallel and each spawned `rr`
-/// manipulates the OS credential store (delete/reinstall drills), which
-/// raced sibling subprocesses into "Existing vault identifier has no OS
-/// credential" failures (2-of-5 runs). One subprocess at a time removes the
-/// interleaving; the lock is poison-tolerant like the production seams.
-static CREDSTORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Hold the cross-test credential-store serialization for one subprocess.
 ///
-/// Inputs: none. Output: the held guard for the subprocess lifetime.
-fn lock_credstore() -> std::sync::MutexGuard<'static, ()> {
-    CREDSTORE.lock().unwrap_or_else(|error| error.into_inner())
+/// Inputs: none. Output: the held lock file for the subprocess lifetime.
+/// This is the same `%TEMP%/rr-test-credential-store.lock` fs2 file lock
+/// that `vault::test_support::lock_credential_store` takes, so spawned
+/// workspace processes interlock with in-process library tests and with
+/// each other across test binaries (an in-process mutex alone left a
+/// cross-binary race that surfaced as "Existing vault identifier has no
+/// OS credential" flakes in recovery round-trips).
+fn lock_credstore() -> std::fs::File {
+    let path = std::env::temp_dir().join("rr-test-credential-store.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open credential-store test lock");
+    fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
+    file
 }
 
 /// Run the `rr` binary with the given arguments.
