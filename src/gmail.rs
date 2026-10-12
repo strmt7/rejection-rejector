@@ -1524,11 +1524,12 @@ mod tests {
 
         // A transport failure while fetching is infrastructure (the queued
         // message must survive untouched), never a malformed-message verdict.
-        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let dead_url = format!("http://{}", dead.local_addr().unwrap());
-        drop(dead);
+        // Port 0 is an eternally unconnectable destination: unlike the old
+        // bind-then-drop pattern, no parallel test can re-bind it and answer
+        // (that TOCTOU race flipped this failure into a malformed verdict).
+        let dead_url = "http://127.0.0.1:0";
         let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
-        let mut client = Gmail::with_endpoints(test_creds(false), &dead_url, &fake.token_url);
+        let mut client = Gmail::with_endpoints(test_creds(false), dead_url, &fake.token_url);
         let failure = client.email(&queued_stub()).unwrap_err();
         assert_eq!(failure.kind, FetchFailureKind::Infrastructure);
         assert!(
@@ -1645,11 +1646,11 @@ mod tests {
         drop(fake);
 
         // Connect loss against a dead endpoint after a live token refresh.
-        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let dead_url = format!("http://{}", dead.local_addr().unwrap());
-        drop(dead);
+        // Port 0 is eternally unconnectable — no parallel test can re-bind
+        // it and answer (the bind-then-drop TOCTOU race this replaces).
+        let dead_url = "http://127.0.0.1:0";
         let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
-        let mut client = Gmail::with_endpoints(test_creds(true), &dead_url, &fake.token_url);
+        let mut client = Gmail::with_endpoints(test_creds(true), dead_url, &fake.token_url);
         let failure = client.send("raw", "thread-1").unwrap_err();
         assert_eq!(failure.kind, SendFailureKind::NotAccepted);
         assert!(
@@ -1776,11 +1777,11 @@ mod tests {
 
         // A transport failure must propagate as an error, never be read as
         // "nothing was sent" (which would break sent-mail reconciliation).
-        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let dead_url = format!("http://{}", dead.local_addr().unwrap());
-        drop(dead);
+        // Port 0 is eternally unconnectable — no parallel test can re-bind
+        // it and answer (the bind-then-drop TOCTOU race this replaces).
+        let dead_url = "http://127.0.0.1:0";
         let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
-        let mut client = Gmail::with_endpoints(test_creds(false), &dead_url, &fake.token_url);
+        let mut client = Gmail::with_endpoints(test_creds(false), dead_url, &fake.token_url);
         assert!(client.find_sent("<msg@example.com>").is_err());
     }
 }

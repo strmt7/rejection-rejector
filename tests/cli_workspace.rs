@@ -12,11 +12,28 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Serialize every spawned workspace process in this file.
+///
+/// Why: the test binary runs its tests in parallel and each spawned `rr`
+/// manipulates the OS credential store (delete/reinstall drills), which
+/// raced sibling subprocesses into "Existing vault identifier has no OS
+/// credential" failures (2-of-5 runs). One subprocess at a time removes the
+/// interleaving; the lock is poison-tolerant like the production seams.
+static CREDSTORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Hold the cross-test credential-store serialization for one subprocess.
+///
+/// Inputs: none. Output: the held guard for the subprocess lifetime.
+fn lock_credstore() -> std::sync::MutexGuard<'static, ()> {
+    CREDSTORE.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 /// Run the `rr` binary with the given arguments.
 ///
 /// Inputs: `args` — command-line arguments. Output: the spawned process
 /// result (status, stdout, stderr).
 fn rr(args: &[&str]) -> Output {
+    let _serialize = lock_credstore();
     rr_command().args(args).output().expect("run rr")
 }
 
@@ -768,6 +785,7 @@ fn model_commands_fail_closed_without_the_local_runtime() {
 #[cfg(all(feature = "gui", windows))]
 #[test]
 fn desktop_launcher_completes_the_screenshot_flow() {
+    let _serialize = lock_credstore();
     for extra in [vec![], vec!["--data-dir", "placeholder"]] {
         let guard_dir =
             std::env::temp_dir().join(format!("rr-cli-desktop-{}", uuid::Uuid::new_v4()));
