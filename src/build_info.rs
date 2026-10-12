@@ -58,6 +58,10 @@ fn identity_hash(
     crate::hex_lower(digest.finalize())
 }
 
+/// Collect the build identity embedded at compile time.
+///
+/// Inputs: none. Output: [`BuildInfo`] with version, commit, rustc, target,
+/// profile and lockfile digest.
 pub fn current() -> BuildInfo {
     let application_version = env!("CARGO_PKG_VERSION").to_owned();
     let source_commit = env!("RR_BUILD_COMMIT").to_owned();
@@ -86,6 +90,10 @@ pub fn current() -> BuildInfo {
     }
 }
 
+/// Digest the build identity for contract surfaces.
+///
+/// Inputs: none. Output: `String` of lowercase hex — the SHA-256 of the
+/// canonical build identity.
 pub fn identity_sha256() -> String {
     current().identity_sha256
 }

@@ -20,6 +20,9 @@ pub struct EmergencyStopStatus {
 ///
 /// The configured path is intentionally not returned: absolute workstation paths
 /// can contain usernames or deployment topology and do not belong in health output.
+///
+/// Inputs: none; reads the configured sentinel path from the environment.
+/// Output: `Result<EmergencyStopStatus>` without exposing the configured path.
 pub fn status() -> Result<EmergencyStopStatus> {
     evaluate(std::env::var_os(EMERGENCY_STOP_FILE_ENV))
 }
@@ -31,6 +34,9 @@ pub fn status() -> Result<EmergencyStopStatus> {
 /// This fail-closed approach ensures that any uncertainty about the emergency-stop
 /// sentinel state results in blocking automatic sends, prioritizing safety over
 /// availability in accordance with the system's security objectives.
+///
+/// Inputs: none. Output: [`EmergencyStopStatus`] with any uncertainty reported
+/// as active.
 pub fn status_fail_closed() -> EmergencyStopStatus {
     fail_closed_from(status())
 }
@@ -51,6 +57,10 @@ fn fail_closed_from(result: Result<EmergencyStopStatus>) -> EmergencyStopStatus 
     }
 }
 
+/// Fail closed while the emergency-stop sentinel is active.
+///
+/// Inputs: none. Output: `Ok(())` when dispatch is allowed; errors while the
+/// sentinel is active or unreadable.
 pub fn ensure_dispatch_allowed() -> Result<()> {
     // Test seam: threads under test arm a scripted gate in
     // `crate::test_support`, so the pre/post-reservation dispatch boundaries

@@ -94,6 +94,10 @@ pub(crate) struct DispatchFailure {
     message: String,
 }
 impl DispatchFailure {
+    /// Build a retryable dispatch failure.
+    ///
+    /// Inputs: `message` — operator-facing failure description. Output: [`Self`]
+    /// with the stable `retryable_dispatch` code.
     pub(crate) fn retryable(message: impl Into<String>) -> Self {
         Self::retryable_code("retryable_dispatch", message)
     }
@@ -104,6 +108,10 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
+    /// Build a review-required dispatch failure.
+    ///
+    /// Inputs: `message` — operator-facing failure description. Output: [`Self`]
+    /// with the stable `review_required_dispatch` code.
     pub(crate) fn review(message: impl Into<String>) -> Self {
         Self::review_code("review_required_dispatch", message)
     }
@@ -114,6 +122,10 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
+    /// Build a reconcile-required failure for an uncertain delivery.
+    ///
+    /// Inputs: `message` — operator-facing failure description. Output: [`Self`]
+    /// with the stable `reconcile_required_delivery_uncertain` code.
     pub(crate) fn reconcile(message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::ReconcileRequired,
@@ -135,9 +147,16 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
+    /// The stable operation code for this dispatch failure.
+    ///
+    /// Inputs: none beyond the failure. Output: `&'static str` operation code.
     pub(crate) fn operation_code(&self) -> &'static str {
         self.code
     }
+    /// Whether the operator may retry this dispatch failure.
+    ///
+    /// Inputs: none beyond the failure. Output: `true` only for the retryable
+    /// kind.
     pub(crate) fn retryable_for_operator(&self) -> bool {
         self.kind == DispatchFailureKind::Retryable
     }
@@ -272,6 +291,13 @@ fn staged_policy_revision_floor(
 }
 
 impl Engine {
+    /// Open (or create) the workspace engine.
+    ///
+    /// Inputs: `directory` — workspace directory; `demo` — whether demo mode is
+    /// active (data lives in a temporary directory and never touches real
+    /// accounts); `paused` — fail-closed worker pause flag; `stop` — shutdown
+    /// flag. Output: `Result<Self>` — the ready engine; errors when the workspace
+    /// cannot be opened.
     pub fn open(
         directory: PathBuf,
         demo: bool,
@@ -434,6 +460,9 @@ impl Engine {
 
     /// Advance independently protected audit evidence after an operation boundary.
     /// This is a no-op unless RR_OS_AUDIT_ANCHOR=required is explicitly configured.
+    ///
+    /// Inputs: none beyond the engine. Output: `Ok(())` after the checkpoint (a
+    /// no-op unless the anchor is required).
     pub fn checkpoint_audit_protection(&self) -> Result<()> {
         if !self.demo {
             audit_anchor::checkpoint_os_anchor_if_required(&self.db, &self.directory)?;
@@ -441,18 +470,32 @@ impl Engine {
         Ok(())
     }
 
+    /// Whether a mailbox provider is connected.
+    ///
+    /// Inputs: none beyond the engine. Output: `true` while provider credentials
+    /// are attached.
     pub fn connected(&self) -> bool {
         self.gmail.is_some()
     }
+    /// Whether the connected provider may send.
+    ///
+    /// Inputs: none beyond the engine. Output: `true` only when a connected
+    /// provider holds send scope.
     pub fn send_scope(&self) -> bool {
         self.gmail.as_ref().is_some_and(Gmail::can_send)
     }
     /// Test-only: publish a provider client into the engine without OAuth so
     /// dispatch orchestration can run against `Gmail::with_endpoints` mocks.
+    ///
+    /// Inputs: `gmail` — provider client to publish. Output: none.
     #[cfg(test)]
     pub(crate) fn attach_gmail_for_tests(&mut self, gmail: Gmail) {
         self.gmail = Some(gmail);
     }
+    /// The effective enterprise-policy status.
+    ///
+    /// Inputs: none beyond the engine. Output: [`PolicyStatus`] for the loaded
+    /// policy, or the inactive status when none is loaded.
     pub fn enterprise_policy_status(&self) -> PolicyStatus {
         self.enterprise_policy
             .as_ref()
@@ -463,6 +506,9 @@ impl Engine {
     /// Reload the optional machine-wide policy and apply only restrictive
     /// changes automatically. Removing or relaxing policy never silently enables
     /// capabilities; users must still opt in through normal settings.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<bool>` — `true` when the
+    /// loaded policy changed.
     pub fn reload_enterprise_policy(&mut self) -> Result<bool> {
         if self.demo {
             return Ok(false);
@@ -570,6 +616,11 @@ impl Engine {
         let gmail = Gmail::new(credentials.clone());
         Ok((credentials, gmail))
     }
+    /// Connect a mailbox provider for this workspace.
+    ///
+    /// Inputs: `path` — OAuth credentials file to load; `send` — whether send
+    /// scope is requested. Output: `Ok(())` once connected; demo mode, enterprise
+    /// policy and the provider can each refuse.
     pub fn connect(&mut self, path: &Path, send: bool) -> Result<()> {
         ensure!(!self.demo, "Demo mode never connects to a real mailbox");
         ensure!(
@@ -602,6 +653,10 @@ impl Engine {
         self.gmail = Some(gmail);
         Ok(())
     }
+    /// Disconnect the provider and disarm delivery.
+    ///
+    /// Inputs: none beyond the engine. Output: `Ok(())`; stored credentials and
+    /// account identity are removed and delivery is disarmed.
     pub fn disconnect(&mut self) -> Result<()> {
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
@@ -616,6 +671,10 @@ impl Engine {
         self.account.clear();
         Ok(())
     }
+    /// Validate and persist new settings under policy constraints.
+    ///
+    /// Inputs: `settings` — candidate settings. Output: `Ok(())` once accepted and
+    /// persisted; demo mode and enterprise policy can refuse the change.
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<()> {
         ensure!(
             !self.demo || !settings.sending_enabled,
@@ -682,6 +741,10 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Run task qualification for the decision model.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<()>` — the qualified digest
+    /// and status are recorded; errors when qualification fails.
     pub fn qualify(&mut self) -> Result<()> {
         let mut unpinned = self.settings.clone();
         unpinned.disarm_delivery();
@@ -700,6 +763,10 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Qualify and pin the verifier model.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<()>` — the pinned verifier
+    /// digest is persisted and any previous task qualification is reset.
     pub fn qualify_verifier(&mut self) -> Result<()> {
         let status = Ollama::new(&self.settings)?.qualify_verifier()?;
         self.settings.disarm_delivery();
@@ -715,6 +782,10 @@ impl Engine {
         Ok(())
     }
 
+    /// Inspect the local verifier model and record its status.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<()>`; a digest that
+    /// contradicts the pin fails closed.
     pub fn inspect_verifier_model_status(&mut self) -> Result<()> {
         let local = Ollama::new(&self.settings)?;
         let mut status = local.inspect_verifier()?;
@@ -748,6 +819,10 @@ impl Engine {
         Ok(())
     }
 
+    /// Compact the workspace database.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<DatabaseCompactionReport>`
+    /// — storage statistics before and after; refused in demo mode.
     pub fn compact_database(&mut self) -> Result<crate::store::DatabaseCompactionReport> {
         ensure!(
             !self.demo,
@@ -763,6 +838,10 @@ impl Engine {
         Ok(report)
     }
 
+    /// Inspect the local decision model and record its status.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<()>`; a digest that
+    /// contradicts the pin fails closed.
     pub fn inspect_model_status(&mut self) -> Result<()> {
         let mut unpinned = self.settings.clone();
         unpinned.model_digest = None;
@@ -791,6 +870,10 @@ impl Engine {
         Ok(())
     }
 
+    /// Evaluate the configured model to a timestamped report.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<PathBuf>` — the report file
+    /// written; refused in demo mode.
     pub fn evaluate_model(&mut self) -> Result<PathBuf> {
         ensure!(
             !self.demo,
@@ -804,6 +887,10 @@ impl Engine {
         Ok(path)
     }
 
+    /// Evaluate the configured model to a chosen path.
+    ///
+    /// Inputs: `path` — destination report file. Output: `Result<()>` once the
+    /// report is written; refused in demo mode.
     pub fn evaluate_model_to(&mut self, path: &Path) -> Result<()> {
         ensure!(
             !self.demo,
@@ -887,6 +974,10 @@ impl Engine {
         }
     }
 
+    /// Profile synthetic model runtime to a timestamped report.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<PathBuf>` — the report file
+    /// written; refused in demo mode.
     pub fn profile_model_runtime(&mut self) -> Result<PathBuf> {
         ensure!(
             !self.demo,
@@ -900,6 +991,10 @@ impl Engine {
         Ok(path)
     }
 
+    /// Profile synthetic model runtime to a chosen path.
+    ///
+    /// Inputs: `path` — destination report file. Output: `Result<()>` once the
+    /// profile is written; refused in demo mode.
     pub fn profile_model_runtime_to(&mut self, path: &Path) -> Result<()> {
         ensure!(
             !self.demo,
@@ -923,6 +1018,10 @@ impl Engine {
         Ok(())
     }
 
+    /// Compare installed decision models to a timestamped report.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<PathBuf>` — the report file
+    /// written; refused in demo mode.
     pub fn compare_models(&mut self) -> Result<PathBuf> {
         ensure!(
             !self.demo,
@@ -942,6 +1041,10 @@ impl Engine {
         Ok(path)
     }
 
+    /// Synchronize the mailbox into the workspace store.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<usize>` — the number of
+    /// newly inserted messages; refused in demo mode.
     pub fn synchronize(&mut self) -> Result<usize> {
         ensure!(
             !self.demo,
@@ -960,12 +1063,21 @@ impl Engine {
             &self.stop,
         )
     }
+    /// The most recent successful mailbox poll time.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<Option<DateTime<Utc>>>` —
+    /// the saved sync timestamp, if any.
     pub fn last_poll(&self) -> Result<Option<DateTime<Utc>>> {
         Ok(self
             .db
             .meta::<SyncState>(&format!("sync/{}", self.account))?
             .and_then(|s| s.last_poll))
     }
+    /// Analyze the next queued message and draft a reply.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<bool>` — `true` when one
+    /// message was processed; `false` in demo mode, without a provider, without a
+    /// pinned model, or when the queue is empty.
     pub fn process_one(&mut self) -> Result<bool> {
         if self.demo || self.gmail.is_none() || self.settings.model_digest.is_none() {
             return Ok(false);
@@ -1121,6 +1233,11 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Edit the drafted reply for one message.
+    ///
+    /// Inputs: `id` — message id; `revision` — expected job revision; `body` —
+    /// replacement draft body. Output: `Result<()>`; Human review mode only, and
+    /// stale revisions are refused.
     pub fn edit(&mut self, id: &str, revision: u64, body: String) -> Result<()> {
         ensure!(
             self.settings.mode == Mode::HumanReview,
@@ -1150,6 +1267,10 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Regenerate the drafted reply for one message.
+    ///
+    /// Inputs: `id` — message id; `revision` — expected job revision. Output: `Result<()>`;
+    /// Human review mode only, and stale revisions are refused.
     pub fn regenerate(&mut self, id: &str, revision: u64) -> Result<()> {
         ensure!(
             self.settings.mode == Mode::HumanReview,
@@ -1174,6 +1295,10 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Dismiss one reviewable message without replying.
+    ///
+    /// Inputs: `id` — message id; `revision` — expected job revision. Output: `Result<()>`;
+    /// stale revisions are refused.
     pub fn dismiss(&mut self, id: &str, revision: u64) -> Result<()> {
         let mut job = self.owned(id)?;
         ensure!(
@@ -1188,6 +1313,10 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Load one job after checking it belongs to this account.
+    ///
+    /// Inputs: `id` — message id. Output: `Result<Job>`; messages from other
+    /// accounts are refused.
     pub fn owned(&self, id: &str) -> Result<Job> {
         let j = self.db.get(id)?;
         ensure!(
@@ -1196,6 +1325,12 @@ impl Engine {
         );
         Ok(j)
     }
+    /// Send the approved reply for one message.
+    ///
+    /// Inputs: `id` — message id; `revision` — expected job revision; `expected_hash`
+    /// — hash of the exact approved draft; `automatic` — whether this is automatic
+    /// dispatch. Output: `Result<()>` — `Ok(())` only on confirmed delivery;
+    /// refusals carry the stable dispatch-failure error.
     pub fn send(
         &mut self,
         id: &str,
@@ -1519,6 +1654,11 @@ impl Engine {
         }
     }
 
+    /// Run one automatic-dispatch pass when policy allows it.
+    ///
+    /// Inputs: none beyond the engine. Output: `Result<bool>` — `true` when one
+    /// message was dispatched; `false` when the mode, send arming or pause flag
+    /// blocks dispatch.
     pub fn automatic_tick(&mut self) -> Result<bool> {
         if self.settings.mode != Mode::Automatic
             || !self.settings.sending_enabled
@@ -1561,6 +1701,10 @@ impl Engine {
         }
         Ok(false)
     }
+    /// Reconcile one uncertain delivery with the provider.
+    ///
+    /// Inputs: `id` — message id. Output: `Result<()>`; only uncertain deliveries
+    /// can be reconciled.
     pub fn reconcile(&mut self, id: &str) -> Result<()> {
         let j = self.owned(id)?;
         ensure!(
@@ -1628,6 +1772,11 @@ impl Engine {
     }
 }
 
+/// Decide whether one job may dispatch automatically.
+///
+/// Inputs: `job` — candidate job; `settings` — current settings; `account` —
+/// account key; `now` — decision time. Output: [`AutomaticPolicyDecision`]
+/// listing every blocking reason with its stable code.
 pub fn automatic_policy(
     job: &Job,
     settings: &Settings,
@@ -1846,6 +1995,10 @@ pub fn automatic_policy(
 
 /// Compatibility helper for existing UI/tests. Integrations should prefer
 /// `automatic_policy` and its stable reason codes.
+///
+/// Inputs: `job` — candidate job; `settings` — current settings; `account` —
+/// account key; `now` — decision time. Output: `Vec<String>` of blocking
+/// messages.
 pub fn auto_blocks(
     job: &Job,
     settings: &Settings,

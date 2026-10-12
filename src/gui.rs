@@ -159,6 +159,11 @@ pub struct App {
     emergency: fn() -> crate::emergency::EmergencyStopStatus,
 }
 impl App {
+    /// Construct the main application around a spawned worker.
+    ///
+    /// Inputs: `cc` — eframe creation context; `dir` — workspace directory; `demo`
+    /// — whether demo mode is active; `screenshot` — optional scripted screenshot
+    /// target. Output: [`Self`] ready for the first frame.
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         dir: PathBuf,
@@ -1912,6 +1917,10 @@ pub struct RecoveryApp {
 }
 
 impl RecoveryApp {
+    /// Construct the recovery application for one workspace.
+    ///
+    /// Inputs: `cc` — eframe creation context; `data_dir` — workspace directory to
+    /// recover. Output: [`Self`] with an empty restore form.
     pub fn new(cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
         configure_theme(&cc.egui_ctx);
         Self {
@@ -2160,6 +2169,10 @@ impl App {
             || self.close_confirmation
     }
     /// Presentation-only demo navigation; CLI permits this only with --demo.
+    ///
+    /// Inputs: `name` — demo view name (`overview`, `activity`, `local-ai`, `settings`;
+    /// anything else shows the review view). Output: none; the tab switches for
+    /// presentation.
     pub fn set_demo_view(&mut self, name: &str) {
         self.navigate(match name {
             "overview" => Tab::Overview,

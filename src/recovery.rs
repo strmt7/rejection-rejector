@@ -131,6 +131,9 @@ fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
 /// An offline restore may bring back an old Automatic/sending permission.
 /// The marker is created before replacing the live database and cleared only
 /// after the next normal startup has durably disarmed delivery.
+///
+/// Inputs: `directory` — workspace directory. Output: `Result<bool>` — `true`
+/// while a restore left reauthorization outstanding.
 pub fn restore_rearm_required(directory: &Path) -> Result<bool> {
     let path = directory.join(RESTORE_REARM_NAME);
     match fs::symlink_metadata(&path) {
@@ -157,6 +160,10 @@ fn mark_restore_rearm_required(directory: &Path) -> Result<()> {
     write_new_private(&directory.join(RESTORE_REARM_NAME), RESTORE_REARM_CONTENT)
 }
 
+/// Clear the restore-reauthorization marker.
+///
+/// Inputs: `directory` — workspace directory. Output: `Ok(())` once cleared; a
+/// missing or invalid marker is refused.
 pub fn clear_restore_rearm_marker(directory: &Path) -> Result<()> {
     ensure!(
         restore_rearm_required(directory)?,
@@ -303,6 +310,10 @@ fn validate_bundle_files(directory: &Path) -> Result<(BackupManifest, PathBuf)> 
 /// The database remains application-layer encrypted. The copied vault identifier
 /// is not the master key; recovery on another machine still requires the original
 /// OS credential-store key.
+///
+/// Inputs: `store` — open store to copy; `data_dir` — workspace directory; `destination`
+/// — backup bundle directory to create. Output: [`BackupManifest`] written
+/// alongside the copied database; existing destinations are refused.
 pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Result<BackupManifest> {
     store.integrity_check()?;
     ensure!(!destination.exists(), "Backup destination already exists");
@@ -421,6 +432,11 @@ const ISOLATION_MEASUREMENT: &str = "windows_volume_prefix";
 #[cfg(not(any(unix, windows)))]
 const ISOLATION_MEASUREMENT: &str = "unsupported_platform";
 
+/// Report whether scheduled backups are isolated from the live workspace.
+///
+/// Inputs: `data_dir` — workspace directory; `settings` — current settings.
+/// Output: `Result<BackupIsolationStatus>` describing the configured directory
+/// and its isolation.
 pub fn backup_isolation_status(
     data_dir: &Path,
     settings: &Settings,
@@ -458,6 +474,11 @@ pub fn backup_isolation_status(
     })
 }
 
+/// Report scheduled-backup freshness.
+///
+/// Inputs: `store` — open store holding the last-success timestamp; `settings`
+/// — current settings; `now` — evaluation time. Output: `Result<ScheduledBackupStatus>`
+/// with age and overdue state.
 pub fn scheduled_backup_status(
     store: &Store,
     settings: &Settings,
@@ -479,6 +500,11 @@ pub fn scheduled_backup_status(
     })
 }
 
+/// Prune old scheduled backups, keeping the newest verified copies.
+///
+/// Inputs: `store` — open store for verification; `parent` — scheduled backup
+/// directory; `keep` — number of newest backups to keep (2–30). Output: `Result<usize>`
+/// — the number of backups removed.
 pub fn prune_verified_scheduled_backups(
     store: &Store,
     parent: &Path,
@@ -530,6 +556,12 @@ pub fn prune_verified_scheduled_backups(
     Ok(removed)
 }
 
+/// Create one scheduled backup and record its success.
+///
+/// Inputs: `store` — open store to copy and update; `data_dir` — workspace
+/// directory; `settings` — current settings; `now` — completion timestamp.
+/// Output: `Result<BackupManifest>` for the new backup; scheduled backups must
+/// be enabled.
 pub fn create_scheduled_backup(
     store: &mut Store,
     data_dir: &Path,
@@ -575,6 +607,10 @@ pub fn create_scheduled_backup(
 ///
 /// The output is intentionally separate from normal backups so organizations can
 /// store encrypted data and its recovery credential in different locations.
+///
+/// Inputs: `data_dir` — workspace directory; `passphrase` — passphrase
+/// wrapping the key; `destination` — file to create. Output: `Result<RecoveryKeyEnvelope>`
+/// for the envelope written; existing destinations are refused.
 pub fn export_recovery_key(
     data_dir: &Path,
     passphrase: &[u8],
@@ -600,6 +636,10 @@ pub fn export_recovery_key(
 
 /// Prove a recovery-key envelope can unlock a specific backup without writing any
 /// key material to the OS credential store.
+///
+/// Inputs: `backup_dir` — backup bundle to unlock; `recovery_key_file` —
+/// exported envelope; `passphrase` — passphrase wrapping the key. Output: `Result<RecoveryKeyEnvelope>`
+/// once it demonstrably unlocks the bundle.
 pub fn verify_recovery_key_for_backup(
     backup_dir: &Path,
     recovery_key_file: &Path,
@@ -620,6 +660,10 @@ pub fn verify_recovery_key_for_backup(
 ///
 /// Existing credentials are never replaced. If a live database already exists it
 /// must authenticate under the recovered key before installation is attempted.
+///
+/// Inputs: `data_dir` — workspace directory; `backup_dir` — backup bundle; `recovery_key_file`
+/// — exported envelope; `passphrase` — passphrase wrapping the key. Output: `Result<RecoveryKeyEnvelope>`
+/// once the key is installed; existing credentials are never replaced.
 pub fn import_recovery_key_for_backup(
     data_dir: &Path,
     backup_dir: &Path,
@@ -669,6 +713,11 @@ pub fn import_recovery_key_for_backup(
 /// workspace before the target directory is touched. Only then is the target
 /// locked, its vault identity checked, and (when needed) the recovered key
 /// installed into the OS credential store before the transactional restore.
+///
+/// Inputs: `data_dir` — workspace directory to populate; `backup_dir` — backup
+/// bundle; `recovery_key_file` — exported envelope; `passphrase` — passphrase
+/// wrapping the key. Output: `Result<RestoreReport>` once the workspace is
+/// rebuilt; errors when any identity or integrity check fails.
 pub fn recover_workspace_from_backup(
     data_dir: &Path,
     backup_dir: &Path,
@@ -748,6 +797,10 @@ pub fn recover_workspace_from_backup(
 
 /// Verify manifest, checksum, vault identity and SQLite structure without
 /// modifying the backup database.
+///
+/// Inputs: `store` — open store whose vault must open the backup; `directory`
+/// — backup bundle to verify. Output: `Result<BackupManifest>` for the
+/// verified bundle.
 pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> {
     let (manifest, database) = validate_bundle_files(directory)?;
     let verification = store.verify_backup_file(&database)?;
@@ -778,6 +831,10 @@ pub fn verify_backup(store: &Store, directory: &Path) -> Result<BackupManifest> 
 /// This never mutates the live database. It proves that the backup can be
 /// restored, reopened, deeply authenticated and reconciled with its manifest
 /// using the current vault key.
+///
+/// Inputs: `data_dir` — workspace directory to restore into; `backup_dir` —
+/// backup bundle to rehearse. Output: `Result<RecoveryDrillReport>` for the
+/// rehearsal; the desktop/worker must be stopped.
 pub fn recovery_drill(data_dir: &Path, backup_dir: &Path) -> Result<RecoveryDrillReport> {
     let vault = Vault::open(data_dir)?;
     recovery_drill_with_vault(data_dir, backup_dir, vault)
@@ -835,6 +892,11 @@ fn recovery_drill_with_vault(
     })
 }
 
+/// Restore a backup into an existing workspace.
+///
+/// Inputs: `data_dir` — workspace directory to restore into; `backup_dir` —
+/// backup bundle to restore. Output: `Result<RestoreReport>` for the restore;
+/// the exclusive instance lock must be acquirable.
 pub fn restore_backup(data_dir: &Path, backup_dir: &Path) -> Result<RestoreReport> {
     let _lock = InstanceLock::acquire(data_dir)?;
     let (manifest, _) = validate_bundle_files(backup_dir)?;
@@ -876,10 +938,18 @@ pub fn restore_backup(data_dir: &Path, backup_dir: &Path) -> Result<RestoreRepor
     }
 }
 
+/// The manifest path inside a backup bundle.
+///
+/// Inputs: `directory` — backup bundle directory. Output: `PathBuf` manifest
+/// path.
 pub fn backup_manifest_path(directory: &Path) -> PathBuf {
     directory.join(MANIFEST_NAME)
 }
 
+/// The default recovery-key file path inside a directory.
+///
+/// Inputs: `directory` — containing directory. Output: `PathBuf` recovery-key
+/// path.
 pub fn recovery_key_default_path(directory: &Path) -> PathBuf {
     directory.join(RECOVERY_KEY_NAME)
 }

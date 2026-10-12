@@ -29,6 +29,11 @@ pub struct RetryGate {
 }
 
 impl RetryGate {
+    /// Create a circuit breaker with a fixed timing policy.
+    ///
+    /// Inputs: `now` — creation time; `base` — base retry delay; `cap` — maximum
+    /// retry delay; `open_after` — consecutive failures that open the circuit; `open_for`
+    /// — how long the circuit stays open before a probe. Output: [`Self`].
     pub fn new(
         now: Instant,
         base: Duration,
@@ -50,14 +55,25 @@ impl RetryGate {
         }
     }
 
+    /// Whether a call may proceed now.
+    ///
+    /// Inputs: `now` — current time. Output: `true` when the circuit allows the
+    /// call.
     pub fn ready(&self, now: Instant) -> bool {
         now >= self.next_allowed
     }
 
+    /// The consecutive failure count.
+    ///
+    /// Inputs: none beyond the breaker. Output: `u32` failures.
     pub fn failures(&self) -> u32 {
         self.failures
     }
 
+    /// Record a successful call.
+    ///
+    /// Inputs: `now` — current time. Output: [`CircuitTransition`] describing the
+    /// state change, if any.
     pub fn success(&mut self, now: Instant) -> CircuitTransition {
         let transition = if self.open {
             CircuitTransition::Closed
@@ -70,6 +86,11 @@ impl RetryGate {
         transition
     }
 
+    /// Record a failed call and compute the next retry delay.
+    ///
+    /// Inputs: `now` — current time; `retry_after` — upstream retry hint, if any.
+    /// Output: `(Duration, CircuitTransition)` — the backoff delay before the next
+    /// attempt plus the state change, if any.
     pub fn failure(
         &mut self,
         now: Instant,

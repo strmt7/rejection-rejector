@@ -69,6 +69,9 @@ struct WorkerPulseState {
 }
 
 impl WorkerPulse {
+    /// Create a worker pulse in its idle state.
+    ///
+    /// Inputs: none. Output: [`Self`] tracking progress from the current time.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(WorkerPulseState {
@@ -110,6 +113,10 @@ impl WorkerPulse {
         }
     }
 
+    /// Build the liveness snapshot reported to readers.
+    ///
+    /// Inputs: `now` — evaluation time. Output: [`WorkerLiveness`] (unresponsive
+    /// when the state lock is poisoned).
     pub fn snapshot(&self, now: DateTime<Utc>) -> WorkerLiveness {
         let Ok(state) = self.inner.lock() else {
             return WorkerLiveness {
@@ -316,6 +323,10 @@ pub struct Worker {
     join: Option<std::thread::JoinHandle<()>>,
 }
 impl Worker {
+    /// Spawn the background worker thread for one workspace.
+    ///
+    /// Inputs: `dir` — workspace directory; `demo` — whether demo mode is active.
+    /// Output: [`Self`] handle with command channel and shared snapshot.
     pub fn spawn(dir: PathBuf, demo: bool) -> Self {
         let (tx, rx) = bounded(32);
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
@@ -387,6 +398,10 @@ impl Worker {
             join: Some(join),
         }
     }
+    /// Queue one worker command.
+    ///
+    /// Inputs: `command` — command to enqueue. Output: none; rejected commands are
+    /// surfaced through the worker state rather than silently dropped.
     pub fn command(&self, command: Command) {
         let kind = command.kind();
         let disconnected = match self.tx.try_send(command) {
@@ -398,10 +413,17 @@ impl Worker {
             report_unqueued_command(&mut snapshot, kind, disconnected);
         }
     }
+    /// The latest shared worker snapshot.
+    ///
+    /// Inputs: none. Output: [`Snapshot`] (the default snapshot when the state
+    /// lock is poisoned).
     pub fn view(&self) -> Snapshot {
         self.snapshot.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
+    /// Request a graceful worker stop.
+    ///
+    /// Inputs: none. Output: none; the pause and stop flags are set.
     pub fn request_stop(&self) {
         self.paused.store(true, Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
@@ -411,6 +433,9 @@ impl Worker {
     ///
     /// Long blocking provider/model calls are intentionally not waited forever.
     /// Delivery ambiguity is handled by the durable reservation state machine.
+    ///
+    /// Inputs: `timeout` — bounded grace period. Output: `true` when the worker
+    /// thread joined within the grace period.
     pub fn shutdown(&mut self, timeout: Duration) -> bool {
         self.request_stop();
         let deadline = Instant::now() + timeout;

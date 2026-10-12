@@ -369,6 +369,10 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     }))
 }
 
+/// Evaluate the configured local model and write the report.
+///
+/// Inputs: `settings` — evaluation settings; `out` — destination for the JSON
+/// report. Output: `Result<Value>` — the evaluation report that was written.
 pub fn run(settings: &Settings, out: &Path) -> Result<serde_json::Value> {
     let report = evaluate(settings)?;
     write_report(out, &report)?;
@@ -379,6 +383,9 @@ pub fn run(settings: &Settings, out: &Path) -> Result<serde_json::Value> {
 ///
 /// A recommendation is emitted only among models that pass the conservative
 /// application-specific eligibility gates and the full-GPU-residency qualification.
+///
+/// Inputs: `settings` — evaluation settings; `out` — destination for the
+/// comparison report. Output: `Ok(())` once the ranked comparison is written.
 pub fn compare_installed(settings: &Settings, out: &Path) -> Result<()> {
     let mut candidates = Vec::new();
     for (label, model) in MODEL_CANDIDATES {

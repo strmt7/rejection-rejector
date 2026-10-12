@@ -131,6 +131,10 @@ pub struct RuntimeJournal {
 }
 
 impl RuntimeJournal {
+    /// Open the runtime log for one workspace.
+    ///
+    /// Inputs: `data_dir` — workspace directory. Output: `Result<Self>` with the
+    /// default size and archive limits.
     pub fn open(data_dir: &Path) -> Result<Self> {
         Self::open_with_limits(data_dir, DEFAULT_MAX_CURRENT_BYTES, DEFAULT_MAX_ARCHIVES)
     }
@@ -156,6 +160,9 @@ impl RuntimeJournal {
         })
     }
 
+    /// Append one runtime event record.
+    ///
+    /// Inputs: `event` — event to record. Output: `Ok(())` once written.
     pub fn record_event(&self, event: RuntimeEvent) -> Result<()> {
         self.write(RuntimeRecord {
             schema_version: LOG_SCHEMA_VERSION,
@@ -171,6 +178,9 @@ impl RuntimeJournal {
         })
     }
 
+    /// Append one runtime signal record.
+    ///
+    /// Inputs: `signal` — signal to record. Output: `Ok(())` once written.
     pub(crate) fn record_signal(&self, signal: RuntimeSignal) -> Result<()> {
         self.write(RuntimeRecord {
             schema_version: LOG_SCHEMA_VERSION,
@@ -186,6 +196,10 @@ impl RuntimeJournal {
         })
     }
 
+    /// Append an operation state-change record.
+    ///
+    /// Inputs: `kind` — operation kind; `state` — operation state. Output: `Ok(())`
+    /// once written.
     pub fn record_operation(&self, kind: OperationKind, state: OperationState) -> Result<()> {
         let status = OperationStatus {
             operation_id: None,
@@ -200,6 +214,10 @@ impl RuntimeJournal {
         self.record_operation_status(&status)
     }
 
+    /// Append a full operation status record.
+    ///
+    /// Inputs: `status` — operation status to record. Output: `Ok(())` once
+    /// written; malformed operation ids are refused.
     pub fn record_operation_status(&self, status: &OperationStatus) -> Result<()> {
         if let Some(operation_id) = &status.operation_id {
             ensure!(
@@ -239,6 +257,10 @@ impl RuntimeJournal {
         Ok(())
     }
 
+    /// Report the runtime log's current status.
+    ///
+    /// Inputs: none beyond the log. Output: `Result<RuntimeLogStatus>` with sizes,
+    /// archives and truncation counters.
     pub fn status(&self) -> Result<RuntimeLogStatus> {
         let inner = self
             .inner
@@ -256,6 +278,10 @@ fn operation_duration_ms(status: &OperationStatus) -> Option<u64> {
     (milliseconds >= 0).then_some(milliseconds as u64)
 }
 
+/// Summarize recorded performance across the log and its archives.
+///
+/// Inputs: `data_dir` — workspace directory. Output: `Result<RuntimePerformanceSummary>`
+/// for monitoring surfaces.
 pub fn performance_summary(data_dir: &Path) -> Result<RuntimePerformanceSummary> {
     let directory = data_dir.join("logs");
     if !directory.exists() {
@@ -327,6 +353,10 @@ pub fn performance_summary(data_dir: &Path) -> Result<RuntimePerformanceSummary>
     Ok(summary)
 }
 
+/// Report the runtime log status for one workspace directory.
+///
+/// Inputs: `data_dir` — workspace directory. Output: `Result<RuntimeLogStatus>`
+/// with the default limits applied.
 pub fn status(data_dir: &Path) -> Result<RuntimeLogStatus> {
     status_for(
         &data_dir.join("logs"),

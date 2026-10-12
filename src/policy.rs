@@ -14,10 +14,16 @@ const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_POLICY_SIGNATURE_BYTES: u64 = 4 * 1024;
 pub const ENTERPRISE_POLICY_SCHEMA_VERSION: u32 = 1;
 
+/// The bundled enterprise-policy JSON schema.
+///
+/// Inputs: none. Output: `&'static str` schema text.
 pub fn schema_text() -> &'static str {
     include_str!("../docs/enterprise-policy.schema.json")
 }
 
+/// Fingerprint the bundled policy schema.
+///
+/// Inputs: none. Output: `String` of lowercase hex — the SHA-256 digest of [`schema_text`].
 pub fn schema_sha256() -> String {
     crate::hex_lower(Sha256::digest(schema_text().as_bytes()))
 }
@@ -73,6 +79,10 @@ pub struct PolicyStatus {
 }
 
 impl EnterprisePolicy {
+    /// Validate the policy document's structure.
+    ///
+    /// Inputs: none beyond the policy. Output: `Ok(())` for supported versions and
+    /// well-formed fields.
     pub fn validate(&self) -> Result<()> {
         ensure!(
             matches!(self.version, 1..=3),
@@ -178,6 +188,10 @@ impl EnterprisePolicy {
         Ok(())
     }
 
+    /// Validate the policy and its time window.
+    ///
+    /// Inputs: `now` — evaluation time. Output: `Ok(())` when the policy is
+    /// well-formed and active.
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
         self.validate()?;
         if self.version >= 2 {
@@ -191,6 +205,10 @@ impl EnterprisePolicy {
         Ok(())
     }
 
+    /// The policy identity/revision pair used for change detection.
+    ///
+    /// Inputs: none beyond the policy. Output: `Option<(&str, u64)>` — `(policy_id, revision)`
+    /// for v2+ policies.
     pub fn revision_identity(&self) -> Option<(&str, u64)> {
         (self.version >= 2)
             .then(|| Some((self.policy_id.as_deref()?, self.revision?)))
@@ -206,6 +224,10 @@ impl EnterprisePolicy {
     /// This function applies enterprise policy constraints to mutable user settings,
     /// returning true if settings were modified (indicating policy was applied) or
     /// false if no changes were needed (settings already compliant).
+    ///
+    /// Inputs: `settings` — mutable user settings to constrain; `startup` —
+    /// whether this is the startup enforcement pass. Output: `Result<bool>` — `true`
+    /// when the settings changed.
     pub fn enforce(&self, settings: &mut Settings, startup: bool) -> Result<bool> {
         self.validate()?;
         let before = settings.clone();
@@ -291,10 +313,17 @@ impl EnterprisePolicy {
         Ok(*settings != before)
     }
 
+    /// Whether the policy permits send scope.
+    ///
+    /// Inputs: none beyond the policy. Output: `true` unless sending is
+    /// prohibited.
     pub fn allows_send_scope(&self) -> bool {
         !self.prohibit_sending
     }
 
+    /// Whether the policy permits recovery-key export.
+    ///
+    /// Inputs: none beyond the policy. Output: `true` unless export is prohibited.
     pub fn allows_recovery_key_export(&self) -> bool {
         !self.prohibit_recovery_key_export
     }
@@ -339,6 +368,10 @@ pub struct PolicyRevisionRecord {
 }
 
 impl PolicyRevisionFloor {
+    /// Record a loaded policy and detect identity changes.
+    ///
+    /// Inputs: `loaded` — policy just loaded. Output: `Result<bool>` — `true` when
+    /// the tracked identity/revision changed; conflicting identities fail closed.
     pub fn observe(&mut self, loaded: &LoadedPolicy) -> Result<bool> {
         let Some((policy_id, revision)) = loaded.policy.revision_identity() else {
             return Ok(false);
@@ -375,6 +408,10 @@ impl PolicyRevisionFloor {
 }
 
 impl LoadedPolicy {
+    /// The status reported for this loaded policy.
+    ///
+    /// Inputs: none beyond the loaded policy. Output: [`PolicyStatus`] marked
+    /// active with its identity and revision.
     pub fn status(&self) -> PolicyStatus {
         PolicyStatus {
             active: true,
@@ -409,6 +446,9 @@ impl LoadedPolicy {
     }
 }
 
+/// The status reported when no policy is loaded.
+///
+/// Inputs: none. Output: [`PolicyStatus`] marked inactive.
 pub fn inactive_status() -> PolicyStatus {
     PolicyStatus {
         active: false,
@@ -614,6 +654,10 @@ fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Resolve the machine-wide policy file path.
+///
+/// Inputs: none; reads the policy environment override and `PROGRAMDATA`.
+/// Output: `Result<Option<PathBuf>>` — the configured policy path, if any.
 pub fn default_policy_path() -> Result<Option<PathBuf>> {
     policy_path_from(
         std::env::var_os("RR_ENTERPRISE_POLICY"),
@@ -649,6 +693,10 @@ fn policy_path_from(
     }
 }
 
+/// Load the machine-wide policy when one is configured.
+///
+/// Inputs: none. Output: `Result<Option<LoadedPolicy>>` — the validated
+/// policy, or `None` when none is configured.
 pub fn load_optional() -> Result<Option<LoadedPolicy>> {
     // Test seam: process threads under test arm a deterministic policy in
     // `crate::test_support`, so reload/startup flows exercise policy behavior
@@ -702,6 +750,10 @@ fn load_optional_from(
     load_file_with_controls(&path, expected_digest, signature_requirement).map(Some)
 }
 
+/// Load and validate one policy file.
+///
+/// Inputs: `path` — policy file to read. Output: `Result<LoadedPolicy>`;
+/// malformed policies are refused.
 pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
     load_file_with_controls(path, None, None)
 }

@@ -32,6 +32,10 @@ struct Args {
     #[arg(long, requires = "demo", value_parser = clap::value_parser!(u32).range(760..=2160))]
     demo_height: Option<u32>,
 }
+/// Run the desktop application entry point.
+///
+/// Inputs: none; parses command-line arguments. Output: `eframe::Result<()>`;
+/// errors propagate out of the egui runtime.
 fn main() -> eframe::Result<()> {
     launch(Args::parse())
 }

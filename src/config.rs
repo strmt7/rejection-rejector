@@ -78,6 +78,9 @@ pub enum Mode {
     Automatic,
 }
 impl Mode {
+    /// The operator-facing mode label.
+    ///
+    /// Inputs: none beyond the mode. Output: `&'static str` label.
     pub fn label(self) -> &'static str {
         match self {
             Self::HumanReview => "Human review",
@@ -303,6 +306,10 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Validate the persisted settings.
+    ///
+    /// Inputs: none beyond the settings. Output: `Ok(())` when the format version
+    /// and every field are supported.
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.settings_format_version == SETTINGS_FORMAT_VERSION,
@@ -495,6 +502,10 @@ impl Settings {
         }
         Ok(())
     }
+    /// Migrate persisted settings to the current format.
+    ///
+    /// Inputs: none beyond the settings (updated in place). Output: `Result<bool>`
+    /// — `true` when a migration ran.
     pub fn migrate_format(&mut self) -> Result<bool> {
         match self.settings_format_version {
             SETTINGS_FORMAT_VERSION => Ok(false),
@@ -515,6 +526,10 @@ impl Settings {
         }
     }
 
+    /// Return the settings to disarmed Human review mode.
+    ///
+    /// Inputs: none beyond the settings. Output: none; sending and automatic
+    /// arming are cleared.
     pub fn disarm_delivery(&mut self) {
         self.mode = Mode::HumanReview;
         self.sending_enabled = false;
@@ -522,6 +537,10 @@ impl Settings {
         self.automatic_since = None;
     }
 
+    /// Repair inconsistent legacy Automatic arming.
+    ///
+    /// Inputs: none beyond the settings. Output: `true` when the mode was demoted
+    /// to Human review.
     pub fn repair_legacy_automatic_state(&mut self) -> bool {
         if self.mode != Mode::Automatic {
             return false;
@@ -533,13 +552,24 @@ impl Settings {
         false
     }
 
+    /// The mailbox poll interval in seconds.
+    ///
+    /// Inputs: none beyond the settings. Output: `i64` seconds.
     pub fn interval_seconds(&self) -> i64 {
         i64::from(self.poll_hours) * 3600
     }
+    /// The earliest message timestamp inside the lookback window.
+    ///
+    /// Inputs: `now` — current time. Output: `DateTime<Utc>` exactly `lookback_days`
+    /// before `now`.
     pub fn cutoff(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         now - chrono::Duration::days(i64::from(self.lookback_days))
     }
 
+    /// Whether the task qualification matches the pinned model.
+    ///
+    /// Inputs: none beyond the settings. Output: `true` only for a current
+    /// qualification.
     pub fn task_qualification_current(&self) -> bool {
         self.task_qualification
             .as_ref()
@@ -554,6 +584,10 @@ impl Settings {
     }
 }
 
+/// Fingerprint the bundled evaluation suite.
+///
+/// Inputs: none. Output: `String` of lowercase hex covering the contract
+/// version and fixtures.
 pub fn evaluation_suite_hash() -> String {
     let mut digest = Sha256::new();
     digest.update(EVALUATION_CONTRACT_VERSION.as_bytes());
@@ -566,6 +600,9 @@ pub fn evaluation_suite_hash() -> String {
     crate::hex_lower(digest.finalize())
 }
 
+/// Hash the settings that shape the inference context.
+///
+/// Inputs: `settings` — settings to hash. Output: `String` context hash.
 pub fn settings_context_hash(settings: &Settings) -> String {
     let mut digest = Sha256::new();
     for value in [
@@ -594,6 +631,10 @@ pub fn settings_context_hash(settings: &Settings) -> String {
     crate::hex_lower(digest.finalize())
 }
 
+/// Validate the configured Ollama origin as local HTTP.
+///
+/// Inputs: `value` — candidate origin URL. Output: `Ok(())` for local HTTP
+/// origins; remote or non-HTTP origins are refused.
 pub fn validate_local_url(value: &str) -> Result<()> {
     let u = url::Url::parse(value)?;
     ensure!(
@@ -614,6 +655,10 @@ pub fn validate_local_url(value: &str) -> Result<()> {
     );
     Ok(())
 }
+/// Validate a model tag's shape.
+///
+/// Inputs: `model` — candidate model tag. Output: `Ok(())` for well-formed
+/// tags.
 pub fn validate_model_name(model: &str) -> Result<()> {
     ensure!(
         !model.is_empty() && model.len() <= 150 && !model.starts_with('-'),
@@ -632,6 +677,10 @@ pub fn validate_model_name(model: &str) -> Result<()> {
     );
     Ok(())
 }
+/// Resolve the local application data directory.
+///
+/// Inputs: none. Output: `Result<PathBuf>` — the platform data directory;
+/// errors when none can be resolved.
 pub fn data_dir() -> Result<PathBuf> {
     directories::ProjectDirs::from("dev", "strmt7", "RejectionRejector")
         .map(|p| p.data_local_dir().to_path_buf())

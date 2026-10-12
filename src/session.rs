@@ -17,6 +17,9 @@ const MAX_MARKER_BYTES: u64 = 8 * 1024;
 
 /// Must run under the workspace lock before opening/creating the normal vault.
 /// Any leftover restore marker means the SQLite file set needs explicit recovery.
+///
+/// Inputs: `directory` — workspace directory. Output: `Ok(())` when no restore
+/// is in flight; a leftover marker fails closed.
 pub(crate) fn ensure_restore_complete(directory: &Path) -> Result<()> {
     match fs::symlink_metadata(directory.join(RESTORE_MARKER_NAME)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -37,6 +40,9 @@ fn sync_directory(directory: &Path) -> Result<()> {
 
 /// Called only by the explicitly authorized offline restore while holding its lock.
 /// A valid leftover marker permits a retry, never ordinary application startup.
+///
+/// Inputs: `directory` — workspace directory. Output: `Ok(())` once the
+/// restore marker is written; only the authorized offline restore calls this.
 pub(crate) fn begin_restore_transaction(directory: &Path) -> Result<()> {
     let path = directory.join(RESTORE_MARKER_NAME);
     match fs::symlink_metadata(&path) {
@@ -55,6 +61,9 @@ pub(crate) fn begin_restore_transaction(directory: &Path) -> Result<()> {
 
 /// Clear only after the installed image or the entire rolled-back file set is valid.
 /// There is intentionally no Drop cleanup: a crash/panic must retain this marker.
+///
+/// Inputs: `directory` — workspace directory. Output: `Ok(())` once the marker
+/// is cleared; an invalid marker is refused.
 pub(crate) fn complete_restore_transaction(directory: &Path) -> Result<()> {
     let path = directory.join(RESTORE_MARKER_NAME);
     ensure!(
@@ -83,6 +92,11 @@ pub(crate) struct SessionLease {
 }
 
 impl SessionLease {
+    /// Begin a workspace session under the session marker.
+    ///
+    /// Inputs: `directory` — workspace directory. Output: `Result<Self>` — the
+    /// session; an unclean previous exit is recorded and concurrent sessions are
+    /// refused.
     pub(crate) fn begin(directory: &Path) -> Result<Self> {
         private_dir(directory)?;
         ensure_restore_complete(directory)?;
@@ -106,6 +120,9 @@ impl SessionLease {
         })
     }
 
+    /// Whether the previous session exited uncleanly.
+    ///
+    /// Inputs: none beyond the session. Output: `bool`.
     pub(crate) fn previous_unclean(&self) -> bool {
         self.previous_unclean
     }

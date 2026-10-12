@@ -12,6 +12,11 @@ const MAX_HEADER_BYTES: usize = 8192;
 /// The caller must bound each blocking read (the TCP caller uses 250 ms).
 /// A per-connection absolute deadline prevents a slow stream from renewing a
 /// per-read timeout indefinitely. Never accept an incomplete header block.
+///
+/// Inputs: `reader` — callback connection stream; `cancelled` — cancellation
+/// flag checked on every chunk; `deadline` — absolute per-connection deadline.
+/// Output: `Result<Zeroizing<Vec<u8>>>` — the complete header block; errors on
+/// cancellation, deadline, or an incomplete block.
 pub(super) fn read_headers(
     reader: &mut impl Read,
     cancelled: &AtomicBool,
@@ -49,6 +54,10 @@ pub(super) fn read_headers(
 }
 
 /// Parse only a GET with a unique literal-loopback Host and no request body.
+///
+/// Inputs: `headers` — complete header block; `port` — loopback port the
+/// callback listener bound. Output: `Result<&str>` — the request target of the
+/// validated `GET`; anything else is rejected.
 pub(super) fn request_target(headers: &[u8], port: u16) -> Result<&str> {
     ensure!(
         headers.len() <= MAX_HEADER_BYTES && headers.ends_with(b"\r\n\r\n"),

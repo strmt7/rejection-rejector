@@ -63,6 +63,11 @@ fn read_small_regular_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Read the workspace fingerprint from the vault identifier file.
+///
+/// Inputs: `data_dir` — workspace directory containing `vault-id`. Output: `Result<String>`
+/// — the trimmed UUID fingerprint; errors when the file is missing or the
+/// identifier is invalid.
 pub fn workspace_fingerprint(data_dir: &Path) -> Result<String> {
     let path = data_dir.join("vault-id");
     let bytes = read_small_regular_file(&path)?;
@@ -77,6 +82,11 @@ pub fn workspace_fingerprint(data_dir: &Path) -> Result<String> {
     ))
 }
 
+/// Build the current audit anchor from live workspace state.
+///
+/// Inputs: `store` — open store supplying the audit point; `data_dir` —
+/// workspace directory for the fingerprint. Output: `Result<AuditAnchor>`
+/// binding sequence, head hash, versions, timestamp and workspace fingerprint.
 pub fn current(store: &Store, data_dir: &Path) -> Result<AuditAnchor> {
     let (audit_sequence, audit_head) = store.audit_point()?;
     Ok(AuditAnchor {
@@ -89,6 +99,12 @@ pub fn current(store: &Store, data_dir: &Path) -> Result<AuditAnchor> {
     })
 }
 
+/// Write the current audit anchor to a new file.
+///
+/// Inputs: `store` — open store supplying the audit point; `data_dir` —
+/// workspace directory; `out` — destination file to create. Output: `Result<AuditAnchor>`
+/// — the anchor that was written; errors when the destination exists or any
+/// safety check fails.
 pub fn write_anchor(store: &Store, data_dir: &Path, out: &Path) -> Result<AuditAnchor> {
     ensure!(!out.exists(), "Audit-anchor destination already exists");
     if let Some(parent) = out.parent().filter(|path| !path.as_os_str().is_empty()) {
@@ -133,6 +149,10 @@ fn parse_anchor(bytes: &[u8]) -> Result<AuditAnchor> {
     Ok(anchor)
 }
 
+/// Parse an audit anchor file from disk.
+///
+/// Inputs: `path` — anchor file to read. Output: `Result<AuditAnchor>`; errors
+/// on unreadable or malformed files.
 pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
     parse_anchor(&read_small_regular_file(path)?)
 }
@@ -147,6 +167,11 @@ fn verify_anchor_value(store: &Store, data_dir: &Path, anchor: &AuditAnchor) -> 
         .map(|_| ())
 }
 
+/// Read an anchor file and check it against live workspace state.
+///
+/// Inputs: `store` — open store to verify against; `data_dir` — workspace
+/// directory; `path` — anchor file. Output: `Result<AuditAnchor>` when the
+/// anchor matches the current audit point.
 pub fn verify_anchor(store: &Store, data_dir: &Path, path: &Path) -> Result<AuditAnchor> {
     let anchor = read_anchor(path)?;
     verify_anchor_value(store, data_dir, &anchor)?;
@@ -169,6 +194,11 @@ fn interpret_os_anchor_required(raw: Option<&str>) -> Result<bool> {
     }
 }
 
+/// Whether enterprise rollback protection requires the OS credential-store
+/// anchor.
+///
+/// Inputs: none; reads the OS-audit-anchor requirement from the environment.
+/// Output: `Result<bool>`; errors on invalid configured values.
 pub fn os_anchor_required() -> Result<bool> {
     os_anchor_required_from(std::env::var(OS_AUDIT_ANCHOR_ENV))
 }
@@ -238,6 +268,10 @@ fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
 /// Verify the OS credential-store anchor when enterprise rollback protection is
 /// explicitly required. An empty credential is allowed only for first-time
 /// bootstrap; unsupported platforms fail closed rather than claiming coverage.
+///
+/// Inputs: `store` — open store to verify against; `data_dir` — workspace
+/// directory. Output: `Result<Option<AuditAnchor>>` — the verified anchor when
+/// required, `None` when the requirement is off.
 pub fn verify_os_anchor_if_required(store: &Store, data_dir: &Path) -> Result<Option<AuditAnchor>> {
     verify_os_anchor(store, data_dir, os_anchor_required()?)
 }
@@ -275,6 +309,10 @@ fn verify_os_anchor(store: &Store, data_dir: &Path, required: bool) -> Result<Op
 /// Advance the OS-protected anchor monotonically. Existing anchors are treated
 /// as trust roots: the database must prove that its current audit head extends
 /// the prior sequence/hash before the credential may be updated.
+///
+/// Inputs: `store` — open store proving the audit extension; `data_dir` —
+/// workspace directory. Output: `Result<Option<AuditAnchor>>` — the advanced
+/// anchor when required, `None` otherwise.
 pub fn checkpoint_os_anchor_if_required(
     store: &Store,
     data_dir: &Path,
@@ -350,6 +388,10 @@ fn checkpoint_os_anchor(
 /// Verify the externally persisted anchor configured for startup rollback
 /// detection. The anchor must be stored outside the rollback domain for this to
 /// provide meaningful protection.
+///
+/// Inputs: `store` — open store to verify against; `data_dir` — workspace
+/// directory. Output: `Result<Option<AuditAnchor>>` — the verified anchor when
+/// one is configured, `None` when the environment sets none.
 pub fn verify_configured_anchor(store: &Store, data_dir: &Path) -> Result<Option<AuditAnchor>> {
     verify_configured_anchor_from(store, data_dir, std::env::var_os(AUDIT_ANCHOR_ENV))
 }

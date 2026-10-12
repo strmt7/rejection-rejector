@@ -92,9 +92,15 @@ pub struct GmailApiError {
     retry_after: Option<Duration>,
 }
 impl GmailApiError {
+    /// The upstream HTTP status of this API error.
+    ///
+    /// Inputs: none beyond the error. Output: `u16` status code.
     pub fn status(&self) -> u16 {
         self.status
     }
+    /// The upstream retry delay, when the API supplied one.
+    ///
+    /// Inputs: none beyond the error. Output: `Option<Duration>` retry delay.
     pub fn retry_after(&self) -> Option<Duration> {
         self.retry_after
     }
@@ -106,6 +112,10 @@ impl std::fmt::Display for GmailApiError {
 }
 impl std::error::Error for GmailApiError {}
 
+/// Extract an upstream retry delay from an error chain.
+///
+/// Inputs: `error` — error chain to inspect. Output: `Option<Duration>` — the
+/// first Gmail retry hint found.
 pub fn retry_after_hint(error: &anyhow::Error) -> Option<Duration> {
     error
         .chain()
@@ -183,6 +193,10 @@ pub struct Gmail {
     token_url: String,
 }
 impl Gmail {
+    /// Build a provider client from stored credentials.
+    ///
+    /// Inputs: `creds` — OAuth credentials with their scope. Output: [`Self`] with
+    /// no access token yet.
     pub fn new(creds: Credentials) -> Self {
         Self {
             creds,
@@ -206,6 +220,9 @@ impl Gmail {
             token_url: token_url.into(),
         }
     }
+    /// Whether these credentials hold send scope.
+    ///
+    /// Inputs: none beyond the client. Output: `true` only with send scope.
     pub fn can_send(&self) -> bool {
         self.creds.can_send
     }
@@ -247,9 +264,18 @@ impl Gmail {
             .send()
             .context("Gmail request failed")
     }
+    /// Fetch the mailbox profile.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<Profile>` — the provider
+    /// profile.
     pub fn profile(&mut self) -> Result<Profile> {
         gmail_json(self.get("/profile", &[])?, 32768)
     }
+    /// List one page of message identities matching a query.
+    ///
+    /// Inputs: `query` — provider search query; `page` — page token, if any.
+    /// Output: `Result<MessagePage>` — the page of identities plus its
+    /// continuation token.
     pub fn list(&mut self, query: &str, page: Option<&str>) -> Result<MessagePage> {
         let mut params = vec![("q", query.into()), ("maxResults", "500".into())];
         if let Some(p) = page {
@@ -257,6 +283,10 @@ impl Gmail {
         }
         gmail_json(self.get("/messages", &params)?, 2 * 1024 * 1024)
     }
+    /// List one page of message additions since a history id.
+    ///
+    /// Inputs: `start` — starting history id; `page` — page token, if any. Output: `Result<HistoryResult>`
+    /// — the added messages and continuation state.
     pub fn history(&mut self, start: &str, page: Option<&str>) -> Result<HistoryResult> {
         let mut params = vec![
             ("startHistoryId", start.into()),
@@ -272,6 +302,11 @@ impl Gmail {
         }
         Ok(HistoryResult::Page(gmail_json(response, 8 * 1024 * 1024)?))
     }
+    /// Fetch and parse one message.
+    ///
+    /// Inputs: `stub` — provider identity to fetch. Output: `Result<Option<Email>, FetchFailure>`
+    /// — the parsed message, `None` when it vanished, or a classified fetch
+    /// failure.
     pub fn email(&mut self, stub: &Stub) -> std::result::Result<Option<Email>, FetchFailure> {
         validate_id(&stub.provider_id).map_err(|error| FetchFailure {
             kind: FetchFailureKind::MalformedMessage,
@@ -309,6 +344,9 @@ impl Gmail {
         })?;
         Ok(Some(parsed))
     }
+    /// Fetch one thread in minimal format.
+    ///
+    /// Inputs: `id` — thread id. Output: `Result<Thread>` — the thread resource.
     pub fn thread(&mut self, id: &str) -> Result<Thread> {
         validate_id(id)?;
         gmail_json(
@@ -402,6 +440,10 @@ impl Gmail {
         })?;
         Ok(sent.id)
     }
+    /// Locate the provider id of a sent message by Message-ID.
+    ///
+    /// Inputs: `message_id` — outgoing RFC 2822 Message-ID. Output: `Result<Option<String>>`
+    /// — the provider message id when found.
     pub fn find_sent(&mut self, message_id: &str) -> Result<Option<String>> {
         ensure!(
             mail::valid_message_id(message_id),
@@ -491,6 +533,10 @@ fn parse_raw_message(raw: &RawMessage, stub: &Stub) -> Result<Email> {
     })
 }
 
+/// Validate a provider identifier's shape.
+///
+/// Inputs: `id` — candidate identifier. Output: `Ok(())` for well-formed
+/// identifiers; anything else is refused.
 pub fn validate_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -507,6 +553,9 @@ pub fn validate_id(id: &str) -> Result<()> {
 ///
 /// This narrow public entry point exists for deterministic tests and fuzzing. It
 /// never executes attachments, scripts, embedded messages or external content.
+///
+/// Inputs: `bytes` — raw RFC 5322/MIME message. Output: `Result<(String, bool)>`
+/// — bounded inert text plus `true` when the whole body was captured.
 pub fn parse_mime_text(bytes: &[u8]) -> Result<(String, bool)> {
     let parsed = mailparse::parse_mail(bytes)?;
     let (text, complete) = mime_text(&parsed, 0)?;
@@ -575,6 +624,10 @@ fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
     }
 }
 
+/// Build the stub identity for one listed message.
+///
+/// Inputs: `account` — account key; `m` — provider message reference. Output: `Result<Stub>`;
+/// malformed ids are refused.
 pub fn stub(account: &str, m: MessageRef) -> Result<Stub> {
     validate_id(&m.id)?;
     validate_id(&m.thread_id)?;

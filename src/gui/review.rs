@@ -2,6 +2,10 @@
 use super::*;
 
 impl App {
+    /// Draw the Review tab for one worker snapshot.
+    ///
+    /// Inputs: `ui` — egui ui to draw into; `s` — worker snapshot to present.
+    /// Output: none; the review flow is laid out for the current mode.
     pub(super) fn review(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::heading(
             ui,

@@ -66,6 +66,10 @@ impl Zeroize for Tokens {
         }
     }
 }
+/// Generate a fresh URL-safe random secret.
+///
+/// Inputs: none. Output: `String` — the URL-safe base64 encoding of 32 random
+/// bytes.
 pub fn secret() -> String {
     let b = rand::random::<[u8; 32]>();
     URL_SAFE_NO_PAD.encode(b)

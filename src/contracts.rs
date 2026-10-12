@@ -17,6 +17,10 @@ pub struct ContractInfo {
     pub prompt_version: String,
 }
 
+/// Collect the machine-readable contract and version inventory.
+///
+/// Inputs: none. Output: [`ContractInfo`] with schema, application and API
+/// versions plus contract digests and settings format version.
 pub fn current() -> ContractInfo {
     ContractInfo {
         schema_version: CONTRACT_INFO_SCHEMA_VERSION,

@@ -29,6 +29,9 @@ pub(crate) struct MockServer {
 
 impl MockServer {
     /// Start a mock server whose responses are produced by `responder`.
+    ///
+    /// Inputs: `responder` — maps `(path, body)` to a JSON answer, or `None` for a
+    /// 404. Output: [`Self`] listening on an ephemeral loopback port.
     pub(crate) fn new(
         responder: impl Fn(&str, Option<Value>) -> Option<Value> + Send + 'static,
     ) -> Self {
@@ -41,6 +44,10 @@ impl MockServer {
     ///
     /// The responder returns `Some((status, body))` for an exact response or
     /// `None` for a 404.
+    ///
+    /// Inputs: `responder` — maps `(path, body)` to `Some((status, body))` for an
+    /// exact response or `None` for a 404. Output: [`Self`] listening on an
+    /// ephemeral loopback port.
     pub(crate) fn new_raw(
         responder: impl Fn(&str, Option<Value>) -> Option<(u16, String)> + Send + 'static,
     ) -> Self {
@@ -85,6 +92,8 @@ impl MockServer {
     }
 
     /// Routes seen so far, in order.
+    ///
+    /// Inputs: none. Output: `Vec<String>` of the routes seen so far, in order.
     pub(crate) fn routes(&self) -> Vec<String> {
         self.calls
             .lock()
@@ -105,16 +114,23 @@ impl Drop for MockServer {
 }
 
 /// Canned `/api/version` answer for a supported runtime.
+///
+/// Inputs: none. Output: [`Value`] — the canned version answer.
 pub(crate) fn version_ok() -> Value {
     json!({"version": "0.35.1"})
 }
 
 /// Canned `/api/tags` answer advertising `model` with a fixed digest.
+///
+/// Inputs: `model` — model name to advertise; `digest` — digest to report.
+/// Output: [`Value`] — the canned tags answer.
 pub(crate) fn tags_for(model: &str, digest: &str) -> Value {
     json!({"models": [{"name": model, "digest": digest, "size": 7_200_000_000u64}]})
 }
 
 /// Canned `/api/show` answer passing local capability checks for drafting.
+///
+/// Inputs: none. Output: [`Value`] — the canned show answer.
 pub(crate) fn show_ok() -> Value {
     json!({
         "details": {"format": "gguf"},
@@ -124,6 +140,9 @@ pub(crate) fn show_ok() -> Value {
 }
 
 /// Canned `/api/show` answer for a decision-only R&D model.
+///
+/// Inputs: none. Output: [`Value`] — the canned show answer for a
+/// decision-only model.
 pub(crate) fn show_decision_only() -> Value {
     json!({
         "details": {"format": "gguf"},
@@ -133,11 +152,17 @@ pub(crate) fn show_decision_only() -> Value {
 }
 
 /// Canned `/api/ps` answer reporting full GPU residency.
+///
+/// Inputs: `model` — loaded model name; `digest` — its digest. Output: [`Value`]
+/// — the canned process-list answer.
 pub(crate) fn ps_resident(model: &str, digest: &str) -> Value {
     json!({"models": [{"name": model, "digest": digest, "size": 7_200_000_000u64, "size_vram": 7_200_000_000u64, "context_length": 32768}]})
 }
 
 /// Canned OAuth token exchange answer with a stable refresh token.
+///
+/// Inputs: `scope` — OAuth scope string to echo. Output: [`Value`] — the
+/// canned token exchange answer.
 pub(crate) fn token_ok(scope: &str) -> Value {
     json!({
         "access_token": "test-access-token",
@@ -148,11 +173,17 @@ pub(crate) fn token_ok(scope: &str) -> Value {
 }
 
 /// Build a Gmail profile answer for `address`.
+///
+/// Inputs: `address` — mailbox address to report. Output: [`Value`] — the
+/// canned profile answer.
 pub(crate) fn gmail_profile(address: &str) -> Value {
     json!({"emailAddress": address, "historyId": "1"})
 }
 
 /// The RFC 2822 message-id style provider ids accepted by `validate_id`.
+///
+/// Inputs: `n` — sequence number distinguishing ids. Output: [`String`]
+/// provider id.
 pub(crate) fn provider_id(n: u64) -> String {
     format!("msg{:022}", n)
 }
@@ -170,12 +201,20 @@ use crate::types::{
 use chrono::{DateTime, Utc};
 
 /// A sendable synthetic Gmail rejection email bound to `account`.
+///
+/// Inputs: `account` — account key; `n` — provider id sequence number; `subject`
+/// — message subject; `text` — message body. Output: [`Email`] ready for
+/// analysis.
 pub(crate) fn gmail_email(account: &str, n: u64, subject: &str, text: &str) -> Email {
     gmail_email_to(account, n, &format!("hr{n}@example.invalid"), subject, text)
 }
 
 /// Like [`gmail_email`] but with an explicit sender mailbox, so tests can share
 /// or separate recipient rate-limit buckets independently of provider ids.
+///
+/// Inputs: `account` — account key; `n` — provider id sequence number; `recipient`
+/// — explicit sender mailbox; `subject` — message subject; `text` — message
+/// body. Output: [`Email`] like [`gmail_email`] with a chosen sender.
 pub(crate) fn gmail_email_to(
     account: &str,
     n: u64,
@@ -205,6 +244,9 @@ pub(crate) fn gmail_email_to(
 }
 
 /// A conflict-free draft body that ends with the trusted signature.
+///
+/// Inputs: `signature` — trusted signature the body must end with. Output: [`String`]
+/// draft body.
 pub(crate) fn draft_body(signature: &str) -> String {
     format!(
         "Dear Recruitment Team,\n\nI would appreciate an individualized explanation of the specific criteria behind this decision and how my relevant experience was assessed against the advertised requirements. Please share the concrete evaluation notes for each stage, the relative weighting of the listed qualifications, and the specific areas where my background was judged insufficient for this particular position.\n\nRegards,\n{}",
@@ -213,6 +255,10 @@ pub(crate) fn draft_body(signature: &str) -> String {
 }
 
 /// Analysis provenance bound to `settings` and `email`, verifying `body`.
+///
+/// Inputs: `settings` — settings supplying provenance; `email` — message the
+/// analysis belongs to; `body` — draft body the analysis verifies. Output: [`Analysis`]
+/// bound to those inputs.
 pub(crate) fn verified_analysis(settings: &Settings, email: &Email, body: &str) -> Analysis {
     Analysis {
         verdict: Verdict {
@@ -249,6 +295,8 @@ pub(crate) fn verified_analysis(settings: &Settings, email: &Email, body: &str) 
 ///
 /// `model_digest` is pinned first, so the computed qualification is current
 /// against the returned configuration.
+///
+/// Inputs: `settings` — settings to arm in place. Output: none.
 pub(crate) fn arm_automatic(settings: &mut Settings) {
     settings.mode = crate::config::Mode::Automatic;
     settings.sending_enabled = true;
@@ -275,12 +323,21 @@ pub(crate) fn arm_automatic(settings: &mut Settings) {
 /// `settings` must be armed via [`arm_automatic`]. The cooldown is satisfied by
 /// dating the draft an hour before `now`. `n` selects the provider identity and
 /// thus the recipient mailbox (`hr{n}@example.invalid`).
+///
+/// Inputs: `settings` — settings armed via [`arm_automatic`]; `account` —
+/// account key; `n` — provider id sequence number; `now` — decision time.
+/// Output: [`Job`] that passes [`automatic_policy`] with zero blocks.
 pub(crate) fn eligible_job(settings: &Settings, account: &str, n: u64, now: DateTime<Utc>) -> Job {
     eligible_job_to(settings, account, n, &format!("hr{n}@example.invalid"), now)
 }
 
 /// Like [`eligible_job`] but with an explicit sender mailbox, so several jobs
 /// can share one recipient and exercise the per-recipient burst limit.
+///
+/// Inputs: `settings` — settings armed via [`arm_automatic`]; `account` —
+/// account key; `n` — provider id sequence number; `recipient` — explicit
+/// sender mailbox; `now` — decision time. Output: [`Job`] built like [`eligible_job`]
+/// with a chosen sender.
 pub(crate) fn eligible_job_to(
     settings: &Settings,
     account: &str,
@@ -313,6 +370,8 @@ pub(crate) fn eligible_job_to(
 }
 
 /// The per-recipient automatic burst limit, re-exported for assertions.
+///
+/// Inputs: none. Output: `u64` per-recipient automatic burst limit.
 pub(crate) fn recipient_limit() -> u64 {
     u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H)
 }
@@ -365,6 +424,10 @@ static INSTALLER: Mutex<Option<Installer>> = Mutex::new(None);
 /// Run `body` with `runner` substituted for the Ollama installer. The
 /// substitution is dropped even when `body` panics, so a failing test cannot
 /// leak it into another test.
+///
+/// Inputs: `runner` — installer stand-in to arm; `body` — code to run with the
+/// substitution. Output: the value `body` returns; the substitution is always
+/// dropped.
 pub(crate) fn with_installer<T>(runner: Installer, body: impl FnOnce() -> T) -> T {
     struct ClearOnDrop;
     impl Drop for ClearOnDrop {
@@ -378,6 +441,8 @@ pub(crate) fn with_installer<T>(runner: Installer, body: impl FnOnce() -> T) -> 
 }
 
 /// The installer stand-in armed by `with_installer`, if any.
+///
+/// Inputs: none. Output: `Option<Installer>` — the armed stand-in, if any.
 pub(crate) fn installer_override() -> Option<Installer> {
     *INSTALLER.lock().unwrap()
 }
@@ -452,6 +517,9 @@ pub(crate) fn arm_worker_seams<T>(
 
 /// Move the pending seam set onto the calling thread. The worker loop calls
 /// this at thread start so tests can script its enterprise checks and timers.
+///
+/// Inputs: none. Output: none; the pending seam set is moved onto the calling
+/// thread.
 pub(crate) fn adopt_seams() {
     if let Some(seams) = PENDING.lock().unwrap().take() {
         SEAMS.with(|s| *s.borrow_mut() = seams);
@@ -459,12 +527,18 @@ pub(crate) fn adopt_seams() {
 }
 
 /// The worker-loop timer interval override armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<Duration>` — the armed interval override, if
+/// any.
 pub(crate) fn worker_interval_override() -> Option<std::time::Duration> {
     SEAMS.with(|s| s.borrow().interval)
 }
 
 /// Run `body` with provider clients bound to mock `root`/`token_url`
 /// endpoints wherever persisted credentials are opened.
+///
+/// Inputs: `root` — mock API root; `token_url` — mock token endpoint; `body` —
+/// code to run with the substitution. Output: the value `body` returns.
 pub(crate) fn with_gmail_endpoints<T>(root: &str, token_url: &str, body: impl FnOnce() -> T) -> T {
     let previous = SEAMS.with(|s| {
         s.borrow_mut()
@@ -478,6 +552,9 @@ pub(crate) fn with_gmail_endpoints<T>(root: &str, token_url: &str, body: impl Fn
 }
 
 /// The provider-endpoint stand-in armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<(String, String)>` — the armed endpoint pair,
+/// if any.
 pub(crate) fn gmail_endpoints() -> Option<(String, String)> {
     SEAMS.with(|s| s.borrow().endpoints.clone())
 }
@@ -492,12 +569,18 @@ impl<T: FnOnce()> Drop for Restore<T> {
 }
 
 /// Run `body` with `policy::load_optional()` substituted by `loaded`.
+///
+/// Inputs: `loaded` — policy answer to substitute; `body` — code to run with
+/// the substitution. Output: the value `body` returns.
 pub(crate) fn with_policy<T>(loaded: Option<LoadedPolicy>, body: impl FnOnce() -> T) -> T {
     with_policy_loader(std::sync::Arc::new(move || loaded.clone()), body)
 }
 
 /// Run `body` with `policy::load_optional()` substituted by a scriptable
 /// loader, so successive loads can answer different policies.
+///
+/// Inputs: `loader` — scriptable policy loader to substitute; `body` — code to
+/// run with the substitution. Output: the value `body` returns.
 pub(crate) fn with_policy_loader<T>(loader: PolicyLoader, body: impl FnOnce() -> T) -> T {
     let previous = SEAMS.with(|s| s.borrow_mut().policy.replace(loader));
     let _restore = Restore(Some(|| {
@@ -507,11 +590,17 @@ pub(crate) fn with_policy_loader<T>(loader: PolicyLoader, body: impl FnOnce() ->
 }
 
 /// The policy-loader stand-in armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<PolicyLoader>` — the armed loader stand-in,
+/// if any.
 pub(crate) fn policy_loader() -> Option<PolicyLoader> {
     SEAMS.with(|s| s.borrow().policy.clone())
 }
 
 /// Run `body` with the enterprise emergency stop substituted by `gate`.
+///
+/// Inputs: `gate` — emergency-stop stand-in; `body` — code to run with the
+/// substitution. Output: the value `body` returns.
 pub(crate) fn with_dispatch_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
     let previous = SEAMS.with(|s| s.borrow_mut().dispatch.replace(gate));
     let _restore = Restore(Some(|| {
@@ -521,11 +610,16 @@ pub(crate) fn with_dispatch_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
 }
 
 /// The emergency-stop stand-in armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<Gate>` — the armed stand-in, if any.
 pub(crate) fn dispatch_gate() -> Option<Gate> {
     SEAMS.with(|s| s.borrow().dispatch.clone())
 }
 
 /// Run `body` with the protected audit checkpoint substituted by `gate`.
+///
+/// Inputs: `gate` — audit-checkpoint stand-in; `body` — code to run with the
+/// substitution. Output: the value `body` returns.
 pub(crate) fn with_audit_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
     let previous = SEAMS.with(|s| s.borrow_mut().audit.replace(gate));
     let _restore = Restore(Some(|| {
@@ -535,6 +629,8 @@ pub(crate) fn with_audit_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
 }
 
 /// The audit-checkpoint stand-in armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<Gate>` — the armed stand-in, if any.
 pub(crate) fn audit_gate() -> Option<Gate> {
     SEAMS.with(|s| s.borrow().audit.clone())
 }
@@ -542,6 +638,10 @@ pub(crate) fn audit_gate() -> Option<Gate> {
 /// Run `body` with the OAuth login exchanged for canned credentials bound to
 /// mock `root`/`token_url` endpoints, so `Engine::connect` can complete its
 /// full connection flow without a browser or Google.
+///
+/// Inputs: `creds` — canned OAuth credentials; `root` — mock API root; `token_url`
+/// — mock token endpoint; `body` — code to run with the substitution. Output:
+/// the value `body` returns.
 pub(crate) fn with_login<T>(
     creds: Credentials,
     root: &str,
@@ -560,6 +660,9 @@ pub(crate) fn with_login<T>(
 }
 
 /// The login stand-in armed for this thread, if any.
+///
+/// Inputs: none. Output: `Option<(Credentials, String, String)>` — the armed
+/// login stand-in, if any.
 pub(crate) fn login_override() -> Option<(Credentials, String, String)> {
     SEAMS.with(|s| s.borrow().login.clone())
 }
@@ -590,6 +693,9 @@ pub(crate) fn gmail_resource(email: &Email) -> Value {
 }
 
 /// The Gmail thread resource containing exactly `email` at its timestamp.
+///
+/// Inputs: `email` — the single message the thread contains. Output: [`Value`]
+/// — the canned thread resource.
 pub(crate) fn gmail_thread(email: &Email) -> Value {
     json!({"messages": [{
         "id": email.stub.provider_id,
@@ -677,6 +783,9 @@ pub(crate) fn loaded_policy(digest: &str, policy: crate::policy::EnterprisePolic
 
 /// Verdict content quoting `evidence` verbatim (rejection evidence must be an
 /// exact quote from the current input).
+///
+/// Inputs: `evidence` — exact quote from the current input. Output: [`Value`]
+/// — the canned rejection verdict.
 pub(crate) fn verdict(evidence: &str) -> Value {
     json!({"category":"rejection","confidence":99,"evidence":evidence,
         "explanation":"Explicit negative hiring decision","company":"","position":"","language":"en"})
@@ -684,12 +793,17 @@ pub(crate) fn verdict(evidence: &str) -> Value {
 
 /// Verdict content for a non-rejection `category` (`opportunity`, `other`,
 /// `uncertain`) — no evidence quote is required.
+///
+/// Inputs: `category` — non-rejection category (`opportunity`, `other`, `uncertain`).
+/// Output: [`Value`] — the canned verdict.
 pub(crate) fn verdict_category(category: &str) -> Value {
     json!({"category":category,"confidence":50,"evidence":"",
         "explanation":"Fixture classification","company":"","position":"","language":"en"})
 }
 
 /// Verification content passing every local reply check.
+///
+/// Inputs: none. Output: [`Value`] — the canned verification content.
 pub(crate) fn verification_ok() -> Value {
     json!({"genuine_rejection":true,"claims_supported":true,"professional":true,
         "injection_free":true,"purpose_aligned":true,"reason":"Synthetic verification result"})
@@ -699,6 +813,11 @@ pub(crate) fn verification_ok() -> Value {
 /// protocol (`keep_alive: 0` unloads, other generations load), with
 /// classification answers produced by `classify` and canned draft and
 /// verification replies signed with `signature`.
+///
+/// Inputs: `models` — `(name, digest)` pairs the runtime reports as loaded; `signature`
+/// — signature answer for drafting; `classify` — maps a request body to a
+/// classification answer. Output: [`MockServer`] scripted as a local Ollama
+/// runtime.
 pub(crate) fn ollama_runtime(
     models: Vec<(String, String)>,
     signature: &str,
