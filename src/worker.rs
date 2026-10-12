@@ -338,6 +338,11 @@ impl Worker {
             pulse.clone(),
         );
         let join = std::thread::spawn(move || {
+            // Test seam: the thread adopts any scripted enterprise checks and
+            // timer intervals armed by the spawning test before doing any
+            // fail-closed runtime work.
+            #[cfg(test)]
+            crate::test_support::adopt_seams();
             let panic_pause = p.clone();
             let panic_stop = c.clone();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -970,6 +975,19 @@ fn record_circuit_transition(
     }
 }
 
+/// The interval a scheduled worker operation waits before running again.
+///
+/// Inputs: `default` — production cadence. Output: the effective cadence;
+/// tests adopt a zero override through `crate::test_support` so every
+/// scheduled operation fires on each loop iteration.
+fn worker_interval(default: Duration) -> Duration {
+    #[cfg(test)]
+    if let Some(interval) = crate::test_support::worker_interval_override() {
+        return interval;
+    }
+    default
+}
+
 fn run(
     mut e: Engine,
     rx: Receiver<Command>,
@@ -992,7 +1010,8 @@ fn run(
             && let Ok(mut snapshot) = shared.lock()
         {
             snapshot.api_token = Some(token);
-            snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
+            snapshot.api_token_expires =
+                Some(Instant::now() + worker_interval(Duration::from_secs(60)));
         }
         match crate::api::start_with_verifier(
             e.settings.api_port,
@@ -1036,9 +1055,9 @@ fn run(
         Duration::from_secs(5 * 60),
     );
     let mut auto_due = Instant::now();
-    let mut retention_due = Instant::now() + Duration::from_secs(60);
-    let mut scheduled_backup_due = Instant::now() + Duration::from_secs(60);
-    let mut policy_due = Instant::now() + Duration::from_secs(30);
+    let mut retention_due = Instant::now() + worker_interval(Duration::from_secs(60));
+    let mut scheduled_backup_due = Instant::now() + worker_interval(Duration::from_secs(60));
+    let mut policy_due = Instant::now() + worker_interval(Duration::from_secs(30));
     let mut automatic_failures = 0u32;
     let mut retention_failures = 0u32;
     let mut scheduled_backup_failures = 0u32;
@@ -1368,7 +1387,7 @@ fn run(
             match result {
                 Ok(changed) => {
                     policy_failures = 0;
-                    policy_due = Instant::now() + Duration::from_secs(60);
+                    policy_due = Instant::now() + worker_interval(Duration::from_secs(60));
                     if changed {
                         let completed: Result<()> = Ok(());
                         report(
@@ -1401,7 +1420,8 @@ fn run(
                 }
                 Err(error) => {
                     policy_failures = policy_failures.saturating_add(1);
-                    policy_due = Instant::now() + bounded_backoff(15, policy_failures, 5 * 60);
+                    policy_due = Instant::now()
+                        + worker_interval(bounded_backoff(15, policy_failures, 5 * 60));
                     e.paused.store(true, Ordering::SeqCst);
                     let failed: Result<()> = Err(error);
                     report(
@@ -1429,7 +1449,7 @@ fn run(
             record_current_operation(&journal, &shared);
             if result.is_ok() {
                 retention_failures = 0;
-                retention_due = Instant::now() + Duration::from_secs(24 * 60 * 60);
+                retention_due = Instant::now() + worker_interval(Duration::from_secs(24 * 60 * 60));
             } else {
                 retention_failures = retention_failures.saturating_add(1);
                 retention_due =
@@ -1461,7 +1481,8 @@ fn run(
                 record_current_operation(&journal, &shared);
                 if result.is_ok() {
                     scheduled_backup_failures = 0;
-                    scheduled_backup_due = Instant::now() + Duration::from_secs(60 * 60);
+                    scheduled_backup_due =
+                        Instant::now() + worker_interval(Duration::from_secs(60 * 60));
                 } else {
                     scheduled_backup_failures = scheduled_backup_failures.saturating_add(1);
                     scheduled_backup_due = Instant::now()
@@ -1470,10 +1491,11 @@ fn run(
                 refresh(&e, &shared, selected.as_deref(), review, page)?;
             } else {
                 scheduled_backup_failures = 0;
-                scheduled_backup_due = Instant::now() + Duration::from_secs(60 * 60);
+                scheduled_backup_due =
+                    Instant::now() + worker_interval(Duration::from_secs(60 * 60));
             }
         } else if !e.settings.scheduled_backup_enabled {
-            scheduled_backup_due = Instant::now() + Duration::from_secs(60);
+            scheduled_backup_due = Instant::now() + worker_interval(Duration::from_secs(60));
         }
 
         if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
@@ -1554,11 +1576,12 @@ fn run(
             match &result {
                 Ok(_) => {
                     automatic_failures = 0;
-                    auto_due = Instant::now() + Duration::from_secs(30);
+                    auto_due = Instant::now() + worker_interval(Duration::from_secs(30));
                 }
                 Err(_) => {
                     automatic_failures = automatic_failures.saturating_add(1);
-                    auto_due = Instant::now() + bounded_backoff(30, automatic_failures, 10 * 60);
+                    auto_due = Instant::now()
+                        + worker_interval(bounded_backoff(30, automatic_failures, 10 * 60));
                 }
             }
             let refresh_after_tick = !matches!(result, Ok(false));
@@ -3089,5 +3112,533 @@ mod orchestration_tests {
             let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
                 .and_then(|entry| entry.delete_credential());
         }
+    }
+
+    fn live_engine(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    /// Poll `pred` until it holds or a generous deadline expires.
+    fn wait_for(mut pred: impl FnMut() -> bool) -> bool {
+        for _ in 0..400 {
+            if pred() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    /// Every read-only integration API route answers its contracted payload
+    /// and rejects malformed queries or identifiers.
+    #[test]
+    fn api_query_routes_cover_the_read_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let e = demo_engine(dir.path());
+
+        assert!(
+            api_query_with_operation(&e, "/v1/metrics", None)
+                .unwrap()
+                .is_object()
+        );
+        let status = api_query_with_operation(&e, "/v1/status", None).unwrap();
+        assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+
+        // The cursor feed pages deterministically and re-encodes its cursor.
+        let feed = api_query_with_operation(&e, "/v1/item-feed?limit=1", None).unwrap();
+        assert_eq!(feed["schema_version"], 1);
+        if let Some(cursor) = feed["next_cursor"].as_str() {
+            let next = api_query_with_operation(
+                &e,
+                &format!("/v1/item-feed?limit=1&cursor={cursor}"),
+                None,
+            )
+            .unwrap();
+            assert!(next["items"].as_array().is_some());
+        }
+        assert!(api_query_with_operation(&e, "/v1/item-feed?limit=0", None).is_err());
+
+        // The page variant enforces its range.
+        let page = api_query_with_operation(&e, "/v1/items?page=1", None).unwrap();
+        assert_eq!(page["page"], 1);
+        assert!(api_query_with_operation(&e, "/v1/items?page=999999999", None).is_err());
+        assert!(api_query_with_operation(&e, "/v1/items?page=1&x=2", None).is_err());
+
+        // Events accept exactly the `after` cursor.
+        let events = api_query_with_operation(&e, "/v1/events?after=0", None).unwrap();
+        assert!(events["events"].as_array().is_some());
+        assert!(api_query_with_operation(&e, "/v1/events?after=x", None).is_err());
+
+        // Item and policy lookups validate their identifiers.
+        let items = api_query_with_operation(&e, "/v1/items?page=0", None).unwrap();
+        let id = items["items"][0]["id"].as_str().unwrap().to_owned();
+        let item = api_query_with_operation(&e, &format!("/v1/items/{id}"), None).unwrap();
+        assert_eq!(item["id"], id);
+        let decision =
+            api_query_with_operation(&e, &format!("/v1/items/{id}/automatic-policy"), None)
+                .unwrap();
+        assert!(decision.get("eligible").is_some());
+        assert!(
+            api_query_with_operation(&e, "/v1/items/not!valid", None).is_err(),
+            "identifiers must be validated"
+        );
+        assert!(
+            api_query_with_operation(&e, &format!("/v1/items/{id}?x=1"), None).is_err(),
+            "item lookups take no query parameters"
+        );
+
+        // Unknown routes fail loudly.
+        assert!(api_query_with_operation(&e, "/v1/nope", None).is_err());
+    }
+
+    /// Each web write arm executes its engine operation and maps failures onto
+    /// the stable error envelope.
+    #[test]
+    fn handle_api_write_arms_execute_their_engine_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live_engine(dir.path());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::new();
+        let journal = None;
+        let mut arm_gate = None;
+        let now = Utc::now();
+
+        // Seed one Ready message.
+        let mut job = crate::test_support::eligible_job(&e.settings, &e.account, 1, now);
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+        let id = job.id.clone();
+        let revision = job.revision;
+        let body = job.draft.as_ref().unwrap().body.clone();
+
+        // Unknown messages answer 404 through the stable envelope.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::EditDraft {
+                id: "f".repeat(64),
+                revision,
+                body: body.clone(),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 404);
+        assert!(
+            outcome.body["code"] == crate::web::CODE_ITEM_NOT_FOUND,
+            "body: {:?}",
+            outcome.body
+        );
+
+        // An invalid edit is rejected before any state change.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::EditDraft {
+                id: id.clone(),
+                revision: revision + 7,
+                body: body.clone(),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert!(outcome.status >= 400);
+        assert_eq!(e.db.get(&id).unwrap().state, JobState::Ready);
+
+        // Regeneration returns the message to the analysis queue.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Regenerate {
+                id: id.clone(),
+                revision,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert_eq!(e.db.get(&id).unwrap().state, JobState::Queued);
+
+        // Dismissal releases a message without sending.
+        let mut job2 = crate::test_support::eligible_job(&e.settings, &e.account, 2, now);
+        e.db.insert_stubs([job2.stub.clone()], now).unwrap();
+        e.db.save(&mut job2, "test.seed", "seeded").unwrap();
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Dismiss {
+                id: job2.id.clone(),
+                revision: job2.revision,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 200);
+        assert_eq!(e.db.get(&job2.id).unwrap().state, JobState::Dismissed);
+
+        // Settings writes merge the resulting view into the response.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::UpdateSettings {
+                mode: None,
+                tone: None,
+                reply_language: None,
+                sending_enabled: None,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 200);
+        assert!(
+            outcome.body.get("mode").is_some(),
+            "body: {:?}",
+            outcome.body
+        );
+
+        // The send arm rechecks the confirmation and dispatches exactly the
+        // persisted draft against the provider.
+        e.settings.sending_enabled = true;
+        e.db.set_meta("settings", &e.settings).unwrap();
+        let mut job3 = crate::test_support::eligible_job(&e.settings, &e.account, 3, now);
+        e.db.insert_stubs([job3.stub.clone()], now).unwrap();
+        e.db.save(&mut job3, "test.seed", "seeded").unwrap();
+        let email = job3.email.clone().unwrap();
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![email],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000003".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &gmail.url,
+            &gmail.url,
+        ));
+        // A mismatched confirmation is rejected before dispatch.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Send {
+                id: job3.id.clone(),
+                revision: job3.revision,
+                confirm_reply: "not the draft".into(),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert!(outcome.status >= 400);
+        // The exact confirmation dispatches.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Send {
+                id: job3.id.clone(),
+                revision: job3.revision,
+                confirm_reply: job3.draft.as_ref().unwrap().body.clone(),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert_eq!(e.db.get(&job3.id).unwrap().state, JobState::Sent);
+
+        // The arm gate: immediate confirmation is rejected, an aged gate arms.
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Open,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert!(outcome.body["arm"].is_object(), "body: {:?}", outcome.body);
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Confirm,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert!(outcome.status >= 400, "cooldown must hold");
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Cancel,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        assert!(outcome.body["arm"].is_null());
+        arm_gate = Some(AutomaticArmGate::open(
+            Utc::now() - chrono::Duration::seconds(60),
+        ));
+        e.settings.sending_enabled = true;
+        e.settings.model_digest = Some("a".repeat(64));
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::AutomaticArm {
+                action: AutomaticArmAction::Confirm,
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        // Automatic mode needs a send-scope workspace; either it arms or the
+        // guard rejects with the stable envelope.
+        if outcome.status < 400 {
+            assert_eq!(e.settings.mode, Mode::Automatic);
+        } else {
+            assert!(outcome.body["code"].is_string(), "body: {:?}", outcome.body);
+        }
+    }
+
+    /// Seed a connected workspace whose integration API listens on `api_port`.
+    fn seed_worker_workspace(dir: &std::path::Path, api_port: u16, mock: &MockServer) {
+        let mut e = live_engine(dir);
+        e.settings.api_enabled = true;
+        e.settings.api_port = api_port;
+        crate::test_support::with_login(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &mock.url,
+            &mock.url,
+            || {
+                e.connect(&dir.join("oauth.json"), true).unwrap();
+            },
+        );
+    }
+
+    /// Ask the worker one read query and return its reply.
+    fn api(w: &Worker, path: &str) -> serde_json::Value {
+        let (tx, rx) = bounded(1);
+        w.command(Command::Api {
+            path: path.into(),
+            reply: tx,
+        });
+        rx.recv_timeout(Duration::from_secs(10)).unwrap()
+    }
+
+    /// The worker loop runs every scheduled operation on its timer, applies
+    /// enterprise policy changes fail-closed, and keeps the integration API
+    /// state honest.
+    #[test]
+    fn worker_loop_timers_drive_scheduled_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let api_port = listener.local_addr().unwrap().port();
+        // Keep the reservation bound through workspace setup and release it
+        // only at the last moment before Worker::spawn (below): dropping it
+        // here would open a multi-second window where a parallel test could
+        // re-bind the port and break the API bind.
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace(dir.path(), api_port, &mock);
+        let restrictive = crate::test_support::loaded_policy(
+            "digest-a",
+            crate::policy::EnterprisePolicy {
+                version: 1,
+                force_human_review: true,
+                prohibit_integration_api: true,
+                ..Default::default()
+            },
+        );
+        let reload_calls = std::sync::atomic::AtomicUsize::new(0);
+        let loader: crate::test_support::PolicyLoader = std::sync::Arc::new(move || {
+            if reload_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                None
+            } else {
+                Some(restrictive.clone())
+            }
+        });
+        crate::test_support::arm_worker_seams(
+            Some(loader),
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                // Release the port reservation microseconds before the API
+                // binds it (see the reservation comment above).
+                drop(listener);
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                // The scheduled policy reload applies the restrictive policy
+                // and disables the prohibited integration API surface.
+                assert!(
+                    wait_for(|| api(&w, "/v1/status")["enterprise_policy"]["active"]
+                        == serde_json::json!(true)),
+                    "the policy timer never applied the enterprise policy"
+                );
+                assert!(
+                    wait_for(|| !w.view().api_listening),
+                    "a prohibited API surface must be marked closed"
+                );
+                // The recurring timered operations run and publish their
+                // outcomes (the mail poll parks on its cursor after the first
+                // pass and is exercised through CheckNow below).
+                let mut kinds = std::collections::BTreeSet::new();
+                for _ in 0..300 {
+                    kinds.insert(format!("{:?}", w.view().operation.kind));
+                    if kinds.len() >= 3 {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                for expected in ["PurgeRetention", "AutomaticDispatch"] {
+                    assert!(
+                        kinds.iter().any(|k| k.contains(expected)),
+                        "scheduled {expected} never ran; saw {kinds:?}"
+                    );
+                }
+                // A manual provider check succeeds against the scripted API.
+                // A manual provider check refreshes the poll cursor.
+                let before = api(&w, "/v1/status")["last_poll"].clone();
+                w.command(Command::CheckNow);
+                assert!(
+                    wait_for(|| api(&w, "/v1/status")["last_poll"] != before
+                        && api(&w, "/v1/status")["last_poll"].is_string()),
+                    "manual provider checks must move the poll cursor"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// A rollback attempt on the enterprise policy revision floor fails
+    /// closed: the worker pauses delivery and surfaces the failure.
+    #[test]
+    fn worker_policy_rollback_pauses_fail_closed() {
+        use crate::policy::{PolicyRevisionFloor, PolicyRevisionRecord};
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        {
+            let mut e = live_engine(dir.path());
+            // The workspace already accepted revision 2 of this policy.
+            let mut floor = PolicyRevisionFloor::default();
+            floor.policies.insert(
+                "corp.policy".into(),
+                PolicyRevisionRecord {
+                    revision: 2,
+                    digest: "digest-newer".into(),
+                },
+            );
+            e.db.set_meta("enterprise_policy_revision_floor", &floor)
+                .unwrap();
+        }
+        let rollback = crate::test_support::loaded_policy(
+            "digest-older",
+            crate::policy::EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.policy".into()),
+                revision: Some(1),
+                ..Default::default()
+            },
+        );
+        let reload_calls = std::sync::atomic::AtomicUsize::new(0);
+        let loader: crate::test_support::PolicyLoader = std::sync::Arc::new(move || {
+            if reload_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                None
+            } else {
+                Some(rollback.clone())
+            }
+        });
+        crate::test_support::arm_worker_seams(
+            Some(loader),
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                let paused = wait_for(|| w.paused.load(Ordering::SeqCst));
+                assert!(
+                    paused,
+                    "a rejected policy rollback must pause delivery fail-closed; error: {} fatal: {}",
+                    w.view().error,
+                    w.view().fatal
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// When the integration API port is unavailable the worker records the
+    /// startup failure instead of pretending the surface is live.
+    #[test]
+    fn worker_reports_integration_api_startup_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy_port = listener.local_addr().unwrap().port();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        // A free port starts the listener and marks the surface live.
+        let free_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let free_port = free_listener.local_addr().unwrap().port();
+        drop(free_listener);
+        seed_worker_workspace(dir.path(), free_port, &mock);
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| w.view().api_listening),
+                    "a free API port must come up, error: {}",
+                    w.view().error
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+        // An occupied port is reported instead of silently ignored.
+        seed_worker_workspace(dir.path(), busy_port, &mock);
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| w.view().error.contains("Integration API did not start")),
+                    "an unavailable API port must be reported, error: {}",
+                    w.view().error
+                );
+                assert!(!w.view().api_listening);
+                drop(listener);
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
     }
 }
