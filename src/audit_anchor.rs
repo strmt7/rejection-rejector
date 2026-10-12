@@ -220,6 +220,11 @@ fn os_anchor_required_from(value: std::result::Result<String, std::env::VarError
     }
 }
 
+// Windows/macOS only, and intentionally so: the OS audit anchor lives in the
+// OS credential store (the keyring crate is a target-scoped dependency and
+// Linux has no credential store). Every `cfg(any(windows, ...))` site in this
+// module is OS-store product code, not a test gate; the `cfg(not(...))` arms
+// below fail closed with the documented wording on other platforms.
 #[cfg(any(windows, target_os = "macos"))]
 fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
     let id = vault_id(data_dir)?;

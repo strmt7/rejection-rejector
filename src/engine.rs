@@ -2285,8 +2285,15 @@ mod dispatch_tests {
         .unwrap()
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Open a live (non-demo) workspace for these tests.
+    ///
+    /// Why: non-demo opens derive the vault key from the OS credential store on
+    /// Windows and macOS and from the documented `RR_VAULT_PASSPHRASE` input on
+    /// headless hosts, so the headless vault seam must be armed first or Linux
+    /// runs fail closed.
+    /// Inputs: `dir` — workspace directory. Output: the opened [`Engine`].
     fn live(dir: &std::path::Path) -> Engine {
+        crate::test_support::headless_vault_seam();
         Engine::open(
             dir.to_path_buf(),
             false,
@@ -2296,12 +2303,17 @@ mod dispatch_tests {
         .unwrap()
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Removes the OS credential minted for a test workspace even when an
+    /// assertion panics, so repeated runs never collide with stale keys.
     struct Cleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+            let _id = &self.0;
+            // Only Windows/macOS vault opens mint an OS credential; headless
+            // hosts derive the key from the passphrase and have nothing to
+            // remove.
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
                 .and_then(|entry| entry.delete_credential());
         }
     }
@@ -2478,7 +2490,6 @@ mod dispatch_tests {
 
     /// Settings changes must revalidate every send gate and disarm unattended
     /// delivery whenever the model or task context moves.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn update_settings_revalidates_and_disarms_on_context_changes() {
         let dir = tempfile::tempdir().unwrap();
@@ -2569,7 +2580,6 @@ mod dispatch_tests {
     }
 
     /// Seed a Ready job with a complete, verified analysis payload.
-    #[cfg(any(windows, target_os = "macos"))]
     fn seed_ready_job(e: &mut Engine, n: u64, now: DateTime<Utc>) -> Job {
         let account = e.account.clone();
         let email = gmail_email(
@@ -2634,7 +2644,6 @@ mod dispatch_tests {
 
     /// Automatic dispatch drives the full send gate for a qualified queue and
     /// holds (never silently skips) the message when a gate fails.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_tick_dispatches_and_holds_on_preflight_failures() {
         use crate::test_support::eligible_job;
@@ -2668,7 +2677,6 @@ mod dispatch_tests {
 
     /// Manual dispatch enforces the human-review pipeline end to end and maps
     /// every provider outcome onto the durable delivery state machine.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn manual_send_walks_the_durable_state_machine() {
         let dir = tempfile::tempdir().unwrap();
@@ -2706,7 +2714,6 @@ mod dispatch_tests {
     // Workspace-open state machine and enterprise policy lifecycle.
     // =====================================================================
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Arm settings exactly like [`crate::test_support::arm_automatic`] but
     /// leave the task qualification stale, so `open` must repair it.
     fn arm_legacy_automatic(settings: &mut Settings) {
@@ -2718,7 +2725,6 @@ mod dispatch_tests {
 
     /// Reopen a workspace whose previous session marker survived a crash and
     /// assert the fail-closed disarm is persisted and audited.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_disarms_unattended_delivery_after_unclean_shutdown() {
         let dir = tempfile::tempdir().unwrap();
@@ -2751,7 +2757,6 @@ mod dispatch_tests {
 
     /// A workspace restored from an offline backup must reopen with delivery
     /// disarmed, audit the restore, and drop the one-shot re-arm marker.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_restored_workspace_requires_explicit_reauthorization() {
         let dir = tempfile::tempdir().unwrap();
@@ -2786,7 +2791,6 @@ mod dispatch_tests {
 
     /// Settings persisted in the legacy v1 format migrate on open: the
     /// obsolete qualification is dropped and delivery disarms fail-closed.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_migrates_legacy_settings_format() {
         let dir = tempfile::tempdir().unwrap();
@@ -2814,7 +2818,6 @@ mod dispatch_tests {
 
     /// Legacy Automatic mode without a current qualification is disabled and
     /// audited; aged review items outside the age window are deferred at open.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_repairs_legacy_automatic_state_and_defers_aged_review() {
         let dir = tempfile::tempdir().unwrap();
@@ -2849,7 +2852,6 @@ mod dispatch_tests {
 
     /// Open under a v2 enterprise policy: restrictive enforcement and the
     /// revision floor are committed together in one audited transaction.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_accepts_enterprise_policy_with_revision_floor() {
         use crate::policy::EnterprisePolicy;
@@ -2896,7 +2898,6 @@ mod dispatch_tests {
     /// Reload semantics: restrictive changes apply and are audited, identical
     /// digests are no-ops, removal never relaxes anything, and revision
     /// rollback or same-revision tampering is rejected.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn reload_enterprise_policy_tightens_but_never_relaxes() {
         use crate::policy::EnterprisePolicy;
@@ -3008,7 +3009,6 @@ mod dispatch_tests {
     // Queue processing and the durable dispatch state machine.
     // =====================================================================
 
-    #[cfg(any(windows, target_os = "macos"))]
     fn test_creds() -> crate::oauth::Credentials {
         crate::oauth::Credentials {
             client_id: "id".into(),
@@ -3018,7 +3018,6 @@ mod dispatch_tests {
         }
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Seed one queued message (identity only) and return its synthetic email
     /// content for the provider mock.
     fn queue_message(e: &mut Engine, n: u64) -> (Job, crate::test_support::MockServer) {
@@ -3039,7 +3038,6 @@ mod dispatch_tests {
         (job, gmail)
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Without a provider, a pinned model or (in demo mode) real mail,
     /// `process_one` refuses to touch the queue.
     #[test]
@@ -3097,7 +3095,6 @@ mod dispatch_tests {
         assert!(!e.process_one().unwrap());
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// One queued message per run: provider fetch outcomes route each message
     /// to its durable state (analyzed, gone, malformed) without stalling the
     /// rest of the queue.
@@ -3222,7 +3219,6 @@ mod dispatch_tests {
         assert_eq!(e.db.get(&job3.id).unwrap().state, JobState::Queued);
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Analysis outcomes land in the review states they deserve, and analysis
     /// failures retry with an isolated per-message budget before escalating.
     #[test]
@@ -3359,7 +3355,6 @@ mod dispatch_tests {
         );
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Per-message analysis failures are isolated with a retry budget and
     /// escalate to human attention only after it is exhausted.
     #[test]
@@ -3410,7 +3405,6 @@ mod dispatch_tests {
         assert!(failure.retry_exhausted);
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Seed a Ready send candidate and return it with its approval hash.
     fn seed_send_job(e: &mut Engine, n: u64) -> (Job, String) {
         let job = seed_ready_job(e, n, Utc::now());
@@ -3418,7 +3412,6 @@ mod dispatch_tests {
         (job, body_hash)
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Every manual-dispatch preflight gate fails closed with its own reason
     /// and none of them ever reaches the provider or marks the job sent.
     #[test]
@@ -3608,7 +3601,6 @@ mod dispatch_tests {
         assert!(error.contains("stale"), "unexpected: {error}");
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Dispatch-time provider reality checks (changed content, dead thread,
     /// newer conversation activity, invalid timestamps) block the send.
     #[test]
@@ -3800,7 +3792,6 @@ mod dispatch_tests {
         assert_ne!(e.db.get(&job.id).unwrap().state, JobState::Sent);
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Provider send outcomes map onto the durable delivery states: rejection
     /// returns the message to review, ambiguity marks Uncertain, acceptance
     /// marks Sent exactly once.
@@ -3884,7 +3875,6 @@ mod dispatch_tests {
         assert!(e.db.has_dispatch_attempt_event(&job3.id).unwrap());
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     /// Reservation lifecycle under gate failures: the emergency stop and the
     /// protected audit checkpoint each release the reservation or record the
     /// exact delivery truth, never leaving a phantom send.
@@ -3996,7 +3986,6 @@ mod dispatch_tests {
 
     /// Automatic dispatch drives the full pipeline for a qualified queue and
     /// holds the recipient burst limit as a review gate, never a silent skip.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_dispatch_sends_until_the_recipient_burst_limit() {
         use crate::test_support::eligible_job_to;
@@ -4264,7 +4253,6 @@ mod dispatch_tests {
 
     /// Automatic ticks respect their guards, skip blocked conversations and
     /// hold (never silently drop) messages whose preflight fails late.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_tick_guards_skips_and_holds() {
         use crate::test_support::eligible_job;
@@ -4342,7 +4330,6 @@ mod dispatch_tests {
 
     /// Reconciliation resolves Uncertain deliveries against Gmail Sent and
     /// never pretends absence is proof of non-delivery.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn reconcile_resolves_uncertain_deliveries_against_sent() {
         let dir = tempfile::tempdir().unwrap();
@@ -4425,7 +4412,6 @@ mod dispatch_tests {
     /// fixtures: `perfect` answers every case with its expected category,
     /// while degraded mode answers only the qualification smoke test and
     /// holds everything else as uncertain.
-    #[cfg(any(windows, target_os = "macos"))]
     fn evaluation_runtime(perfect: bool) -> MockServer {
         let cases: Vec<Value> =
             serde_json::from_str(include_str!("../tests/fixtures/classification.json")).unwrap();
@@ -4468,7 +4454,6 @@ mod dispatch_tests {
 
     /// Task evaluation either qualifies the pinned model with a bound
     /// qualification or fails closed and disarms delivery.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn evaluate_model_to_qualifies_or_rejects_the_task() {
         let dir = tempfile::tempdir().unwrap();
@@ -4515,7 +4500,6 @@ mod dispatch_tests {
 
     /// Qualification pins digests, status inspection surfaces stale pins and
     /// residency losses, and verifier flows follow the same contract.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn qualification_and_status_flows_pin_and_revalidate() {
         let dir = tempfile::tempdir().unwrap();
@@ -4599,7 +4583,6 @@ mod dispatch_tests {
 
     /// Runtime profiling and the installed-model bake-off persist private
     /// reports and audit their creation.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn runtime_profile_and_bakeoff_persist_private_reports() {
         let dir = tempfile::tempdir().unwrap();
@@ -4633,7 +4616,6 @@ mod dispatch_tests {
     }
 
     /// Synchronize against the provider records its poll cursor.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn synchronize_records_the_poll_cursor() {
         let dir = tempfile::tempdir().unwrap();
@@ -4667,7 +4649,6 @@ mod dispatch_tests {
 
     /// Editing, regenerating and dismissing drive the review lifecycle and
     /// invalidate model verification whenever a human takes over.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn review_lifecycle_edits_regenerates_and_dismisses() {
         let dir = tempfile::tempdir().unwrap();
@@ -4718,7 +4699,6 @@ mod dispatch_tests {
 
     /// Connecting persists encrypted credentials with delivery disarmed;
     /// disconnecting removes them; demo and policy refusals stay hard.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn connect_and_disconnect_persist_credentials_disarmed() {
         let dir = tempfile::tempdir().unwrap();
@@ -4794,23 +4774,32 @@ mod dispatch_tests {
 #[cfg(test)]
 mod fail_closed_open_tests {
     use super::*;
-    // Serves credential-store tests that run only on Windows and macOS;
-    // gate with the same cfg so Linux warnings-as-errors builds stay clean.
-    #[cfg(any(windows, target_os = "macos"))]
     use crate::policy::EnterprisePolicy;
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Removes the OS credential minted for a test workspace even when an
+    /// assertion panics, so repeated runs never collide with stale keys.
     struct Cleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+            let _id = &self.0;
+            // Only Windows/macOS vault opens mint an OS credential; headless
+            // hosts derive the key from the passphrase and have nothing to
+            // remove.
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
                 .and_then(|entry| entry.delete_credential());
         }
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Open a live (non-demo) workspace for these tests.
+    ///
+    /// Why: non-demo opens derive the vault key from the OS credential store on
+    /// Windows and macOS and from the documented `RR_VAULT_PASSPHRASE` input on
+    /// headless hosts, so the headless vault seam must be armed first or Linux
+    /// runs fail closed.
+    /// Inputs: `dir` — workspace directory. Output: the opened [`Engine`].
     fn live(dir: &std::path::Path) -> Engine {
+        crate::test_support::headless_vault_seam();
         Engine::open(
             dir.to_path_buf(),
             false,
@@ -4827,7 +4816,6 @@ mod fail_closed_open_tests {
     /// Inputs: workspace plus a policy demanding `require_external_audit_anchor`
     /// with no anchor environment configured. Output: open error naming the
     /// anchoring requirement.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_refuses_policy_that_requires_an_unconfigured_external_anchor() {
         let dir = tempfile::tempdir().unwrap();
@@ -4874,7 +4862,6 @@ mod fail_closed_open_tests {
     /// Inputs: workspace opened under a restrictive policy, then reopened after
     /// its stored settings were replaced with armed Automatic mode. Output:
     /// policy restrictions re-applied and the constraint audited.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn open_reconstrains_out_of_band_settings_under_accepted_policy() {
         let dir = tempfile::tempdir().unwrap();
@@ -4955,26 +4942,33 @@ mod fail_closed_open_tests {
 #[cfg(test)]
 mod dispatch_error_path_tests {
     use super::*;
-    // These fixtures serve credential-store tests that run only on Windows
-    // and macOS; gate the imports with the same cfg so warnings-as-errors
-    // builds on Linux stay clean.
-    #[cfg(any(windows, target_os = "macos"))]
     use crate::test_support::{self as ts, MockServer};
-    #[cfg(any(windows, target_os = "macos"))]
     use serde_json::Value;
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Removes the OS credential minted for a test workspace even when an
+    /// assertion panics, so repeated runs never collide with stale keys.
     struct Cleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+            let _id = &self.0;
+            // Only Windows/macOS vault opens mint an OS credential; headless
+            // hosts derive the key from the passphrase and have nothing to
+            // remove.
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
                 .and_then(|entry| entry.delete_credential());
         }
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
+    /// Open a live (non-demo) workspace for these tests.
+    ///
+    /// Why: non-demo opens derive the vault key from the OS credential store on
+    /// Windows and macOS and from the documented `RR_VAULT_PASSPHRASE` input on
+    /// headless hosts, so the headless vault seam must be armed first or Linux
+    /// runs fail closed.
+    /// Inputs: `dir` — workspace directory. Output: the opened [`Engine`].
     fn live(dir: &std::path::Path) -> Engine {
+        crate::test_support::headless_vault_seam();
         Engine::open(
             dir.to_path_buf(),
             false,
@@ -4984,7 +4978,6 @@ mod dispatch_error_path_tests {
         .unwrap()
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     fn test_creds() -> crate::oauth::Credentials {
         crate::oauth::Credentials {
             client_id: "id".into(),
@@ -4994,7 +4987,6 @@ mod dispatch_error_path_tests {
         }
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     fn seed_send_job(e: &mut Engine, n: u64) -> (Job, String) {
         let now = Utc::now();
         let email = ts::gmail_email(
@@ -5019,7 +5011,6 @@ mod dispatch_error_path_tests {
         (job, body_hash)
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     fn attach(e: &mut Engine, server: &MockServer) {
         e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
             test_creds(),
@@ -5028,7 +5019,6 @@ mod dispatch_error_path_tests {
         ));
     }
 
-    #[cfg(any(windows, target_os = "macos"))]
     fn runtime_version_exposing(version: &str) -> MockServer {
         let version = version.to_owned();
         MockServer::new_raw(move |route, _| {
@@ -5044,7 +5034,6 @@ mod dispatch_error_path_tests {
     /// Inputs: message fetches answering 503 then 400 INVALID_ARGUMENT.
     /// Output: retryable failure for the outage, non-retryable failure for the
     /// malformed response, job still Ready in both cases.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn provider_fetch_failures_split_retryable_from_review() {
         let dir = tempfile::tempdir().unwrap();
@@ -5110,7 +5099,6 @@ mod dispatch_error_path_tests {
     /// Inputs: a message fetch that flips the pause flag as it answers.
     /// Output: retryable "Paused before dispatch" failure, no send request on
     /// the wire, job still Ready.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn a_pause_arriving_mid_flight_still_blocks_dispatch() {
         let dir = tempfile::tempdir().unwrap();
@@ -5161,7 +5149,6 @@ mod dispatch_error_path_tests {
     /// so operators retry instead of escalating a routine outage.
     /// Inputs: a profile endpoint answering 503. Output: retryable failure
     /// naming the account preflight; nothing dispatched.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn profile_preflight_outages_are_operator_retryable() {
         let dir = tempfile::tempdir().unwrap();
@@ -5201,7 +5188,6 @@ mod dispatch_error_path_tests {
     /// checkpoint failing after the provider answer. Output: non-retryable
     /// `nonretryable_audit_checkpoint_failed` for the rejection and the
     /// "Do not resend" uncertainty wording for the uncertain delivery.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn checkpoint_outage_after_provider_answers_is_never_retryable() {
         let dir = tempfile::tempdir().unwrap();
@@ -5274,7 +5260,6 @@ mod dispatch_error_path_tests {
     /// Inputs: runtimes exposing a failing version endpoint, a foreign
     /// version, and a failing model catalogue. Output: retryable failures for
     /// the outages and a review-required failure naming the runtime change.
-    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn automatic_pre_send_runtime_gates_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
