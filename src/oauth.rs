@@ -545,12 +545,15 @@ mod tests {
     fn pkce_verifiers_stay_inside_rfc_7636_bounds() {
         for _ in 0..32 {
             let verifier = secret();
-            assert!(verifier.len() >= 43 && verifier.len() <= 128, "{verifier}");
+            assert!(
+                verifier.len() >= 43 && verifier.len() <= 128,
+                "verifier length outside RFC 7636 bounds"
+            );
             assert!(
                 verifier
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
-                "verifier leaves the unreserved alphabet: {verifier}"
+                "verifier leaves the unreserved alphabet"
             );
         }
     }
@@ -714,7 +717,7 @@ mod tests {
                     query.get("state").unwrap()
                 ),
             );
-            assert!(response.contains("200 OK"), "{response}");
+            assert!(response.contains("200 OK"), "{response:?}");
             query
         });
         let creds = login_with(
@@ -804,7 +807,7 @@ mod tests {
                     query.get("redirect_uri").unwrap(),
                     &format!("/callback?state={}&code=c1", query.get("state").unwrap()),
                 );
-                assert!(response.contains("200 OK"), "{response}");
+                assert!(response.contains("200 OK"), "{response:?}");
             });
             let result = login_with(
                 &path,
@@ -850,14 +853,14 @@ mod tests {
             let redirect = query.get("redirect_uri").unwrap().clone();
             let state = query.get("state").unwrap().clone();
             let forged = drive(&redirect, "/callback?state=attacker&code=x");
-            assert!(forged.contains("400 Bad Request"), "{forged}");
+            assert!(forged.contains("400 Bad Request"), "{forged:?}");
             let declined = drive(
                 &redirect,
                 &format!("/callback?state={state}&code=ok&error=access_denied"),
             );
-            assert!(declined.contains("400 Bad Request"), "{declined}");
+            assert!(declined.contains("400 Bad Request"), "{declined:?}");
             let valid = drive(&redirect, &format!("/callback?state={state}&code=ok-code"));
-            assert!(valid.contains("200 OK"), "{valid}");
+            assert!(valid.contains("200 OK"), "{valid:?}");
         });
         let creds = login_with(
             &path,
