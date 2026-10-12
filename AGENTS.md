@@ -72,6 +72,14 @@ exist only as regression floors. Rules:
 3. Every uncovered line left in a changed area must have a written reason
    (unreachable, platform-gated, or rendering glue).
 
+## Lessons learned (all AI agents)
+
+Read `docs/LESSONS.md` before starting non-trivial work. It is a sanitized,
+repo-wide record of generic engineering rules distilled from past failures —
+each rule exists because it previously caused a real defect. Update it when
+a genuinely new failure class appears (generic rules only: never incident
+detail, personal data, or machine specifics — this repository is public).
+
 ## Definition of done
 
 Local suite green (fmt, clippy, all tests, `tests/release`) AND pushed AND remote
