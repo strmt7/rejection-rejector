@@ -139,26 +139,6 @@ pub(crate) fn show_ok() -> Value {
     })
 }
 
-/// Canned `/api/show` answer for a decision-only R&D model.
-///
-/// Inputs: none. Output: [`Value`] — the canned show answer for a
-/// decision-only model.
-pub(crate) fn show_decision_only() -> Value {
-    json!({
-        "details": {"format": "gguf"},
-        "model_info": {"general.architecture": "gemma4"},
-        "capabilities": ["decision"]
-    })
-}
-
-/// Canned `/api/ps` answer reporting full GPU residency.
-///
-/// Inputs: `model` — loaded model name; `digest` — its digest. Output: [`Value`]
-/// — the canned process-list answer.
-pub(crate) fn ps_resident(model: &str, digest: &str) -> Value {
-    json!({"models": [{"name": model, "digest": digest, "size": 7_200_000_000u64, "size_vram": 7_200_000_000u64, "context_length": 32768}]})
-}
-
 /// Canned OAuth token exchange answer with a stable refresh token.
 ///
 /// Inputs: `scope` — OAuth scope string to echo. Output: [`Value`] — the
@@ -532,23 +512,6 @@ pub(crate) fn adopt_seams() {
 /// any.
 pub(crate) fn worker_interval_override() -> Option<std::time::Duration> {
     SEAMS.with(|s| s.borrow().interval)
-}
-
-/// Run `body` with provider clients bound to mock `root`/`token_url`
-/// endpoints wherever persisted credentials are opened.
-///
-/// Inputs: `root` — mock API root; `token_url` — mock token endpoint; `body` —
-/// code to run with the substitution. Output: the value `body` returns.
-pub(crate) fn with_gmail_endpoints<T>(root: &str, token_url: &str, body: impl FnOnce() -> T) -> T {
-    let previous = SEAMS.with(|s| {
-        s.borrow_mut()
-            .endpoints
-            .replace((root.to_owned(), token_url.to_owned()))
-    });
-    let _restore = Restore(Some(|| {
-        SEAMS.with(|s| s.borrow_mut().endpoints = previous);
-    }));
-    body()
 }
 
 /// The provider-endpoint stand-in armed for this thread, if any.

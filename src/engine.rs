@@ -636,7 +636,7 @@ impl Engine {
         // state and audit event together before publishing it to the in-memory engine.
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
-        self.db.change_meta(
+        let connected = self.db.change_meta(
             &[
                 ("settings", serde_json::to_value(&settings)?),
                 ("google_credentials", serde_json::to_value(&credentials)?),
@@ -645,7 +645,8 @@ impl Engine {
             &[],
             "account.connected",
             "Google credentials encrypted locally; sending remains disabled",
-        )?;
+        );
+        connected?;
         self.settings = settings;
         self.account = account;
         self.gmail = Some(gmail);
@@ -658,12 +659,13 @@ impl Engine {
     pub fn disconnect(&mut self) -> Result<()> {
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
-        self.db.change_meta(
+        let disconnected = self.db.change_meta(
             &[("settings", serde_json::to_value(&settings)?)],
             &["google_credentials", "account"],
             "account.disconnected",
             "Local credentials removed; revoke Google consent separately if desired",
-        )?;
+        );
+        disconnected?;
         self.settings = settings;
         self.gmail = None;
         self.account.clear();
@@ -732,11 +734,12 @@ impl Engine {
             self.db
                 .defer_review_outside_window(&self.account, self.settings.cutoff(now), now)?;
         }
-        self.db.log(
+        let logged = self.db.log(
             "settings.changed",
             None,
             "Settings updated; mode, age window and send gates revalidated",
-        )?;
+        );
+        logged?;
         Ok(())
     }
     /// Run task qualification for the decision model.
@@ -754,11 +757,12 @@ impl Engine {
         self.settings.task_qualification = None;
         self.db.set_meta("settings", &self.settings)?;
         self.model = status;
-        self.db.log(
+        let logged = self.db.log(
             "model.qualified",
             None,
             "Smoke test and Ollama residency check passed; model digest pinned. Automatic mode remains disarmed until the task-specific evaluation passes.",
-        )?;
+        );
+        logged?;
         Ok(())
     }
     /// Qualify and pin the verifier model.
@@ -772,11 +776,12 @@ impl Engine {
         self.settings.task_qualification = None;
         self.db.set_meta("settings", &self.settings)?;
         self.verifier_model = status;
-        self.db.log(
+        let logged = self.db.log(
             "model.verifier_qualified",
             None,
             "Independent verifier smoke test and GPU residency passed; verifier digest pinned. Automatic mode remains disarmed until the full task evaluation passes.",
-        )?;
+        );
+        logged?;
         Ok(())
     }
 
@@ -1007,14 +1012,15 @@ impl Engine {
             std::fs::create_dir_all(parent)?;
         }
         crate::vault::write_new_private(path, &serde_json::to_vec_pretty(&profile)?)?;
-        self.db.log(
+        let logged = self.db.log(
             "model.runtime_profiled",
             None,
             &format!(
                 "Synthetic cold/warm/near-context local runtime profile saved as {}",
                 path.display()
             ),
-        )?;
+        );
+        logged?;
         Ok(())
     }
 
@@ -1030,14 +1036,15 @@ impl Engine {
         let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
         let path = self.directory.join(format!("model-bakeoff-{stamp}.json"));
         evaluation::compare_installed(&self.settings, &path)?;
-        self.db.log(
+        let logged = self.db.log(
             "models.compared",
             None,
             &format!(
                 "Task-specific installed-model bake-off saved as {}",
                 path.display()
             ),
-        )?;
+        );
+        logged?;
         Ok(path)
     }
 
@@ -1266,11 +1273,12 @@ impl Engine {
             a.verification = None;
         }
         job.flags = vec!["User-edited reply; previous automatic verification invalidated".into()];
-        self.db.save_clearing_processing_failure(
+        let saved = self.db.save_clearing_processing_failure(
             &mut job,
             "draft.edited",
             "Human edit; explicit review required before send",
-        )?;
+        );
+        saved?;
         Ok(())
     }
     /// Regenerate the drafted reply for one message.
@@ -1294,11 +1302,12 @@ impl Engine {
         job.analysis = None;
         job.flags.clear();
         job.retry_at = 0;
-        self.db.save_clearing_processing_failure(
+        let saved = self.db.save_clearing_processing_failure(
             &mut job,
             "analysis.requested",
             "User requested a fresh local analysis",
-        )?;
+        );
+        saved?;
         Ok(())
     }
     /// Dismiss one reviewable message without replying.
@@ -1312,11 +1321,12 @@ impl Engine {
             "Message changed; reload before dismissing"
         );
         job.state = JobState::Dismissed;
-        self.db.save_clearing_processing_failure(
+        let saved = self.db.save_clearing_processing_failure(
             &mut job,
             "email.dismissed",
             "Dismissed by user; no mail sent",
-        )?;
+        );
+        saved?;
         Ok(())
     }
     /// Load one job after checking it belongs to this account.
@@ -1688,11 +1698,12 @@ impl Engine {
                         current
                             .flags
                             .push(format!("Automatic dispatch held: {}", error.message));
-                        self.db.save(
+                        let saved = self.db.save(
                             &mut current,
                             "automatic.held",
                             "Deterministic preflight failed; requires human review",
-                        )?;
+                        );
+                        saved?;
                     }
                 }
                 return Err(anyhow::Error::new(error));
@@ -1719,11 +1730,12 @@ impl Engine {
         if let Some(provider) = found {
             self.db.finish_send(id, Some(provider))?;
         } else {
-            self.db.log(
+            let logged = self.db.log(
                 "delivery.unresolved",
                 Some(id),
                 "No Sent match found. Reservation retained; absence does not prove non-delivery",
-            )?;
+            );
+            logged?;
         }
         Ok(())
     }
@@ -1762,11 +1774,12 @@ impl Engine {
                 origin: "demo".into(),
             });
             job.drafted_at = Some(Utc::now());
-            self.db.save(
+            let saved = self.db.save(
                 &mut job,
                 "demo.loaded",
                 "Synthetic fixture, not model-generated or real email",
-            )?;
+            );
+            saved?;
         }
         Ok(())
     }
@@ -4053,6 +4066,199 @@ mod dispatch_tests {
                 .any(|f| f.contains("Automatic dispatch held")),
             "flags: {:?}",
             held[0].flags
+        );
+    }
+
+    /// Why: every engine mutation that records an audit event must surface a
+    /// failed audit write to its caller instead of reporting success — a silent
+    /// `Ok` would let a storage fault erase the audit trail while the UI claims
+    /// the change landed.
+    /// Inputs: a demo engine whose `events` table has been dropped so every
+    /// audit write fails. Output: `Err` from each mutation with an audit tail,
+    /// and no partial state change from the review mutations.
+    #[test]
+    fn audit_write_failures_surface_through_engine_mutations() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        e.db.drop_table_for_tests("events");
+
+        // update_settings: the audit tail fails after staging the settings.
+        assert!(e.update_settings(e.settings.clone()).is_err());
+        // disconnect: account teardown must not claim success.
+        assert!(e.disconnect().is_err());
+
+        // Human-review mutations must fail without partially applying.
+        let mut items = e.db.list(&e.account, true, 0, 25).unwrap();
+        let j = items.pop().unwrap();
+        let before = e.db.get(&j.id).unwrap();
+        assert!(
+            e.edit(
+                &j.id,
+                j.revision,
+                "Please explain the specific assessment criteria used.".into(),
+            )
+            .is_err()
+        );
+        assert!(e.dismiss(&j.id, j.revision).is_err());
+        let after = e.db.get(&j.id).unwrap();
+        assert_eq!(
+            after.state, before.state,
+            "state must not change on failure"
+        );
+        assert_eq!(
+            after.draft.as_ref().map(|draft| draft.body.clone()),
+            before.draft.as_ref().map(|draft| draft.body.clone()),
+            "draft must not change on failure"
+        );
+    }
+
+    /// Why: with no digest pin the engine must report the local installation
+    /// verbatim — no pin comparison and no residency gate — so a regression
+    /// that applies pin semantics to unpinned workspaces (or drops recording
+    /// the local status) is caught.
+    /// Inputs: a demo engine pointed at a mock runtime reporting one installed
+    /// model, with `model_digest` unset. Output: `Ok(())`; `e.model.digest`
+    /// equals the installed digest and no pin-mismatch message is recorded.
+    #[test]
+    fn inspect_model_status_without_pin_reports_local_installation() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let installed = "a".repeat(64);
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(e.settings.model.clone(), installed.clone())],
+            "Test Applicant",
+            |_| crate::test_support::verdict_category("other"),
+        );
+        e.settings.ollama_url = runtime.url.clone();
+        e.settings.model_digest = None;
+        e.inspect_model_status().unwrap();
+        assert_eq!(e.model.digest, installed);
+        assert!(
+            !e.model.message.contains("differs from the qualified pin"),
+            "no pin means no pin comparison"
+        );
+    }
+
+    /// Why: when the pinned verifier is installed but its GPU residency cannot
+    /// be confirmed, the engine must fail closed — `gpu_resident` false with an
+    /// explicit operator message — instead of trusting the pin alone.
+    /// Inputs: a mock runtime whose verifier tag digest equals the pin but
+    /// whose process-list endpoint is unavailable. Output: `Ok(())` with
+    /// `verifier_model.gpu_resident == false` and the unconfirmed-residency
+    /// message.
+    #[test]
+    fn inspect_verifier_model_status_surfaces_unconfirmed_residency() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let digest = "b".repeat(64);
+        e.settings.verifier_model = "verifier-model".into();
+        e.settings.verifier_model_digest = Some(digest.clone());
+        let server = crate::test_support::MockServer::new(move |route, _| match route {
+            "/api/version" => Some(crate::test_support::version_ok()),
+            "/api/tags" => Some(crate::test_support::tags_for("verifier-model", &digest)),
+            "/api/show" => Some(crate::test_support::show_ok()),
+            _ => None,
+        });
+        e.settings.ollama_url = server.url.clone();
+        e.inspect_verifier_model_status().unwrap();
+        assert!(!e.verifier_model.gpu_resident);
+        assert!(
+            e.verifier_model
+                .message
+                .contains("not currently confirmed GPU-resident"),
+            "the operator must be told residency is unconfirmed"
+        );
+    }
+
+    /// Why: verifier provenance must be re-checked on the digest, not only the
+    /// model name — a matching verifier name with a drifted digest is stale
+    /// provenance and must block unattended sending.
+    /// Inputs: an eligible job whose analysis names the configured verifier but
+    /// pins a different digest, then the matching digest. Output: the
+    /// stale-provenance block present for the drift, absent for the match.
+    #[test]
+    fn automatic_policy_blocks_stale_verifier_provenance_digest() {
+        let mut settings = Settings::default();
+        crate::test_support::arm_automatic(&mut settings);
+        settings.independent_verifier_enabled = true;
+        settings.verifier_model = "verifier-model".into();
+        settings.verifier_model_digest = Some("c".repeat(64));
+        let now = Utc::now();
+        let mut job = crate::test_support::eligible_job(&settings, "me@example.com", 1, now);
+        let analysis = job.analysis.as_mut().unwrap();
+        analysis.verification_model = "verifier-model".into();
+        analysis.verification_model_digest = "d".repeat(64);
+
+        let blocks = auto_blocks(&job, &settings, "me@example.com", now);
+        assert!(
+            blocks
+                .iter()
+                .any(|b| b.contains("Independent-verifier provenance is stale")),
+            "digest drift must block: {blocks:?}"
+        );
+
+        job.analysis.as_mut().unwrap().verification_model_digest = "c".repeat(64);
+        let blocks = auto_blocks(&job, &settings, "me@example.com", now);
+        assert!(
+            !blocks
+                .iter()
+                .any(|b| b.contains("Independent-verifier provenance is stale")),
+            "matching provenance must not block: {blocks:?}"
+        );
+    }
+
+    /// Why: `automatic_tick` must SKIP a ready job that fails automatic policy
+    /// — no dispatch attempt and no "held" downgrade — leaving it untouched for
+    /// human review. If the skip guard regresses, the blocked job is pushed
+    /// into the send path and is either wrongly held or consumes a send
+    /// attempt.
+    /// Inputs: a demo engine whose ready jobs all fail automatic policy (seeded
+    /// demo fixtures have no analysis; the seeded test job has low confidence).
+    /// Output: `Ok(false)` and the job still Ready with no held-flag.
+    #[test]
+    fn automatic_tick_skips_policy_blocked_jobs_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        crate::test_support::arm_automatic(&mut e.settings);
+        let now = Utc::now();
+        let mut job = crate::test_support::eligible_job(&e.settings, &e.account, 77, now);
+        job.analysis.as_mut().unwrap().verdict.confidence = 40;
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        e.db.save(&mut job, "test.seed", "blocked fixture").unwrap();
+
+        assert!(!e.automatic_tick().unwrap());
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Ready);
+        assert!(
+            after
+                .flags
+                .iter()
+                .all(|flag| !flag.contains("Automatic dispatch held")),
+            "a skipped job must never be downgraded to held"
         );
     }
 

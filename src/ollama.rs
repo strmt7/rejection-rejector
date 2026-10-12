@@ -427,13 +427,14 @@ impl Ollama {
             tag.size > 0 && tag.size < GPU_BUDGET_BYTES,
             "Model file is outside the supported 16 GiB GPU budget"
         );
-        let show: Value = net::json(
+        let show = net::json(
             net::client(30, true)?
                 .post(self.url("/api/show"))
                 .json(&json!({"model":self.settings.model}))
                 .send()?,
             4 * 1024 * 1024,
-        )?;
+        );
+        let show: Value = show?;
         ensure!(
             show.get("remote_host").is_none() && show.get("remote_model").is_none(),
             "Cloud-backed models are forbidden"
@@ -562,7 +563,7 @@ impl Ollama {
     }
 
     fn unload_for_transport_recovery(&self) -> Result<()> {
-        let _: Value = net::json(
+        let unloaded = net::json(
             net::client(30, true)?
                 .post(self.url("/api/generate"))
                 .json(&json!({
@@ -573,7 +574,8 @@ impl Ollama {
                 .send()
                 .context("Could not unload the local Ollama model after a transport failure")?,
             256 * 1024,
-        )?;
+        );
+        let _: Value = unloaded?;
         Ok(())
     }
 
@@ -591,10 +593,11 @@ impl Ollama {
         }
         self.unload_for_transport_recovery()?;
         for _ in 0..50 {
-            let ps: Ps = net::json(
+            let ps = net::json(
                 net::client(10, true)?.get(self.url("/api/ps")).send()?,
                 2 * 1024 * 1024,
-            )?;
+            );
+            let ps: Ps = ps?;
             if !ps
                 .models
                 .iter()
@@ -816,7 +819,7 @@ impl Ollama {
     }
     fn preflight_private_inference(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
-        let warm: Generate = net::json(
+        let warm = net::json(
             net::client(self.settings.llm_timeout_seconds, true)?
                 .post(self.url("/api/generate"))
                 .json(&json!({
@@ -835,7 +838,8 @@ impl Ollama {
                 .send()
                 .context("Local Ollama warm-up failed")?,
             256 * 1024,
-        )?;
+        );
+        let warm: Generate = warm?;
         self.record_usage(warm.prompt_eval_count, warm.eval_count);
         ensure!(
             warm.done && warm.prompt_eval_count > 0,
@@ -916,16 +920,14 @@ impl Ollama {
                     crate::language::first_language(&current, "en")
                 }
             };
-            let output: ReplyOutput = analysis_stage(
-                AnalysisFailureStage::DraftGeneration,
-                || {
-                    self.chat(
+            let output = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+                self.chat(
                         DRAFT_SYSTEM_PROMPT,
                         json!({"tone":self.settings.tone.instruction(),"reply_language":reply_language,"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
                         json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}),
                     self.draft_predict())
-                },
-            )?;
+            });
+            let output: ReplyOutput = output?;
             analysis_stage(AnalysisFailureStage::DraftGeneration, || {
                 crate::language::ensure_reply_language(&output.body, &reply_language)?;
                 mail::validate_draft(&output.body)?;
@@ -1284,6 +1286,60 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Why: each analysis failure stage maps to its own processing-failure code
+    /// so operators can tell a preflight outage from a classification, draft or
+    /// verification fault; a wrong mapping misroutes every failure record.
+    /// Inputs: all four stages. Output: each stage's documented
+    /// [`ProcessingFailureCode`].
+    #[test]
+    fn analysis_failure_stages_map_to_distinct_processing_codes() {
+        assert_eq!(
+            AnalysisFailureStage::Preflight.code(),
+            ProcessingFailureCode::ModelPreflight
+        );
+        assert_eq!(
+            AnalysisFailureStage::Classification.code(),
+            ProcessingFailureCode::Classification
+        );
+        assert_eq!(
+            AnalysisFailureStage::DraftGeneration.code(),
+            ProcessingFailureCode::DraftGeneration
+        );
+        assert_eq!(
+            AnalysisFailureStage::VerificationRuntime.code(),
+            ProcessingFailureCode::VerificationRuntime
+        );
+    }
+
+    /// Why: the output budgets are tiered to keep think reasoning plus schema
+    /// JSON inside the configured context window; a regressed tier truncates
+    /// real classifications to `done_reason=length` and fails closed on healthy
+    /// mail.
+    /// Inputs: `num_ctx` at the 8192, 16384 and 32768 tiers. Output: the
+    /// documented structured, draft and classification-text budgets for each
+    /// tier.
+    #[test]
+    fn predict_budgets_follow_the_context_tier() {
+        for (num_ctx, structured, draft, text) in [
+            (8192u32, 1536u32, 2560u32, 3500usize),
+            (16384, 8192, 8192, 5400),
+            (32768, 8192, 8192, 24000),
+        ] {
+            let settings = Settings {
+                num_ctx,
+                ..Settings::default()
+            };
+            let local = Ollama::new(&settings).unwrap();
+            assert_eq!(
+                local.structured_predict(),
+                structured,
+                "structured {num_ctx}"
+            );
+            assert_eq!(local.draft_predict(), draft, "draft {num_ctx}");
+            assert_eq!(local.classify_text_budget(), text, "text {num_ctx}");
+        }
+    }
 
     /// Analysis through the independent verifier verifies with the verifier
     /// model and reports its provenance instead of the primary model's.
