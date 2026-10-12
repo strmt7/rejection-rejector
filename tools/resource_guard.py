@@ -61,10 +61,18 @@ class Thresholds:
     80% (VRAM) / 85% (RAM) of total.
     """
 
-    min_free_vram: int = 2 * GIB
+    # VRAM floor is small on purpose: GPU use up to ~99% is desired; the
+    # protection that matters is RAM (host slowdown) and true exhaustion.
+    min_free_vram: int = 256 * 1024 * 1024
     min_free_ram: int = 4 * GIB
     min_free_disk: int = 10 * GIB
-    max_vram_use_fraction: float = 0.80
+    # VRAM usage budget: deliberately permissive. Measured crash evidence for
+    # GPU training faults attributes them to codegen defects, not capacity
+    # ("within headroom" at fault time), so the binding safety line for VRAM
+    # is the min_free floor (exhaustion), not a usage fraction. 95% keeps the
+    # floor meaningful on small cards while letting large models use the GPU
+    # fully. RAM keeps a stricter budget: host OOM destabilizes the machine.
+    max_vram_use_fraction: float = 0.99
     max_ram_use_fraction: float = 0.85
     require_vram: bool = False
     require_ram: bool = True
