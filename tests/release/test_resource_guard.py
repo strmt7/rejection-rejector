@@ -334,6 +334,48 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0].reason, "unmeasurable")
 
+    def test_soft_resources_warn_but_never_stop(self):
+        """Why: VRAM exhaustion is an accepted, checkpoint-bounded outcome
+        (clean OOM abort, last checkpoint kept); blindness or breaches on
+        vram must never kill a run. RAM/disk stay hard: host slowdown and
+        data loss are the unacceptable classes."""
+        fired = []
+        wd = rg.ResourceWatchdog(
+            limits=rg.Thresholds(require_vram=True),
+            soft_resources=frozenset({"vram"}),
+            on_violation=lambda v: fired.append(v),
+            interval_s=0.02,
+            vram_probe=lambda: (0, 16 * rg.GIB),
+            ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
+            disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
+        )
+        wd.start()
+        time.sleep(0.2)
+        self.assertEqual(fired, [], "vram breaches must not stop the run")
+        wd.stop()
+
+    def test_soft_resources_do_not_mask_hard_breaches(self):
+        """Why: naming vram soft must never weaken the RAM/disk hard line -
+        heavy RAM pressure must stop the workload so the configuration can
+        be rethought (model size, quantization, sequence length)."""
+        fired = []
+        wd = rg.ResourceWatchdog(
+            limits=rg.Thresholds(require_vram=True),
+            soft_resources=frozenset({"vram"}),
+            on_violation=lambda v: fired.append(v),
+            interval_s=0.02,
+            vram_probe=lambda: (0, 16 * rg.GIB),
+            ram_probe=lambda: (1 * rg.GIB, 64 * rg.GIB),
+            disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
+        )
+        wd.start()
+        deadline = time.time() + 3.0
+        while not fired and time.time() < deadline:
+            time.sleep(0.02)
+        wd.stop()
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0].resource, "ram")
+
     def test_watchdog_stop_is_idempotent(self):
         """Why: cleanup paths may run twice during failure handling."""
         wd = rg.ResourceWatchdog(

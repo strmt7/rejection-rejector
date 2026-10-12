@@ -231,12 +231,18 @@ class ResourceWatchdog:
         limits: Optional[Thresholds] = None,
         on_violation: Callable[[Violation], None],
         interval_s: float = 2.0,
+        soft_resources: Optional[frozenset] = None,
         vram_probe: Optional[Callable[[], tuple[int, int]]] = None,
         ram_probe: Optional[Callable[[], tuple[int, int]]] = None,
         disk_path: str = ".",
         disk_probe: Optional[Callable[[], tuple[int, int]]] = None,
     ) -> None:
         self._limits = limits or Thresholds()
+        # Soft resources (e.g. VRAM mid-run) report through on_soft_violation
+        # and never stop the workload: an allocator OOM aborts cleanly and
+        # bounded checkpoints cap the loss. RAM/disk stay hard: host
+        # slowdown and data loss are unacceptable.
+        self._soft = soft_resources or frozenset()
         self._on_violation = on_violation
         self._interval_s = interval_s
         self._vram_probe = vram_probe
@@ -291,8 +297,12 @@ class ResourceWatchdog:
                     self._stop.wait(self._interval_s)
                     continue
             if violations and not self._fired:
+                hard = [v for v in violations if v.resource not in self._soft]
+                if not hard:
+                    self._stop.wait(self._interval_s)
+                    continue
                 self._fired = True
-                self._on_violation(violations[0])
+                self._on_violation(hard[0])
                 return
             self._stop.wait(self._interval_s)
 
