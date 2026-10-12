@@ -57,6 +57,27 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 6. Root-cause once, then scan sibling code paths for the same pattern instead
    of rediscovering the bug file by file.
 
+## Verification discipline (all AI agents)
+
+Never assume — verify against live sources, then re-verify after changes.
+1. State facts only from tool output run this turn (CI status, versions,
+   signatures, file contents) — never from memory, training data, or a
+   stale result from an earlier turn.
+2. Check the ACTUAL API signature / package index / upstream issue thread
+   before using or installing anything. Assumed shapes break builds
+   (two Trainer API breaks this way).
+3. Version families: read the upstream issue tracker before debugging a
+   failure. Known-broken families get swapped, not patched with flags.
+4. After every push: confirm which workflows ran AND why any were skipped
+   (path filters). A skipped lane is not a green lane — a change outside a
+   lane's paths needs that lane's equivalent verified locally or by a lane
+   that does cover those paths.
+5. Platform-gated code needs platform-gated imports; verify with the CI's
+   view (warnings denied, Linux + Windows) before claiming green.
+6. Every claim in a report carries its evidence (SHA, run id, count).
+   One verified fact beats ten plausible sentences; skip restating context.
+   Caution costs one tool call — assumptions cost a crash.
+
 ## Coverage doctrine (all AI agents)
 
 The goal is **not a single uncovered line of product code** — 100% line
