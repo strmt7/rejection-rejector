@@ -50,6 +50,13 @@ rule exists because it previously caused a real defect or delay.
 
 ## Concurrency and runtime
 
+- Never SIGKILL a process holding a GPU context on Windows/WSL: forced
+  terminations corrupt the dxgkrnl VMBus channel and every later GPU
+  allocation fails with `create_allocation: -75 (EOVERFLOW)` until a full
+  `wsl --shutdown` resets it (microsoft/WSL#41062). Stop GPU workloads
+  cooperatively; if one must die hard, reset WSL afterwards before any new
+  GPU run. A quick health probe before a big run: `dmesg | grep -c '\-75'`
+  must be zero for the current boot.
 - On Windows/WSL, a distro auto-shuts down about 15 seconds after its last
   active shell exits, SIGKILLing background jobs with no trace (empty
   logs, lost exit codes). Long jobs need `[general] instanceIdleTimeout=-1`
