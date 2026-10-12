@@ -223,6 +223,8 @@ class ResourceWatchdog:
     ``stop()``. The watchdog is fail-closed exactly like :func:`preflight`.
     """
 
+    TOLERATED_MISSED_PROBES = 5
+
     def __init__(
         self,
         *,
@@ -244,6 +246,7 @@ class ResourceWatchdog:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._fired = False
+        self._probe_misses = 0
 
     def __enter__(self) -> "ResourceWatchdog":
         self.start()
@@ -276,6 +279,17 @@ class ResourceWatchdog:
                 disk_probe=self._disk_probe,
             )
             violations = check(snap, self._limits)
+            # Transient probe failures must not kill a healthy run: only a
+            # real breach, or a probe that stays unmeasurable for
+            # `TOLERATED_MISSED_PROBES` consecutive polls, triggers the stop.
+            unmeasurable_only = violations and all(
+                v.reason == "unmeasurable" for v in violations
+            )
+            if unmeasurable_only:
+                self._probe_misses += 1
+                if self._probe_misses < self.TOLERATED_MISSED_PROBES:
+                    self._stop.wait(self._interval_s)
+                    continue
             if violations and not self._fired:
                 self._fired = True
                 self._on_violation(violations[0])

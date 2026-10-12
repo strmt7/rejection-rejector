@@ -281,6 +281,55 @@ class WatchdogTests(unittest.TestCase):
         wd.stop()
         self.assertEqual(fired, [])
 
+    def test_watchdog_tolerates_transient_probe_failures(self):
+        """Why: one flaky GPU probe reading must not kill a healthy run -
+        the stop is for real breaches or probes that stay blind."""
+        fired = []
+        misses = {"n": 0}
+        lock = threading.Lock()
+
+        def flaky_vram():
+            with lock:
+                misses["n"] += 1
+                if misses["n"] <= 3:  # 3 transient misses < tolerance of 5
+                    raise RuntimeError("transient probe failure")
+                return (8 * rg.GIB, 16 * rg.GIB)
+
+        wd = rg.ResourceWatchdog(
+            limits=rg.Thresholds(require_vram=True),
+            on_violation=lambda v: fired.append(v),
+            interval_s=0.02,
+            vram_probe=flaky_vram,
+            ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
+            disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
+        )
+        wd.start()
+        time.sleep(0.3)
+        wd.stop()
+        self.assertEqual(fired, [], "transient probe misses must not stop the run")
+
+    def test_watchdog_stops_when_probe_stays_blind(self):
+        """Why: a probe that never recovers must fail closed after the
+        tolerance window - persistent blindness is a breach."""
+        fired = []
+
+        def blind():
+            raise RuntimeError("probe permanently broken")
+
+        wd = rg.ResourceWatchdog(
+            limits=rg.Thresholds(require_vram=True),
+            on_violation=lambda v: fired.append(v),
+            interval_s=0.01,
+            vram_probe=blind,
+            ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
+            disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
+        )
+        wd.start()
+        time.sleep(0.4)
+        wd.stop()
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0].reason, "unmeasurable")
+
     def test_watchdog_stop_is_idempotent(self):
         """Why: cleanup paths may run twice during failure handling."""
         wd = rg.ResourceWatchdog(
