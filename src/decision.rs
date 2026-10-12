@@ -252,6 +252,10 @@ fn decide(settings: &Settings, model: &str, case: &Case) -> Result<(Category, De
 /// Benchmark a local Ollama decision model on the recruiting classification corpus.
 ///
 /// This path is R&D-only: it never connects Gmail, mutates delivery state or sends mail.
+///
+/// Inputs: `settings` — base settings (delivery stays disarmed); `model` —
+/// Ollama model name to benchmark; `out` — destination for the JSON report.
+/// Output: `Result<Value>` — the benchmark report that was written.
 pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
     validate_model_name(model)?;
     let mut candidate = settings.clone();
@@ -516,6 +520,10 @@ fn ranked_candidates(candidates: &[Value]) -> Vec<CandidateRank> {
 /// deliberately lexicographic: eligibility first, then higher rejection recall,
 /// then lower rejection Brier score, lower critical-negative rejection score and
 /// finally lower latency.
+///
+/// Inputs: `settings` — base settings; `out` — destination for the comparison
+/// report. Output: `Result<Value>` — the lexicographically ranked comparison
+/// report.
 pub fn compare_installed(settings: &Settings, out: &Path) -> Result<Value> {
     let temp = tempfile::tempdir().context("Cannot create temporary decision-model workspace")?;
     let mut candidates = Vec::new();

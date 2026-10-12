@@ -4,6 +4,11 @@ use serde::de::DeserializeOwned;
 use std::{io::Read, time::Duration};
 use zeroize::Zeroizing;
 
+/// Build the hardened HTTP client used for upstream calls.
+///
+/// Inputs: `timeout` — total request timeout in seconds; `local` — whether the
+/// client bypasses any configured proxy for local targets. Output: `Result<Client>`;
+/// errors when the client cannot be constructed.
 pub fn client(timeout: u64, local: bool) -> Result<Client> {
     let mut builder = Client::builder()
         .http1_only()
@@ -20,6 +25,10 @@ pub fn client(timeout: u64, local: bool) -> Result<Client> {
 }
 
 /// Do not include upstream bodies, credentials or echoed private values in errors.
+///
+/// Inputs: `response` — upstream HTTP response to decode; `limit` — maximum
+/// accepted body size in bytes. Output: `Result<T>` — the decoded JSON value;
+/// non-success statuses, oversized bodies and malformed JSON are refused.
 pub fn json<T: DeserializeOwned>(response: Response, limit: usize) -> Result<T> {
     ensure!(
         response.status().is_success(),

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// Hash a value with SHA-256 for identities and fingerprints.
+///
+/// Inputs: `value` — any byte buffer. Output: `String` of lowercase hex.
 pub fn hash(value: impl AsRef<[u8]>) -> String {
     crate::hex_lower(Sha256::digest(value.as_ref()))
 }
@@ -21,6 +24,10 @@ pub struct Stub {
     pub source: Source,
 }
 impl Stub {
+    /// The stable message identity.
+    ///
+    /// Inputs: none beyond the stub. Output: `String` — hash of account, source
+    /// and provider id.
     pub fn id(&self) -> String {
         hash(format!(
             "{}\0{:?}\0{}",
@@ -29,6 +36,10 @@ impl Stub {
             self.provider_id
         ))
     }
+    /// The stable thread identity.
+    ///
+    /// Inputs: none beyond the stub. Output: `String` — hash of account, source
+    /// and thread id.
     pub fn thread_key(&self) -> String {
         hash(format!(
             "{}\0{:?}\0{}",
@@ -53,15 +64,27 @@ pub struct Email {
     pub body_complete: bool,
 }
 impl Email {
+    /// Read the first value of one message header.
+    ///
+    /// Inputs: `name` — header name. Output: `Option<&str>` — the first matching
+    /// value, if present.
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .get(name)
             .and_then(|v| v.first())
             .map(String::as_str)
     }
+    /// The normalized reply mailbox for this message.
+    ///
+    /// Inputs: none beyond the message. Output: `anyhow::Result<String>` — the
+    /// reply-to mailbox, falling back to the sender.
     pub fn recipient(&self) -> anyhow::Result<String> {
         crate::mail::mailbox(self.reply_to.as_deref().unwrap_or(&self.from))
     }
+    /// The content fingerprint used to detect message changes.
+    ///
+    /// Inputs: none beyond the message. Output: `String` fingerprint hash (labels
+    /// are excluded; they are checked separately at send time).
     pub fn fingerprint(&self) -> String {
         // Gmail labels can legitimately change. They are checked separately at send time.
         hash(format!(
@@ -110,6 +133,10 @@ pub struct Verification {
     pub reason: String,
 }
 impl Verification {
+    /// Whether every verification check passed.
+    ///
+    /// Inputs: none beyond the verification. Output: `true` only when all five
+    /// checks pass.
     pub fn passed(&self) -> bool {
         self.genuine_rejection
             && self.claims_supported
@@ -152,6 +179,9 @@ pub enum ProcessingFailureCode {
     AnalysisUnknown,
 }
 impl ProcessingFailureCode {
+    /// The stable stored failure code.
+    ///
+    /// Inputs: none beyond the code. Output: `&'static str`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MessageMalformed => "message_malformed",
@@ -163,6 +193,10 @@ impl ProcessingFailureCode {
         }
     }
 
+    /// Parse a stored processing-failure code.
+    ///
+    /// Inputs: `value` — stored code string. Output: `Option<Self>`; `None` for
+    /// unknown codes.
     pub fn from_db(value: &str) -> Option<Self> {
         Some(match value {
             "message_malformed" => Self::MessageMalformed,
@@ -190,6 +224,9 @@ pub enum JobState {
     Uncertain,
 }
 impl JobState {
+    /// The stable stored job state name.
+    ///
+    /// Inputs: none beyond the state. Output: `&'static str`.
     pub fn db(self) -> &'static str {
         match self {
             Self::Queued => "queued",
@@ -203,6 +240,9 @@ impl JobState {
             Self::Uncertain => "uncertain",
         }
     }
+    /// The operator-facing job state label.
+    ///
+    /// Inputs: none beyond the state. Output: `&'static str` label.
     pub fn label(self) -> &'static str {
         match self {
             Self::Queued => "Awaiting analysis",
@@ -216,10 +256,18 @@ impl JobState {
             Self::Uncertain => "Delivery uncertain",
         }
     }
+    /// Whether the state is actionable in review.
+    ///
+    /// Inputs: none beyond the state. Output: `true` for the ready and attention
+    /// states.
     pub fn reviewable(self) -> bool {
         matches!(self, Self::Ready | Self::Attention)
     }
 
+    /// Parse a stored job state name.
+    ///
+    /// Inputs: `value` — stored state string. Output: `Option<Self>`; `None` for
+    /// unknown states.
     pub fn from_db(value: &str) -> Option<Self> {
         Some(match value {
             "queued" => Self::Queued,
@@ -237,6 +285,9 @@ impl JobState {
 
     /// Persisted lifecycle invariant. Same-state saves are allowed for metadata,
     /// retry counters, retention pruning and other non-transition updates.
+    ///
+    /// Inputs: `next` — requested next state. Output: `true` for allowed
+    /// transitions (same-state saves included).
     pub fn can_transition_to(self, next: Self) -> bool {
         if self == next {
             return true;
@@ -275,6 +326,10 @@ pub struct Job {
     pub provider_sent_id: Option<String>,
 }
 impl Job {
+    /// Create a queued job from one provider stub.
+    ///
+    /// Inputs: `stub` — provider identity; `now` — creation timestamp. Output: [`Job`]
+    /// in the queued state at revision zero.
     pub fn new(stub: Stub, now: DateTime<Utc>) -> Self {
         Self {
             id: stub.id(),
@@ -366,6 +421,9 @@ pub enum OperationKind {
     AutomaticDispatch,
 }
 impl OperationKind {
+    /// The stable failure code for this operation kind.
+    ///
+    /// Inputs: none beyond the kind. Output: `&'static str` code.
     pub fn failure_code(self) -> &'static str {
         match self {
             Self::Idle => "operation_idle",
@@ -410,6 +468,9 @@ impl OperationKind {
     /// Operations for which process termination can leave an external side
     /// effect ambiguous or an operator artifact incomplete. SQLite-only
     /// transactions are intentionally excluded because they roll back atomically.
+    ///
+    /// Inputs: none beyond the kind. Output: `true` for operations whose
+    /// interruption can leave an external side effect ambiguous.
     pub fn shutdown_sensitive(self) -> bool {
         matches!(
             self,
@@ -417,6 +478,10 @@ impl OperationKind {
         )
     }
 
+    /// Whether a failed operation of this kind may be retried safely.
+    ///
+    /// Inputs: none beyond the kind. Output: `true` for the idempotent, retryable
+    /// operations.
     pub fn retryable(self) -> bool {
         matches!(
             self,
@@ -446,6 +511,9 @@ impl OperationKind {
     /// Monitoring threshold, not a cancellation deadline. A worker that has not
     /// reported progress within this operation-specific budget is considered
     /// stalled by the direct liveness endpoint.
+    ///
+    /// Inputs: none beyond the kind. Output: `u64` seconds before the operation
+    /// counts as stalled.
     pub fn stall_budget_seconds(self) -> u64 {
         match self {
             Self::Idle => 10,
@@ -590,6 +658,9 @@ pub struct OperationStatus {
 impl OperationStatus {
     /// Interpret the stable failure-code contract without changing the serialized
     /// OperationStatus layout used by existing integrations.
+    ///
+    /// Inputs: none beyond the status. Output: [`FailureDisposition`] derived from
+    /// the stable failure-code prefix and the retryable flag.
     pub fn failure_disposition(&self) -> FailureDisposition {
         if self.state != OperationState::Failed {
             return FailureDisposition::None;
@@ -637,6 +708,9 @@ pub enum AuditDomain {
     Other,
 }
 impl AuditDomain {
+    /// The stable stored audit domain name.
+    ///
+    /// Inputs: none beyond the domain. Output: `&'static str`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Mail => "mail",
@@ -665,6 +739,9 @@ pub enum AuditSeverity {
     Security,
 }
 impl AuditSeverity {
+    /// The stable stored audit severity name.
+    ///
+    /// Inputs: none beyond the severity. Output: `&'static str`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Info => "info",
@@ -675,6 +752,10 @@ impl AuditSeverity {
     }
 }
 
+/// Classify an audit event kind into domain and severity.
+///
+/// Inputs: `kind` — audit event kind. Output: `(AuditDomain, AuditSeverity)`
+/// derived from the kind's prefix.
 pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
     let domain = if kind.starts_with("email.")
         || kind.starts_with("gmail.")

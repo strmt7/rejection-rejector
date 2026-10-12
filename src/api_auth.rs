@@ -21,6 +21,11 @@ pub struct ApiCredentialMaterial {
 }
 
 impl ApiTokenVerifier {
+    /// Derive the verifier for one plaintext API token.
+    ///
+    /// Inputs: `token` — candidate plaintext token (at least 40 characters).
+    /// Output: `Result<Self>` — the domain-separated SHA-256 verifier; errors when
+    /// the token lacks required entropy.
     pub fn from_token(token: &str) -> Result<Self> {
         ensure!(token.len() >= 40, "API token lacks required entropy");
         let mut hasher = Sha256::new();
@@ -29,6 +34,10 @@ impl ApiTokenVerifier {
         Ok(Self(hasher.finalize().into()))
     }
 
+    /// Parse a persisted verifier from its stored hex encoding.
+    ///
+    /// Inputs: `value` — exactly 64 hex characters. Output: `Result<Self>`; errors
+    /// on any malformed encoding.
     pub fn from_hex(value: &str) -> Result<Self> {
         ensure!(
             value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -43,10 +52,18 @@ impl ApiTokenVerifier {
         Ok(Self(digest))
     }
 
+    /// Serialize the verifier for persistence.
+    ///
+    /// Inputs: none beyond the verifier. Output: `String` of exactly 64 lowercase
+    /// hex characters.
     pub fn to_hex(&self) -> String {
         self.0.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// Check one plaintext token against this verifier in constant time.
+    ///
+    /// Inputs: `token` — candidate plaintext token. Output: `true` only when the
+    /// derived verifier matches.
     pub fn verify_token(&self, token: &str) -> bool {
         let Ok(candidate) = Self::from_token(token) else {
             return false;
@@ -54,6 +71,10 @@ impl ApiTokenVerifier {
         self.0.ct_eq(&candidate.0).unwrap_u8() == 1
     }
 
+    /// Authorize one `Authorization` header value.
+    ///
+    /// Inputs: `value` — raw header value, if present. Output: `true` only for a
+    /// well-formed `Bearer` token that verifies.
     pub fn authorize_header(&self, value: Option<&str>) -> bool {
         let Some(token) = value.and_then(|header| header.strip_prefix("Bearer ")) else {
             return false;
@@ -92,6 +113,10 @@ fn persist_verifier(
 /// Legacy plaintext tokens are hashed in-place and then deleted atomically, so
 /// existing clients continue to authenticate but the token can no longer be
 /// recovered from application storage.
+///
+/// Inputs: `store` — persistent metadata store to read or migrate. Output: `Result<ApiCredentialMaterial>`
+/// — the active verifier plus one-time plaintext for newly created or migrated
+/// credentials (`None` when a stored verifier was simply loaded).
 pub fn load_or_create(store: &mut Store) -> Result<ApiCredentialMaterial> {
     if let Some(encoded) = store.meta::<String>(TOKEN_HASH_META)? {
         return Ok(ApiCredentialMaterial {
@@ -136,6 +161,10 @@ pub fn load_or_create(store: &mut Store) -> Result<ApiCredentialMaterial> {
 
 /// Rotate the integration credential. Only the verifier is persisted. The
 /// returned plaintext must be displayed/transferred once and then discarded.
+///
+/// Inputs: `store` — persistent metadata store receiving the new verifier.
+/// Output: `Result<ApiCredentialMaterial>` whose `plaintext_once` must be
+/// displayed once and then discarded.
 pub fn rotate(store: &mut Store) -> Result<ApiCredentialMaterial> {
     let token = Zeroizing::new(oauth::secret());
     let verifier = ApiTokenVerifier::from_token(token.as_str())?;

@@ -73,6 +73,10 @@ fn code_key(code: AutomaticPolicyCode) -> Result<String> {
         .to_owned())
 }
 
+/// Simulate what Automatic mode would do now, without sending anything.
+///
+/// Inputs: `engine` — open engine with current settings and jobs. Output: `Result<Value>`
+/// — the shadow-mode simulation report.
 pub fn report(engine: &Engine) -> Result<serde_json::Value> {
     let now = Utc::now();
     let policy = engine.enterprise_policy_status();
@@ -186,6 +190,10 @@ pub fn report(engine: &Engine) -> Result<serde_json::Value> {
     })?)
 }
 
+/// Write the shadow-mode simulation report to disk.
+///
+/// Inputs: `engine` — open engine; `path` — destination file. Output: `Ok(())`
+/// once the report is written; missing parent directories are created first.
 pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
     let data = report(engine)?;
     if let Some(parent) = path.parent()

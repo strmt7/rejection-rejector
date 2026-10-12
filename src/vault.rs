@@ -143,6 +143,10 @@ fn install_key_into_credential_store(
     store(encoded.as_str())
 }
 
+/// Read the workspace vault identifier.
+///
+/// Inputs: `dir` — workspace directory. Output: `Result<String>` — the
+/// validated vault id.
 pub fn vault_id(dir: &Path) -> Result<String> {
     let id = fs::read_to_string(dir.join("vault-id")).context("Vault identifier is missing")?;
     let id = id.trim().to_owned();
@@ -178,11 +182,18 @@ impl Vault {
         Self { key: Arc::new(key) }
     }
 
+    /// Generate a vault with a fresh random master key.
+    ///
+    /// Inputs: none. Output: [`Self`] holding an in-memory 32-byte key.
     pub fn random() -> Self {
         let mut key = Zeroizing::new([0u8; 32]);
         key.as_mut().copy_from_slice(&rand::random::<[u8; 32]>());
         Self::from_zeroizing_key(key)
     }
+    /// Open (or create) the workspace vault.
+    ///
+    /// Inputs: `dir` — workspace directory. Output: `Result<Self>` — the vault
+    /// whose master key is installed or recovered for this workspace.
     pub fn open(dir: &Path) -> Result<Self> {
         private_dir(dir)?;
         let id_path = dir.join("vault-id");
@@ -230,6 +241,10 @@ impl Vault {
     /// The passphrase is never serialized. The envelope contains only an
     /// Argon2id salt/parameters and an AEAD-wrapped 256-bit key bound to the
     /// vault UUID as associated data.
+    ///
+    /// Inputs: `vault_id` — workspace vault identifier to bind; `passphrase` —
+    /// passphrase wrapping the key. Output: `Result<RecoveryKeyEnvelope>`; the
+    /// passphrase is never serialized.
     pub fn recovery_envelope(
         &self,
         vault_id: &str,
@@ -280,6 +295,10 @@ impl Vault {
     ///
     /// This does not write to the OS credential store. Callers must first
     /// authenticate the recovered key against the backup database.
+    ///
+    /// Inputs: `envelope` — exported recovery envelope; `passphrase` — passphrase
+    /// wrapping the key. Output: `Result<Self>` — the recovered vault; nothing is
+    /// written to the OS credential store.
     pub fn from_recovery_envelope(
         envelope: &RecoveryKeyEnvelope,
         passphrase: &[u8],
@@ -339,6 +358,10 @@ impl Vault {
         Ok(Self::from_zeroizing_key(key))
     }
 
+    /// Install the master key into the OS credential store when missing.
+    ///
+    /// Inputs: `dir` — workspace directory. Output: `Ok(())`; existing credentials
+    /// are never replaced.
     #[cfg(any(windows, target_os = "macos"))]
     pub fn install_os_key_if_missing(&self, dir: &Path) -> Result<()> {
         let id = vault_id(dir)?;
@@ -354,6 +377,10 @@ impl Vault {
         )
     }
 
+    /// Refuse portable recovery-key import on this platform.
+    ///
+    /// Inputs: `_dir` — workspace directory (unused). Output: always an error
+    /// naming the supported platforms.
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn install_os_key_if_missing(&self, _dir: &Path) -> Result<()> {
         anyhow::bail!(
@@ -361,6 +388,10 @@ impl Vault {
         )
     }
 
+    /// Encrypt one value under a context binding.
+    ///
+    /// Inputs: `context` — domain-separation context; `value` — value to encrypt.
+    /// Output: `Result<Vec<u8>>` — the sealed record.
     pub fn seal<T: Serialize>(&self, context: &str, value: &T) -> Result<Vec<u8>> {
         let plain = Zeroizing::new(serde_json::to_vec(value)?);
         let nonce = fresh_nonce();
@@ -381,6 +412,11 @@ impl Vault {
         out.extend(encrypted);
         Ok(out)
     }
+    /// Decrypt one sealed record under a context binding.
+    ///
+    /// Inputs: `context` — domain-separation context; `bytes` — sealed record.
+    /// Output: `Result<T>` — the decrypted value; records bound to another context
+    /// are refused.
     pub fn open_value<T: DeserializeOwned>(&self, context: &str, bytes: &[u8]) -> Result<T> {
         ensure!(
             bytes.len() >= 41 && bytes[0] == 1,
@@ -407,6 +443,10 @@ impl Vault {
         Ok(serde_json::from_slice(&plain)?)
     }
 }
+/// Create (and validate) a private data directory.
+///
+/// Inputs: `path` — directory to create. Output: `Ok(())`; symlinks are
+/// refused.
 pub fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
     ensure!(
@@ -420,6 +460,10 @@ pub fn private_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+/// Create a new private file exclusively.
+///
+/// Inputs: `path` — file to create; `data` — bytes to write. Output: `Ok(())`;
+/// existing files and unsafe paths are refused.
 pub fn write_new_private(path: &Path, data: &[u8]) -> Result<()> {
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -437,6 +481,10 @@ pub struct InstanceLock {
     _file: fs::File,
 }
 impl InstanceLock {
+    /// Acquire the exclusive workspace instance lock.
+    ///
+    /// Inputs: `dir` — workspace directory. Output: `Result<Self>` — the held
+    /// lock; a live existing lock is refused.
     pub fn acquire(dir: &Path) -> Result<Self> {
         private_dir(dir)?;
         let path = dir.join("instance.lock");

@@ -3,6 +3,11 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
+/// Assemble the local diagnostics report for one workspace.
+///
+/// Inputs: `engine` — open engine supplying database and settings state.
+/// Output: `Result<Value>` — the JSON report covering integrity, counts,
+/// processing failures and configuration.
 pub fn report(engine: &Engine) -> Result<Value> {
     let integrity = engine.db.integrity_check();
     let database_bytes = std::fs::metadata(engine.directory.join("state.sqlite3"))
@@ -183,6 +188,10 @@ pub fn report(engine: &Engine) -> Result<Value> {
     }))
 }
 
+/// Write the local diagnostics report to disk.
+///
+/// Inputs: `engine` — open engine; `path` — destination file. Output: `Ok(())`
+/// once the report is written; missing parent directories are created first.
 pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
     let data = report(engine)?;
     if let Some(parent) = path.parent()

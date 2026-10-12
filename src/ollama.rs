@@ -195,6 +195,10 @@ fn analysis_stage<T>(
     })
 }
 
+/// Classify an analysis error into its stable processing-failure code.
+///
+/// Inputs: `error` — analysis-stage failure. Output: [`ProcessingFailureCode`]
+/// for the failure stage, or `AnalysisUnknown` for unclassified errors.
 pub fn processing_failure_code(error: &anyhow::Error) -> ProcessingFailureCode {
     error
         .downcast_ref::<AnalysisPipelineError>()
@@ -257,6 +261,10 @@ const TEMPLATE_MARGIN_BYTES: usize = 512;
 const SYSTEM_PROMPT_BOUND_BYTES: usize = 1600;
 
 impl Ollama {
+    /// Build a client for the configured local Ollama runtime.
+    ///
+    /// Inputs: `settings` — settings to validate and use (model, origin and
+    /// budgets). Output: `Result<Self>`; errors when the settings are invalid.
     pub fn new(settings: &Settings) -> Result<Self> {
         settings.validate()?;
         Ok(Self {
@@ -282,10 +290,19 @@ impl Ollama {
         Self::new(&settings)
     }
 
+    /// Inspect the independent verifier model's local status.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelStatus>`; the verifier
+    /// runs with delivery scope disarmed.
     pub fn inspect_verifier(&self) -> Result<ModelStatus> {
         self.verifier_client(false)?.inspect()
     }
 
+    /// Download the independent verifier model.
+    ///
+    /// Inputs: `cancelled` — cancellation flag checked during the pull; `progress`
+    /// — callback receiving provider progress lines. Output: `Result<()>` once the
+    /// download completes.
     pub fn pull_verifier(
         &self,
         cancelled: &AtomicBool,
@@ -294,6 +311,11 @@ impl Ollama {
         self.verifier_client(false)?.pull(cancelled, progress)
     }
 
+    /// Qualify the independent verifier model.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelStatus>` — the
+    /// qualified verifier status; a verifier tag equal to the primary model tag is
+    /// refused.
     pub fn qualify_verifier(&self) -> Result<ModelStatus> {
         ensure!(
             self.settings.verifier_model != self.settings.model,
@@ -339,6 +361,9 @@ impl Ollama {
     }
     /// True when an Ollama HTTP server answers on the configured loopback origin,
     /// regardless of whether its version is new enough for this application.
+    ///
+    /// Inputs: none beyond the client. Output: `true` when the configured origin
+    /// answers.
     pub fn reachable(&self) -> bool {
         net::client(3, true)
             .and_then(|client| {
@@ -351,9 +376,18 @@ impl Ollama {
             })
             .is_ok()
     }
+    /// Whether the Ollama runtime is reachable at a supported version.
+    ///
+    /// Inputs: none beyond the client. Output: `true` only for a supported
+    /// runtime.
     pub fn healthy(&self) -> bool {
         self.runtime_version().is_ok()
     }
+    /// Report the Ollama runtime version.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<String>` — the
+    /// server-reported version; errors when the server is unreachable or answers
+    /// invalidly.
     pub fn runtime_version(&self) -> Result<String> {
         let value: Value = net::json(
             net::client(3, true)?
@@ -433,13 +467,26 @@ impl Ollama {
         })
     }
 
+    /// Inspect the configured drafting model's local status.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelStatus>` under the
+    /// generative capability checks.
     pub fn inspect(&self) -> Result<ModelStatus> {
         self.inspect_for_purpose(ModelPurpose::Generative)
     }
 
+    /// Inspect a decision-only model's local status.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelStatus>` under the
+    /// decision capability checks.
     pub fn inspect_decision(&self) -> Result<ModelStatus> {
         self.inspect_for_purpose(ModelPurpose::Decision)
     }
+    /// Check the pinned model's GPU residency.
+    ///
+    /// Inputs: `digest` — pinned digest the loaded model must match. Output: `Result<ModelStatus>`
+    /// with `gpu_resident` set only for a single fully resident model within the
+    /// VRAM budget.
     pub fn residency(&self, digest: &str) -> Result<ModelStatus> {
         let ps: Ps = net::json(
             net::client(10, true)?.get(self.url("/api/ps")).send()?,
@@ -672,6 +719,10 @@ impl Ollama {
     /// certification. It deliberately includes a cold load, an immediate repeat
     /// (which exercises prefix/cache behavior), and a near-context synthetic
     /// rejection without exposing mailbox content.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelRuntimeProfile>` —
+    /// cold, repeat and near-context synthetic timings together with the recorded
+    /// caveats.
     pub fn profile_synthetic_runtime(&self) -> Result<ModelRuntimeProfile> {
         let ollama_runtime_version = self.runtime_version()?;
         let info = self.inspect()?;
@@ -724,6 +775,10 @@ impl Ollama {
         })
     }
 
+    /// Qualify and pin the configured drafting model.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<ModelStatus>` — the
+    /// qualified model status; failures leave the pin unset.
     pub fn qualify(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
         let mut pinned = self.settings.clone();
@@ -795,6 +850,11 @@ impl Ollama {
         Ok(status)
     }
 
+    /// Classify one message with the local model.
+    ///
+    /// Inputs: `email` — message to classify. Output: `Result<(Verdict, bool)>` —
+    /// the verdict plus `true` when the whole message fit the classification
+    /// budget.
     pub fn classify(&self, email: &Email) -> Result<(Verdict, bool)> {
         let current = mail::current_text(&email.text);
         let (text, complete) = mail::bounded_text(&current, self.classify_text_budget());
@@ -811,6 +871,11 @@ impl Ollama {
             complete && email.body_complete && email.subject.len() <= 600,
         ))
     }
+    /// Run the full local analysis pipeline for one message.
+    ///
+    /// Inputs: `email` — message to analyze. Output: `Result<(Analysis,
+    /// Option<Draft>, Vec<String>)>` — provenance-bound analysis, the drafted
+    /// reply when one was produced, and the operator flags.
     pub fn analyze(&self, email: &Email) -> Result<(Analysis, Option<Draft>, Vec<String>)> {
         analysis_stage(AnalysisFailureStage::Preflight, || {
             ensure!(
@@ -988,6 +1053,10 @@ impl Ollama {
             flags,
         ))
     }
+    /// Verify one drafted reply against its message.
+    ///
+    /// Inputs: `email` — original message; `body` — proposed reply. Output: `Result<(Verification, bool)>`
+    /// — the verification verdict plus `true` when the whole message was visible.
     pub fn verify(&self, email: &Email, body: &str) -> Result<(Verification, bool)> {
         let current = mail::current_text(&email.text);
         let extra = body.len() + self.settings.candidate_context.len();
@@ -1007,6 +1076,11 @@ impl Ollama {
         ensure!(v.reason.len() <= 3000, "Verification explanation too long");
         Ok((v, complete && email.body_complete))
     }
+    /// Download the configured model from the local runtime.
+    ///
+    /// Inputs: `cancelled` — cancellation flag checked during the pull; `progress`
+    /// — callback receiving provider progress lines. Output: `Result<()>` once the
+    /// download completes; incomplete downloads are refused.
     pub fn pull(&self, cancelled: &AtomicBool, mut progress: impl FnMut(String)) -> Result<()> {
         let response = net::client(7200, true)?
             .post(self.url("/api/pull"))
@@ -1042,6 +1116,10 @@ impl Ollama {
         ensure!(success, "Download did not complete; retry to resume it");
         Ok(())
     }
+    /// Start the local Ollama runtime when it is not already serving.
+    ///
+    /// Inputs: none beyond the client. Output: `Ok(())` when a runtime is serving;
+    /// a daemon already owning the port is reused, never replaced.
     pub fn start(&self) -> Result<()> {
         if self.reachable() {
             // A daemon already owns the configured port. Never attempt to launch a
@@ -1088,9 +1166,18 @@ fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
+/// The stable hash of the inference context settings.
+///
+/// Inputs: `settings` — settings defining the inference context. Output: `String`
+/// context hash recorded with each analysis.
 pub fn context_hash(settings: &Settings) -> String {
     settings_context_hash(settings)
 }
+/// Validate one model-produced verdict for shape and grounded evidence.
+///
+/// Inputs: `v` — verdict to check; `source` — current subject and text the
+/// evidence must ground into. Output: `Ok(())` when valid; ungrounded or
+/// oversized fields are refused.
 pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
     ensure!(
         v.confidence <= 100
@@ -1119,6 +1206,10 @@ pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
     }
     Ok(())
 }
+/// Locate the installed Ollama executable.
+///
+/// Inputs: none. Output: `Result<PathBuf>` — the executable path; errors when
+/// Ollama is not installed.
 pub fn ollama_executable() -> Result<PathBuf> {
     #[cfg(windows)]
     {
@@ -1132,6 +1223,10 @@ pub fn ollama_executable() -> Result<PathBuf> {
     which::which("ollama")
         .context("Ollama is not installed; use Install Ollama in the Local AI tab")
 }
+/// Run the platform Ollama installer.
+///
+/// Inputs: none. Output: `Ok(())` once the installer completes; Windows uses
+/// winget, other platforms open the download page.
 pub fn install() -> Result<()> {
     #[cfg(windows)]
     {
@@ -1162,6 +1257,10 @@ pub fn install() -> Result<()> {
         Ok(())
     }
 }
+/// Build a synthetic sample rejection email.
+///
+/// Inputs: `subject` — sample subject; `text` — sample body. Output: [`Email`]
+/// addressed to the reserved demo account.
 pub fn sample_email(subject: &str, text: &str) -> Email {
     Email {
         stub: Stub {

@@ -54,6 +54,11 @@ impl Provider for Gmail {
 }
 
 /// A cursor is saved only after EVERY page has been inserted durably. Replays are harmless.
+///
+/// Inputs: `provider` — mail provider to page through; `db` — store receiving
+/// the messages; `settings` — sync settings; `account` — mailbox account key; `now`
+/// — sync timestamp; `cancelled` — cancellation flag checked per page. Output: `Result<usize>`
+/// — the number of newly inserted messages.
 pub fn synchronize<P: Provider>(
     provider: &mut P,
     db: &mut Store,

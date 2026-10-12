@@ -9,6 +9,10 @@ use base64::{
 };
 use chrono::{DateTime, Utc};
 
+/// Normalize a mailbox address from a header value.
+///
+/// Inputs: `input` — raw address header value. Output: `Result<String>` — the
+/// normalized mailbox; invalid shapes are refused.
 pub fn mailbox(input: &str) -> Result<String> {
     ensure!(
         input.len() <= 512 && !input.chars().any(char::is_control),
@@ -52,6 +56,10 @@ pub fn mailbox(input: &str) -> Result<String> {
     Ok(value)
 }
 
+/// Whether a string is a well-formed RFC 2822 Message-ID.
+///
+/// Inputs: `s` — candidate identifier. Output: `true` for bracketed ids within
+/// the length limits.
 pub fn valid_message_id(s: &str) -> bool {
     s.len() >= 5
         && s.len() <= 250
@@ -63,6 +71,10 @@ pub fn valid_message_id(s: &str) -> bool {
             .all(|b| b.is_ascii_graphic() && b != b'<' && b != b'>')
 }
 
+/// Bound text to a byte budget at a character boundary.
+///
+/// Inputs: `s` — text to bound; `bytes` — byte budget. Output: `(&str, bool)`
+/// — the bounded prefix plus `true` when the whole input fit.
 pub fn bounded_text(s: &str, bytes: usize) -> (&str, bool) {
     if s.len() <= bytes {
         return (s, true);
@@ -75,6 +87,9 @@ pub fn bounded_text(s: &str, bytes: usize) -> (&str, bool) {
 }
 
 /// Strip common quoted/forwarded sections. Not a universal email quote parser.
+///
+/// Inputs: `s` — message body. Output: [`String`] with common quoted sections
+/// removed.
 pub fn current_text(s: &str) -> String {
     let mut lines = Vec::new();
     for line in s.lines() {
@@ -110,6 +125,10 @@ pub fn current_text(s: &str) -> String {
     lines.join("\n")
 }
 
+/// Validate a draft reply against the reply envelope.
+///
+/// Inputs: `text` — draft body. Output: `Ok(())` within the size and word
+/// limits; anything else is refused.
 pub fn validate_draft(text: &str) -> Result<()> {
     ensure!(
         (20..=6000).contains(&text.len()) && text.split_whitespace().count() <= 400,
@@ -143,6 +162,10 @@ pub fn validate_draft(text: &str) -> Result<()> {
 /// Returns a vector of reason strings explaining why sending is blocked.
 /// An empty vector means no hard blocks were found and sending may proceed
 /// (subject to soft blocks and policy checks).
+///
+/// Inputs: `email` — message to screen; `account` — owning account key.
+/// Output: `Vec<String>` of blocking reasons (empty when the message is
+/// clear).
 pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
     let mut reasons = Vec::new();
     if email.stub.source != Source::Gmail {
@@ -212,6 +235,9 @@ pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
 /// requires at least one clear rejection phrase in the *current* message, so
 /// correlated classifier/verifier mistakes cannot by themselves authorize a
 /// reply. Human Review deliberately does not require this conservative gate.
+///
+/// Inputs: `subject` — message subject; `text` — message body. Output: `true`
+/// when clear rejection language is present.
 pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
     let lower = format!("{}\n{}", subject, current_text(text)).to_lowercase();
     [
@@ -288,6 +314,10 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
 }
 
 /// A second, deterministic filter for automatic sends; the LLM is still the classifier.
+///
+/// Inputs: `subject` — message subject; `text` — message body. Output: `true`
+/// when invitation or offer language conflicts with an automatic rejection
+/// reply.
 pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
     let lower = format!("{}\n{}", subject, current_text(text)).to_lowercase();
     [
@@ -388,6 +418,9 @@ pub fn auto_language_conflict(subject: &str, text: &str) -> bool {
 
 /// Conservative deterministic hold for unattended replies. Human Review is not
 /// prohibited from sending user-authored text that matches these terms.
+///
+/// Inputs: `body` — proposed reply; `signature` — trusted signature. Output: `true`
+/// when the draft conflicts with the conservative unattended-reply rules.
 pub fn automatic_draft_conflict(body: &str, signature: &str) -> bool {
     let trimmed = body.trim_end();
     let trusted_signature = signature.trim();
@@ -435,10 +468,18 @@ fn encoded_subject(subject: &str) -> String {
     out.join("\r\n ")
 }
 
+/// The deterministic outgoing Message-ID for one job.
+///
+/// Inputs: `job` — job being sent. Output: `String` Message-ID.
 pub fn outgoing_id(job: &Job) -> String {
     format!("<rr.{}@rejection-rejector.invalid>", job.id)
 }
 
+/// Render the raw reply message for one job.
+///
+/// Inputs: `job` — job supplying the thread and draft; `settings` — settings
+/// supplying the signature; `account` — sending account; `now` — send
+/// timestamp. Output: `Result<String>` — the rendered RFC 2822 message.
 pub fn raw_reply(
     job: &Job,
     settings: &Settings,
@@ -495,6 +536,10 @@ pub fn raw_reply(
     Ok(URL_SAFE_NO_PAD.encode(raw.as_bytes()))
 }
 
+/// Validate that a job's identity is internally consistent.
+///
+/// Inputs: `job` — job to check. Output: `Ok(())` when the stub, email and
+/// threading identifiers agree.
 pub fn validate_job_identity(job: &Job) -> Result<()> {
     let email = job
         .email

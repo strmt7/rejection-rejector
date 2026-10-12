@@ -57,6 +57,9 @@ impl RateLimiter {
     }
 }
 
+/// Fingerprint the bundled OpenAPI contract document.
+///
+/// Inputs: none. Output: `String` of lowercase hex — the SHA-256 digest of [`OPENAPI_DOCUMENT`].
 pub fn openapi_sha256() -> String {
     crate::hex_lower(Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
 }
@@ -347,6 +350,13 @@ fn finalize_response(
 /// static page at `GET /` contains no data and needs no token; read endpoints
 /// stay read-only, and state-changing endpoints accept only authenticated
 /// POST requests under the fixed body cap.
+///
+/// Inputs: `port` — loopback TCP port to bind (`0` picks an ephemeral one); `verifier`
+/// — bearer-token verifier applied to every data route; `commands` — channel
+/// to the worker for write commands; `stop` — flag that shuts the accept loop
+/// down; `disabled` — flag that stops the accept loop while the API is
+/// disabled; `pulse` — worker liveness source for read snapshots. Output: `Result<u16>`
+/// with the port actually bound; errors when the listener cannot bind.
 pub fn start_with_verifier(
     port: u16,
     verifier: ApiTokenVerifier,
@@ -560,6 +570,12 @@ pub fn start_with_verifier(
 /// Backwards-compatible library entry point. The supplied plaintext token is
 /// immediately reduced to an in-memory verifier; application persistence uses
 /// only verifier material.
+///
+/// Inputs: `port` — loopback TCP port to bind; `token` — plaintext bearer
+/// token, reduced to a verifier before use; `commands` — channel to the
+/// worker; `stop` — flag that shuts the accept loop down; `disabled` — flag
+/// that stops the accept loop while the API is disabled; `pulse` — worker
+/// liveness source. Output: `Result<u16>` with the bound port, as [`start_with_verifier`].
 pub fn start(
     port: u16,
     token: String,

@@ -39,6 +39,10 @@ enum ReadinessRequirement {
 }
 
 impl ReadinessRequirement {
+    /// Whether a readiness gate is satisfied by a runtime readiness report.
+    ///
+    /// Inputs: `readiness` — runtime readiness report to test. Output: `true` only
+    /// when this gate's flag is ready.
     fn satisfied(self, readiness: &rejection_rejector::readiness::RuntimeReadiness) -> bool {
         match self {
             Self::Workspace => readiness.workspace_ready,
@@ -203,6 +207,11 @@ enum Action {
     /// Print the machine-readable JSON Schema for enterprise policy files.
     PolicySchema,
 }
+/// Read a recovery passphrase from a file.
+///
+/// Inputs: `path` — passphrase file. Output: `Result<Zeroizing<Vec<u8>>>` —
+/// the file bytes; missing files, symlinks and out-of-envelope contents are
+/// refused.
 fn recovery_passphrase(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(path.is_file(), "Recovery passphrase file is missing");
     ensure!(
@@ -443,6 +452,10 @@ fn resolve_dir(data_dir: &Option<PathBuf>) -> Result<PathBuf> {
     Ok(data_dir.clone().unwrap_or(config::data_dir()?))
 }
 
+/// Run the `rr` command-line interface.
+///
+/// Inputs: none; parses command-line arguments. Output: `Ok(())` on success;
+/// errors abort with a non-zero exit.
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {

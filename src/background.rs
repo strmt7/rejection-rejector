@@ -789,6 +789,9 @@ mod tests {
 
         /// Clear recorded calls and load `script` as the ordered exit-code /
         /// stdout answers for upcoming invocations.
+        ///
+        /// Inputs: `script` — ordered `(exit code, stdout)` answers for upcoming
+        /// calls. Output: none.
         pub(super) fn reset(script: Vec<(u32, Vec<u8>)>) {
             CALLS.with(|calls| calls.borrow_mut().clear());
             SCRIPT.with(|s| *s.borrow_mut() = script.into());
@@ -797,6 +800,9 @@ mod tests {
 
         /// Arm the fake so every invocation fails like an unspawnable
         /// `schtasks.exe`.
+        ///
+        /// Inputs: none. Output: none; every later invocation fails as if `schtasks.exe`
+        /// could not spawn.
         pub(super) fn fail_spawn() {
             reset(Vec::new());
             SPAWN_FAIL.with(|f| *f.borrow_mut() = true);
@@ -804,6 +810,9 @@ mod tests {
 
         /// Fake [`super::CommandRunner`]: record `args`, then replay the next
         /// scripted response or the armed spawn failure.
+        ///
+        /// Inputs: `args` — argument vector of the faked invocation. Output: `Result<std::process::Output>`
+        /// — the next scripted response, or a spawn failure once armed.
         pub(super) fn run(args: &[&str]) -> super::Result<std::process::Output> {
             CALLS.with(|calls| {
                 calls
@@ -820,6 +829,9 @@ mod tests {
         }
 
         /// Every recorded argument vector since [`reset`].
+        ///
+        /// Inputs: none. Output: `Vec<Vec<String>>` of every recorded argument vector
+        /// since [`reset`].
         pub(super) fn calls() -> Vec<Vec<String>> {
             CALLS.with(|calls| calls.borrow().clone())
         }
