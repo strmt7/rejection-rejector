@@ -1,0 +1,356 @@
+{
+  "builder": "build_corpus_v2.py",
+  "banks": "corpus_banks_v2.py",
+  "seed": 42,
+  "holdout_fraction": 0.15,
+  "languages": [
+    "en",
+    "es",
+    "zh",
+    "hi",
+    "ar",
+    "fr",
+    "bn",
+    "pt",
+    "ru",
+    "ja",
+    "de",
+    "el"
+  ],
+  "generated_attempts": 4025,
+  "exact_dupes_skipped": 25,
+  "train_records": 3120,
+  "holdout_records": 880,
+  "train_by_category": {
+    "opportunity": 471,
+    "other": 1039,
+    "rejection": 1246,
+    "uncertain": 364
+  },
+  "holdout_by_category": {
+    "opportunity": 130,
+    "other": 300,
+    "rejection": 354,
+    "uncertain": 96
+  },
+  "train_by_language": {
+    "ar": 195,
+    "bn": 196,
+    "de": 196,
+    "el": 195,
+    "en": 969,
+    "es": 196,
+    "fr": 196,
+    "hi": 196,
+    "ja": 195,
+    "pt": 195,
+    "ru": 195,
+    "zh": 196
+  },
+  "holdout_by_language": {
+    "ar": 55,
+    "bn": 54,
+    "de": 54,
+    "el": 55,
+    "en": 281,
+    "es": 54,
+    "fr": 54,
+    "hi": 54,
+    "ja": 55,
+    "pt": 55,
+    "ru": 55,
+    "zh": 54
+  },
+  "by_class": {
+    "opportunity": 601,
+    "other": 1339,
+    "rejection": 1600,
+    "uncertain": 460
+  },
+  "by_language": {
+    "ar": 250,
+    "bn": 250,
+    "de": 250,
+    "el": 250,
+    "en": 1250,
+    "es": 250,
+    "fr": 250,
+    "hi": 250,
+    "ja": 250,
+    "pt": 250,
+    "ru": 250,
+    "zh": 250
+  },
+  "by_label": {
+    "not_rejection": 2400,
+    "rejection": 1600
+  },
+  "by_purpose": {
+    "training_ambiguous": 460,
+    "training_hard_negative": 1940,
+    "training_positive": 1600
+  },
+  "by_rejection_style": {
+    "agency": 194,
+    "ats": 194,
+    "brutal": 206,
+    "direct": 206,
+    "internal": 194,
+    "legal": 194,
+    "polite": 206,
+    "vague": 206
+  },
+  "by_negative_type": {
+    "account_security": 196,
+    "adversarial": 343,
+    "application_ack": 212,
+    "ats_notification": 57,
+    "interview_invite": 212,
+    "job_alert": 209,
+    "marketing": 56,
+    "newsletter": 184,
+    "offer_letter": 212,
+    "recruiter_spam": 202,
+    "scheduling_tool": 57
+  },
+  "by_ambiguous_type": {
+    "assessment": 98,
+    "forwarded_mixed": 22,
+    "keep_in_touch": 110,
+    "on_hold": 99,
+    "resume_on_file": 110,
+    "withdrawn": 21
+  },
+  "by_format": {
+    "ats_auto": 779,
+    "forwarded_thread": 475,
+    "html_artifact": 672,
+    "plain_text": 1487,
+    "recruiter_dm": 587
+  },
+  "dedup": {
+    "unique_rows": 4000,
+    "exact_normalized_hash_collisions_removed": 25,
+    "near_hash_groups": 3793,
+    "largest_near_hash_group": 4
+  },
+  "holdout_separation": {
+    "strata": {
+      "opportunity|ar": {
+        "total": 42,
+        "holdout": 9
+      },
+      "opportunity|bn": {
+        "total": 35,
+        "holdout": 7
+      },
+      "opportunity|de": {
+        "total": 35,
+        "holdout": 7
+      },
+      "opportunity|el": {
+        "total": 38,
+        "holdout": 9
+      },
+      "opportunity|en": {
+        "total": 192,
+        "holdout": 43
+      },
+      "opportunity|es": {
+        "total": 36,
+        "holdout": 7
+      },
+      "opportunity|fr": {
+        "total": 34,
+        "holdout": 7
+      },
+      "opportunity|hi": {
+        "total": 33,
+        "holdout": 7
+      },
+      "opportunity|ja": {
+        "total": 40,
+        "holdout": 9
+      },
+      "opportunity|pt": {
+        "total": 42,
+        "holdout": 9
+      },
+      "opportunity|ru": {
+        "total": 38,
+        "holdout": 9
+      },
+      "opportunity|zh": {
+        "total": 36,
+        "holdout": 7
+      },
+      "other|ar": {
+        "total": 78,
+        "holdout": 18
+      },
+      "other|bn": {
+        "total": 85,
+        "holdout": 19
+      },
+      "other|de": {
+        "total": 85,
+        "holdout": 19
+      },
+      "other|el": {
+        "total": 82,
+        "holdout": 18
+      },
+      "other|en": {
+        "total": 428,
+        "holdout": 96
+      },
+      "other|es": {
+        "total": 84,
+        "holdout": 19
+      },
+      "other|fr": {
+        "total": 86,
+        "holdout": 19
+      },
+      "other|hi": {
+        "total": 87,
+        "holdout": 19
+      },
+      "other|ja": {
+        "total": 80,
+        "holdout": 18
+      },
+      "other|pt": {
+        "total": 78,
+        "holdout": 18
+      },
+      "other|ru": {
+        "total": 82,
+        "holdout": 18
+      },
+      "other|zh": {
+        "total": 84,
+        "holdout": 19
+      },
+      "rejection|ar": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|bn": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|de": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|el": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|en": {
+        "total": 500,
+        "holdout": 112
+      },
+      "rejection|es": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|fr": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|hi": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|ja": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|pt": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|ru": {
+        "total": 100,
+        "holdout": 22
+      },
+      "rejection|zh": {
+        "total": 100,
+        "holdout": 22
+      },
+      "uncertain|ar": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|bn": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|de": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|el": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|en": {
+        "total": 130,
+        "holdout": 30
+      },
+      "uncertain|es": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|fr": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|hi": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|ja": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|pt": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|ru": {
+        "total": 30,
+        "holdout": 6
+      },
+      "uncertain|zh": {
+        "total": 30,
+        "holdout": 6
+      }
+    },
+    "groups_kept_whole": true,
+    "near_duplicate_rows_moved_to_train": 0,
+    "threshold": 0.85,
+    "exact_hash_overlap": 0,
+    "near_duplicate_pairs_ge_threshold": 0,
+    "max_cross_split_jaccard": 0.7879
+  },
+  "schema_conformance": {
+    "top_level_keys_match": true,
+    "message_roles_match": true,
+    "assistant_keys_match": true,
+    "meta_keys_match": true,
+    "user_payload_keys_match": true,
+    "value_types_and_system_prompt_match": true
+  },
+  "count_checks": {
+    "train_by_category_match": true,
+    "holdout_by_category_match": true,
+    "train_by_language_match": true,
+    "holdout_by_language_match": true,
+    "total_by_language_match": true,
+    "negative_type_counts_match": true,
+    "ambiguous_type_counts_match": true
+  }
+}
