@@ -3071,6 +3071,10 @@ mod orchestration_tests {
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn recovery_commands_round_trip_on_a_real_workspace() {
+        // Share the cross-test credential-store lock: parallel in-process
+        // tests use the same OS credential store, and this workspace round
+        // trip must not observe another test's transient vault identifiers.
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let dir = tempfile::tempdir().unwrap();
         let mut worker = Worker::spawn(dir.path().into(), false);
         let start = Instant::now();
