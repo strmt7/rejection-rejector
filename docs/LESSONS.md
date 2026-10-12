@@ -47,3 +47,32 @@ rule exists because it previously caused a real defect or delay.
   `Output:` sections naming parameters and behavior.
 - Sanitize everything committed: no credentials, personal data, hostnames,
   or machine specifics in code, docs, tests, or commit messages.
+
+## Concurrency and runtime
+
+- Accelerator/GPU APIs are owned by one thread: never probe or query a
+  device from a watchdog or side thread while the workload thread drives
+  it — the bridge races you. Sample in a per-step callback on the owner
+  thread and share the reading as plain data.
+- Cooperative stops must reach a well-defined exit: a run that receives a
+  stop flag can still wedge in its teardown path. Bounded checkpoints
+  (save every N steps, keep K) cap the cost of any hang.
+- Fail-closed belongs at start gates and persistent blindness, not at a
+  single flaky reading mid-run: tolerate a small consecutive-miss window
+  before stopping a healthy workload.
+
+## Editing and verification
+
+- Generated/regex edits are untrusted until re-read: they can silently
+  no-op (matching the wrong anchor) or swallow a neighboring definition.
+  After every one, grep the result and check definition-before-use order
+  by line number; a compiling file can still fail at first dynamic use.
+- `cmd | tail` reports tail's exit code. Run verification un-piped (or
+  check PIPESTATUS) before declaring success.
+- Read correction and withdrawal comments in upstream issue threads before
+  concluding — a severe report may be retracted as the reporter's own test
+  artifact. And a merged fix is not proof it is in the release you run:
+  check the merge commit against that release's tag or branch.
+- Before a large workload, run the exact fault-class operations as small
+  probes with wall-clock timeouts (the crash gate). Clean probes earn the
+  right to the full run.

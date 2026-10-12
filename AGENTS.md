@@ -77,6 +77,19 @@ Never assume — verify against live sources, then re-verify after changes.
 6. Every claim in a report carries its evidence (SHA, run id, count).
    One verified fact beats ten plausible sentences; skip restating context.
    Caution costs one tool call — assumptions cost a crash.
+7. Hardware-API thread affinity: accelerator/GPU APIs are called only from
+   the thread that owns the workload. Probe from a side thread and the
+   driver bridge races you (flaky probes, teardown hangs). Sample in a
+   per-step callback on the owner thread and share the reading as data.
+8. Read correction/withdrawn comments in issue threads before concluding —
+   the scariest report may be retracted as the reporter's own harness bug.
+   And `merged` != `shipped in your release`: verify the fix commit is in
+   the tag/branch you actually run.
+9. Programmatic (regex/generated) edits are untrusted until re-read: they
+   can silently no-op or swallow a neighboring definition. After every one,
+   grep the result and confirm definition-before-use order by line number.
+10. `cmd | tail` reports tail's exit code, not cmd's. Run verification
+    commands un-piped (or check PIPESTATUS) before claiming green.
 
 ## Coverage doctrine (all AI agents)
 
