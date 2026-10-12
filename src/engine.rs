@@ -4588,6 +4588,9 @@ mod dispatch_tests {
 #[cfg(test)]
 mod fail_closed_open_tests {
     use super::*;
+    // Serves credential-store tests that run only on Windows and macOS;
+    // gate with the same cfg so Linux warnings-as-errors builds stay clean.
+    #[cfg(any(windows, target_os = "macos"))]
     use crate::policy::EnterprisePolicy;
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -4746,7 +4749,12 @@ mod fail_closed_open_tests {
 #[cfg(test)]
 mod dispatch_error_path_tests {
     use super::*;
+    // These fixtures serve credential-store tests that run only on Windows
+    // and macOS; gate the imports with the same cfg so warnings-as-errors
+    // builds on Linux stay clean.
+    #[cfg(any(windows, target_os = "macos"))]
     use crate::test_support::{self as ts, MockServer};
+    #[cfg(any(windows, target_os = "macos"))]
     use serde_json::Value;
 
     #[cfg(any(windows, target_os = "macos"))]
