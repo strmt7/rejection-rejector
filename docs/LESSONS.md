@@ -18,6 +18,10 @@ rule exists because it previously caused a real defect or delay.
 
 - Every test must assert behavior that fails on subtle breakage; never pad
   tests to inflate coverage. A covered line must be observable.
+- Observe scheduler-driven behaviour through the durable record the product
+  publishes (runtime journal, database rows, log files), not by sampling live
+  in-memory state: sampling races the scheduler and silently misses short
+  operations, producing platform-dependent flakes.
 - Platform-gated code needs matching test-helper gates (a helper used only by
   `#[cfg(windows)]` tests must itself be `#[cfg(windows)]`), or Linux builds
   fail the deny-warnings policy.
@@ -119,3 +123,10 @@ rule exists because it previously caused a real defect or delay.
   safety caveat is a regression, not polish.
 - A sentence a broader audience cannot follow is a bug even when it is precise: define
   the term, give the example, then keep the precise claim.
+
+## Test observation and build health
+
+- Phantom build failures that survive a clean target directory ("can't find
+  crate", vanishing unused-import warnings, rustc crashes, mmap/commit
+  errors) are host memory exhaustion from concurrent builds, not corrupted
+  caches: serialise the builds and lower `-j` before chasing compiler bugs.
