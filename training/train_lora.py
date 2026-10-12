@@ -158,6 +158,9 @@ def main() -> int:
             self._time = time
             self.vram_probe = vram_probe
             self._probe_errors = 0
+            self._last_step = -1
+            self._last_change = self._time.time()
+            self._dumped = False
 
         def on_train_begin(self, args, state, control, **kwargs):
             self._write(state, "running")
@@ -185,13 +188,31 @@ def main() -> int:
             self._write(state, "complete")
 
         def _write(self, state, status: str) -> None:
+            import faulthandler
+
+            now = self._time.time()
+            step = int(state.global_step)
+            if step == self._last_step and status == "running":
+                if now - self._last_change > 120.0 and not self._dumped:
+                    # Stall evidence: dump every thread's stack so the wedge
+                    # is root-caused by location, not by theory.
+                    self._dumped = True
+                    print(
+                        f"resource-guard: STALLED at step {step} for "
+                        f"{now - self._last_change:.0f}s; dumping stacks",
+                        file=sys.stderr,
+                    )
+                    faulthandler.dump_traceback(file=sys.stderr)
+            else:
+                self._last_step = step
+                self._last_change = now
             record = {
                 "job": "train_lora",
-                "step": int(state.global_step),
+                "step": step,
                 "total_steps": int(state.max_steps or 0),
                 "loss": state.log_history[-1].get("loss") if state.log_history else None,
-                "elapsed_seconds": self._time.time() - self.began,
-                "updated_at_unix": self._time.time(),
+                "elapsed_seconds": now - self.began,
+                "updated_at_unix": now,
                 "status": status,
             }
             progress.write_progress(self.path, record)
