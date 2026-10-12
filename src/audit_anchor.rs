@@ -279,6 +279,14 @@ pub fn checkpoint_os_anchor_if_required(
     store: &Store,
     data_dir: &Path,
 ) -> Result<Option<AuditAnchor>> {
+    // Test seam: threads under test arm a scripted checkpoint in
+    // `crate::test_support`, so protected-checkpoint failure handling is
+    // exercised deterministically without OS credential mutation.
+    #[cfg(test)]
+    if let Some(gate) = crate::test_support::audit_gate() {
+        gate()?;
+        return Ok(None);
+    }
     checkpoint_os_anchor(store, data_dir, os_anchor_required()?)
 }
 

@@ -418,7 +418,7 @@ impl Engine {
             paused,
             stop,
             enterprise_policy,
-            gmail: creds.map(Gmail::new),
+            gmail: creds.map(Self::provider_client),
             _lock: lock,
             _session: session,
             _temporary: temporary,
@@ -537,6 +537,39 @@ impl Engine {
         self.enterprise_policy = loaded;
         Ok(true)
     }
+    /// Build the provider client for persisted credentials.
+    ///
+    /// Inputs: `credentials` — decrypted OAuth material. Output: a client
+    /// bound to the Gmail API. Test seam: threads under test adopt mock
+    /// endpoints through `crate::test_support`, so worker-driven provider
+    /// flows run deterministically without Google.
+    fn provider_client(credentials: Credentials) -> Gmail {
+        #[cfg(test)]
+        if let Some((root, token_url)) = crate::test_support::gmail_endpoints() {
+            return Gmail::with_endpoints(credentials, &root, &token_url);
+        }
+        Gmail::new(credentials)
+    }
+    /// Obtain OAuth credentials and a provider client for [`Self::connect`].
+    ///
+    /// Inputs: `path` — Google Desktop-app OAuth JSON; `send` — whether the
+    /// send scope is requested; `stop` — cooperative cancellation flag.
+    /// Output: the credentials to persist plus a client bound to them. Test
+    /// seam: threads under test arm canned credentials and mock endpoints in
+    /// `crate::test_support`, so the whole connection flow runs without a
+    /// browser or Google.
+    fn login_client(path: &Path, send: bool, stop: &AtomicBool) -> Result<(Credentials, Gmail)> {
+        #[cfg(test)]
+        if let Some((creds, root, token_url)) = crate::test_support::login_override() {
+            return Ok((
+                creds.clone(),
+                Gmail::with_endpoints(creds, &root, &token_url),
+            ));
+        }
+        let credentials = oauth::login(path, send, stop)?;
+        let gmail = Gmail::new(credentials.clone());
+        Ok((credentials, gmail))
+    }
     pub fn connect(&mut self, path: &Path, send: bool) -> Result<()> {
         ensure!(!self.demo, "Demo mode never connects to a real mailbox");
         ensure!(
@@ -547,8 +580,7 @@ impl Engine {
                     .is_none_or(|loaded| loaded.policy.allows_send_scope()),
             "Enterprise policy prohibits requesting Gmail send permission"
         );
-        let credentials = oauth::login(path, send, &self.stop)?;
-        let mut gmail = Gmail::new(credentials.clone());
+        let (credentials, mut gmail) = Self::login_client(path, send, &self.stop)?;
         let profile = gmail.profile()?;
         let account = mail::mailbox(&profile.email_address)?;
         // Fail closed during an account switch. Persist the complete connection
@@ -2260,6 +2292,7 @@ mod dispatch_tests {
     #[test]
     fn update_settings_revalidates_and_disarms_on_context_changes() {
         let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
         let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
         e.settings.signature = "Test Applicant".into();
@@ -2375,6 +2408,7 @@ mod dispatch_tests {
     #[test]
     fn model_status_and_qualification_track_the_local_runtime() {
         let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = demo(dir.path());
         let server = runtime(usize::MAX);
         e.settings.ollama_url = server.url.clone();
@@ -2415,6 +2449,7 @@ mod dispatch_tests {
     fn automatic_tick_dispatches_and_holds_on_preflight_failures() {
         use crate::test_support::eligible_job;
         let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
         let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
         crate::test_support::arm_automatic(&mut e.settings);
@@ -2447,6 +2482,7 @@ mod dispatch_tests {
     #[test]
     fn manual_send_walks_the_durable_state_machine() {
         let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
         let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
         e.settings.sending_enabled = true;
@@ -2474,5 +2510,1900 @@ mod dispatch_tests {
         assert!(error.to_string().contains("Reply changed"));
         let error = e.send(&job.id, job.revision + 3, "bad", false).unwrap_err();
         assert!(error.to_string().contains("stale"));
+    }
+
+    // =====================================================================
+    // Workspace-open state machine and enterprise policy lifecycle.
+    // =====================================================================
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Arm settings exactly like [`crate::test_support::arm_automatic`] but
+    /// leave the task qualification stale, so `open` must repair it.
+    fn arm_legacy_automatic(settings: &mut Settings) {
+        settings.mode = Mode::Automatic;
+        settings.sending_enabled = true;
+        settings.automatic_confirmed = true;
+        settings.automatic_since = Some(Utc::now());
+    }
+
+    /// Reopen a workspace whose previous session marker survived a crash and
+    /// assert the fail-closed disarm is persisted and audited.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_disarms_unattended_delivery_after_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            crate::test_support::arm_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        std::fs::write(dir.path().join(".runtime-session.json"), b"not-json").unwrap();
+        let _cleanup = Cleanup(vault);
+        let e = live(dir.path());
+        assert!(!e.settings.sending_enabled);
+        assert!(!e.settings.automatic_confirmed);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.kind == "security.unclean_shutdown_detected"),
+            "unclean shutdown must be audited"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.detail.contains("ended uncleanly")),
+            "the persisted disarm must name the unclean session"
+        );
+    }
+
+    /// A workspace restored from an offline backup must reopen with delivery
+    /// disarmed, audit the restore, and drop the one-shot re-arm marker.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_restored_workspace_requires_explicit_reauthorization() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            crate::test_support::arm_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        std::fs::write(
+            dir.path().join(".restore-rearm-required"),
+            b"restore-rearm:v1\n",
+        )
+        .unwrap();
+        let _cleanup = Cleanup(vault);
+        let e = live(dir.path());
+        assert!(!e.settings.sending_enabled);
+        assert!(!e.settings.automatic_confirmed);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.kind == "security.restore_rearm_required"),
+            "offline restore must be audited"
+        );
+        assert!(
+            !dir.path().join(".restore-rearm-required").exists(),
+            "the one-shot marker must be consumed"
+        );
+    }
+
+    /// Settings persisted in the legacy v1 format migrate on open: the
+    /// obsolete qualification is dropped and delivery disarms fail-closed.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_migrates_legacy_settings_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            crate::test_support::arm_automatic(&mut e.settings);
+            e.settings.settings_format_version = 1;
+            e.settings.independent_verifier_enabled = true;
+            e.db.set_meta("settings", &e.settings).unwrap();
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let _cleanup = Cleanup(vault);
+        let e = live(dir.path());
+        assert!(e.settings.task_qualification.is_none());
+        assert!(!e.settings.independent_verifier_enabled);
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events.iter().any(|ev| ev.kind == "settings.migrated"
+                && ev.detail.contains("migrated from format v1")),
+            "the format migration must be audited"
+        );
+    }
+
+    /// Legacy Automatic mode without a current qualification is disabled and
+    /// audited; aged review items outside the age window are deferred at open.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_repairs_legacy_automatic_state_and_defers_aged_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let (vault, aged_id) = {
+            let mut e = live(dir.path());
+            arm_legacy_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+            e.db.set_meta("account", &"applicant@example.invalid".to_string())
+                .unwrap();
+            e.account = "applicant@example.invalid".into();
+            let now = Utc::now();
+            let mut job = seed_ready_job(&mut e, 7, now);
+            job.email.as_mut().unwrap().received_at = now - chrono::Duration::days(20);
+            e.db.save(&mut job, "test.age", "aged").unwrap();
+            (crate::vault::vault_id(dir.path()).unwrap(), job.id.clone())
+        };
+        let _cleanup = Cleanup(vault);
+        let e = live(dir.path());
+        assert!(!e.settings.sending_enabled);
+        assert_eq!(e.settings.mode, Mode::HumanReview);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events.iter().any(|ev| ev
+                .detail
+                .contains("Legacy Automatic mode without current qualification")),
+            "the legacy-state repair must be audited"
+        );
+        let aged = e.db.get(&aged_id).unwrap();
+        assert_eq!(aged.state, JobState::Deferred);
+    }
+
+    /// Open under a v2 enterprise policy: restrictive enforcement and the
+    /// revision floor are committed together in one audited transaction.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_accepts_enterprise_policy_with_revision_floor() {
+        use crate::policy::EnterprisePolicy;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let e = live(dir.path());
+            drop(e);
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let policy = crate::test_support::loaded_policy(
+            "digest-a",
+            EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.policy".into()),
+                revision: Some(3),
+                force_human_review: true,
+                ..Default::default()
+            },
+        );
+        let _cleanup = Cleanup(vault);
+        let e = crate::test_support::with_policy(Some(policy), || {
+            let e = live(dir.path());
+            // Restrictive policy is applied and delivery stays disarmed.
+            assert_eq!(e.settings.mode, Mode::HumanReview);
+            assert!(!e.settings.sending_enabled);
+            let floor: serde_json::Value =
+                e.db.meta("enterprise_policy_revision_floor")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(floor["policies"]["corp.policy"]["revision"], 3);
+            let events = e.db.events(0, 500).unwrap();
+            assert!(
+                events.iter().any(|ev| ev.kind == "policy.accepted"
+                    && ev.detail.contains("policy_id=corp.policy")
+                    && ev.detail.contains("revision=3")),
+                "policy acceptance must record the pinned identity"
+            );
+            e
+        });
+        assert!(e.enterprise_policy.is_some());
+    }
+
+    /// Reload semantics: restrictive changes apply and are audited, identical
+    /// digests are no-ops, removal never relaxes anything, and revision
+    /// rollback or same-revision tampering is rejected.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn reload_enterprise_policy_tightens_but_never_relaxes() {
+        use crate::policy::EnterprisePolicy;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+
+        // Demo mode never consults the machine-wide policy.
+        let mut d = demo(dir.path());
+        assert!(!d.reload_enterprise_policy().unwrap());
+
+        // No policy anywhere: reload is a reported no-op.
+        assert!(!crate::test_support::with_policy(None, || {
+            e.reload_enterprise_policy().unwrap()
+        }));
+
+        // A restrictive policy disarms live delivery and records the reload.
+        e.settings.sending_enabled = true;
+        e.settings.mode = Mode::Automatic;
+        let restrictive = crate::test_support::loaded_policy(
+            "digest-a",
+            EnterprisePolicy {
+                version: 1,
+                prohibit_sending: true,
+                ..Default::default()
+            },
+        );
+        assert!(crate::test_support::with_policy(
+            Some(restrictive.clone()),
+            || { e.reload_enterprise_policy().unwrap() }
+        ));
+        assert!(!e.settings.sending_enabled);
+        assert_eq!(e.settings.mode, Mode::HumanReview);
+        assert!(!e.model.installed, "model status must be revalidated");
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "policy.reloaded"
+            && ev.detail.contains("persisted settings were restricted")));
+
+        // The same digest is a no-op.
+        assert!(!crate::test_support::with_policy(Some(restrictive), || {
+            e.reload_enterprise_policy().unwrap()
+        }));
+
+        // Removing the policy reports the change but never relaxes settings.
+        assert!(crate::test_support::with_policy(None, || {
+            e.reload_enterprise_policy().unwrap()
+        }));
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| {
+            ev.detail
+                .contains("existing restrictive settings were not relaxed automatically")
+        }));
+
+        // v2 lifecycle: revision floor staged on accept, rollback rejected,
+        // and same-revision content swaps are rejected.
+        let v2 = |revision: u64, digest: &str| {
+            crate::test_support::loaded_policy(
+                digest,
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp.policy".into()),
+                    revision: Some(revision),
+                    ..Default::default()
+                },
+            )
+        };
+        assert!(crate::test_support::with_policy(
+            Some(v2(2, "digest-b")),
+            || { e.reload_enterprise_policy().unwrap() }
+        ));
+        let error = crate::test_support::with_policy(Some(v2(1, "digest-c")), || {
+            e.reload_enterprise_policy().unwrap_err().to_string()
+        });
+        assert!(error.contains("rollback rejected"), "unexpected: {error}");
+        let error = crate::test_support::with_policy(Some(v2(2, "digest-d")), || {
+            e.reload_enterprise_policy().unwrap_err().to_string()
+        });
+        assert!(
+            error.contains("without increasing revision"),
+            "unexpected: {error}"
+        );
+        assert!(crate::test_support::with_policy(
+            Some(v2(3, "digest-e")),
+            || { e.reload_enterprise_policy().unwrap() }
+        ));
+
+        // A policy demanding protected audit anchoring without an anchor fails
+        // closed at reload.
+        let anchored = crate::test_support::loaded_policy(
+            "digest-f",
+            EnterprisePolicy {
+                version: 1,
+                require_external_audit_anchor: true,
+                ..Default::default()
+            },
+        );
+        let error = crate::test_support::with_policy(Some(anchored), || {
+            e.reload_enterprise_policy().unwrap_err().to_string()
+        });
+        assert!(
+            error.contains("independently protected audit anchoring"),
+            "unexpected: {error}"
+        );
+    }
+
+    // =====================================================================
+    // Queue processing and the durable dispatch state machine.
+    // =====================================================================
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn test_creds() -> crate::oauth::Credentials {
+        crate::oauth::Credentials {
+            client_id: "id".into(),
+            client_secret: "secret".into(),
+            refresh_token: "refresh".into(),
+            can_send: true,
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Seed one queued message (identity only) and return its synthetic email
+    /// content for the provider mock.
+    fn queue_message(e: &mut Engine, n: u64) -> (Job, crate::test_support::MockServer) {
+        let now = Utc::now();
+        let email = gmail_email(
+            &e.account,
+            n,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let job = Job::new(email.stub.clone(), now);
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![email],
+            crate::test_support::SendOutcome::Deliver(format!("sent{n:021}")),
+        );
+        (job, gmail)
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Without a provider, a pinned model or (in demo mode) real mail,
+    /// `process_one` refuses to touch the queue.
+    #[test]
+    fn process_one_short_circuits_unavailable_runtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut d = demo(dir.path());
+        assert!(!d.process_one().unwrap());
+
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.account = "applicant@example.invalid".into();
+        // No provider client yet.
+        assert!(!e.process_one().unwrap());
+        // Provider attached but no pinned digest: still a no-op.
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent00000000000000000001".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail.url,
+            &gmail.url,
+        ));
+        assert!(!e.process_one().unwrap());
+
+        // A dead runtime is a global failure: the queue stays intact.
+        e.settings.model_digest = Some("a".repeat(64));
+        e.settings.ollama_url = "http://127.0.0.1:9".into();
+        let error = e.process_one().unwrap_err().to_string();
+        assert!(
+            error.contains("Local Ollama is unavailable"),
+            "unexpected: {error}"
+        );
+
+        // A runtime without the pinned model fails before dequeue as well.
+        let bare = crate::test_support::ollama_runtime(vec![], "Test Applicant", |_| {
+            crate::test_support::verdict_category("other")
+        });
+        e.settings.ollama_url = bare.url.clone();
+        let error = e.process_one().unwrap_err().to_string();
+        assert!(
+            error.contains("Pinned local model is unavailable"),
+            "unexpected: {error}"
+        );
+
+        // A healthy runtime with an empty queue reports nothing to do.
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| crate::test_support::verdict_category("other"),
+        );
+        e.settings.ollama_url = runtime.url.clone();
+        assert!(!e.process_one().unwrap());
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// One queued message per run: provider fetch outcomes route each message
+    /// to its durable state (analyzed, gone, malformed) without stalling the
+    /// rest of the queue.
+    #[test]
+    fn process_one_routes_provider_fetch_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        e.settings.model_digest = Some("a".repeat(64));
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+
+        // Provider has no record of the message: it becomes Other with the
+        // reason preserved.
+        let (job, _gmail) = {
+            let now = Utc::now();
+            let email = gmail_email(
+                &e.account,
+                1,
+                "Your application — R&D Engineer",
+                "Thank you for applying. We have decided not to move forward with your application.",
+            );
+            let job = Job::new(email.stub.clone(), now);
+            e.db.insert_stubs([job.stub.clone()], now).unwrap();
+            let empty = crate::test_support::gmail_server(
+                &e.account,
+                vec![],
+                crate::test_support::SendOutcome::Deliver("sent00000000000000000001".into()),
+            );
+            e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+                test_creds(),
+                &empty.url,
+                &empty.url,
+            ));
+            (job, empty)
+        };
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Other);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.kind == "email.unavailable" && ev.detail.contains("no longer exists")),
+            "the vanished-message outcome must be audited"
+        );
+
+        // A provider message that cannot be parsed safely is held for humans.
+        let mut broken = gmail_email(
+            &e.account,
+            2,
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        broken.message_id = "not-a-message-id".into();
+        let mut resource = crate::test_support::gmail_resource(&broken);
+        resource["raw"] = serde_json::json!("!!!not-base64!!!");
+        let broken_gmail = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            if route == "/" {
+                return answer(200, crate::test_support::token_ok("test-scope"));
+            }
+            if route.starts_with("/messages/") {
+                return answer(200, resource.clone());
+            }
+            None
+        });
+        let now = Utc::now();
+        let job2 = Job::new(broken.stub.clone(), now);
+        e.db.insert_stubs([job2.stub.clone()], now).unwrap();
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &broken_gmail.url,
+            &broken_gmail.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job2.id).unwrap();
+        assert_eq!(after.state, JobState::Attention);
+        let failure = e.db.processing_failure(&job2.id).unwrap().unwrap();
+        assert_eq!(failure.attempts, 1);
+        assert!(failure.retry_exhausted);
+
+        // A provider outage is global: it must surface as an error rather than
+        // consume one message's retry budget.
+        let outage = MockServer::new_raw(move |route, _| match route {
+            "/" => Some((200, crate::test_support::token_ok("test-scope").to_string())),
+            _ => Some((500, r#"{"error":{"status":"UNAVAILABLE"}}"#.into())),
+        });
+        let job3 = {
+            let email = gmail_email(
+                &e.account,
+                3,
+                "Your application",
+                "We have decided not to move forward with your application.",
+            );
+            let job = Job::new(email.stub.clone(), now);
+            e.db.insert_stubs([job.stub.clone()], now).unwrap();
+            job
+        };
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &outage.url,
+            &outage.url,
+        ));
+        let error = e.process_one().unwrap_err().to_string();
+        assert!(
+            error.contains("fetch returned HTTP 500"),
+            "unexpected: {error}"
+        );
+        assert_eq!(e.db.get(&job3.id).unwrap().state, JobState::Queued);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Analysis outcomes land in the review states they deserve, and analysis
+    /// failures retry with an isolated per-message budget before escalating.
+    #[test]
+    fn process_one_classifies_and_isolates_analysis_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        e.settings.model_digest = Some("a".repeat(64));
+        e.settings.lookback_days = 7;
+
+        // A high-confidence verified rejection is Ready for review.
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+        let (job, gmail) = queue_message(&mut e, 1);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail.url,
+            &gmail.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Ready);
+        assert!(after.draft.is_some());
+        assert!(
+            after
+                .analysis
+                .as_ref()
+                .unwrap()
+                .verified_draft_hash
+                .is_some()
+        );
+
+        // An uncertain message is held for attention, a non-rejection is
+        // discarded with its content released, an aged message is deferred and
+        // provider-side folders are excluded.
+        let uncertain = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| crate::test_support::verdict_category("uncertain"),
+        );
+        e.settings.ollama_url = uncertain.url.clone();
+        let (job2, gmail2) = queue_message(&mut e, 2);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail2.url,
+            &gmail2.url,
+        ));
+        assert!(e.process_one().unwrap());
+        assert_eq!(e.db.get(&job2.id).unwrap().state, JobState::Attention);
+
+        let other = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| crate::test_support::verdict_category("other"),
+        );
+        e.settings.ollama_url = other.url.clone();
+        let (job3, gmail3) = queue_message(&mut e, 3);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail3.url,
+            &gmail3.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job3.id).unwrap();
+        assert_eq!(after.state, JobState::Other);
+        assert!(after.email.is_none() && after.analysis.is_none());
+
+        // Outside the age window: identity kept, content released.
+        let mut aged = gmail_email(
+            &e.account,
+            4,
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        aged.received_at = Utc::now() - chrono::Duration::days(20);
+        let aged_gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![aged.clone()],
+            crate::test_support::SendOutcome::Deliver("sent00000000000000000004".into()),
+        );
+        let job4 = Job::new(aged.stub.clone(), Utc::now());
+        e.db.insert_stubs([job4.stub.clone()], Utc::now()).unwrap();
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &aged_gmail.url,
+            &aged_gmail.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job4.id).unwrap();
+        assert_eq!(after.state, JobState::Deferred);
+        assert!(after.email.is_none());
+
+        // Excluded provider folders never reach analysis.
+        let mut excluded = gmail_email(
+            &e.account,
+            5,
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        excluded.labels = vec!["SENT".into()];
+        let excluded_gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![excluded.clone()],
+            crate::test_support::SendOutcome::Deliver("sent00000000000000000005".into()),
+        );
+        let job5 = Job::new(excluded.stub.clone(), Utc::now());
+        e.db.insert_stubs([job5.stub.clone()], Utc::now()).unwrap();
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &excluded_gmail.url,
+            &excluded_gmail.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job5.id).unwrap();
+        assert_eq!(after.state, JobState::Other);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.kind == "email.excluded"
+                    && ev.detail.contains("Provider folder excluded")),
+            "folder exclusions must be audited"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Per-message analysis failures are isolated with a retry budget and
+    /// escalate to human attention only after it is exhausted.
+    #[test]
+    fn process_one_retries_analysis_before_escalating() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        e.settings.model_digest = Some("a".repeat(64));
+        let broken = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| serde_json::json!("not-a-verdict"),
+        );
+        e.settings.ollama_url = broken.url.clone();
+        let (job, gmail) = queue_message(&mut e, 1);
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail.url,
+            &gmail.url,
+        ));
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.attempts, 1);
+        assert!(after.retry_at > Utc::now().timestamp());
+        assert!(
+            after
+                .flags
+                .iter()
+                .any(|f| f.contains("Analysis unavailable"))
+        );
+        let failure = e.db.processing_failure(&job.id).unwrap().unwrap();
+        assert!(!failure.retry_exhausted);
+
+        // With the budget already spent the message escalates to a human.
+        let mut current = e.db.get(&job.id).unwrap();
+        current.attempts = 2;
+        current.retry_at = 0;
+        e.db.save(&mut current, "test.budget", "spent").unwrap();
+        assert!(e.process_one().unwrap());
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Attention);
+        assert_eq!(after.retry_at, 0);
+        let failure = e.db.processing_failure(&job.id).unwrap().unwrap();
+        assert_eq!(failure.attempts, 3);
+        assert!(failure.retry_exhausted);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Seed a Ready send candidate and return it with its approval hash.
+    fn seed_send_job(e: &mut Engine, n: u64) -> (Job, String) {
+        let job = seed_ready_job(e, n, Utc::now());
+        let body_hash = hash(&job.draft.as_ref().unwrap().body);
+        (job, body_hash)
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Every manual-dispatch preflight gate fails closed with its own reason
+    /// and none of them ever reaches the provider or marks the job sent.
+    #[test]
+    fn every_manual_dispatch_preflight_gate_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let base = e.settings.clone();
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail.url,
+            &gmail.url,
+        ));
+        let mut keep: Vec<MockServer> = Vec::new();
+        let mut n = 100u64;
+
+        macro_rules! gate {
+            ($message:expr, $perturb:expr) => {{
+                e.settings = base.clone();
+                e.paused.store(false, Ordering::SeqCst);
+                e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+                    test_creds(),
+                    &gmail.url,
+                    &gmail.url,
+                ));
+                n += 1;
+                let (mut job, body_hash) = seed_send_job(&mut e, n);
+                ($perturb)(&mut e, &mut job, &mut keep);
+                let error = e
+                    .send(&job.id, job.revision, &body_hash, false)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains($message),
+                    "expected {:?} in {:?}",
+                    $message,
+                    error
+                );
+                let after = e.db.get(&job.id).unwrap();
+                assert_ne!(
+                    after.state,
+                    JobState::Sent,
+                    "gate {:?} must never dispatch",
+                    $message
+                );
+            }};
+        }
+
+        gate!(
+            "Paused or stopping",
+            |e: &mut Engine, _: &mut Job, _: &mut Vec<MockServer>| {
+                e.paused.store(true, Ordering::SeqCst);
+            }
+        );
+        gate!(
+            "Sending is disabled",
+            |e: &mut Engine, _: &mut Job, _: &mut Vec<MockServer>| {
+                e.settings.sending_enabled = false;
+            }
+        );
+        gate!(
+            "Manual sending is only available in Human review mode",
+            |e: &mut Engine, _: &mut Job, _: &mut Vec<MockServer>| {
+                e.settings.mode = Mode::Automatic;
+            }
+        );
+        gate!(
+            "Approval is stale or message is not reviewable",
+            |_e: &mut Engine, job: &mut Job, _: &mut Vec<MockServer>| {
+                job.state = JobState::Dismissed;
+                _e.db.save(job, "test.dismiss", "held").unwrap();
+            }
+        );
+        gate!("Reply changed after confirmation", |_e: &mut Engine,
+                                                   job: &mut Job,
+                                                   _: &mut Vec<
+            MockServer,
+        >| {
+            // The stored draft is swapped after the approval hash was taken.
+            let mut edited = job.draft.clone().unwrap();
+            edited.body = crate::test_support::draft_body("Someone Else");
+            job.draft = Some(edited);
+            _e.db.save(job, "test.edit", "swapped").unwrap();
+        });
+        gate!(
+            "Original email is missing",
+            |_e: &mut Engine, job: &mut Job, _: &mut Vec<MockServer>| {
+                job.email = None;
+                _e.db.save(job, "test.drop", "dropped").unwrap();
+            }
+        );
+        gate!(
+            "Draft is missing",
+            |_e: &mut Engine, job: &mut Job, _: &mut Vec<MockServer>| {
+                job.draft = None;
+                _e.db.save(job, "test.nodraft", "dropped").unwrap();
+            }
+        );
+        gate!(
+            "Message is blocked by mailbox safety checks",
+            |_e: &mut Engine, job: &mut Job, _: &mut Vec<MockServer>| {
+                job.email.as_mut().unwrap().message_id = "invalid-message-id".into();
+                _e.db.save(job, "test.block", "blocked").unwrap();
+            }
+        );
+        gate!(
+            "Original message is outside the selected age window",
+            |_e: &mut Engine, job: &mut Job, _: &mut Vec<MockServer>| {
+                job.email.as_mut().unwrap().received_at = Utc::now() - chrono::Duration::days(20);
+                _e.db.save(job, "test.age", "aged").unwrap();
+            }
+        );
+        gate!(
+            "Gmail is not connected",
+            |e: &mut Engine, _: &mut Job, _: &mut Vec<MockServer>| {
+                e.gmail = None;
+            }
+        );
+        gate!("Google send permission is missing", |e: &mut Engine,
+                                                    _: &mut Job,
+                                                    _: &mut Vec<
+            MockServer,
+        >| {
+            let creds = crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: false,
+            };
+            e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+                creds, &gmail.url, &gmail.url,
+            ));
+        });
+        gate!(
+            "Connected account changed",
+            |e: &mut Engine, _: &mut Job, keep: &mut Vec<MockServer>| {
+                let foreign = crate::test_support::gmail_server(
+                    "other@example.invalid",
+                    vec![],
+                    crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+                );
+                e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+                    test_creds(),
+                    &foreign.url,
+                    &foreign.url,
+                ));
+                keep.push(foreign);
+            }
+        );
+        gate!("Original message no longer exists", |_e: &mut Engine,
+                                                    _job: &mut Job,
+                                                    _: &mut Vec<
+            MockServer,
+        >| {});
+        // Automatic dispatch has its own gates after the shared preflight.
+        {
+            e.settings = base.clone();
+            n += 1;
+            let (mut job, body_hash) = seed_send_job(&mut e, n);
+            job.state = JobState::Attention;
+            e.db.save(&mut job, "test.hold", "held").unwrap();
+            let error = e
+                .send(&job.id, job.revision, &body_hash, true)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("Automatic send conditions were not satisfied"),
+                "unexpected: {error}"
+            );
+        }
+
+        // Stale approvals fail before any gate above is consulted.
+        let (job, body_hash) = seed_send_job(&mut e, n + 1);
+        let error = e
+            .send(&job.id, job.revision + 5, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("stale"), "unexpected: {error}");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Dispatch-time provider reality checks (changed content, dead thread,
+    /// newer conversation activity, invalid timestamps) block the send.
+    #[test]
+    fn provider_reality_checks_block_stale_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let (job, body_hash) = seed_send_job(&mut e, 1);
+        let email = job.email.clone().unwrap();
+        let mut keep: Vec<MockServer> = Vec::new();
+
+        // The original message changed after review.
+        let mut altered = email.clone();
+        altered.text = "We regret to inform you that this text was edited.".into();
+        let altered_resource = crate::test_support::gmail_resource(&altered);
+        let thread = crate::test_support::gmail_thread(&email);
+        let changed = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                p if p.starts_with("/messages/") => answer(200, altered_resource.clone()),
+                p if p.starts_with("/threads/") => answer(200, thread.clone()),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &changed.url,
+            &changed.url,
+        ));
+        keep.push(changed);
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Original message changed"),
+            "unexpected: {error}"
+        );
+
+        // The conversation itself is gone.
+        let resource = crate::test_support::gmail_resource(&email);
+        let gone = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                p if p.starts_with("/messages/") => answer(200, resource.clone()),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gone.url,
+            &gone.url,
+        ));
+        keep.push(gone);
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("conversation preflight is temporarily unavailable"),
+            "unexpected: {error}"
+        );
+
+        // The thread no longer contains the reviewed message.
+        let resource = crate::test_support::gmail_resource(&email);
+        let stranger_thread = serde_json::json!({"messages": [{
+            "id": "msg999999999999999999999",
+            "internalDate": email.received_at.timestamp_millis().to_string(),
+            "labelIds": ["INBOX"],
+        }]});
+        let stranger = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                p if p.starts_with("/messages/") => answer(200, resource.clone()),
+                p if p.starts_with("/threads/") => answer(200, stranger_thread.clone()),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &stranger.url,
+            &stranger.url,
+        ));
+        keep.push(stranger);
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("no longer in the conversation"),
+            "unexpected: {error}"
+        );
+
+        // Newer thread activity requires re-review before replying.
+        let resource = crate::test_support::gmail_resource(&email);
+        let busy_thread = serde_json::json!({"messages": [
+            {"id": email.stub.provider_id,
+             "internalDate": email.received_at.timestamp_millis().to_string(),
+             "labelIds": ["INBOX"]},
+            {"id": "msg888888888888888888888",
+             "internalDate": (email.received_at.timestamp_millis() + 60_000).to_string(),
+             "labelIds": ["INBOX"]},
+        ]});
+        let busy = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                p if p.starts_with("/messages/") => answer(200, resource.clone()),
+                p if p.starts_with("/threads/") => answer(200, busy_thread.clone()),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &busy.url,
+            &busy.url,
+        ));
+        keep.push(busy);
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Newer conversation activity exists"),
+            "unexpected: {error}"
+        );
+
+        // Unparseable provider timestamps fail closed.
+        let resource = crate::test_support::gmail_resource(&email);
+        let bogus_thread = serde_json::json!({"messages": [
+            {"id": email.stub.provider_id,
+             "internalDate": email.received_at.timestamp_millis().to_string(),
+             "labelIds": ["INBOX"]},
+            {"id": "msg777777777777777777777",
+             "internalDate": "not-a-timestamp",
+             "labelIds": ["INBOX"]},
+        ]});
+        let bogus = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                p if p.starts_with("/messages/") => answer(200, resource.clone()),
+                p if p.starts_with("/threads/") => answer(200, bogus_thread.clone()),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &bogus.url,
+            &bogus.url,
+        ));
+        keep.push(bogus);
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid provider timestamp"),
+            "unexpected: {error}"
+        );
+        // No provider outcome ever dispatched anything.
+        assert_ne!(e.db.get(&job.id).unwrap().state, JobState::Sent);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Provider send outcomes map onto the durable delivery states: rejection
+    /// returns the message to review, ambiguity marks Uncertain, acceptance
+    /// marks Sent exactly once.
+    #[test]
+    fn provider_send_outcomes_map_onto_delivery_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+
+        // Definitive rejection: nothing was accepted, review resumes.
+        let (job, body_hash) = seed_send_job(&mut e, 1);
+        let email = job.email.clone().unwrap();
+        let rejecting = crate::test_support::gmail_server(
+            &e.account,
+            vec![email.clone()],
+            crate::test_support::SendOutcome::Reject,
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &rejecting.url,
+            &rejecting.url,
+        ));
+        let error = e
+            .send(&job.id, job.revision, &body_hash, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Gmail rejected the send request"),
+            "unexpected: {error}"
+        );
+        let after = e.db.get(&job.id).unwrap();
+        assert!(after.state.reviewable(), "state: {:?}", after.state);
+        assert!(after.provider_sent_id.is_none());
+
+        // Ambiguous transport outcome: the delivery is Uncertain and must be
+        // reconciled, never retried blindly.
+        let (job2, body_hash2) = seed_send_job(&mut e, 2);
+        let email2 = job2.email.clone().unwrap();
+        let flaky = crate::test_support::gmail_server(
+            &e.account,
+            vec![email2.clone()],
+            crate::test_support::SendOutcome::Uncertain,
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &flaky.url,
+            &flaky.url,
+        ));
+        let error = e
+            .send(&job2.id, job2.revision, &body_hash2, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Do not resend"), "unexpected: {error}");
+        let after = e.db.get(&job2.id).unwrap();
+        assert_eq!(after.state, JobState::Uncertain);
+
+        // Acceptance marks Sent with the provider identity.
+        let (job3, body_hash3) = seed_send_job(&mut e, 3);
+        let email3 = job3.email.clone().unwrap();
+        let accepting = crate::test_support::gmail_server(
+            &e.account,
+            vec![email3.clone()],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000003".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &accepting.url,
+            &accepting.url,
+        ));
+        e.send(&job3.id, job3.revision, &body_hash3, false).unwrap();
+        let after = e.db.get(&job3.id).unwrap();
+        assert_eq!(after.state, JobState::Sent);
+        assert_eq!(
+            after.provider_sent_id.as_deref(),
+            Some("sent000000000000000000003")
+        );
+        assert!(e.db.has_dispatch_attempt_event(&job3.id).unwrap());
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    /// Reservation lifecycle under gate failures: the emergency stop and the
+    /// protected audit checkpoint each release the reservation or record the
+    /// exact delivery truth, never leaving a phantom send.
+    #[test]
+    fn reservation_lifecycle_survives_gate_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+
+        let run = |e: &mut Engine,
+                   n: u64,
+                   dispatch_script: Vec<bool>,
+                   audit_script: Vec<bool>,
+                   paused_mid_send: bool|
+         -> (String, Job) {
+            let (job, body_hash) = seed_send_job(e, n);
+            let email = job.email.clone().unwrap();
+            let accepting = crate::test_support::gmail_server(
+                &e.account,
+                vec![email],
+                crate::test_support::SendOutcome::Deliver(format!("sent{n:021}")),
+            );
+            e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+                test_creds(),
+                &accepting.url,
+                &accepting.url,
+            ));
+            let dispatch_calls = std::sync::atomic::AtomicUsize::new(0);
+            let audit_calls = std::sync::atomic::AtomicUsize::new(0);
+            let paused = e.paused.clone();
+            let dispatch: crate::test_support::Gate = std::sync::Arc::new(move || {
+                let step = dispatch_calls.fetch_add(1, Ordering::SeqCst);
+                if dispatch_script.get(step).copied().unwrap_or(true) {
+                    Ok(())
+                } else {
+                    anyhow::bail!("synthetic enterprise emergency stop")
+                }
+            });
+            let audit: crate::test_support::Gate = std::sync::Arc::new(move || {
+                let step = audit_calls.fetch_add(1, Ordering::SeqCst);
+                if paused_mid_send && step == 0 {
+                    paused.store(true, Ordering::SeqCst);
+                }
+                if audit_script.get(step).copied().unwrap_or(true) {
+                    Ok(())
+                } else {
+                    anyhow::bail!("synthetic protected audit outage")
+                }
+            });
+            let outcome = crate::test_support::with_dispatch_gate(dispatch, || {
+                crate::test_support::with_audit_gate(audit, || {
+                    e.send(&job.id, job.revision, &body_hash, false)
+                })
+            });
+            e.paused.store(false, Ordering::SeqCst);
+            (outcome.unwrap_err().to_string(), job)
+        };
+
+        // Emergency stop before any provider contact.
+        let (error, job) = run(&mut e, 11, vec![false], vec![], false);
+        assert!(error.contains("emergency stop"), "unexpected: {error}");
+        assert_ne!(e.db.get(&job.id).unwrap().state, JobState::Sent);
+
+        // Emergency stop after the reservation: the reservation is released.
+        let (error, job) = run(&mut e, 12, vec![true, false], vec![], false);
+        assert!(error.contains("emergency stop"), "unexpected: {error}");
+        let after = e.db.get(&job.id).unwrap();
+        assert!(after.state.reviewable(), "state: {:?}", after.state);
+
+        // Emergency stop after the reservation while the protected checkpoint
+        // is also down: the failure is explicitly non-retryable.
+        let (error, job) = run(&mut e, 13, vec![true, false], vec![true, false], false);
+        assert!(
+            error.contains("protected audit checkpoint failed"),
+            "unexpected: {error}"
+        );
+        assert_ne!(e.db.get(&job.id).unwrap().state, JobState::Sent);
+
+        // Checkpoint outage before the network request releases the
+        // reservation without sending.
+        let (error, job) = run(&mut e, 14, vec![true], vec![false], false);
+        assert!(
+            error.contains("Protected audit checkpoint is unavailable"),
+            "unexpected: {error}"
+        );
+        let after = e.db.get(&job.id).unwrap();
+        assert!(after.state.reviewable(), "state: {:?}", after.state);
+
+        // Pausing after the reservation cancels before Gmail accepts anything.
+        let (error, job) = run(&mut e, 15, vec![true], vec![true], true);
+        assert!(
+            error.contains("Dispatch cancelled before Gmail accepted"),
+            "unexpected: {error}"
+        );
+        let after = e.db.get(&job.id).unwrap();
+        assert!(after.state.reviewable(), "state: {:?}", after.state);
+
+        // Checkpoint outage after Gmail accepted: the state is Sent and the
+        // operator is told not to resend.
+        let (error, job) = run(&mut e, 16, vec![true], vec![true, false], false);
+        assert!(error.contains("Do not resend"), "unexpected: {error}");
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Sent);
+    }
+
+    /// Automatic dispatch drives the full pipeline for a qualified queue and
+    /// holds the recipient burst limit as a review gate, never a silent skip.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn automatic_dispatch_sends_until_the_recipient_burst_limit() {
+        use crate::test_support::eligible_job_to;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        crate::test_support::arm_automatic(&mut e.settings);
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+        let now = Utc::now();
+
+        // Every job shares one recipient mailbox so the per-recipient burst
+        // limit eventually engages.
+        let limit = crate::test_support::recipient_limit();
+        let mut jobs = Vec::new();
+        for k in 0..=limit {
+            let mut job =
+                eligible_job_to(&e.settings, &e.account, 600 + k, "hr0@example.invalid", now);
+            e.db.insert_stubs([job.stub.clone()], now).unwrap();
+            e.db.save(&mut job, "test.seed", "seeded").unwrap();
+            jobs.push(job);
+        }
+        let emails: Vec<_> = jobs.iter().map(|j| j.email.clone().unwrap()).collect();
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            emails,
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000600".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &gmail.url,
+            &gmail.url,
+        ));
+
+        for k in 0..limit {
+            assert!(e.automatic_tick().unwrap(), "burst slot {k} must dispatch");
+        }
+        let error = e.automatic_tick().unwrap_err().to_string();
+        assert!(
+            error.contains("Automatic recipient 24-hour reply limit reached"),
+            "unexpected: {error}"
+        );
+        let states: Vec<_> = jobs.iter().map(|j| e.db.get(&j.id).unwrap()).collect();
+        let sent = states.iter().filter(|j| j.state == JobState::Sent).count();
+        assert_eq!(sent, limit as usize, "exactly the burst slots may dispatch");
+        let held: Vec<_> = states
+            .iter()
+            .filter(|j| j.state != JobState::Sent)
+            .collect();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].state, JobState::Attention);
+        assert!(
+            held[0]
+                .flags
+                .iter()
+                .any(|f| f.contains("Automatic dispatch held")),
+            "flags: {:?}",
+            held[0].flags
+        );
+    }
+
+    /// Automatic ticks respect their guards, skip blocked conversations and
+    /// hold (never silently drop) messages whose preflight fails late.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn automatic_tick_guards_skips_and_holds() {
+        use crate::test_support::eligible_job;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        crate::test_support::arm_automatic(&mut e.settings);
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+
+        // Not armed for unattended work: nothing happens.
+        e.settings.sending_enabled = false;
+        assert!(!e.automatic_tick().unwrap());
+        e.settings.sending_enabled = true;
+
+        // The rolling daily budget is spent: nothing happens.
+        let spent = e.settings.daily_send_limit;
+        e.settings.daily_send_limit = 0;
+        assert!(!e.automatic_tick().unwrap());
+        e.settings.daily_send_limit = spent;
+
+        // A job failing automatic policy is skipped, not dispatched.
+        let now = Utc::now();
+        let mut blocked = eligible_job(&e.settings, &e.account, 1, now);
+        blocked.state = JobState::Attention;
+        e.db.insert_stubs([blocked.stub.clone()], now).unwrap();
+        e.db.save(&mut blocked, "test.seed", "blocked").unwrap();
+        assert!(!e.automatic_tick().unwrap());
+        assert_eq!(e.db.get(&blocked.id).unwrap().state, JobState::Attention);
+
+        // A late preflight failure holds the message for human review.
+        let job = eligible_job(&e.settings, &e.account, 2, now);
+        let email = job.email.clone().unwrap();
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        let mut job = job;
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+        // The provider now reports a different connected account.
+        let foreign = crate::test_support::gmail_server(
+            "other@example.invalid",
+            vec![email],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000002".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &foreign.url,
+            &foreign.url,
+        ));
+        let error = e.automatic_tick().unwrap_err().to_string();
+        assert!(
+            error.contains("Automatic dispatch held")
+                || error.contains("Connected account changed"),
+            "unexpected: {error}"
+        );
+        let held = e.db.get(&job.id).unwrap();
+        assert_eq!(held.state, JobState::Attention);
+        assert!(
+            held.flags
+                .iter()
+                .any(|f| f.contains("Automatic dispatch held")),
+            "flags: {:?}",
+            held.flags
+        );
+    }
+
+    /// Reconciliation resolves Uncertain deliveries against Gmail Sent and
+    /// never pretends absence is proof of non-delivery.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn reconcile_resolves_uncertain_deliveries_against_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+
+        let (job, _) = seed_send_job(&mut e, 1);
+
+        // Only Uncertain deliveries may be reconciled.
+        let error = e.reconcile(&job.id).unwrap_err().to_string();
+        assert!(error.contains("Only uncertain"), "unexpected: {error}");
+
+        // Put the job into Uncertain exactly like an ambiguous send outcome.
+        let current = e.db.get(&job.id).unwrap();
+        let reserved = e.db.reserve_send(&current, 50, Utc::now()).unwrap();
+        e.db.finish_send(&reserved.id, None).unwrap();
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Uncertain);
+
+        // Without a provider reconciliation cannot even start.
+        let error = e.reconcile(&job.id).unwrap_err().to_string();
+        assert!(error.contains("Connect Gmail"), "unexpected: {error}");
+
+        // Sent contains no matching message: the reservation is retained.
+        let empty = crate::test_support::gmail_server(
+            &e.account,
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &empty.url,
+            &empty.url,
+        ));
+        e.reconcile(&job.id).unwrap();
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Uncertain);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "delivery.unresolved"));
+
+        // Sent contains the message: the delivery resolves to Sent once.
+        let found = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                "/messages" => answer(
+                    200,
+                    serde_json::json!({"messages": [{
+                        "id": "sent000000000000000000009",
+                        "threadId": current.stub.thread_id,
+                    }]}),
+                ),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &found.url,
+            &found.url,
+        ));
+        e.reconcile(&job.id).unwrap();
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Sent);
+        assert_eq!(
+            after.provider_sent_id.as_deref(),
+            Some("sent000000000000000000009")
+        );
+    }
+
+    // =====================================================================
+    // Model qualification, evaluation and operator diagnostics.
+    // =====================================================================
+
+    /// A scripted runtime whose classifications mirror the evaluation
+    /// fixtures: `perfect` answers every case with its expected category,
+    /// while degraded mode answers only the qualification smoke test and
+    /// holds everything else as uncertain.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn evaluation_runtime(perfect: bool) -> MockServer {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../tests/fixtures/classification.json")).unwrap();
+        crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            move |payload| {
+                let subject = payload["subject"].as_str().unwrap_or("").to_owned();
+                let text = payload["untrusted_email"].as_str().unwrap_or("").to_owned();
+                let key =
+                    |s: &str, t: &str| format!("{s}\n{}", t.chars().take(64).collect::<String>());
+                let matched = cases.iter().find(|case| {
+                    let case_text =
+                        crate::mail::current_text(case["text"].as_str().unwrap_or("\0"));
+                    key(&subject, &text)
+                        .starts_with(&key(case["subject"].as_str().unwrap_or(""), &case_text))
+                });
+                let smoke = text.starts_with("Thank you for applying for the engineer position.");
+                let expected = if smoke {
+                    "rejection"
+                } else {
+                    matched
+                        .and_then(|case| case["expected"].as_str())
+                        .unwrap_or("other")
+                };
+                if (perfect && matched.is_some()) || smoke {
+                    if expected == "rejection" {
+                        let source = format!("{subject}\n{text}");
+                        let quote: String = source.chars().take(40).collect();
+                        crate::test_support::verdict(&quote)
+                    } else {
+                        crate::test_support::verdict_category(expected)
+                    }
+                } else {
+                    crate::test_support::verdict_category("uncertain")
+                }
+            },
+        )
+    }
+
+    /// Task evaluation either qualifies the pinned model with a bound
+    /// qualification or fails closed and disarms delivery.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn evaluate_model_to_qualifies_or_rejects_the_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.settings.reply_language = crate::config::ReplyLanguage::English;
+
+        // A model mirroring the whole fixture suite passes and is bound.
+        let perfect = evaluation_runtime(true);
+        e.settings.ollama_url = perfect.url.clone();
+        let out = dir.path().join("reports").join("eval.json");
+        e.evaluate_model_to(&out).unwrap();
+        assert!(e.settings.task_qualification.is_some());
+        assert_eq!(
+            e.settings.model_digest.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        let report: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(report["summary"]["fixture_count"], 74);
+        assert_eq!(report["summary"]["recommendation_eligible"], true);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "model.task_qualified"));
+
+        // The dated wrapper writes its report next to the workspace.
+        e.evaluate_model().unwrap();
+
+        // A degraded model fails the gates: qualification is dropped and
+        // unattended delivery disarms fail-closed.
+        let degraded = evaluation_runtime(false);
+        e.settings.ollama_url = degraded.url.clone();
+        let out2 = dir.path().join("eval2.json");
+        let error = e.evaluate_model_to(&out2).unwrap_err().to_string();
+        assert!(
+            error.contains("did not meet Automatic-mode gates"),
+            "unexpected: {error}"
+        );
+        assert!(e.settings.task_qualification.is_none());
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "model.task_rejected"));
+    }
+
+    /// Qualification pins digests, status inspection surfaces stale pins and
+    /// residency losses, and verifier flows follow the same contract.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn qualification_and_status_flows_pin_and_revalidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.settings.reply_language = crate::config::ReplyLanguage::English;
+        let runtime = crate::test_support::ollama_runtime(
+            vec![
+                (crate::config::DEFAULT_MODEL.into(), "a".repeat(64)),
+                (crate::config::DEFAULT_VERIFIER_MODEL.into(), "b".repeat(64)),
+            ],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+
+        // Qualify pins the digest and keeps unattended delivery disabled.
+        e.settings.sending_enabled = true;
+        e.qualify().unwrap();
+        assert_eq!(
+            e.settings.model_digest.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "model.qualified"));
+
+        // Status reflects residency while the pin matches.
+        e.inspect_model_status().unwrap();
+        assert!(e.model.gpu_resident);
+        // A stale pin surfaces as a requalification demand.
+        e.settings.model_digest = Some("c".repeat(64));
+        e.inspect_model_status().unwrap();
+        assert!(!e.model.gpu_resident);
+        assert!(e.model.message.contains("qualify again"));
+        // A pin that matches but has no residency says so precisely.
+        e.settings.model_digest = Some("a".repeat(64));
+        let empty_ps = MockServer::new_raw(move |route, _| match route {
+            "/" => Some((200, crate::test_support::token_ok("test-scope").to_string())),
+            "/api/version" => Some((200, crate::test_support::version_ok().to_string())),
+            "/api/tags" => Some((
+                200,
+                crate::test_support::tags_for(crate::config::DEFAULT_MODEL, &"a".repeat(64))
+                    .to_string(),
+            )),
+            "/api/show" => Some((200, crate::test_support::show_ok().to_string())),
+            "/api/ps" => Some((200, serde_json::json!({"models": []}).to_string())),
+            _ => None,
+        });
+        e.settings.ollama_url = empty_ps.url.clone();
+        e.inspect_model_status().unwrap();
+        assert!(!e.model.gpu_resident);
+        assert!(
+            e.model
+                .message
+                .contains("not currently confirmed GPU-resident")
+        );
+
+        // Verifier qualification and status follow the same pin semantics.
+        e.settings.ollama_url = runtime.url.clone();
+        e.settings.verifier_model = crate::config::DEFAULT_VERIFIER_MODEL.into();
+        e.settings.verifier_model_digest = None;
+        e.qualify_verifier().unwrap();
+        assert_eq!(
+            e.settings.verifier_model_digest.as_deref(),
+            Some("b".repeat(64).as_str())
+        );
+        e.inspect_verifier_model_status().unwrap();
+        assert!(e.verifier_model.gpu_resident);
+        e.settings.verifier_model_digest = Some("c".repeat(64));
+        e.inspect_verifier_model_status().unwrap();
+        assert!(!e.verifier_model.gpu_resident);
+        assert!(e.verifier_model.message.contains("qualify again"));
+    }
+
+    /// Runtime profiling and the installed-model bake-off persist private
+    /// reports and audit their creation.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn runtime_profile_and_bakeoff_persist_private_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.settings.reply_language = crate::config::ReplyLanguage::English;
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        e.settings.ollama_url = runtime.url.clone();
+
+        let report = e.profile_model_runtime().unwrap();
+        assert!(report.exists());
+        let profile: Value =
+            serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+        assert!(profile["cold_pipeline"]["request_count"].as_u64().unwrap() > 0);
+
+        let bakeoff = e.compare_models().unwrap();
+        assert!(bakeoff.exists());
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "model.runtime_profiled"));
+        assert!(events.iter().any(|ev| ev.kind == "models.compared"));
+    }
+
+    /// Synchronize against the provider records its poll cursor.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn synchronize_records_the_poll_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.account = "applicant@example.invalid".into();
+        assert!(e.last_poll().unwrap().is_none());
+        let sync_server = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                "/messages" => answer(200, serde_json::json!({"messages": []})),
+                "/history" => answer(200, serde_json::json!({"history": [], "historyId": "42"})),
+                _ => None,
+            }
+        });
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &sync_server.url,
+            &sync_server.url,
+        ));
+        let inserted = e.synchronize().unwrap();
+        assert_eq!(inserted, 0);
+        assert!(e.last_poll().unwrap().is_some());
+    }
+
+    /// Editing, regenerating and dismissing drive the review lifecycle and
+    /// invalidate model verification whenever a human takes over.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn review_lifecycle_edits_regenerates_and_dismisses() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let (job, _) = seed_send_job(&mut e, 1);
+
+        // A human edit invalidates model verification and holds the draft.
+        e.edit(
+            &job.id,
+            job.revision,
+            crate::test_support::draft_body("Test Applicant"),
+        )
+        .unwrap();
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Attention);
+        assert!(after.analysis.as_ref().unwrap().verification.is_none());
+        assert!(
+            after
+                .analysis
+                .as_ref()
+                .unwrap()
+                .verified_draft_hash
+                .is_none()
+        );
+        assert!(
+            after.flags.iter().any(|f| f.contains("User-edited reply")),
+            "flags: {:?}",
+            after.flags
+        );
+
+        // Regeneration returns the message to the local analysis queue.
+        e.regenerate(&job.id, after.revision).unwrap();
+        let after = e.db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Queued);
+        assert!(after.draft.is_none() && after.analysis.is_none());
+
+        // Dismissal releases the message with no mail sent.
+        let (job2, _) = seed_send_job(&mut e, 2);
+        e.dismiss(&job2.id, job2.revision).unwrap();
+        assert_eq!(e.db.get(&job2.id).unwrap().state, JobState::Dismissed);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "email.dismissed"));
+    }
+
+    /// Connecting persists encrypted credentials with delivery disarmed;
+    /// disconnecting removes them; demo and policy refusals stay hard.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn connect_and_disconnect_persist_credentials_disarmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let provider = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, crate::test_support::token_ok("test-scope")),
+                "/profile" => answer(
+                    200,
+                    crate::test_support::gmail_profile("applicant@example.invalid"),
+                ),
+                _ => None,
+            }
+        });
+
+        // Demo mode never touches a real mailbox.
+        let mut d = demo(dir.path());
+        let error =
+            crate::test_support::with_login(test_creds(), &provider.url, &provider.url, || {
+                d.connect(&dir.path().join("oauth.json"), true).unwrap_err()
+            })
+            .to_string();
+        assert!(error.contains("Demo mode"), "unexpected: {error}");
+
+        // An enterprise policy can forbid even requesting send scope.
+        let restrictive = crate::test_support::loaded_policy(
+            "digest-a",
+            crate::policy::EnterprisePolicy {
+                version: 1,
+                prohibit_sending: true,
+                ..Default::default()
+            },
+        );
+        let error = crate::test_support::with_policy(Some(restrictive), || {
+            e.reload_enterprise_policy().unwrap();
+            crate::test_support::with_login(test_creds(), &provider.url, &provider.url, || {
+                e.connect(&dir.path().join("oauth.json"), true).unwrap_err()
+            })
+            .to_string()
+        });
+        assert!(
+            error.contains("prohibits requesting Gmail send permission"),
+            "unexpected: {error}"
+        );
+
+        // Removing the policy does not re-enable anything by itself; a normal
+        // login then persists everything with delivery disarmed.
+        crate::test_support::with_policy(None, || {
+            e.reload_enterprise_policy().unwrap();
+        });
+        crate::test_support::with_login(test_creds(), &provider.url, &provider.url, || {
+            e.connect(&dir.path().join("oauth.json"), true).unwrap();
+        });
+        assert_eq!(e.account, "applicant@example.invalid");
+        assert!(e.connected() && e.send_scope());
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "account.connected"));
+
+        // Disconnecting removes local credentials and audits it.
+        e.disconnect().unwrap();
+        assert!(!e.connected());
+        assert!(e.account.is_empty());
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(events.iter().any(|ev| ev.kind == "account.disconnected"));
     }
 }

@@ -1185,6 +1185,54 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Analysis through the independent verifier verifies with the verifier
+    /// model and reports its provenance instead of the primary model's.
+    #[test]
+    fn analyze_runs_the_independent_verifier_pipeline() {
+        use crate::config::{DEFAULT_MODEL, DEFAULT_VERIFIER_MODEL, ReplyLanguage};
+        let mut settings = Settings {
+            signature: "Test Applicant".into(),
+            reply_language: ReplyLanguage::English,
+            model: DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some("b".repeat(64)),
+            ..Default::default()
+        };
+        let runtime = crate::test_support::ollama_runtime(
+            vec![
+                (DEFAULT_MODEL.into(), "a".repeat(64)),
+                (DEFAULT_VERIFIER_MODEL.into(), "b".repeat(64)),
+            ],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        settings.ollama_url = runtime.url.clone();
+        let llm = Ollama::new(&settings).unwrap();
+        let email = sample_email(
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        let (analysis, draft, flags) = llm.analyze(&email).unwrap();
+        assert!(draft.is_some());
+        assert!(flags.is_empty(), "flags: {flags:?}");
+        assert_eq!(analysis.verification_model, DEFAULT_VERIFIER_MODEL);
+        assert_eq!(analysis.verification_model_digest, "b".repeat(64));
+        assert!(
+            analysis
+                .verification
+                .as_ref()
+                .is_some_and(Verification::passed)
+        );
+        assert!(analysis.gpu_resident);
+    }
+
     #[test]
     fn transport_recovery_is_narrowly_limited_to_timeout_or_connect_errors() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

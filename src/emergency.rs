@@ -52,6 +52,14 @@ fn fail_closed_from(result: Result<EmergencyStopStatus>) -> EmergencyStopStatus 
 }
 
 pub fn ensure_dispatch_allowed() -> Result<()> {
+    // Test seam: threads under test arm a scripted gate in
+    // `crate::test_support`, so the pre/post-reservation dispatch boundaries
+    // can be exercised deterministically without touching the process
+    // environment. Production threads always take the sentinel below.
+    #[cfg(test)]
+    if let Some(gate) = crate::test_support::dispatch_gate() {
+        return gate();
+    }
     ensure_dispatch_allowed_for(std::env::var_os(EMERGENCY_STOP_FILE_ENV))
 }
 

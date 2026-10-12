@@ -200,6 +200,25 @@ mod tests {
     use crate::engine::Engine;
     use std::sync::{Arc, atomic::AtomicBool};
 
+    /// A destination whose parent cannot be created fails loudly and writes
+    /// nothing instead of half a report.
+    #[test]
+    fn write_report_refuses_unusable_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let blocker = root.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let target = blocker.join("nested").join("report.json");
+        assert!(write_report(&engine, &target).is_err());
+        assert!(!target.exists());
+    }
+
     #[test]
     fn diagnostic_report_omits_private_mail_and_profile_fields() {
         let root = tempfile::tempdir().unwrap();

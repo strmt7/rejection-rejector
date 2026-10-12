@@ -650,6 +650,13 @@ fn policy_path_from(
 }
 
 pub fn load_optional() -> Result<Option<LoadedPolicy>> {
+    // Test seam: process threads under test arm a deterministic policy in
+    // `crate::test_support`, so reload/startup flows exercise policy behavior
+    // without machine-wide files or environment mutation.
+    #[cfg(test)]
+    if let Some(loader) = crate::test_support::policy_loader() {
+        return Ok(loader());
+    }
     let expected_digest = configured_digest_pin()?;
     let signature_configured = std::env::var_os("RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY")
         .is_some()

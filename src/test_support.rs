@@ -149,7 +149,7 @@ pub(crate) fn token_ok(scope: &str) -> Value {
 
 /// Build a Gmail profile answer for `address`.
 pub(crate) fn gmail_profile(address: &str) -> Value {
-    json!({"emailAddress": address})
+    json!({"emailAddress": address, "historyId": "1"})
 }
 
 /// The RFC 2822 message-id style provider ids accepted by `validate_id`.
@@ -276,9 +276,22 @@ pub(crate) fn arm_automatic(settings: &mut Settings) {
 /// dating the draft an hour before `now`. `n` selects the provider identity and
 /// thus the recipient mailbox (`hr{n}@example.invalid`).
 pub(crate) fn eligible_job(settings: &Settings, account: &str, n: u64, now: DateTime<Utc>) -> Job {
-    let email = gmail_email(
+    eligible_job_to(settings, account, n, &format!("hr{n}@example.invalid"), now)
+}
+
+/// Like [`eligible_job`] but with an explicit sender mailbox, so several jobs
+/// can share one recipient and exercise the per-recipient burst limit.
+pub(crate) fn eligible_job_to(
+    settings: &Settings,
+    account: &str,
+    n: u64,
+    recipient: &str,
+    now: DateTime<Utc>,
+) -> Job {
+    let email = gmail_email_to(
         account,
         n,
+        recipient,
         "Your application — R&D Engineer",
         "Thank you for applying. We have decided not to move forward with your application.",
     );
@@ -331,4 +344,383 @@ pub(crate) fn with_installer<T>(runner: Installer, body: impl FnOnce() -> T) -> 
 /// The installer stand-in armed by `with_installer`, if any.
 pub(crate) fn installer_override() -> Option<Installer> {
     *INSTALLER.lock().unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Thread-scoped runtime seams.
+//
+// Enterprise policy loading, the dispatch emergency stop, the protected audit
+// checkpoint and the OAuth login all read process-wide state or launch real
+// processes. Each seam below substitutes one of them only for the thread that
+// arms it (`with_*` guards restore the previous value even on panic), so
+// parallel tests never observe each other's substitutions and the production
+// fallthrough stays byte-for-byte the real one.
+// ---------------------------------------------------------------------------
+use crate::oauth::Credentials;
+use crate::policy::LoadedPolicy;
+use std::cell::RefCell;
+
+/// A scripted stand-in for a fail-closed runtime gate.
+pub(crate) type Gate = std::sync::Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>;
+
+/// A scripted stand-in for the enterprise policy loader; each call may answer
+/// a different policy so reload transitions are observable.
+pub(crate) type PolicyLoader = std::sync::Arc<dyn Fn() -> Option<LoadedPolicy> + Send + Sync>;
+
+#[derive(Default)]
+struct Seams {
+    policy: Option<PolicyLoader>,
+    dispatch: Option<Gate>,
+    audit: Option<Gate>,
+    login: Option<(Credentials, String, String)>,
+    interval: Option<std::time::Duration>,
+    endpoints: Option<(String, String)>,
+}
+
+thread_local! {
+    static SEAMS: RefCell<Seams> = RefCell::new(Seams::default());
+}
+
+/// Process-wide seam set waiting for the next worker thread to adopt it.
+static PENDING: Mutex<Option<Seams>> = Mutex::new(None);
+
+/// Arm every seam for the worker thread the surrounding test is about to
+/// spawn, plus the worker-loop timer interval override (zero makes every
+/// scheduled operation fire on each loop iteration).
+///
+/// Inputs: the substitution set; `body` runs while the seams are pending for
+/// the next thread that calls [`adopt_seams`]. Output: `body`'s result. The
+/// pending set is restored afterwards even on panic.
+pub(crate) fn arm_worker_seams<T>(
+    policy: Option<PolicyLoader>,
+    dispatch: Option<Gate>,
+    audit: Option<Gate>,
+    login: Option<(Credentials, String, String)>,
+    interval: Option<std::time::Duration>,
+    endpoints: Option<(String, String)>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let previous = PENDING.lock().unwrap().replace(Seams {
+        policy,
+        dispatch,
+        audit,
+        login,
+        interval,
+        endpoints,
+    });
+    let _restore = Restore(Some(|| {
+        *PENDING.lock().unwrap() = previous;
+    }));
+    body()
+}
+
+/// Move the pending seam set onto the calling thread. The worker loop calls
+/// this at thread start so tests can script its enterprise checks and timers.
+pub(crate) fn adopt_seams() {
+    if let Some(seams) = PENDING.lock().unwrap().take() {
+        SEAMS.with(|s| *s.borrow_mut() = seams);
+    }
+}
+
+/// The worker-loop timer interval override armed for this thread, if any.
+pub(crate) fn worker_interval_override() -> Option<std::time::Duration> {
+    SEAMS.with(|s| s.borrow().interval)
+}
+
+/// Run `body` with provider clients bound to mock `root`/`token_url`
+/// endpoints wherever persisted credentials are opened.
+pub(crate) fn with_gmail_endpoints<T>(root: &str, token_url: &str, body: impl FnOnce() -> T) -> T {
+    let previous = SEAMS.with(|s| {
+        s.borrow_mut()
+            .endpoints
+            .replace((root.to_owned(), token_url.to_owned()))
+    });
+    let _restore = Restore(Some(|| {
+        SEAMS.with(|s| s.borrow_mut().endpoints = previous);
+    }));
+    body()
+}
+
+/// The provider-endpoint stand-in armed for this thread, if any.
+pub(crate) fn gmail_endpoints() -> Option<(String, String)> {
+    SEAMS.with(|s| s.borrow().endpoints.clone())
+}
+
+struct Restore<T: FnOnce()>(Option<T>);
+impl<T: FnOnce()> Drop for Restore<T> {
+    fn drop(&mut self) {
+        if let Some(restore) = self.0.take() {
+            restore();
+        }
+    }
+}
+
+/// Run `body` with `policy::load_optional()` substituted by `loaded`.
+pub(crate) fn with_policy<T>(loaded: Option<LoadedPolicy>, body: impl FnOnce() -> T) -> T {
+    with_policy_loader(std::sync::Arc::new(move || loaded.clone()), body)
+}
+
+/// Run `body` with `policy::load_optional()` substituted by a scriptable
+/// loader, so successive loads can answer different policies.
+pub(crate) fn with_policy_loader<T>(loader: PolicyLoader, body: impl FnOnce() -> T) -> T {
+    let previous = SEAMS.with(|s| s.borrow_mut().policy.replace(loader));
+    let _restore = Restore(Some(|| {
+        SEAMS.with(|s| s.borrow_mut().policy = previous);
+    }));
+    body()
+}
+
+/// The policy-loader stand-in armed for this thread, if any.
+pub(crate) fn policy_loader() -> Option<PolicyLoader> {
+    SEAMS.with(|s| s.borrow().policy.clone())
+}
+
+/// Run `body` with the enterprise emergency stop substituted by `gate`.
+pub(crate) fn with_dispatch_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
+    let previous = SEAMS.with(|s| s.borrow_mut().dispatch.replace(gate));
+    let _restore = Restore(Some(|| {
+        SEAMS.with(|s| s.borrow_mut().dispatch = previous);
+    }));
+    body()
+}
+
+/// The emergency-stop stand-in armed for this thread, if any.
+pub(crate) fn dispatch_gate() -> Option<Gate> {
+    SEAMS.with(|s| s.borrow().dispatch.clone())
+}
+
+/// Run `body` with the protected audit checkpoint substituted by `gate`.
+pub(crate) fn with_audit_gate<T>(gate: Gate, body: impl FnOnce() -> T) -> T {
+    let previous = SEAMS.with(|s| s.borrow_mut().audit.replace(gate));
+    let _restore = Restore(Some(|| {
+        SEAMS.with(|s| s.borrow_mut().audit = previous);
+    }));
+    body()
+}
+
+/// The audit-checkpoint stand-in armed for this thread, if any.
+pub(crate) fn audit_gate() -> Option<Gate> {
+    SEAMS.with(|s| s.borrow().audit.clone())
+}
+
+/// Run `body` with the OAuth login exchanged for canned credentials bound to
+/// mock `root`/`token_url` endpoints, so `Engine::connect` can complete its
+/// full connection flow without a browser or Google.
+pub(crate) fn with_login<T>(
+    creds: Credentials,
+    root: &str,
+    token_url: &str,
+    body: impl FnOnce() -> T,
+) -> T {
+    let previous = SEAMS.with(|s| {
+        s.borrow_mut()
+            .login
+            .replace((creds, root.to_owned(), token_url.to_owned()))
+    });
+    let _restore = Restore(Some(|| {
+        SEAMS.with(|s| s.borrow_mut().login = previous);
+    }));
+    body()
+}
+
+/// The login stand-in armed for this thread, if any.
+pub(crate) fn login_override() -> Option<(Credentials, String, String)> {
+    SEAMS.with(|s| s.borrow().login.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Gmail wire fixtures for provider preflights.
+// ---------------------------------------------------------------------------
+use base64::Engine as _;
+
+/// The Gmail message resource whose parsed form reproduces `email` exactly.
+///
+/// Inputs: `email` — synthetic message identity and content. Output: the
+/// `/messages/{id}` JSON body (base64url RFC 2822 payload included), so a
+/// fetch-time fingerprint check sees the same message that was queued.
+pub(crate) fn gmail_resource(email: &Email) -> Value {
+    let mime = format!(
+        "From: {}\r\nSubject: {}\r\nMessage-ID: {}\r\n\r\n{}",
+        email.from, email.subject, email.message_id, email.text
+    );
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mime.as_bytes());
+    json!({
+        "id": email.stub.provider_id,
+        "threadId": email.stub.thread_id,
+        "internalDate": email.received_at.timestamp_millis().to_string(),
+        "labelIds": email.labels,
+        "raw": raw,
+    })
+}
+
+/// The Gmail thread resource containing exactly `email` at its timestamp.
+pub(crate) fn gmail_thread(email: &Email) -> Value {
+    json!({"messages": [{
+        "id": email.stub.provider_id,
+        "internalDate": email.received_at.timestamp_millis().to_string(),
+        "labelIds": ["INBOX"],
+    }]})
+}
+
+/// Provider outcome scripted for the outbound send endpoint.
+pub(crate) enum SendOutcome {
+    /// Accept the send request and answer `id` as the delivered message.
+    Deliver(String),
+    /// Definitively reject the request (HTTP 400): nothing was accepted.
+    Reject,
+    /// Return an ambiguous server failure (HTTP 503): delivery uncertain.
+    Uncertain,
+}
+
+/// A scripted Gmail API covering token refresh, profile, message and thread
+/// fetches, Sent search and one send governed by `outcome`.
+///
+/// Inputs: `account` — connected mailbox; `emails` — messages served for their
+/// provider/thread ids; `outcome` — scripted send result. Output: a running
+/// [`MockServer`] whose routes mirror the Gmail client's wire protocol.
+pub(crate) fn gmail_server(account: &str, emails: Vec<Email>, outcome: SendOutcome) -> MockServer {
+    let account = account.to_owned();
+    MockServer::new_raw(move |route, _body| {
+        let answer = |status: u16, value: Value| Some((status, value.to_string()));
+        if route == "/" {
+            return answer(200, token_ok("test-scope"));
+        }
+        if route == "/profile" {
+            return answer(200, gmail_profile(&account));
+        }
+        if route == "/messages/send" {
+            return match &outcome {
+                SendOutcome::Deliver(id) => answer(200, json!({"id": id})),
+                SendOutcome::Reject => {
+                    answer(400, json!({"error": {"status": "INVALID_ARGUMENT"}}))
+                }
+                SendOutcome::Uncertain => answer(503, json!({"error": {"status": "UNAVAILABLE"}})),
+            };
+        }
+        if route == "/messages" {
+            return answer(200, json!({"messages": []}));
+        }
+        if route == "/history" {
+            return answer(200, json!({"history": [], "historyId": "42"}));
+        }
+        if let Some(id) = route.strip_prefix("/messages/") {
+            return emails
+                .iter()
+                .find(|e| e.stub.provider_id == id)
+                .and_then(|e| answer(200, gmail_resource(e)));
+        }
+        if let Some(id) = route.strip_prefix("/threads/") {
+            return emails
+                .iter()
+                .find(|e| e.stub.thread_id == id)
+                .and_then(|e| answer(200, gmail_thread(e)));
+        }
+        None
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Local model-runtime fixtures.
+// ---------------------------------------------------------------------------
+
+/// A deterministic loaded policy for startup/reload flows.
+///
+/// Inputs: `digest` — the content identity the engine compares across
+/// reloads; `policy` — the constraint document. Output: a [`LoadedPolicy`]
+/// with no external signature controls.
+pub(crate) fn loaded_policy(digest: &str, policy: crate::policy::EnterprisePolicy) -> LoadedPolicy {
+    LoadedPolicy {
+        policy,
+        digest: digest.into(),
+        expected_digest: None,
+        signature_enforced: false,
+        signature_verified: false,
+        signer_key_sha256: None,
+    }
+}
+
+/// Verdict content quoting `evidence` verbatim (rejection evidence must be an
+/// exact quote from the current input).
+pub(crate) fn verdict(evidence: &str) -> Value {
+    json!({"category":"rejection","confidence":99,"evidence":evidence,
+        "explanation":"Explicit negative hiring decision","company":"","position":"","language":"en"})
+}
+
+/// Verdict content for a non-rejection `category` (`opportunity`, `other`,
+/// `uncertain`) — no evidence quote is required.
+pub(crate) fn verdict_category(category: &str) -> Value {
+    json!({"category":category,"confidence":50,"evidence":"",
+        "explanation":"Fixture classification","company":"","position":"","language":"en"})
+}
+
+/// Verification content passing every local reply check.
+pub(crate) fn verification_ok() -> Value {
+    json!({"genuine_rejection":true,"claims_supported":true,"professional":true,
+        "injection_free":true,"purpose_aligned":true,"reason":"Synthetic verification result"})
+}
+
+/// A scriptable local Ollama runtime whose loaded-model state follows the wire
+/// protocol (`keep_alive: 0` unloads, other generations load), with
+/// classification answers produced by `classify` and canned draft and
+/// verification replies signed with `signature`.
+pub(crate) fn ollama_runtime(
+    models: Vec<(String, String)>,
+    signature: &str,
+    classify: impl Fn(&Value) -> Value + Send + Sync + 'static,
+) -> MockServer {
+    let state: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let loaded = state.clone();
+    let digests: std::collections::HashMap<String, String> = models.iter().cloned().collect();
+    let signature = signature.to_owned();
+    MockServer::new(move |route, body| {
+        let body = body.unwrap_or(json!({}));
+        let model = body["model"].as_str().unwrap_or("").to_owned();
+        match route {
+            "/api/version" => Some(version_ok()),
+            "/api/tags" => Some(json!({"models": models
+                .iter()
+                .map(|(name, digest)| json!({"name": name, "digest": digest, "size": 7_200_000_000u64}))
+                .collect::<Vec<_>>()})),
+            "/api/show" => Some(show_ok()),
+            "/api/ps" => {
+                let current = loaded.lock().unwrap().clone();
+                Some(match current {
+                    Some(name) => json!({"models": [{
+                        "name": name,
+                        "digest": digests.get(&name).cloned().unwrap_or_default(),
+                        "size": 7_200_000_000u64,
+                        "size_vram": 7_200_000_000u64,
+                        "context_length": 32768u32
+                    }]}),
+                    None => json!({"models": []}),
+                })
+            }
+            "/api/generate" => {
+                if body["keep_alive"] == json!(0) {
+                    *loaded.lock().unwrap() = None;
+                } else {
+                    *loaded.lock().unwrap() = Some(model);
+                }
+                Some(json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+            }
+            "/api/chat" => {
+                *loaded.lock().unwrap() = Some(model);
+                let payload: Value =
+                    serde_json::from_str(body["messages"][1]["content"].as_str().unwrap_or("{}"))
+                        .unwrap_or(json!({}));
+                let content = if payload.get("proposed_reply").is_some() {
+                    verification_ok()
+                } else if payload.get("tone").is_some() {
+                    json!({"body": draft_body(&signature)})
+                } else {
+                    classify(&payload)
+                };
+                Some(
+                    json!({"model":"m","message":{"role":"assistant","content":content.to_string()},
+                    "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                )
+            }
+            _ => None,
+        }
+    })
 }
