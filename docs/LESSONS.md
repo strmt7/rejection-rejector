@@ -50,6 +50,13 @@ rule exists because it previously caused a real defect or delay.
 
 ## Concurrency and runtime
 
+- On Windows/WSL, a distro auto-shuts down about 15 seconds after its last
+  active shell exits, SIGKILLing background jobs with no trace (empty
+  logs, lost exit codes). Long jobs need `[general] instanceIdleTimeout=-1`
+  (and `[wsl2] vmIdleTimeout=-1`) in `.wslconfig` — the documented upstream
+  remedy (microsoft/WSL#40865). Capture evidence with `tee`, not with a
+  redirect into a `tail` buffer that dies with the process group.
+
 - Accelerator/GPU APIs are owned by one thread: never probe or query a
   device from a watchdog or side thread while the workload thread drives
   it — the bridge races you. Sample in a per-step callback on the owner
