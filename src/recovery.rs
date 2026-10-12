@@ -258,7 +258,8 @@ fn verify_vault_marker(database: &Path, vault: &Vault) -> Result<()> {
     let connection = rusqlite::Connection::open_with_flags(
         database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
+    );
+    let connection = connection?;
     let encrypted: Vec<u8> = connection
         .query_row(
             "SELECT payload FROM meta WHERE name='vault_check'",
@@ -596,19 +597,21 @@ pub fn create_scheduled_backup(
     ));
     let manifest = create_backup(store, data_dir, &destination)?;
     store.set_meta(LAST_SCHEDULED_BACKUP_META, &now)?;
-    store.log(
+    let logged = store.log(
         "backup.scheduled_succeeded",
         None,
         "Scheduled encrypted backup created and verified",
-    )?;
+    );
+    logged?;
     if prune_verified_scheduled_backups(store, &root, usize::from(settings.scheduled_backup_keep))
         .is_err()
     {
-        store.log(
+        let logged = store.log(
             "backup.retention_warning",
             None,
             "Scheduled backup succeeded but old verified backups could not be fully pruned",
-        )?;
+        );
+        logged?;
     }
     Ok(manifest)
 }
@@ -747,10 +750,11 @@ pub fn recover_workspace_from_backup(
     // Prove the full production restore path before mutating the requested target.
     let isolated = tempfile::tempdir().context("Cannot create isolated pre-recovery workspace")?;
     private_dir(isolated.path())?;
-    write_new_private(
+    let vault_marker_written = write_new_private(
         &isolated.path().join(VAULT_ID_NAME),
         manifest.vault_id.as_bytes(),
-    )?;
+    );
+    vault_marker_written?;
     restore_backup_with_vault(isolated.path(), backup_dir, &manifest, recovered.clone())
         .context("Portable recovery preflight failed in the isolated workspace")?;
 

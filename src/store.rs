@@ -157,11 +157,12 @@ fn event(
         "INSERT INTO events(event_id,payload,prev_hash,event_hash) VALUES(?1,?2,?3,?4)",
         params![id, payload, previous_hash, event_hash],
     )?;
-    tx.execute(
+    let applied = tx.execute(
         "INSERT INTO meta(name,payload) VALUES('audit_head',?1)
          ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
         [vault.seal("meta/audit_head", &event_hash)?],
-    )?;
+    );
+    applied?;
     Ok(())
 }
 
@@ -205,11 +206,12 @@ fn migrate_audit_chain(conn: &Connection, vault: &Vault) -> Result<()> {
         )?;
         previous_hash = event_hash;
     }
-    tx.execute(
+    let applied = tx.execute(
         "INSERT INTO meta(name,payload) VALUES('audit_head',?1)
          ON CONFLICT(name) DO UPDATE SET payload=excluded.payload",
         [vault.seal("meta/audit_head", &previous_hash)?],
-    )?;
+    );
+    applied?;
     tx.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS events_hash ON events(event_hash);
          PRAGMA user_version=4;",
@@ -292,9 +294,10 @@ fn create_pre_migration_backup(
             let backup = Backup::new(source, &mut target)?;
             backup.run_to_completion(64, Duration::from_millis(10), None)?;
         }
-        target.execute_batch(
+        let pragmas_applied = target.execute_batch(
             "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
-        )?;
+        );
+        pragmas_applied?;
         check_connection_integrity(&target)?;
         let backed_up_version: i64 =
             target.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -406,9 +409,9 @@ fn verify_application_invariants_connection(
 
                 match job.state {
                     JobState::Sent => {
-                        let provider_payload = provider_payload.context(
-                            "Sent delivery is missing its encrypted provider identifier",
-                        )?;
+                        let provider_payload = provider_payload
+                            .context("Sent delivery is missing its encrypted provider identifier");
+                        let provider_payload = provider_payload?;
                         let provider: String =
                             vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
                         ensure!(
@@ -443,10 +446,11 @@ fn verify_application_invariants_connection(
 
     let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if schema_version >= 5 {
-        let mut failures = conn.prepare(
+        let failures = conn.prepare(
             "SELECT item_id,code,attempts,retry_exhausted,occurred_at,payload
              FROM processing_failures ORDER BY item_id",
-        )?;
+        );
+        let mut failures = failures?;
         let rows = failures.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -474,11 +478,12 @@ fn verify_application_invariants_connection(
                     && record.occurred_at.timestamp() == occurred_at,
                 "Processing-failure clear metadata does not match authenticated payload"
             );
-            let item_exists: bool = conn.query_row(
+            let item_exists = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
                 [&item_id],
                 |row| row.get(0),
-            )?;
+            );
+            let item_exists: bool = item_exists?;
             ensure!(
                 item_exists,
                 "Processing-failure record references a missing item"
@@ -510,13 +515,14 @@ fn recipient_attempts_since(
     recipient: &str,
     cutoff: i64,
 ) -> Result<u64> {
-    let mut query = conn.prepare(
+    let query = conn.prepare(
         "SELECT i.id,i.payload,i.revision,i.state
          FROM deliveries d
          JOIN items i ON i.id=d.item_id
          WHERE d.attempt_at>=?1
          ORDER BY d.attempt_at DESC",
-    )?;
+    );
+    let mut query = query?;
     let rows = query.query_map([cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -602,14 +608,16 @@ impl Store {
                 CREATE UNIQUE INDEX events_hash ON events(event_hash);")?;
             let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
             let audit_head = vault.seal("meta/audit_head", &AUDIT_GENESIS)?;
-            conn.execute(
+            let applied = conn.execute(
                 "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
                 [marker],
-            )?;
-            conn.execute(
+            );
+            applied?;
+            let applied = conn.execute(
                 "INSERT INTO meta(name,payload) VALUES('audit_head',?1)",
                 [audit_head],
-            )?;
+            );
+            applied?;
             conn.execute_batch("PRAGMA user_version=5; COMMIT;")?;
         } else if version == 1 {
             conn.execute_batch("BEGIN IMMEDIATE;
@@ -633,11 +641,12 @@ impl Store {
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 PRAGMA user_version=3; COMMIT;")?;
-        } else if version >= 3 {
-            conn.execute_batch(
+        } else {
+            let migrated = conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
                  CREATE INDEX IF NOT EXISTS deliveries_thread_state ON deliveries(thread_key,status);",
-            )?;
+            );
+            migrated?;
         }
         let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if current_version == 3 {
@@ -658,13 +667,14 @@ impl Store {
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("pre-migration.sqlite3");
-            db.log(
+            let logged = db.log(
                 "database.migrated",
                 None,
                 &format!(
                     "Schema migrated from v{version} to v{DATABASE_SCHEMA_VERSION}; verified pre-migration image retained as {name}"
                 ),
-            )?;
+            );
+            logged?;
         }
         Ok(db)
     }
@@ -816,10 +826,11 @@ impl Store {
 
         let mut previous_hash = anchor.to_owned();
         let mut latest_sequence = sequence;
-        let mut query = self.conn.prepare(
+        let query = self.conn.prepare(
             "SELECT seq,event_id,payload,prev_hash,event_hash
              FROM events WHERE seq>?1 ORDER BY seq",
-        )?;
+        );
+        let mut query = query?;
         let rows = query.query_map([sequence], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -866,11 +877,13 @@ impl Store {
         if anchor == AUDIT_GENESIS {
             return Ok(true);
         }
-        Ok(self.conn.query_row(
+        let found = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE event_hash=?1)",
             [anchor],
             |row| row.get(0),
-        )?)
+        );
+        let found = found?;
+        Ok(found)
     }
 
     /// Create a consistent online copy of the encrypted SQLite database.
@@ -914,7 +927,8 @@ impl Store {
         let connection = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        );
+        let connection = connection?;
         check_connection_integrity(&connection)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_version = self.schema_version()?;
@@ -998,11 +1012,12 @@ impl Store {
 
         let audit_head = if version >= 4 {
             verify_audit_chain_connection(&connection, &self.vault)?;
-            let encrypted: Vec<u8> = connection.query_row(
+            let encrypted = connection.query_row(
                 "SELECT payload FROM meta WHERE name='audit_head'",
                 [],
                 |row| row.get(0),
-            )?;
+            );
+            let encrypted: Vec<u8> = encrypted?;
             let head: String = self.vault.open_value("meta/audit_head", &encrypted)?;
             ensure!(valid_audit_hash(&head), "Backup audit head is invalid");
             Some(head)
@@ -1076,11 +1091,13 @@ impl Store {
         Ok(())
     }
     pub fn contains(&self, id: &str) -> Result<bool> {
-        Ok(self.conn.query_row(
+        let found = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
             [id],
             |r| r.get(0),
-        )?)
+        );
+        let found = found?;
+        Ok(found)
     }
     /// Insert a Gmail page worth of message identities in one durable transaction.
     /// Existing identities are ignored without rewriting their encrypted payloads.
@@ -1096,14 +1113,15 @@ impl Store {
             let j = Job::new(stub, now);
             let n = tx.execute("INSERT OR IGNORE INTO items(id,account_key,state,revision,created_at,updated_at,retry_at,payload) VALUES(?1,?2,?3,0,?4,?4,0,?5)", params![j.id, hash(&j.stub.account), j.state.db(), now.timestamp(), self.vault.seal(&format!("item/{}", j.id), &j)?])?;
             if n == 1 {
-                event(
+                let recorded = event(
                     &tx,
                     &self.vault,
                     "email.queued",
                     Some(&j.id),
                     "New provider identity stored",
                     now,
-                )?;
+                );
+                recorded?;
                 inserted += 1;
             }
         }
@@ -1128,6 +1146,22 @@ impl Store {
     }
     pub fn save(&mut self, job: &mut Job, kind: &str, detail: &str) -> Result<()> {
         self.save_internal(job, kind, detail, ProcessingFailureMutation::Keep)
+    }
+
+    /// Test-only seam: drop one fixed table so later reads and writes fail.
+    ///
+    /// Inputs: `table` — one of `events`, `items`, `deliveries`; any other name
+    /// panics. Output: none. Keeping the names fixed lets error-propagation
+    /// tests break storage without building arbitrary SQL.
+    #[cfg(test)]
+    pub(crate) fn drop_table_for_tests(&self, table: &str) {
+        let statement = match table {
+            "events" => "DROP TABLE events",
+            "items" => "DROP TABLE items",
+            "deliveries" => "DROP TABLE deliveries",
+            other => panic!("unsupported test table {other}"),
+        };
+        self.conn.execute_batch(statement).unwrap();
     }
 
     pub fn save_processing_failure(
@@ -1266,7 +1300,8 @@ impl Store {
                     r.get::<_, String>(3)?,
                 ))
             },
-        )?;
+        );
+        let rows = rows?;
         rows.map(|r| {
             let (id, b, rev, s) = r?;
             decode(&self.vault, &id, &b, rev, &s)
@@ -1431,11 +1466,12 @@ impl Store {
                 job.drafted_at = None;
                 job.retry_at = 0;
                 job.flags = vec!["Outside selected age window; private content removed".into()];
-                self.save_clearing_processing_failure(
+                let saved = self.save_clearing_processing_failure(
                     &mut job,
                     "email.outside_window",
                     "Age window tightened; identity retained and private content removed",
-                )?;
+                );
+                saved?;
                 deferred += 1;
             }
         }
@@ -1524,19 +1560,22 @@ impl Store {
                 _ => (),
             }
         }
-        c.attempts_24h = self.conn.query_row(
+        let attempts = self.conn.query_row(
             "SELECT COUNT(*) FROM deliveries WHERE attempt_at>=?1",
             [Utc::now().timestamp() - 86400],
             |r| row_get_u64(r, 0),
-        )?;
+        );
+        c.attempts_24h = attempts?;
         Ok(c)
     }
     pub fn thread_blocked(&self, key: &str) -> Result<bool> {
-        Ok(self.conn.query_row(
+        let found = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1 AND status IN ('reserved','uncertain'))",
             [key],
             |r| r.get(0),
-        )?)
+        );
+        let found = found?;
+        Ok(found)
     }
 
     /// Count recent durable send attempts to the same normalized reply mailbox.
@@ -1683,7 +1722,7 @@ impl Store {
             removed == 1,
             "Reserved delivery was not found; refusing to release conversation lock"
         );
-        tx.execute(
+        let applied = tx.execute(
             "UPDATE items SET state=?2,revision=?3,updated_at=?4,payload=?5 WHERE id=?1 AND state=?6 AND revision=?7",
             params![
                 id,
@@ -1694,15 +1733,17 @@ impl Store {
                 original_state.db(),
                 sql_i64(original_revision)?,
             ],
-        )?;
-        event(
+        );
+        applied?;
+        let recorded = event(
             &tx,
             &self.vault,
             "delivery.rejected",
             Some(id),
             detail,
             job.updated_at,
-        )?;
+        );
+        recorded?;
         tx.commit()?;
         Ok(job)
     }
@@ -1755,7 +1796,7 @@ impl Store {
             items_changed == 1,
             "Item record was not updated; concurrent modification detected"
         );
-        event(
+        let recorded = event(
             &tx,
             &self.vault,
             if j.state == JobState::Sent {
@@ -1766,7 +1807,8 @@ impl Store {
             Some(id),
             "Message-level delivery record retained; uncertain thread remains blocked",
             j.updated_at,
-        )?;
+        );
+        recorded?;
         tx.commit()?;
         Ok(j)
     }
@@ -1805,10 +1847,11 @@ impl Store {
             if self.has_dispatch_attempt_event(id)? {
                 self.finish_send(id, None)?;
             } else {
-                self.release_unsent_reservation(
+                let released = self.release_unsent_reservation(
                     id,
                     "Recovered never-dispatched reservation after interruption; released to Attention",
-                )?;
+                );
+                released?;
             }
         }
         Ok(ids.len())
@@ -1834,11 +1877,12 @@ impl Store {
     pub fn compact(&mut self) -> Result<DatabaseCompactionReport> {
         self.readiness_check()?;
         let (before_page_count, before_freelist_count, page_size_bytes) = self.page_stats()?;
-        self.conn.execute_batch(
+        let compacted = self.conn.execute_batch(
             "PRAGMA wal_checkpoint(TRUNCATE);
              VACUUM;
              PRAGMA optimize;",
-        )?;
+        );
+        compacted?;
         let (after_page_count, after_freelist_count, after_page_size) = self.page_stats()?;
         ensure!(
             page_size_bytes == after_page_size,
@@ -1852,14 +1896,15 @@ impl Store {
             after_freelist_count,
             page_size_bytes,
         };
-        self.log(
+        let logged = self.log(
             "database.compacted",
             None,
             &format!(
                 "SQLite compaction completed: pages {}->{}, freelist {}->{}",
                 before_page_count, after_page_count, before_freelist_count, after_freelist_count
             ),
-        )?;
+        );
+        logged?;
         self.readiness_check()?;
         Ok(report)
     }
@@ -3263,6 +3308,134 @@ mod tests {
                 .is_err()
         );
         assert!(db.processing_failure_summary("me@example.com").is_err());
+    }
+
+    /// Why: reopening a current-schema store must run the idempotent index
+    /// pass (`CREATE INDEX IF NOT EXISTS`) so the review-order index survives
+    /// every open; a regression that skips it strands list queries on missing
+    /// indexes and one that is not idempotent breaks the second open.
+    /// Inputs: a freshly created store reopened at its current schema version.
+    /// Output: `Ok` on reopen with `items_review_order` still present exactly
+    /// once.
+    #[test]
+    fn reopen_runs_the_idempotent_index_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("db");
+        let vault = Vault::random();
+        drop(Store::open(&path, vault.clone()).unwrap());
+        let db = Store::open(&path, vault).unwrap();
+        let indexes: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='items_review_order'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 1, "the review-order index must exist exactly once");
+    }
+
+    /// Why: the identity and conversation-lock getters are safety checks — a
+    /// failed query must surface as an error, never as a silent `false` that
+    /// would authorize a duplicate send (thread lock) or skip an audit-anchor
+    /// requirement.
+    /// Inputs: stores with `deliveries`, `items` and `events` dropped in turn.
+    /// Output: `Err` from every getter reading the broken table.
+    #[test]
+    fn getter_failures_propagate_on_broken_tables() {
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.drop_table_for_tests("deliveries");
+        assert!(
+            db.thread_blocked("t1").is_err(),
+            "thread lock reads must fail"
+        );
+
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.drop_table_for_tests("items");
+        assert!(db.contains("x").is_err(), "identity reads must fail");
+
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.drop_table_for_tests("events");
+        assert!(
+            db.contains_audit_anchor("h").is_err(),
+            "audit-anchor reads must fail"
+        );
+    }
+
+    /// Why: tightening the age window must defer only out-of-window messages —
+    /// an in-window job must be left untouched and reported as `0` deferred,
+    /// or a window change would silently strip private content from live
+    /// conversations.
+    /// Inputs: one reviewable job with a freshly received email, a seven-day
+    /// cutoff and `now`. Output: `Ok(0)` with the job still Ready and its email
+    /// retained.
+    #[test]
+    fn defer_review_outside_window_leaves_in_window_jobs_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut job = ready(&mut db, "inw1", "tinw1");
+        job.email = Some(crate::ollama::sample_email("s", "in-window"));
+        db.save(&mut job, "test.seed", "in-window fixture").unwrap();
+        let now = Utc::now();
+        let deferred = db
+            .defer_review_outside_window("me@example.com", now - chrono::Duration::days(7), now)
+            .unwrap();
+        assert_eq!(deferred, 0, "in-window jobs must never be deferred");
+        let after = db.get(&job.id).unwrap();
+        assert_eq!(after.state, JobState::Ready);
+        assert!(after.email.is_some(), "private content must be retained");
+    }
+
+    /// Why: `purge` must count only records whose private content it actually
+    /// released — an already-pruned completed record must be skipped and left
+    /// alone, not double-counted or rewritten with a fresh timestamp that
+    /// defeats retention accounting.
+    /// Inputs: one old dismissed record with no email, draft or analysis.
+    /// Output: `Ok(0)` with the record still Dismissed.
+    #[test]
+    fn purge_skips_records_without_prunable_content() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let mut done = ready(&mut db, "skip1", "tskip1");
+        done.state = JobState::Dismissed;
+        db.save(&mut done, "test", "done").unwrap();
+        db.conn
+            .execute(
+                "UPDATE items SET updated_at=?2 WHERE id=?1",
+                rusqlite::params![done.id, (now - chrono::Duration::days(400)).timestamp()],
+            )
+            .unwrap();
+        assert_eq!(db.purge(30).unwrap(), 0, "nothing to prune must count zero");
+        assert_eq!(db.get(&done.id).unwrap().state, JobState::Dismissed);
+    }
+
+    /// Why: `has_dispatch_attempt_event` must walk past events that belong to
+    /// other items before concluding; a regression that stops at the first
+    /// non-matching event would classify a dispatched message as never
+    /// attempted, breaking at-most-once delivery bookkeeping.
+    /// Inputs: two items whose newest audit events belong to each other; one
+    /// then receives a `delivery.reserved` event.
+    /// Output: `false` for both — a reservation is not a dispatch attempt —
+    /// while the walk visits the unrelated event.
+    #[test]
+    fn has_dispatch_attempt_event_skips_unrelated_events() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let mut a = ready(&mut db, "evt1", "tevt1");
+        let mut b = ready(&mut db, "evt2", "tevt2");
+        db.save(&mut a, "test.seed", "seed a").unwrap();
+        db.save(&mut b, "test.seed", "seed b").unwrap();
+        assert!(!db.has_dispatch_attempt_event(&a.id).unwrap());
+        db.reserve_send(&a, 10, now).unwrap();
+        assert!(
+            !db.has_dispatch_attempt_event(&a.id).unwrap(),
+            "a reservation must not read as a dispatch attempt"
+        );
     }
 
     /// Why: backup destinations at the path boundary must be handled without
