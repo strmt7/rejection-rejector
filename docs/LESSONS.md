@@ -90,3 +90,32 @@ rule exists because it previously caused a real defect or delay.
 - Before a large workload, run the exact fault-class operations as small
   probes with wall-clock timeouts (the crash gate). Clean probes earn the
   right to the full run.
+
+## Evidence and reporting
+
+- A skipped lane is not a green lane. If a check did not run (path filters, cancelled
+  job, missing trigger), it produced no evidence — run its equivalent locally and say
+  so, or route the change through the paths that trigger it.
+- Every claim in a report carries its evidence: commit SHA, run id, count or exact
+  command output. One verified fact beats ten plausible sentences; skip restating
+  context.
+- State facts only from tool output run this turn — never from memory or a stale
+  result from an earlier turn. Caution costs one tool call; assumptions cost a crash.
+- Check the actual API signature, package index or upstream issue thread before using
+  or installing anything. Assumed shapes break builds.
+- Platform-gated code needs platform-gated imports, not just platform-gated tests.
+  Verify with the CI's own view (warnings denied, every platform) before claiming
+  green.
+- A green run is evidence about one commit and one configuration. Quote the commit it
+  measured; do not restate it as a property of the project.
+
+## Documentation
+
+- Documentation claims about external systems carry a source and a date checked;
+  vendor figures (model sizes, benchmark scores, versions) are snapshots, not standing
+  properties. Re-check before relying.
+- When rewriting documentation, preserve every factual claim that is still true and
+  verify uncertain ones against the code before changing them; a rewrite that drops a
+  safety caveat is a regression, not polish.
+- A sentence a broader audience cannot follow is a bug even when it is precise: define
+  the term, give the example, then keep the precise claim.

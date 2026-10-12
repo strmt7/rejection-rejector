@@ -1,6 +1,10 @@
 # Enterprise readiness
 
-This document is a release gate, not marketing. A capability is listed as verified only when an automated test, CI workflow, or owner-environment acceptance check supports it.
+This document is a release gate, not marketing. A capability is listed as verified only
+when an automated test, CI workflow, or owner-environment acceptance check supports it.
+Reading rule used throughout: a check that did not run is not a passed check, and every
+claim here points at the evidence that backs it (workflow name, test, or acceptance
+record).
 
 ## Current controls
 
@@ -25,7 +29,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Optional machine-wide enterprise policy can force Human Review, prohibit sending/API exposure, constrain local models, enforce retention/cooldown/send caps, and require independently protected audit anchoring. Policy v2 has local revision rollback protection; deployments can independently authenticate exact policy bytes with a SHA-256 pin, an Ed25519 detached signature, or both. Rollback evidence can live in an externally managed anchor file or, on Windows/macOS, as a monotonic OS credential-store checkpoint. Invalid or unauthenticated managed policy fails closed.
 - The integration API exposes versioned OpenAPI 3.1, canonical readiness, typed worker-operation state, stable policy reason codes, request IDs and stable error envelopes. Bearer credentials use verifier-only persistence: the application stores a domain-separated SHA-256 verifier, migrates legacy recoverable tokens without invalidating clients, and exposes new plaintext credentials only once after creation/rotation. CI asserts every public route is represented by the contract, including metrics, snapshot cursor feeds and per-item Automatic-policy explanations.
 - Operational troubleshooting uses a privacy-minimal typed JSONL runtime journal with bounded local rotation. It stores operation/event enums, stable codes and local operation-correlation UUIDs only; arbitrary errors and mailbox/profile/credential fields are structurally absent from the record schema.
-- Safety-critical mutation testing is a hard release-quality gate: surviving mutants and timeouts fail the workflow rather than being treated as advisory evidence, and changes to the guarded policy/recovery/mail files trigger it automatically. Coverage is enforced at the measured baseline ratchet of at least 61% lines and 65% functions (baseline commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` measured 61.48% / 65.13%).
+- Safety-critical mutation testing is a hard release-quality gate: surviving mutants and timeouts fail the workflow rather than being treated as advisory evidence, and changes to the guarded policy/recovery/mail files trigger it automatically. Coverage is enforced at the measured baseline ratchet of at least 61% lines and 65% functions (baseline commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` measured 61.48% / 65.13%). Those thresholds are regression floors only: the standing coverage goal is 100% line coverage of logical product code (the coverage doctrine in `AGENTS.md`), and the coverage-wave commits on `main` report line coverage of 98.56% at the time of writing. Raise the floor from new measured evidence; never lower it to make a change pass.
 
 ## Development and release governance
 
@@ -42,6 +46,7 @@ This document is a release gate, not marketing. A capability is listed as verifi
 - Windows workstations can register the headless worker as a least-privilege per-user Task Scheduler job at logon. The task contract is drift-checked, single-instance, delayed 30 seconds after logon and bounded to three one-minute restart attempts; it deliberately preserves the signed-in user's Credential Manager boundary instead of claiming LocalSystem service semantics.
 - Managed deployments can configure an out-of-band emergency-stop sentinel. It blocks manual and Automatic Gmail writes, is rechecked after reservation immediately before provider dispatch, fails closed on malformed configuration, and exposes only privacy-safe state through doctor/health/OpenMetrics. The diagnostics JSON report also includes an `emergency_stop` field showing the current sentinel state.
 - Unattended delivery has defense-in-depth rate containment: the configured global rolling daily cap is enforced transactionally, and a non-user-raiseable two-attempt rolling 24-hour ceiling applies per normalized recipient mailbox. The recipient identity is evaluated from the bounded encrypted recent-delivery set rather than persisted in a new plaintext/index field; Human Review is the explicit override path.
+- Evidence hygiene is part of the gate: a workflow skipped by path filters is not evidence, a newer failed run cannot be masked by older green evidence, and every readiness claim in a report carries its identifier (commit SHA, run id or count).
 
 ## Enterprise gaps still open
 
@@ -74,4 +79,15 @@ All development for this repository is performed directly on `main` per reposito
 
 The maintainer accepts the exact `CII Best Practices` (alert 9) observation recorded in the [governance baseline](../.github/scanner-governance-baseline.json) as a pass until the project's badge application completes; it remains visible in audit output and does not block release readiness. The former `Code-Review` observation is no longer accepted: it is enforced properly by reviewed pull requests with required approval and protected default branch. `SAST` is enforced by CodeQL on every push and pull request.
 
-The `Maintained` observation (alert 7) is age-gated, not suppressed: the Scorecard check only succeeds once a repository is more than 90 days old, which occurs on 2026-12-25 for this repository. With continuous weekly commits it resolves automatically at that point. All other source, dependency and qualification requirements remain in force.
+The `Maintained` observation (alert 7) is age-gated, not suppressed: the Scorecard check only succeeds once a repository is more than 90 days old, which occurs on 2026-12-25 for this repository (first commit 2026-09-26). With continuous weekly commits it resolves automatically at that point. All other source, dependency and qualification requirements remain in force.
+
+## Sources (checked 2026-10-12)
+
+- SLSA, build provenance and levels (used by the attestation gates):
+  https://slsa.dev/spec/v1/provenance
+- CycloneDX, SBOM specification (1.5 is the emitted format):
+  https://cyclonedx.org/specification/overview/
+- OpenSSF Scorecard checks (including the `Maintained` age gate):
+  https://securityscorecards.dev/#list-of-checks
+- NIST SP 800-63B-4 (authenticator/passphrase practice referenced by recovery-key
+  guidance): https://csrc.nist.gov/pubs/sp/800/63/b/4/final

@@ -32,6 +32,39 @@ Before a change is treated as release-quality:
 - public HTTP/OpenAPI compatibility remains additive unless an API-version change is deliberate;
 - no lint, test or security check is disabled merely to obtain a green build.
 
+## Evidence rules for contributors
+
+These are the same verification rules the project applies to its own automation and AI
+assistants (see `AGENTS.md`); they apply to human contributions too:
+
+- **A skipped lane is not a green lane.** If a CI workflow did not run for your change
+  (path filters), run its equivalent locally and say so in the PR description, or touch
+  the paths that trigger it. Never report a check as passing because its job was skipped.
+- **Claims carry evidence.** Statements such as "tests pass", "the API is unchanged" or
+  "the mutant was caught" should name the command, run id, commit SHA or count that
+  proves them. One verified fact beats ten plausible sentences.
+- **`cmd | tail` reports tail's exit code.** Run verification commands un-piped (or
+  check `PIPESTATUS`) before declaring success.
+- **Verify upstream shapes before depending on them.** Check the actual API signature,
+  package index or issue thread of any tool you install; known-broken version families
+  are swapped, not patched with flags.
+- **Generated edits are untrusted until re-read.** After scripted or regex edits, grep
+  the result and confirm definition-before-use order.
+
+## Documentation standards
+
+- Documentation aims at a technically rigorous but broadly readable audience: define
+  terms on first use, prefer concrete examples, keep precision.
+- Follow the Diátaxis structure (tutorials / how-to guides / reference / explanation)
+  and the Google developer documentation style guide where they do not conflict with
+  this repository's safety terminology.
+- When a maintainer supplies replacement text, change words only — never alter
+  user-owned formatting, layout, or structure (`README.md` in particular is words-only).
+- Keep doc comments in house style: one-line purpose plus `Inputs:` and `Output:`
+  sections naming parameters and behavior.
+- Documentation claims follow the same evidence rules as code: cite the source and the
+  date it was checked for anything outside this repository.
+
 ## Enterprise design rules
 
 - The model is advisory; Rust policy owns authorization and external-write decisions.
@@ -45,3 +78,10 @@ Before a change is treated as release-quality:
 - Diagnostic JSON stability: The `report_version` field in diagnostics output should be incremented when making breaking changes to the JSON structure, and release notes should document any changes to the diagnostic schema.
 
 See [the operations runbook](docs/OPERATIONS.md), [threat model](docs/THREAT_MODEL.md), and [enterprise readiness gate](docs/ENTERPRISE_READINESS.md).
+
+## Sources (checked 2026-10-12)
+
+- Rust API Guidelines (naming, documentation and interoperability conventions for the
+  public Rust surface): https://rust-lang.github.io/api-guidelines/
+- Diátaxis documentation framework: https://diataxis.fr/
+- Google developer documentation style guide: https://developers.google.com/style
