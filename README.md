@@ -11,7 +11,7 @@
 
 ## Implemented
 
-| Component | Version 0.2 |
+| Component | Version 0.3 |
 |---|---|
 | Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail Desktop OAuth, system browser, PKCE, explicit read/send consent |
