@@ -3122,7 +3122,14 @@ mod orchestration_tests {
     /// thread's own open and the worker thread's later open deriving the same
     /// key on every platform.
     fn live_engine(dir: &std::path::Path) -> Engine {
+        let seam_calls_before = crate::test_support::headless_vault_seam_calls();
         crate::test_support::headless_vault_seam();
+        // The arming must be observable: a mutant deleting the call above is
+        // otherwise silent on Windows/macOS where the seam body is a no-op.
+        assert!(
+            crate::test_support::headless_vault_seam_calls() > seam_calls_before,
+            "headless vault seam must be armed before live opens"
+        );
         Engine::open(
             dir.to_path_buf(),
             false,

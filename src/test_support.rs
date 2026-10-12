@@ -317,6 +317,14 @@ pub(crate) fn recipient_limit() -> u64 {
     u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H)
 }
 
+/// Seam invocations observed in this process.
+///
+/// Why: on Windows/macOS the seam body is a no-op (the OS credential store
+/// answers), so deleting the call in callers was an unkillable mutant there.
+/// The counter makes arming observable on every platform and `live_engine`
+/// asserts it moved before any live open.
+static HEADLESS_SEAM_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Install the documented headless vault input for tests that open a live
 /// (non-demo) workspace.
 ///
@@ -326,13 +334,23 @@ pub(crate) fn recipient_limit() -> u64 {
 /// seam `tests/cli_workspace.rs` attaches to spawned commands, and mutating the
 /// process environment mid-run would race concurrent environment readers in
 /// parallel tests, so the vault keeps a one-shot test seam instead. The
-/// installed value is constant and installation is idempotent, so worker
-/// threads opening the same vault on their own threads derive the same key.
-/// Inputs: none. Output: none; on Windows and macOS this is a no-op because
-/// the OS credential store answers instead.
+/// installed value is constant and installation is idempotent, so worker threads opening the same vault on their own threads derive the same key.
+/// Arm the documented headless vault seam where the platform needs it.
+///
+/// Inputs: none. Output: none; on non-Windows/macOS the process gains the
+/// documented `RR_VAULT_PASSPHRASE` derivation input, and every platform
+/// records the arming for test observation.
 pub(crate) fn headless_vault_seam() {
+    HEADLESS_SEAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     #[cfg(not(any(windows, target_os = "macos")))]
     crate::vault::test_support::install_headless_passphrase();
+}
+
+/// Seam invocations observed so far.
+///
+/// Inputs: none. Output: count of `headless_vault_seam` calls in-process.
+pub(crate) fn headless_vault_seam_calls() -> u32 {
+    HEADLESS_SEAM_CALLS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Process-wide stand-in for the Ollama installer command.
