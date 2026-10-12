@@ -206,6 +206,25 @@ mod tests {
     use super::*;
     use std::sync::{Arc, atomic::AtomicBool};
 
+    /// A destination whose parent cannot be created fails loudly instead of
+    /// writing a partial shadow report.
+    #[test]
+    fn write_report_refuses_unusable_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let blocker = root.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let target = blocker.join("nested").join("shadow.json");
+        assert!(write_report(&engine, &target).is_err());
+        assert!(!target.exists());
+    }
+
     #[test]
     fn demo_shadow_audit_is_aggregate_private_and_non_mutating() {
         let root = tempfile::tempdir().unwrap();

@@ -3086,4 +3086,158 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0, "failed pre-migration image must be deleted");
     }
+
+    /// Row-returning queries only light their mapping closures when matching
+    /// rows exist; each lookup must agree with the durable state.
+    #[test]
+    fn row_queries_agree_with_durable_state() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let mut job = ready(&mut db, "row1", "trow1");
+        job.email = Some(crate::ollama::sample_email(
+            "s",
+            "we decided not to move forward",
+        ));
+        db.save(&mut job, "test", "with-email").unwrap();
+        ready(&mut db, "row1b", "trow1b");
+
+        // Membership lookups answer from the matching row.
+        assert!(db.contains(&job.id).unwrap());
+        assert!(!db.contains(&"0".repeat(64)).unwrap());
+        assert!(db.ready_ids("me@example.com").unwrap().contains(&job.id));
+        assert_eq!(db.counts("me@example.com").unwrap().review, 2);
+        let page = db.list_cursor("me@example.com", false, None, 1).unwrap();
+        assert_eq!(page.items.len(), 1);
+        let cursor = page.next_cursor.clone();
+        let next = db
+            .list_cursor("me@example.com", false, cursor.as_ref(), 1)
+            .unwrap();
+        assert_eq!(next.items.len(), 1);
+        assert_ne!(page.items[0].id, next.items[0].id);
+        assert_eq!(db.list("me@example.com", false, 0, 25).unwrap().len(), 2);
+        assert!(db.events(0, 10).unwrap().len() >= 2);
+        let _ = db.processing_failure_summary("me@example.com").unwrap();
+
+        // An active reservation blocks its conversation exactly.
+        assert!(!db.thread_blocked(&job.stub.thread_key()).unwrap());
+        let reserved = db.reserve_send(&job, 10, now).unwrap();
+        assert!(db.thread_blocked(&job.stub.thread_key()).unwrap());
+        assert_eq!(reserved.state, JobState::Sending);
+
+        // The audit anchor is contained once recorded.
+        let head = db.audit_head().unwrap();
+        assert!(db.contains_audit_anchor(&head).unwrap());
+
+        // Recipient burst accounting counts matching deliveries per mailbox.
+        let mut other = ready(&mut db, "row2", "trow2");
+        other.email = Some(crate::ollama::sample_email(
+            "s",
+            "we decided not to move forward",
+        ));
+        db.save(&mut other, "test", "with-email").unwrap();
+        db.finish_send(&reserved.id, Some("prov1".into())).unwrap();
+        assert_eq!(db.recipient_attempts_24h(&other, now).unwrap(), 1);
+
+        // A delivery that lost its source email breaks burst accounting
+        // loudly instead of silently under-counting.
+        let bare = ready(&mut db, "row3", "trow3");
+        let bare_reserved = db.reserve_send(&bare, 10, now).unwrap();
+        db.finish_send(&bare_reserved.id, Some("prov2".into()))
+            .unwrap();
+        let error = db
+            .recipient_attempts_24h(&other, now)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("missing source email"),
+            "unexpected: {error}"
+        );
+    }
+
+    /// Retention deferral and pruning release private content while keeping
+    /// delivery identities, and each storage failure surfaces instead of
+    /// silently reporting success.
+    #[test]
+    fn retention_and_storage_failures_never_report_false_success() {
+        // Deferral outside the age window releases the content.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+        let mut aged = ready(&mut db, "aged1", "taged1");
+        aged.email = Some(crate::ollama::sample_email("s", "old news"));
+        aged.email.as_mut().unwrap().received_at = now - chrono::Duration::days(400);
+        db.save(&mut aged, "test", "aged").unwrap();
+        let deferred = db
+            .defer_review_outside_window("me@example.com", now - chrono::Duration::days(30), now)
+            .unwrap();
+        assert_eq!(deferred, 1);
+        let after = db.get(&aged.id).unwrap();
+        assert_eq!(after.state, JobState::Deferred);
+        assert!(after.email.is_none());
+
+        // Pruning releases content of completed messages past retention.
+        let mut done = ready(&mut db, "done1", "tdone1");
+        done.state = JobState::Dismissed;
+        done.email = Some(crate::ollama::sample_email("s", "done"));
+        db.save(&mut done, "test", "done").unwrap();
+        db.conn
+            .execute(
+                "UPDATE items SET updated_at=?2 WHERE id=?1",
+                rusqlite::params![done.id, (now - chrono::Duration::days(400)).timestamp()],
+            )
+            .unwrap();
+        assert_eq!(db.purge(30).unwrap(), 1);
+        assert!(db.get(&done.id).unwrap().email.is_none());
+
+        // A vanished item aborts reservation rather than inventing state.
+        let mut ghost = ready(&mut db, "ghost1", "tghost1");
+        ghost.id = "1".repeat(64);
+        let error = db.reserve_send(&ghost, 10, now).unwrap_err().to_string();
+        assert!(!error.is_empty());
+        assert!(!db.thread_blocked(&"1".repeat(64)).unwrap());
+    }
+
+    /// Storage-layer failures propagate through every write path; a broken
+    /// table never yields a success result.
+    #[test]
+    fn storage_write_failures_propagate_to_callers() {
+        // Dropping the audit table breaks event recording and journal reads.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "f1", "tf1");
+        db.conn.execute_batch("DROP TABLE events").unwrap();
+        assert!(db.events(0, 10).is_err());
+        assert!(
+            db.verify_audit_extension(0, &db.audit_head().unwrap_or_default())
+                .is_err()
+        );
+        let mut j = job.clone();
+        assert!(db.save(&mut j, "test", "nope").is_err());
+
+        // Dropping deliveries breaks every reservation accounting query.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "f2", "tf2");
+        db.conn.execute_batch("DROP TABLE deliveries").unwrap();
+        let mut ghost = job.clone();
+        ghost.id = "2".repeat(64);
+        assert!(db.reserve_send(&ghost, 10, Utc::now()).is_err());
+        assert!(db.reserve_send(&job, 10, Utc::now()).is_err());
+
+        // Dropping items breaks item reads and queue queries.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "f3", "tf3");
+        db.conn.execute_batch("DROP TABLE items").unwrap();
+        let mut j = job.clone();
+        assert!(db.save(&mut j, "test", "nope").is_err());
+        assert!(db.list("me@example.com", false, 0, 25).is_err());
+        assert!(db.ready_ids("me@example.com").is_err());
+        assert!(
+            db.defer_review_outside_window("me@example.com", Utc::now(), Utc::now())
+                .is_err()
+        );
+        assert!(db.processing_failure_summary("me@example.com").is_err());
+    }
 }
