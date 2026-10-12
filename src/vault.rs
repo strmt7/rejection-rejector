@@ -150,6 +150,25 @@ pub fn vault_id(dir: &Path) -> Result<String> {
     Ok(id)
 }
 
+/// Read the headless vault input for hosts without an OS credential store.
+///
+/// Why: Linux has no credential store, so [`Vault::open`] derives the workspace
+/// key from `RR_VAULT_PASSPHRASE` (docs/SETUP.md) on every run and fails closed
+/// when it is absent. In-process tests install the same documented input through
+/// the one-shot seam in `test_support` instead of mutating the process
+/// environment mid-run, which would race concurrent environment readers in
+/// parallel tests. Inputs: none. Output: the passphrase, or the fail-closed
+/// error naming the variable when neither the seam nor the environment
+/// supplies one.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn linux_vault_passphrase() -> Result<Zeroizing<String>> {
+    #[cfg(test)]
+    if let Some(pass) = test_support::HEADLESS_PASSPHRASE.get() {
+        return Ok(Zeroizing::new(pass.clone()));
+    }
+    Ok(Zeroizing::new(std::env::var("RR_VAULT_PASSPHRASE").context("On Linux, set RR_VAULT_PASSPHRASE to a strong passphrase (20+ characters). Windows uses Credential Manager automatically")?))
+}
+
 #[derive(Clone)]
 pub struct Vault {
     key: Arc<Zeroizing<[u8; 32]>>,
@@ -193,7 +212,7 @@ impl Vault {
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             // Linux fallback is explicit and requires a user-supplied passphrase on every run.
-            let pass=Zeroizing::new(std::env::var("RR_VAULT_PASSPHRASE").context("On Linux, set RR_VAULT_PASSPHRASE to a strong passphrase (20+ characters). Windows uses Credential Manager automatically")?);
+            let pass = linux_vault_passphrase()?;
             ensure!(
                 pass.len() >= 20,
                 "Vault passphrase must be at least 20 characters"
@@ -646,6 +665,26 @@ pub(crate) mod test_support {
             .expect("open credential-store test lock");
         fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
         file
+    }
+
+    /// One-shot in-process stand-in for the headless `RR_VAULT_PASSPHRASE`
+    /// input (docs/SETUP.md).
+    ///
+    /// Why: the value is a constant test passphrase, so installing it once and
+    /// never mutating it again lets every parallel vault open — including the
+    /// ones worker threads perform on their own threads — read it race-free.
+    /// Windows and macOS never consult it: their `Vault::open` resolves the key
+    /// from the OS credential store instead.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub(crate) static HEADLESS_PASSPHRASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    /// Install the documented headless vault input for this test process.
+    ///
+    /// Inputs: none. Output: none; idempotent one-shot installation, so any
+    /// number of tests and worker threads may call it.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub(crate) fn install_headless_passphrase() {
+        let _ = HEADLESS_PASSPHRASE.set("rr-test-headless-vault-passphrase".to_owned());
     }
 }
 
