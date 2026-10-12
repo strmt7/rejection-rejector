@@ -317,10 +317,11 @@ impl Engine {
         let session = SessionLease::begin(&directory)?;
         let previous_unclean_session = session.previous_unclean();
         let vault = if demo {
-            write_new_private(
+            let identity_written = write_new_private(
                 &directory.join("vault-id"),
                 uuid::Uuid::new_v4().to_string().as_bytes(),
-            )?;
+            );
+            identity_written?;
             Vault::random()
         } else {
             Vault::open(&directory)?
@@ -368,14 +369,11 @@ impl Engine {
         {
             let mut upserts = vec![("settings", serde_json::to_value(&settings)?)];
             if revision_floor_changed {
-                upserts.push((
-                    "enterprise_policy_revision_floor",
-                    serde_json::to_value(
-                        revision_floor
-                            .as_ref()
-                            .context("Policy revision floor staging was lost")?,
-                    )?,
-                ));
+                let staged = revision_floor
+                    .as_ref()
+                    .context("Policy revision floor staging was lost")?;
+                let staged = serde_json::to_value(staged)?;
+                upserts.push(("enterprise_policy_revision_floor", staged));
             }
             let detail = if revision_floor_changed {
                 let loaded = enterprise_policy
@@ -400,7 +398,7 @@ impl Engine {
                 "Legacy Automatic mode without current qualification was disabled fail-closed"
                     .into()
             };
-            db.change_meta(
+            let persisted = db.change_meta(
                 &upserts,
                 &[],
                 if revision_floor_changed {
@@ -411,22 +409,25 @@ impl Engine {
                     "settings.repaired"
                 },
                 &detail,
-            )?;
+            );
+            persisted?;
         }
         if restored_workspace {
-            db.log(
+            let logged = db.log(
                 "security.restore_rearm_required",
                 None,
                 "Offline backup restore detected; sending and Automatic mode disabled until explicitly reauthorized",
-            )?;
+            );
+            logged?;
             recovery::clear_restore_rearm_marker(&directory)?;
         }
         if previous_unclean_session && !demo {
-            db.log(
+            let logged = db.log(
                 "security.unclean_shutdown_detected",
                 None,
                 "Previous runtime session marker remained after exclusive workspace lock acquisition; unattended delivery is disabled until explicitly re-enabled",
-            )?;
+            );
+            logged?;
         }
         let creds: Option<Credentials> = db.meta("google_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
@@ -560,14 +561,11 @@ impl Engine {
             upserts.push(("settings", serde_json::to_value(&settings)?));
         }
         if revision_floor_changed {
-            upserts.push((
-                "enterprise_policy_revision_floor",
-                serde_json::to_value(
-                    revision_floor
-                        .as_ref()
-                        .context("Policy revision floor staging was lost")?,
-                )?,
-            ));
+            let staged = revision_floor
+                .as_ref()
+                .context("Policy revision floor staging was lost")?;
+            let staged = serde_json::to_value(staged)?;
+            upserts.push(("enterprise_policy_revision_floor", staged));
         }
         if !upserts.is_empty() {
             self.db
@@ -946,27 +944,29 @@ impl Engine {
             self.settings.task_qualification = Some(qualification);
             self.settings.validate()?;
             self.db.set_meta("settings", &self.settings)?;
-            self.db.log(
+            let logged = self.db.log(
                 "model.task_qualified",
                 None,
                 &format!(
                     "Task-specific model evaluation passed and was bound to the current configuration: {}",
                     path.display()
                 ),
-            )?;
+            );
+            logged?;
             Ok(())
         } else {
             self.settings.task_qualification = None;
             self.settings.disarm_delivery();
             self.db.set_meta("settings", &self.settings)?;
-            self.db.log(
+            let logged = self.db.log(
                 "model.task_rejected",
                 None,
                 &format!(
                     "Task-specific model evaluation did not meet Automatic-mode gates: {}",
                     path.display()
                 ),
-            )?;
+            );
+            logged?;
             anyhow::bail!(
                 "Task-specific evaluation did not meet Automatic-mode gates; report saved at {}",
                 path.display()
@@ -1106,11 +1106,12 @@ impl Engine {
                 Ok(Some(email)) => job.email = Some(email),
                 Ok(None) => {
                     job.state = JobState::Other;
-                    self.db.save(
+                    let saved = self.db.save(
                         &mut job,
                         "email.unavailable",
                         "Provider message no longer exists",
-                    )?;
+                    );
+                    saved?;
                     return Ok(true);
                 }
                 Err(error) if error.kind == FetchFailureKind::Infrastructure => {
@@ -1125,12 +1126,13 @@ impl Engine {
                         retry_exhausted: true,
                         occurred_at: Utc::now(),
                     };
-                    self.db.save_processing_failure(
+                    let saved = self.db.save_processing_failure(
                         &mut job,
                         &failure,
                         "email.malformed",
                         "Message parsing failed safely; Human review required",
-                    )?;
+                    );
+                    saved?;
                     return Ok(true);
                 }
             }
@@ -1154,7 +1156,7 @@ impl Engine {
                 retry_exhausted,
                 occurred_at: now,
             };
-            self.db.save_processing_failure(
+            let saved = self.db.save_processing_failure(
                 &mut job,
                 &failure,
                 if retry_exhausted {
@@ -1163,7 +1165,8 @@ impl Engine {
                     "analysis.retry_scheduled"
                 },
                 "Per-message analysis failure isolated; no send authorized",
-            )?;
+            );
+            saved?;
             // This failure is isolated to one item. Global Ollama/provider failures
             // are detected before dequeue and still return Err, opening the worker
             // circuit. A poison message therefore cannot stall unrelated queued mail.
@@ -1178,11 +1181,12 @@ impl Engine {
         if email.received_at < self.settings.cutoff(Utc::now()) || email.received_at > Utc::now() {
             job.state = JobState::Deferred;
             job.email = None;
-            self.db.save_clearing_processing_failure(
+            let cleared = self.db.save_clearing_processing_failure(
                 job,
                 "email.outside_window",
                 "Identity retained; body not kept outside requested age range",
-            )?;
+            );
+            cleared?;
             return Ok(());
         }
         if email
@@ -1192,11 +1196,12 @@ impl Engine {
         {
             job.state = JobState::Other;
             job.email = None;
-            self.db.save_clearing_processing_failure(
+            let cleared = self.db.save_clearing_processing_failure(
                 job,
                 "email.excluded",
                 "Provider folder excluded",
-            )?;
+            );
+            cleared?;
             return Ok(());
         }
         let (analysis, draft, mut flags) = Ollama::new(&self.settings)?.analyze(email)?;
@@ -1226,11 +1231,12 @@ impl Engine {
             job.email = None;
             job.analysis = None;
         }
-        self.db.save_clearing_processing_failure(
+        let cleared = self.db.save_clearing_processing_failure(
             job,
             "email.analyzed",
             "Local structured classification and reply verification completed",
-        )?;
+        );
+        cleared?;
         Ok(())
     }
     /// Edit the drafted reply for one message.
@@ -1413,14 +1419,11 @@ impl Engine {
                 DispatchFailureKind::ReviewRequired,
                 "Automatic send conditions were not satisfied",
             )?;
-            let recipient_attempts =
-                self.db
-                    .recipient_attempts_24h(&job, Utc::now())
-                    .map_err(|error| {
-                        DispatchFailure::review(format!(
-                            "Automatic recipient burst safety could not be established: {error}"
-                        ))
-                    })?;
+            let burst_safety = self
+                .db
+                .recipient_attempts_24h(&job, Utc::now())
+                .map_err(recipient_burst_unavailable);
+            let recipient_attempts = burst_safety?;
             dispatch_require(
                 recipient_attempts < u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
                 DispatchFailureKind::ReviewRequired,
@@ -1529,12 +1532,9 @@ impl Engine {
             DispatchFailureKind::Retryable,
             "Paused before dispatch; nothing sent",
         )?;
-        let storage = crate::storage::ensure_runtime_write_headroom(&self.directory)
-            .map_err(|error| {
-                DispatchFailure::retryable(format!(
-                    "Durable send state cannot be recorded safely because storage headroom is low: {error}"
-                ))
-            })?;
+        let headroom = crate::storage::ensure_runtime_write_headroom(&self.directory)
+            .map_err(storage_headroom_unknown);
+        let storage = headroom?;
         dispatch_require(
             storage.runtime_write_safe,
             DispatchFailureKind::Retryable,
@@ -2010,6 +2010,30 @@ pub fn auto_blocks(
         .into_iter()
         .map(|block| block.message)
         .collect()
+}
+
+/// Map a failed recipient-burst safety probe onto its dispatch failure.
+///
+/// Inputs: `error` — the storage error that prevented counting this
+/// recipient's recent attempts. Output: [`DispatchFailure`] requiring review:
+/// burst safety cannot be assumed when it could not be measured, so the send
+/// is held for a human instead of being blindly retried.
+fn recipient_burst_unavailable(error: impl std::fmt::Display) -> DispatchFailure {
+    DispatchFailure::review(format!(
+        "Automatic recipient burst safety could not be established: {error}"
+    ))
+}
+
+/// Map a failed storage-headroom probe onto its dispatch failure.
+///
+/// Inputs: `error` — the storage error that prevented measuring write
+/// headroom. Output: [`DispatchFailure`] that is operator-retryable: a
+/// measurement outage is transient and must not consume the approval, while
+/// the durable-send-state guarantee still blocks the attempt.
+fn storage_headroom_unknown(error: impl std::fmt::Display) -> DispatchFailure {
+    DispatchFailure::retryable(format!(
+        "Durable send state cannot be recorded safely because storage headroom is low: {error}"
+    ))
 }
 
 #[cfg(test)]
@@ -4558,5 +4582,572 @@ mod dispatch_tests {
         assert!(!e.settings.sending_enabled);
         let events = e.db.events(0, 500).unwrap();
         assert!(events.iter().any(|ev| ev.kind == "account.disconnected"));
+    }
+}
+
+#[cfg(test)]
+mod fail_closed_open_tests {
+    use super::*;
+    use crate::policy::EnterprisePolicy;
+
+    #[cfg(any(windows, target_os = "macos"))]
+    struct Cleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn live(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    /// Why: a managed policy that requires independently protected audit
+    /// anchoring must fail closed — opening without a configured external
+    /// anchor or OS anchor mode would run with unverifiable rollback evidence,
+    /// so the workspace must refuse to open and name the missing protection.
+    /// Inputs: workspace plus a policy demanding `require_external_audit_anchor`
+    /// with no anchor environment configured. Output: open error naming the
+    /// anchoring requirement.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_refuses_policy_that_requires_an_unconfigured_external_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let e = live(dir.path());
+            drop(e);
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let policy = crate::test_support::loaded_policy(
+            "digest-anchor",
+            EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.anchor".into()),
+                revision: Some(1),
+                require_external_audit_anchor: true,
+                ..Default::default()
+            },
+        );
+        let _cleanup = Cleanup(vault);
+        let error = crate::test_support::with_policy(Some(policy), || {
+            Engine::open(
+                dir.path().into(),
+                false,
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .err()
+            .expect("policy-required anchoring must fail closed")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("independently protected audit anchoring"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: settings persisted between sessions may only be relaxed by an
+    /// explicit user action; reopening under the same already-accepted policy
+    /// must re-constrain settings that were relaxed out of band and audit the
+    /// policy-constrained detail, otherwise a manual settings edit could
+    /// silently outlive the managed policy between restarts.
+    /// Inputs: workspace opened under a restrictive policy, then reopened after
+    /// its stored settings were replaced with armed Automatic mode. Output:
+    /// policy restrictions re-applied and the constraint audited.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn open_reconstrains_out_of_band_settings_under_accepted_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let e = live(dir.path());
+            drop(e);
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let policy = crate::test_support::loaded_policy(
+            "digest-reconstrain",
+            EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.reconstrain".into()),
+                revision: Some(7),
+                force_human_review: true,
+                ..Default::default()
+            },
+        );
+        {
+            let e = crate::test_support::with_policy(Some(policy.clone()), || live(dir.path()));
+            assert_eq!(e.settings.mode, Mode::HumanReview);
+        }
+        {
+            let mut e = live(dir.path());
+            crate::test_support::arm_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+        }
+        let _cleanup = Cleanup(vault);
+        let e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
+        assert_eq!(
+            e.settings.mode,
+            Mode::HumanReview,
+            "policy must re-constrain an out-of-band mode change"
+        );
+        assert!(!e.settings.sending_enabled);
+        let events = e.db.events(0, 500).unwrap();
+        assert!(
+            events.iter().any(|ev| ev
+                .detail
+                .contains("Persisted settings were constrained by enterprise policy")),
+            "the re-constraint must be audited as a policy action"
+        );
+    }
+
+    /// Why: analysis must never run on unfetched content — classifying a job
+    /// whose body is still missing could bless a draft for the wrong message,
+    /// so the guard must error before any analysis output is recorded.
+    /// Inputs: a queued job with `email: None`. Output: error naming the
+    /// missing content, job untouched.
+    #[test]
+    fn analyze_job_refuses_jobs_without_fetched_content() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let mut job = Job::new(
+            ollama::sample_email("Test", "not selected").stub.clone(),
+            Utc::now(),
+        );
+        let error = e
+            .analyze_job(&mut job)
+            .expect_err("analysis of unfetched content must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("Message content must be fetched before analysis"),
+            "unexpected error: {error}"
+        );
+        assert!(job.analysis.is_none());
+    }
+}
+
+#[cfg(test)]
+mod dispatch_error_path_tests {
+    use super::*;
+    use crate::test_support::{self as ts, MockServer};
+    use serde_json::Value;
+
+    #[cfg(any(windows, target_os = "macos"))]
+    struct Cleanup(String);
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
+                .and_then(|entry| entry.delete_credential());
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn live(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn test_creds() -> crate::oauth::Credentials {
+        crate::oauth::Credentials {
+            client_id: "id".into(),
+            client_secret: "secret".into(),
+            refresh_token: "refresh".into(),
+            can_send: true,
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn seed_send_job(e: &mut Engine, n: u64) -> (Job, String) {
+        let now = Utc::now();
+        let email = ts::gmail_email(
+            &e.account,
+            n,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let body = ts::draft_body(&e.settings.signature);
+        let mut job = Job::new(email.stub.clone(), now);
+        job.analysis = Some(ts::verified_analysis(&e.settings, &email, &body));
+        job.email = Some(email);
+        job.draft = Some(Draft {
+            body,
+            origin: "ollama-v1".into(),
+        });
+        job.drafted_at = Some(now - chrono::Duration::hours(1));
+        job.state = JobState::Ready;
+        e.db.insert_stubs([job.stub.clone()], now).unwrap();
+        e.db.save(&mut job, "test.seed", "seeded").unwrap();
+        let body_hash = hash(&job.draft.as_ref().unwrap().body);
+        (job, body_hash)
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn attach(e: &mut Engine, server: &MockServer) {
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            test_creds(),
+            &server.url,
+            &server.url,
+        ));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn runtime_version_exposing(version: &str) -> MockServer {
+        let version = version.to_owned();
+        MockServer::new_raw(move |route, _| {
+            (route == "/api/version")
+                .then(|| (200, serde_json::json!({"version": version}).to_string()))
+        })
+    }
+
+    /// Why: provider fetch failures must be classified before anything is sent
+    /// — a transient outage is operator-retryable while a malformed provider
+    /// response is not — and no message state may change, so an outage can
+    /// never consume an approval or mark mail as handled.
+    /// Inputs: message fetches answering 503 then 400 INVALID_ARGUMENT.
+    /// Output: retryable failure for the outage, non-retryable failure for the
+    /// malformed response, job still Ready in both cases.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn provider_fetch_failures_split_retryable_from_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let (job, body_hash) = seed_send_job(&mut e, 21);
+        let email = job.email.clone().unwrap();
+
+        let outage = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, ts::token_ok("test-scope")),
+                "/profile" => answer(200, ts::gmail_profile("applicant@example.invalid")),
+                p if p.starts_with("/messages/") => {
+                    answer(503, serde_json::json!({"error": {"status": "UNAVAILABLE"}}))
+                }
+                _ => None,
+            }
+        });
+        attach(&mut e, &outage);
+        let failure = e
+            .send_attempt(&job.id, job.revision, &body_hash, false)
+            .expect_err("an unreachable provider must not dispatch");
+        assert!(
+            failure.retryable_for_operator(),
+            "transient fetch outages must be operator-retryable: {failure}"
+        );
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Ready);
+
+        let malformed = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, ts::token_ok("test-scope")),
+                "/profile" => answer(200, ts::gmail_profile("applicant@example.invalid")),
+                p if p.starts_with("/messages/") => {
+                    let mut broken = ts::gmail_resource(&email);
+                    broken["raw"] = serde_json::json!("%%%not-base64%%%");
+                    answer(200, broken)
+                }
+                _ => None,
+            }
+        });
+        attach(&mut e, &malformed);
+        let failure = e
+            .send_attempt(&job.id, job.revision, &body_hash, false)
+            .expect_err("a malformed provider response must not dispatch");
+        assert!(
+            !failure.retryable_for_operator(),
+            "malformed provider responses must require review: {failure}"
+        );
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Ready);
+    }
+
+    /// Why: the pause check immediately before durable reservation is the last
+    /// gate before send state is recorded — a pause that arrives mid-flight
+    /// (while provider fetches are in progress) must still block dispatch and
+    /// leave the job untouched, or a paused worker could still put mail on the
+    /// wire.
+    /// Inputs: a message fetch that flips the pause flag as it answers.
+    /// Output: retryable "Paused before dispatch" failure, no send request on
+    /// the wire, job still Ready.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn a_pause_arriving_mid_flight_still_blocks_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let (job, body_hash) = seed_send_job(&mut e, 22);
+        let email = job.email.clone().unwrap();
+        let resource = ts::gmail_resource(&email);
+        let thread = ts::gmail_thread(&email);
+        let paused = e.paused.clone();
+
+        let server = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, ts::token_ok("test-scope")),
+                "/profile" => answer(200, ts::gmail_profile("applicant@example.invalid")),
+                p if p.starts_with("/messages/") => {
+                    paused.store(true, Ordering::SeqCst);
+                    answer(200, resource.clone())
+                }
+                p if p.starts_with("/threads/") => answer(200, thread.clone()),
+                _ => None,
+            }
+        });
+        attach(&mut e, &server);
+        let failure = e
+            .send_attempt(&job.id, job.revision, &body_hash, false)
+            .expect_err("a mid-flight pause must block dispatch");
+        assert!(
+            failure.to_string().contains("Paused before dispatch"),
+            "unexpected: {failure}"
+        );
+        assert!(failure.retryable_for_operator());
+        assert!(
+            !server.routes().iter().any(|r| r == "/messages/send"),
+            "nothing may reach the provider send endpoint"
+        );
+        assert_eq!(e.db.get(&job.id).unwrap().state, JobState::Ready);
+        e.paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Why: an unreachable account-profile preflight is a transient condition
+    /// and must be classified operator-retryable with its own stable wording,
+    /// so operators retry instead of escalating a routine outage.
+    /// Inputs: a profile endpoint answering 503. Output: retryable failure
+    /// naming the account preflight; nothing dispatched.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn profile_preflight_outages_are_operator_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+        let (job, body_hash) = seed_send_job(&mut e, 23);
+        let server = MockServer::new_raw(move |route, _| {
+            let answer = |status: u16, value: Value| Some((status, value.to_string()));
+            match route {
+                "/" => answer(200, ts::token_ok("test-scope")),
+                "/profile" => answer(503, serde_json::json!({"error": {"status": "UNAVAILABLE"}})),
+                _ => None,
+            }
+        });
+        attach(&mut e, &server);
+        let failure = e
+            .send_attempt(&job.id, job.revision, &body_hash, false)
+            .expect_err("a failed preflight must not dispatch");
+        assert!(
+            failure
+                .to_string()
+                .contains("Gmail account preflight is temporarily unavailable"),
+            "unexpected: {failure}"
+        );
+        assert!(failure.retryable_for_operator());
+    }
+
+    /// Why: once the provider has given a definitive answer, a failing protected
+    /// audit checkpoint must flip the failure to explicitly non-retryable with
+    /// the operator instruction not to resend — retrying a rejected send or an
+    /// uncertain delivery after losing audit evidence risks a duplicate reply.
+    /// Inputs: a rejecting send and an uncertain send, each with the protected
+    /// checkpoint failing after the provider answer. Output: non-retryable
+    /// `nonretryable_audit_checkpoint_failed` for the rejection and the
+    /// "Do not resend" uncertainty wording for the uncertain delivery.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn checkpoint_outage_after_provider_answers_is_never_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        e.settings.sending_enabled = true;
+        e.settings.signature = "Test Applicant".into();
+        e.account = "applicant@example.invalid".into();
+
+        let failing_checkpoint = || -> ts::Gate {
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            std::sync::Arc::new(move || {
+                let step = calls.fetch_add(1, Ordering::SeqCst);
+                if step >= 1 {
+                    anyhow::bail!("synthetic protected audit outage")
+                }
+                Ok(())
+            })
+        };
+
+        let (job, body_hash) = seed_send_job(&mut e, 24);
+        let email = job.email.clone().unwrap();
+        let rejecting = ts::gmail_server(&e.account, vec![email], ts::SendOutcome::Reject);
+        attach(&mut e, &rejecting);
+        let failure = ts::with_audit_gate(failing_checkpoint(), || {
+            e.send_attempt(&job.id, job.revision, &body_hash, false)
+        })
+        .expect_err("a rejected send with a failed checkpoint must not report success");
+        assert_eq!(
+            failure.operation_code(),
+            "nonretryable_audit_checkpoint_failed"
+        );
+        assert!(
+            !failure.retryable_for_operator(),
+            "a lost audit checkpoint must never be operator-retried: {failure}"
+        );
+        assert!(
+            failure
+                .to_string()
+                .contains("Gmail rejected the reply before acceptance"),
+            "unexpected: {failure}"
+        );
+
+        let (job, body_hash) = seed_send_job(&mut e, 25);
+        let email = job.email.clone().unwrap();
+        let uncertain = ts::gmail_server(&e.account, vec![email], ts::SendOutcome::Uncertain);
+        attach(&mut e, &uncertain);
+        let failure = ts::with_audit_gate(failing_checkpoint(), || {
+            e.send_attempt(&job.id, job.revision, &body_hash, false)
+        })
+        .expect_err("an uncertain delivery with a failed checkpoint must not report success");
+        assert!(
+            failure.to_string().contains(
+                "Delivery remains Uncertain and the required protected audit checkpoint also failed"
+            ),
+            "unexpected: {failure}"
+        );
+        assert!(
+            failure.to_string().contains("Do not resend"),
+            "the operator must be told not to resend: {failure}"
+        );
+    }
+
+    /// Why: the automatic branch re-validates the local runtime immediately
+    /// before dispatch — an unreachable runtime is retryable while a runtime
+    /// version that changed since task qualification requires re-review —
+    /// because sending from a runtime the user never qualified would break the
+    /// whole qualification guarantee.
+    /// Inputs: runtimes exposing a failing version endpoint, a foreign
+    /// version, and a failing model catalogue. Output: retryable failures for
+    /// the outages and a review-required failure naming the runtime change.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn automatic_pre_send_runtime_gates_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        ts::arm_automatic(&mut e.settings);
+        e.account = "applicant@example.invalid".into();
+        let (job, body_hash) = seed_send_job(&mut e, 26);
+        let job_id = job.id.clone();
+        let revision = job.revision;
+
+        // The version endpoint is unreachable: a transient, retryable failure.
+        let broken_version = MockServer::new_raw(|_, _| None);
+        e.settings.ollama_url = broken_version.url.clone();
+        let failure = e
+            .send_attempt(&job_id, revision, &body_hash, true)
+            .expect_err("an unreachable runtime must not dispatch");
+        assert!(
+            failure
+                .to_string()
+                .contains("Local model runtime pre-send check"),
+            "unexpected: {failure}"
+        );
+        assert!(failure.retryable_for_operator());
+
+        // The runtime version drifted from task qualification: re-evaluate.
+        let foreign = runtime_version_exposing("9.9.9");
+        e.settings.ollama_url = foreign.url.clone();
+        let failure = e
+            .send_attempt(&job_id, revision, &body_hash, true)
+            .expect_err("a changed runtime must not dispatch");
+        assert!(
+            failure
+                .to_string()
+                .contains("Ollama runtime changed since task qualification"),
+            "unexpected: {failure}"
+        );
+        assert!(!failure.retryable_for_operator());
+
+        // The model catalogue is unreachable: a transient, retryable failure.
+        let broken_tags = MockServer::new_raw(move |route, _| {
+            (route == "/api/version").then(|| (200, ts::version_ok().to_string()))
+        });
+        e.settings.ollama_url = broken_tags.url.clone();
+        let failure = e
+            .send_attempt(&job_id, revision, &body_hash, true)
+            .expect_err("an unreachable model catalogue must not dispatch");
+        assert!(
+            failure.to_string().contains("Local model pre-send check"),
+            "unexpected: {failure}"
+        );
+        assert!(failure.retryable_for_operator());
+    }
+
+    /// Why: when recent recipient attempts cannot be counted the send must be
+    /// held for review — silently assuming zero attempts would defeat the
+    /// per-recipient burst limit exactly when the limit is unverifiable — and
+    /// the operator-facing text must name the burst-safety failure.
+    /// Inputs: a storage error from the attempt counter. Output: a
+    /// non-retryable review failure naming the recipient burst safety.
+    #[test]
+    fn unmeasurable_recipient_burst_safety_holds_the_send_for_review() {
+        let failure = recipient_burst_unavailable("database is locked");
+        assert!(!failure.retryable_for_operator());
+        assert!(
+            failure.to_string().contains(
+                "Automatic recipient burst safety could not be established: database is locked"
+            ),
+            "unexpected: {failure}"
+        );
+    }
+
+    /// Why: a storage-headroom measurement outage is transient, so the send
+    /// must be operator-retryable — but it still blocks the attempt because
+    /// durable send state cannot be guaranteed while headroom is unknown.
+    /// Inputs: a storage error from the headroom probe. Output: a retryable
+    /// failure naming the durable send state requirement.
+    #[test]
+    fn unknown_storage_headroom_is_retryable_but_still_blocks() {
+        let failure = storage_headroom_unknown("volume unavailable");
+        assert!(failure.retryable_for_operator());
+        assert!(
+            failure.to_string().contains(
+                "Durable send state cannot be recorded safely because storage headroom is low: volume unavailable"
+            ),
+            "unexpected: {failure}"
+        );
     }
 }

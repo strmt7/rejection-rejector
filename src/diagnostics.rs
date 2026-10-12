@@ -192,14 +192,30 @@ pub fn report(engine: &Engine) -> Result<Value> {
 ///
 /// Inputs: `engine` — open engine; `path` — destination file. Output: `Ok(())`
 /// once the report is written; missing parent directories are created first.
-pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
-    let data = report(engine)?;
+/// Render a diagnostics report into any write-like sink.
+///
+/// Inputs: `data` — assembled report; `path` — destination (used for parent
+/// directory preparation and error naming); `out` — write-like sink receiving
+/// the pretty-printed JSON bytes. Output: `Ok(())` once the full document is
+/// written and flushed; destinations without a parent component do no
+/// directory work. Write and serialization failures propagate unchanged so a
+/// partial report can never be mistaken for a complete one.
+fn write_report_to(data: &Value, path: &Path, out: &mut dyn std::io::Write) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)?;
     }
-    write_new_private(path, &serde_json::to_vec_pretty(&data)?)?;
+    out.write_all(&serde_json::to_vec_pretty(data)?)?;
+    out.flush()?;
+    Ok(())
+}
+
+pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
+    let data = report(engine)?;
+    let mut rendered = Vec::new();
+    write_report_to(&data, path, &mut rendered)?;
+    write_new_private(path, &rendered)?;
     Ok(())
 }
 
@@ -399,5 +415,43 @@ mod tests {
         assert!(output.is_file());
         let value: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
         assert_eq!(value["report_version"], 5);
+    }
+
+    /// Why: the report writer must work with any write-like sink — a bare
+    /// filename destination has no directory work to do and must not error,
+    /// while a sink failure must surface instead of silently dropping the
+    /// report; both behaviours are what keep `diagnostics` usable from scripts
+    /// and safe against half-written output.
+    /// Inputs: a bare filename and a nested path rendered into capturing and
+    /// always-failing sinks. Output: complete JSON for the good sink, `Ok` for
+    /// the bare filename, and the sink's own error for the failing one.
+    #[test]
+    fn report_renders_through_write_like_sinks() {
+        struct FailingSink;
+        impl std::io::Write for FailingSink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("sink unavailable"))
+            }
+        }
+
+        let data = json!({"report_version": 5});
+        let mut out = Vec::new();
+        write_report_to(&data, Path::new("diagnostics-report.json"), &mut out).unwrap();
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(parsed["report_version"], 5);
+
+        let error = write_report_to(
+            &data,
+            Path::new("diagnostics-report.json"),
+            &mut FailingSink,
+        )
+        .expect_err("sink failures must propagate");
+        assert!(
+            error.to_string().contains("sink unavailable"),
+            "unexpected error: {error}"
+        );
     }
 }
