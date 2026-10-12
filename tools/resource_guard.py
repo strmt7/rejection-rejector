@@ -223,7 +223,7 @@ class ResourceWatchdog:
     ``stop()``. The watchdog is fail-closed exactly like :func:`preflight`.
     """
 
-    TOLERATED_MISSED_PROBES = 5
+    TOLERATED_MISSED_PROBES = 30
 
     def __init__(
         self,

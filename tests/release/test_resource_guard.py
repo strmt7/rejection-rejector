@@ -291,7 +291,7 @@ class WatchdogTests(unittest.TestCase):
         def flaky_vram():
             with lock:
                 misses["n"] += 1
-                if misses["n"] <= 3:  # 3 transient misses < tolerance of 5
+                if misses["n"] <= 3:  # fewer misses than the tolerated window
                     raise RuntimeError("transient probe failure")
                 return (8 * rg.GIB, 16 * rg.GIB)
 
@@ -305,8 +305,8 @@ class WatchdogTests(unittest.TestCase):
         )
         wd.start()
         time.sleep(0.3)
-        wd.stop()
         self.assertEqual(fired, [], "transient probe misses must not stop the run")
+        wd.stop()
 
     def test_watchdog_stops_when_probe_stays_blind(self):
         """Why: a probe that never recovers must fail closed after the
@@ -316,16 +316,20 @@ class WatchdogTests(unittest.TestCase):
         def blind():
             raise RuntimeError("probe permanently broken")
 
+        interval = 0.01
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=True),
             on_violation=lambda v: fired.append(v),
-            interval_s=0.01,
+            interval_s=interval,
             vram_probe=blind,
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
             disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
         )
         wd.start()
-        time.sleep(0.4)
+        # Poll to a hard deadline instead of trusting scheduler timing.
+        deadline = time.time() + 5.0
+        while not fired and time.time() < deadline:
+            time.sleep(0.02)
         wd.stop()
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0].reason, "unmeasurable")

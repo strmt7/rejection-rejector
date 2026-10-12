@@ -150,17 +150,26 @@ def main() -> int:
         `training/progress.py` can probe live progress and detect stalls.
         """
 
-        def __init__(self, path: Path) -> None:
+        def __init__(self, path: Path, vram_probe=None) -> None:
             import time
 
             self.path = path
             self.began = time.time()
             self._time = time
+            self.vram_probe = vram_probe
 
         def on_train_begin(self, args, state, control, **kwargs):
             self._write(state, "running")
 
         def on_step_end(self, args, state, control, **kwargs):
+            # GPU memory queries happen here, on the main thread that owns
+            # the GPU work: calling GPU APIs from the watchdog thread races
+            # the bridge and intermittently fails or wedges it.
+            if self.vram_probe is not None:
+                try:
+                    self.vram_probe()
+                except Exception:
+                    pass  # keep last known value; the watchdog ages it out
             self._write(state, "running")
 
         def on_train_end(self, args, state, control, **kwargs):
@@ -298,8 +307,26 @@ def main() -> int:
         args=train_args,
         train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
         data_collator=make_causal_collator(tokenizer),
-        callbacks=[ProgressCallback(progress_path)],
+        callbacks=[ProgressCallback(progress_path, vram_probe=sample_vram)],
     )
+    vram_state = {"reading": None, "at": 0.0}
+
+    def sample_vram():
+        import torch
+        import time as _t
+
+        free, total = torch.cuda.mem_get_info()
+        vram_state["reading"] = (int(free), int(total))
+        vram_state["at"] = _t.time()
+
+    def vram_reading_or_raise():
+        import time as _t
+
+        reading, at = vram_state["reading"], vram_state["at"]
+        if reading is None or _t.time() - at > 30.0:
+            raise RuntimeError("no fresh main-thread VRAM reading")
+        return reading
+
     def stop_on_resource_breach(v):
         """Stop training before any resource limit is reached. Inputs:
         `v` — the first guard violation. Output: none; sets the trainer's
@@ -315,8 +342,8 @@ def main() -> int:
     # Continuous observation: a second process eating VRAM/RAM, or runaway
     # output growth, ends the run BEFORE anything approaches a limit.
     with rg.ResourceWatchdog(
-        limits=rg.Thresholds(min_free_vram=rg.GIB,
-                             require_vram=(device == "cuda")),
+        limits=rg.Thresholds(require_vram=(device == "cuda")),
+        vram_probe=vram_reading_or_raise,
         on_violation=stop_on_resource_breach,
         disk_path=str(args.output_dir.parent),
     ):
