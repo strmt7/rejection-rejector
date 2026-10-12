@@ -1,6 +1,14 @@
 # Threat model and data-flow security invariants
 
-This document defines Rejection Rejector's security model for engineering and release review. It is intentionally stricter than a feature overview: a control is useful only when its trust boundary, failure mode and enforcement point are explicit.
+This document defines Rejection Rejector's security model for engineering and release
+review. It is intentionally stricter than a feature overview: a control is useful only
+when its trust boundary, failure mode and enforcement point are explicit.
+
+How to read it: a **trust boundary** (TB) is a line where data or control crosses
+between parts of the system with different levels of trust; each TB below states what
+crosses it and what the security consequence is. **AEAD** (authenticated encryption
+with associated data) means encrypted payloads that also fail verification when
+tampered with. Terms for specific algorithms are defined where first used.
 
 ## Security objectives
 
@@ -41,69 +49,127 @@ This document defines Rejection Rejector's security model for engineering and re
 
 ### TB1 — Untrusted incoming email → parser/policy/model
 
-Recruiters, ATS systems and attackers can control email subject/body/headers. Email is **data, never instructions**. It receives no tool authority. MIME parsing is bounded; attachments are not executed. Model classifications are structured and verified, but model output is never itself an authorization token.
+Recruiters, ATS systems and attackers can control email subject/body/headers. Email is
+**data, never instructions**. It receives no tool authority. MIME parsing is bounded;
+attachments are not executed. Model classifications are structured and verified, but
+model output is never itself an authorization token.
 
-Security consequence: prompt injection inside an email cannot directly call Gmail send, alter settings or grant Automatic eligibility.
+Security consequence: prompt injection inside an email cannot directly call Gmail send,
+alter settings or grant Automatic eligibility. (Prompt injection — text crafted to make
+a model ignore its instructions — is treated as hostile input, per OWASP guidance on
+LLM applications.)
 
 ### TB2 — System browser / Google OAuth → local callback
 
-OAuth uses a system browser, random loopback callback port, S256 PKCE and random state with bounded lifetime. The callback accepts only the expected state/code shape. OAuth client JSON is user-provided; the application never ships a shared secret identity.
+OAuth uses a system browser, random loopback callback port, S256 PKCE and random state
+with bounded lifetime. **PKCE** (Proof Key for Code Exchange, RFC 7636) binds the
+authorization code to the client that started the flow; RFC 8252 requires it for native
+apps and specifies the loopback redirect pattern used here. The callback accepts only
+the expected state/code shape. OAuth client JSON is user-provided; the application
+never ships a shared secret identity.
 
-Security consequence: browser content is not trusted merely because it arrived through localhost.
+Security consequence: browser content is not trusted merely because it arrived through
+localhost.
 
 ### TB3 — Gmail REST → local state machine
 
-Gmail is the authoritative provider for source-message/thread state and Sent reconciliation. Provider identifiers are validated before URL construction. A fresh conversation preflight occurs before dispatch. The write boundary is protected by a durable local reservation written before the network send.
+Gmail is the authoritative provider for source-message/thread state and Sent
+reconciliation. Provider identifiers are validated before URL construction. A fresh
+conversation preflight occurs before dispatch. The write boundary is protected by a
+durable local reservation written before the network send.
 
-Security consequence: timeout/server ambiguity becomes **Uncertain**, never an automatic retry.
+Security consequence: timeout/server ambiguity becomes **Uncertain**, never an
+automatic retry.
 
 ### TB4 — Encrypted SQLite ↔ OS credential store
 
-Application payloads are AEAD encrypted with associated-data binding. The database itself is not full-file encrypted: indexes/counts/timestamps/hash metadata can remain visible. The master key is stored separately in the OS credential store on Windows/macOS; Linux requires an explicit passphrase.
+Application payloads are AEAD encrypted with associated-data binding. The database
+itself is not full-file encrypted: indexes/counts/timestamps/hash metadata can remain
+visible. The master key is stored separately in the OS credential store on
+Windows/macOS; Linux requires an explicit passphrase (key derivation uses Argon2id,
+RFC 9106 — a memory-hard password-hashing function).
 
-Security consequence: copying only the database does not reveal payloads, but same-user malware/process memory/OS compromise remain outside this boundary.
+Security consequence: copying only the database does not reveal payloads, but same-user
+malware/process memory/OS compromise remain outside this boundary.
 
 ### TB5 — Local process → Ollama
 
-Inference origin must be a literal loopback HTTP origin. Environment proxies are bypassed for local inference. Redirects/cloud markers are rejected. The configured model/digest/context is qualified and a separate task-specific evaluation must match the exact Automatic-mode configuration.
+Inference origin must be a literal loopback HTTP origin. Environment proxies are
+bypassed for local inference. Redirects/cloud markers are rejected. The configured
+model/digest/context is qualified and a separate task-specific evaluation must match
+the exact Automatic-mode configuration.
 
-Security consequence: changing model, digest, context, signature, tone or candidate facts invalidates unattended-send qualification.
+Security consequence: changing model, digest, context, signature, tone or candidate
+facts invalidates unattended-send qualification.
 
 ### TB6 — Native GUI/API → single worker
 
-The native UI and optional local API submit work through a bounded command channel to one worker owning the data directory. Stale UI revisions fail optimistic concurrency checks. The HTTP API is read-only, loopback-only, bearer-authenticated, rejects browser Origin, uses stable request IDs and returns no-store responses. API bearer plaintext is never persistently recoverable: storage contains only a domain-separated SHA-256 verifier, and new/rotated plaintext credentials are shown once.
+The native UI and optional local API submit work through a bounded command channel to
+one worker owning the data directory. Stale UI revisions fail optimistic concurrency
+checks. The HTTP API is read-only for machine integrations, loopback-only,
+bearer-authenticated, rejects browser `Origin`, uses stable request IDs and returns
+no-store responses. API bearer plaintext is never persistently recoverable: storage
+contains only a domain-separated SHA-256 verifier, and new/rotated plaintext
+credentials are shown once.
 
-Security consequence: integrations must use the API/library contract; SQLite internals are not an external synchronization contract.
+Security consequence: integrations must use the API/library contract; SQLite internals
+are not an external synchronization contract.
 
 ### TB7 — Worker → external send
 
-Human Review requires exact persisted draft confirmation. Automatic mode requires deterministic current-message rejection evidence, a qualified local-model pipeline, cooldown/rate limits, current source/draft/model identities and fresh provider preflight. A durable per-message reservation is created before Gmail dispatch.
+Human Review requires exact persisted draft confirmation. Automatic mode requires
+deterministic current-message rejection evidence, a qualified local-model pipeline,
+cooldown/rate limits, current source/draft/model identities and fresh provider
+preflight. A durable per-message reservation is created before Gmail dispatch.
 
-Security consequence: no model-generated result can independently mint permission to send.
+Security consequence: no model-generated result can independently mint permission to
+send.
 
 ### TB8 — Backup/recovery media ↔ live workspace
 
-Backups are checksum- and audit-head-bound encrypted database images with manifest/vault identity. Restore stages and verifies before replacing live files and keeps rollback material. Portable recovery-key envelopes are stored separately and passphrase-wrapped with Argon2id + XChaCha20-Poly1305.
+Backups are checksum- and audit-head-bound encrypted database images with
+manifest/vault identity. Restore stages and verifies before replacing live files and
+keeps rollback material. Portable recovery-key envelopes are stored separately and
+passphrase-wrapped with Argon2id (RFC 9106) + XChaCha20-Poly1305 (the extended-nonce
+ChaCha AEAD construction specified in the CFRG draft `draft-irtf-cfrg-xchacha`; it has
+no IETF RFC yet, so this is cited as a draft, not a standard).
 
-Security consequence: a backup is not equivalent to a plaintext mailbox export. Losing both OS key and recovery envelope/passphrase is intentionally unrecoverable.
+Security consequence: a backup is not equivalent to a plaintext mailbox export. Losing
+both OS key and recovery envelope/passphrase is intentionally unrecoverable.
 
 ### TB9 — Administrator policy → application
 
-Managed policy is bounded, schema-strict and non-symlinked. Deployments can enforce exact SHA-256 bytes, Ed25519 provenance or both. A per-policy encrypted revision/digest floor rejects downgrade and same-revision drift.
+Managed policy is bounded, schema-strict and non-symlinked. Deployments can enforce
+exact SHA-256 bytes, Ed25519 (RFC 8032) provenance or both. A per-policy encrypted
+revision/digest floor rejects downgrade and same-revision drift.
 
-Security consequence: invalid managed policy fails closed rather than silently falling back to user-controlled settings.
+Security consequence: invalid managed policy fails closed rather than silently falling
+back to user-controlled settings.
 
 ### TB10 — Signed-in Windows user → scheduled worker
 
-Optional Windows autostart uses Task Scheduler with an `InteractiveToken`, `LeastPrivilege` principal and the same workspace/data directory as the user. The task is single-instance and its exported definition is checked for drift. It is not a LocalSystem service.
+Optional Windows autostart uses Task Scheduler with an `InteractiveToken`,
+`LeastPrivilege` principal and the same workspace/data directory as the user. The task
+is single-instance and its exported definition is checked for drift. It is not a
+LocalSystem service.
 
-Security consequence: the worker preserves access to the user's Credential Manager-protected vault key and does not broaden privileges. Logoff ends this availability model; organization Task Scheduler policy is respected rather than bypassed.
+Security consequence: the worker preserves access to the user's
+Credential Manager-protected vault key and does not broaden privileges. Logoff ends
+this availability model; organization Task Scheduler policy is respected rather than
+bypassed.
 
 ### TB11 — Source repository → release binary
 
-CI pins source/toolchain/actions, runs format/test/clippy/security/supply-chain/deep-quality gates, embeds auditable dependency metadata, emits an SBOM and can create GitHub artifact/SBOM attestations. Manual packaging verifies exact-main gates and deep-quality evidence lineage.
+CI pins source/toolchain/actions, runs format/test/clippy/security/supply-chain/deep-
+quality gates, embeds auditable dependency metadata, emits an SBOM and can create
+GitHub artifact/SBOM attestations. Manual packaging verifies exact-main gates and
+deep-quality evidence lineage.
 
-Security consequence: SHA-256 alone is not treated as publisher identity. The manual release workflow has an optional fail-closed Azure Artifact Signing/OIDC path and verifies Authenticode on both executables, but a signed release is claimed only for an artifact produced by that successfully configured path. MSI/MSIX/Intune packaging remains a separate control.
+Security consequence: SHA-256 alone is not treated as publisher identity. The manual
+release workflow has an optional fail-closed Azure Artifact Signing/OIDC path and
+verifies Authenticode on both executables, but a signed release is claimed only for an
+artifact produced by that successfully configured path. MSI/MSIX/Intune packaging
+remains a separate control.
 
 ## Threats, abuse cases and mitigations
 
@@ -135,7 +201,8 @@ Security consequence: SHA-256 alone is not treated as publisher identity. The ma
 
 ## Security invariants — must remain testable
 
-The following are release-level invariants. A change that invalidates one requires an explicit architecture/security update, not a silent workaround.
+The following are release-level invariants. A change that invalidates one requires an
+explicit architecture/security update, not a silent workaround.
 
 1. Constructing the library or opening a workspace never sends email.
 2. Human Review is the default and application sending is disabled by default.
@@ -152,7 +219,7 @@ The following are release-level invariants. A change that invalidates one requir
 13. Restore never overwrites a running workspace and has rollback material before replacing live state.
 14. Portable recovery never writes the raw master key to disk.
 15. Managed policy rollback/same-revision drift is rejected when policy v2 state exists.
-16. The integration API remains read-only; write-route enablement requires a future explicit API version/security design.
+16. The integration API remains read-only for machine consumers; write-route enablement for anything other than the embedded web interface requires a future explicit API version/security design.
 17. Runtime journal records cannot contain mailbox bodies/subjects/addresses, OAuth/API secrets, signature, candidate facts or arbitrary exception strings.
 18. Public API operations and runtime records expose only locally generated correlation/request identifiers, never private identifiers.
 19. Release packaging uses the exact triggering `main` commit and cannot accept a newer failed deep-quality run hidden behind older green evidence.
@@ -185,4 +252,25 @@ Before accepting a change, reviewers should answer:
 7. Does it introduce an OS/process trust assumption not captured above?
 8. Does the release evidence still prove the exact source and relevant quality lineage?
 
-If any answer is yes, the associated code, test, documentation and release gate should change together.
+If any answer is yes, the associated code, test, documentation and release gate should
+change together.
+
+## Sources (checked 2026-10-12)
+
+- IETF RFC 8252 (OAuth 2.0 for Native Apps) and RFC 7636 (PKCE): TB2.
+  https://www.rfc-editor.org/rfc/rfc8252 and https://www.rfc-editor.org/rfc/rfc7636
+- IETF RFC 9106 (Argon2): TB4/TB8 key derivation.
+  https://www.rfc-editor.org/rfc/rfc9106
+- IRTF CFRG `draft-irtf-cfrg-xchacha` (XChaCha20-Poly1305; draft status):
+  https://datatracker.ietf.org/doc/draft-irtf-cfrg-xchacha/
+- IETF RFC 8032 (Ed25519): TB9 policy signatures.
+  https://www.rfc-editor.org/rfc/rfc8032
+- NIST FIPS 180-4 (SHA-256) for digests/fingerprints:
+  https://csrc.nist.gov/pubs/fips/180/4/final
+- NIST SP 800-30 Rev. 1 (risk-assessment terminology behind "threat / capability /
+  required behavior"): https://csrc.nist.gov/pubs/sp/800/30/r1/final
+- NIST SP 800-88 Rev. 2 (media sanitization; why pruning is not physical erasure):
+  https://csrc.nist.gov/pubs/sp/800/88/r2/final
+- OWASP Foundation, "OWASP Top 10 for LLM Applications" (prompt injection as hostile
+  input, TB1): https://owasp.org/www-project-top-10-for-large-language-model-applications/
+- SLSA build provenance (TB11): https://slsa.dev/spec/v1/provenance

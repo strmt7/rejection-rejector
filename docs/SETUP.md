@@ -1,14 +1,38 @@
 # Setup and operation
 
+This is the end-to-end how-to: preview the app safely, connect a real Gmail account,
+set up the local model, work in Human review, optionally arm Automatic mode, and
+manage backups/recovery. Commands are shown for Windows; Linux differences are noted at
+the end.
+
+Terms used throughout: the **workspace** (data directory) is the folder holding the
+encrypted SQLite database and settings; the **vault key** is the 256-bit master key
+that encrypts it (held by Windows Credential Manager / macOS Keychain, or derived from a
+passphrase on Linux); **OAuth scope** is a permission string you grant during Google
+sign-in (for example read-only versus send); **digest pin** records the exact SHA-256
+identity of the downloaded model so it cannot be swapped later; **VRAM residency**
+means the whole model actually fits in GPU memory.
+
 ## Windows runtime
 
-The x64 binaries require Microsoft Visual C++ v14 Redistributable. See [WINDOWS-RUNTIME.md](WINDOWS-RUNTIME.md) for the official source and missing-DLL guidance.
+The x64 binaries require Microsoft Visual C++ v14 Redistributable. See
+[WINDOWS-RUNTIME.md](WINDOWS-RUNTIME.md) for the official source and missing-DLL
+guidance.
 
 ## Safe preview and storage
 
-Run `rejection-rejector.exe --demo` for synthetic offline data. It uses a temporary encrypted database and cannot connect to Gmail or send anything. Real data goes to the OS local application-data directory; override with `--data-dir <absolute-path>`. Never choose a public repository or shared/synchronized directory.
+Run `rejection-rejector.exe --demo` for synthetic offline data. It uses a temporary
+encrypted database and cannot connect to Gmail or send anything — use it to see the
+whole interface risk-free. Real data goes to the OS local application-data directory;
+override with `--data-dir <absolute-path>`. Never choose a public repository or
+shared/synchronized directory.
 
 ## Gmail OAuth
+
+The app uses **OAuth 2.0 for desktop apps**: you create your own Google Cloud OAuth
+client, sign in through your system browser, and the app receives tokens through a
+random local callback port protected by PKCE (RFC 8252/7636). No shared Google identity
+ships with the app.
 
 1. Create/select your own Google Cloud project and enable **Gmail API**.
 2. Configure Google Auth Platform/consent-screen branding and audience. For an external project in Testing, add your Gmail address as a test user.
@@ -17,7 +41,12 @@ Run `rejection-rejector.exe --demo` for synthetic offline data. It uses a tempor
 5. In Settings, choose whether to request send permission, then **Choose OAuth JSON & connect**. Sign in using the browser on the same computer. The random loopback callback uses PKCE/state and expires after five minutes.
 6. Confirm the account and replace the placeholder signature. Reconnecting always disables application delivery and restores Human review.
 
-Credentials are encrypted locally. The original downloaded JSON remains where you saved it; protect that copy. The app does not ship a shared OAuth identity. Google verification, Workspace administrator restrictions and consent expiry still apply. External projects in Testing can receive seven-day refresh tokens for Gmail scopes; reconnect as needed. Distribution to other users requires reviewing Google's current verification requirements.
+Credentials are encrypted locally. The original downloaded JSON remains where you saved
+it; protect that copy. The app does not ship a shared OAuth identity. Google
+verification, Workspace administrator restrictions and consent expiry still apply.
+External projects in Testing can receive seven-day refresh tokens for Gmail scopes;
+reconnect as needed. Distribution to other users requires reviewing Google's current
+verification requirements.
 
 Official references:
 - https://developers.google.com/identity/protocols/oauth2/native-app
@@ -26,7 +55,14 @@ Official references:
 
 ## Ollama and local AI
 
-Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a provisional task-specific default, not a permanent leaderboard choice. The current curated generative challengers include `granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, the higher-headroom `gemma4:12b-it-q4_K_M`, `ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. The separate non-sending typed-decision bake-off includes `nimble:9b-q8_0`, `clef-flash:9b-q8_0` and `tev1:4b`. Changing model/context disarms delivery until the new configuration is qualified.
+Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a
+provisional task-specific default, not a permanent leaderboard choice (see
+[MODEL.md](MODEL.md)). The current curated generative challengers include
+`granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, the higher-headroom `gemma4:12b-it-q4_K_M`,
+`ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. The separate
+non-sending typed-decision bake-off includes `nimble:9b-q8_0`, `clef-flash:9b-q8_0` and
+`tev1:4b`. Changing model/context disarms delivery until the new configuration is
+qualified.
 
 1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.35.1 or newer**. It fails closed if `/api/show` does not expose capability metadata: production chat models must declare general completion capability and may not be decision-only, while the typed-decision R&D lane requires a decision-only capability. This prevents decision endpoints from being accidentally promoted into the reply-generation pipeline. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
@@ -45,13 +81,22 @@ $env:OLLAMA_HOST = '127.0.0.1:11434'
 ollama serve
 ```
 
-Do not start a second server on an occupied port. Environment variables do not retroactively change an existing process. GPU compatibility depends on Ollama/backend/driver. The app does not guarantee every 16 GiB card works identically.
+Do not start a second server on an occupied port. Environment variables do not
+retroactively change an existing process. GPU compatibility depends on
+Ollama/backend/driver. The app does not guarantee every 16 GiB card works identically.
 
 ### Scheduled verified backups
 
-The desktop can optionally create encrypted same-vault backups every 24, 72, 168 or 336 hours and retain 2–30 verified generations. A new backup is created and authenticated before retention pruning runs. Pruning considers only direct child directories created by the scheduled-backup naming convention and deletes a directory only after its manifest, checksum, schema, vault identity and audit head verify under the active workspace key. Unrelated or unverifiable folders are ignored.
+The desktop can optionally create encrypted same-vault backups every 24, 72, 168 or
+336 hours and retain 2–30 verified generations. A new backup is created and
+authenticated before retention pruning runs. Pruning considers only direct child
+directories created by the scheduled-backup naming convention and deletes a directory
+only after its manifest, checksum, schema, vault identity and audit head verify under
+the active workspace key. Unrelated or unverifiable folders are ignored.
 
-Scheduled backups continue while Gmail is disconnected or delivery is paused, but require the desktop or headless worker process to be running. Backup age is exposed only as privacy-safe operational metadata.
+Scheduled backups continue while Gmail is disconnected or delivery is paused, but
+require the desktop or headless worker process to be running. Backup age is exposed
+only as privacy-safe operational metadata.
 
 ### Readiness check
 
@@ -61,31 +106,66 @@ Close the GUI, then run:
 .\rr.exe doctor
 ```
 
-This prints only non-sensitive readiness state: Gmail connection/send-scope flags, selected schedule/mode, Ollama reachability, model pin/install match and current Ollama GPU-residency status. It does not print message bodies, refresh tokens or OAuth client secrets. A healthy point-in-time residency report does not replace **Qualify & pin**, which exercises the full local AI pipeline.
+This prints only non-sensitive readiness state: Gmail connection/send-scope flags,
+selected schedule/mode, Ollama reachability, model pin/install match and current Ollama
+GPU-residency status. It does not print message bodies, refresh tokens or OAuth client
+secrets. A healthy point-in-time residency report does not replace **Qualify & pin**,
+which exercises the full local AI pipeline.
 
 ## Human review
 
-Save the check interval and age window. Use **Check email now** to populate the durable queue. Only missing provider identities are inserted; Gmail pages are committed in batches. Non-rejection bodies are discarded after classification while identities remain. Tightening the age window immediately removes older reviewable items from the queue and clears their stored body/draft/analysis while retaining the identity tombstone for deduplication.
+Save the check interval and age window. Use **Check email now** to populate the durable
+queue. Only missing provider identities are inserted; Gmail pages are committed in
+batches. Non-rejection bodies are discarded after classification while identities
+remain. Tightening the age window immediately removes older reviewable items from the
+queue and clears their stored body/draft/analysis while retaining the identity tombstone
+for deduplication.
 
-Select a rejection in Review. Read the original and response, edit/save or regenerate it, then confirm the exact recipient, subject and body before sending. A failed save must remain unsaved. Sending requires Google send scope **and** the app's Enable sending switch. The conversation is rechecked before dispatch.
+Select a rejection in Review. Read the original and response, edit/save or regenerate
+it, then confirm the exact recipient, subject and body before sending. A failed save
+must remain unsaved. Sending requires Google send scope **and** the app's Enable
+sending switch. The conversation is rechecked before dispatch.
+
+Four graded reply tones are available: Professional (soft), Assertive, Hardline (harsh,
+default) and Insane (offensive, with strict legal limits). Tone choice is part of the
+qualified configuration: changing it invalidates model qualification like any other
+model input.
 
 ## Automatic
 
-Select Automatic, enable sending and explicitly authorize automatic replies. The enrollment time is recorded on saving. Backlog is excluded unless you explicitly include older rejections within the selected window. Cooldown and rolling send-attempt limits apply. Review is disabled in Automatic; switch back for held cases. Activity remains readable.
+Select Automatic, enable sending and explicitly authorize automatic replies. The
+enrollment time is recorded on saving. Backlog is excluded unless you explicitly
+include older rejections within the selected window. Cooldown and rolling send-attempt
+limits apply. Arming requires a 30-second risk-acknowledgment cooldown. Review is
+disabled in Automatic; switch back for held cases. Activity remains readable.
 
-Pause blocks future dispatch but cannot recall a request already sent to Gmail. An active model request may run until its timeout. Closing the app stops its scheduler, not necessarily the Ollama daemon. Close the GUI before using `rr.exe run`; one process may own a data directory.
+Pause blocks future dispatch but cannot recall a request already sent to Gmail. An
+active model request may run until its timeout. Closing the app stops its scheduler,
+not necessarily the Ollama daemon. Close the GUI before using `rr.exe run`; one process
+may own a data directory.
 
 ## Recovery and retention
 
-For a replacement or locked Windows/macOS workspace, the preferred native flow is the pre-open recovery UI:
+For a replacement or locked Windows/macOS workspace, the preferred native flow is the
+pre-open recovery UI:
 
 ```powershell
 .\rejection-rejector.exe --recovery
 ```
 
-Recovery Mode does **not** start the normal Gmail/model worker and does not open or create the normal vault first. Select the encrypted backup directory and the separately stored wrapped recovery-key JSON, enter the recovery passphrase, then type `RESTORE`. The application authenticates the key against the backup and exercises the production restore path in an isolated temporary workspace before it locks or modifies the target workspace. Close Recovery Mode after success, then launch the application normally.
+Recovery Mode does **not** start the normal Gmail/model worker and does not open or
+create the normal vault first. Select the encrypted backup directory and the separately
+stored wrapped recovery-key JSON, enter the recovery passphrase, then type `RESTORE`.
+The application authenticates the key against the backup and exercises the production
+restore path in an isolated temporary workspace before it locks or modifies the target
+workspace. Close Recovery Mode after success, then launch the application normally.
 
-An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection returns the rejection message to Human Review instead of pretending delivery may have occurred. Completed Sent records are permanent per-message at-most-once tombstones, but they do not block a later distinct rejection in the same thread.
+An ambiguous send outcome becomes Uncertain and blocks that Gmail thread until
+reconciliation. Use Activity → Reconcile with Gmail Sent. No match does not prove
+non-delivery; automatic retry is not offered. A definite pre-dispatch/provider rejection
+returns the rejection message to Human Review instead of pretending delivery may have
+occurred. Completed Sent records are permanent per-message at-most-once tombstones, but
+they do not block a later distinct rejection in the same thread.
 
 Use the built-in recovery commands instead of manually copying a live SQLite database:
 
@@ -100,25 +180,43 @@ Restore is intentionally offline. Close the GUI and any `rr run` worker first:
 .\rr.exe restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
 ```
 
-Restore acquires the exclusive workspace lock, stages and deeply authenticates the backup, preserves the existing SQLite/WAL/SHM files under the private `recovery` directory, installs a clean SQLite image, verifies it, and rolls back automatically if final validation fails. A normal backup remains same-vault: another machine still needs the original OS-protected master key. For portable disaster recovery, create a **separate encrypted recovery-key envelope** and store it away from the backup. The raw vault key is never written to disk.
+Restore acquires the exclusive workspace lock, stages and deeply authenticates the
+backup, preserves the existing SQLite/WAL/SHM files under the private `recovery`
+directory, installs a clean SQLite image, verifies it, and rolls back automatically if
+final validation fails. A normal backup remains same-vault: another machine still needs
+the original OS-protected master key. For portable disaster recovery, create a
+**separate encrypted recovery-key envelope** and store it away from the backup. The raw
+vault key is never written to disk.
 
-Create a temporary passphrase file containing at least 20 bytes, export the wrapped key, verify the pair, then securely remove the temporary passphrase file according to your organization's policy:
+Create a temporary passphrase file containing at least 20 bytes, export the wrapped
+key, verify the pair, then securely remove the temporary passphrase file according to
+your organization's policy:
 
 ```powershell
 .\rr.exe export-recovery-key --out E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt
 .\rr.exe verify-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt
 ```
 
-On a replacement Windows/macOS machine, copy the backup and recovery-key envelope, create/use the intended data directory, then import the key **before** restore:
+On a replacement Windows/macOS machine, copy the backup and recovery-key envelope,
+create/use the intended data directory, then import the key **before** restore:
 
 ```powershell
 .\rr.exe --data-dir "$env:LOCALAPPDATA\dev\<user>\RejectionRejector" import-recovery-key --backup D:\RR-backups\backup-2026-09-27 --recovery-key E:\RR-recovery\recovery-key.json --passphrase-file .\recovery-passphrase.txt --confirm IMPORT
 .\rr.exe --data-dir "$env:LOCALAPPDATA\dev\<user>\RejectionRejector" restore-backup D:\RR-backups\backup-2026-09-27 --confirm RESTORE
 ```
 
-Import first authenticates the wrapped key against the backup database. It refuses to overwrite an existing OS credential. Linux continues to use the original `RR_VAULT_PASSPHRASE` plus vault ID rather than OS-key import. The recovery-key file is encrypted but still sensitive; keep it separate from the backup and protect the passphrase independently.
+Import first authenticates the wrapped key against the backup database. It refuses to
+overwrite an existing OS credential. Linux continues to use the original
+`RR_VAULT_PASSPHRASE` plus vault ID rather than OS-key import. The recovery-key file is
+encrypted but still sensitive; keep it separate from the backup and protect the
+passphrase independently.
 
-Pruning removes old completed message/draft/analysis content plus processing timestamps/counters, but retains encrypted deduplication/delivery identities and minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not guaranteed physical SSD erasure. Do not delete the OS credential or vault-id unless you have separately validated disaster-recovery material.
+Pruning removes old completed message/draft/analysis content plus processing
+timestamps/counters, but retains encrypted deduplication/delivery identities and
+minimal state. Pending/uncertain records remain. Invoke pruning explicitly; it is not
+guaranteed physical SSD erasure (see NIST SP 800-88 Rev. 2 for what media sanitization
+requires). Do not delete the OS credential or vault-id unless you have separately
+validated disaster-recovery material.
 
 ## Troubleshooting
 
@@ -130,6 +228,27 @@ Pruning removes old completed message/draft/analysis content plus processing tim
 - Newer thread activity: inspect/handle in Gmail instead of blindly replying.
 - API busy: retry later with backoff; do not bypass the worker by editing SQLite.
 
-Linux development requires desktop libraries and a strong private `RR_VAULT_PASSPHRASE` of 20+ characters for a real workspace. Argon2 derives the key. Demo needs no passphrase. Never commit the passphrase.
+Linux development requires desktop libraries and a strong private `RR_VAULT_PASSPHRASE`
+of 20+ characters for a real workspace. Argon2 derives the key. Demo needs no
+passphrase. Never commit the passphrase.
 
-Linux runtime note: X11 rendering requires `libxkbcommon-x11-0` in addition to the build libraries. CI installs `libxkbcommon-x11-dev`, which supplies the runtime dependency.
+Linux runtime note: X11 rendering requires `libxkbcommon-x11-0` in addition to the
+build libraries. CI installs `libxkbcommon-x11-dev`, which supplies the runtime
+dependency.
+
+## Sources (checked 2026-10-12)
+
+- Google, "OAuth 2.0 for Mobile & Desktop Apps" (Desktop client + loopback/PKCE):
+  https://developers.google.com/identity/protocols/oauth2/native-app
+- Google, "OAuth 2.0 token expiration" (seven-day refresh tokens while in Testing):
+  https://developers.google.com/identity/protocols/oauth2#expiration
+- Google, Gmail API scopes (`gmail.readonly`, `gmail.send`):
+  https://developers.google.com/gmail/api/auth/scopes
+- Ollama, Windows download and API documentation:
+  https://ollama.com/download/windows and https://github.com/ollama/ollama/blob/main/docs/api.md
+- Microsoft, Windows Package Manager (`winget`, used by **Install Ollama**):
+  https://learn.microsoft.com/en-us/windows/package-manager/
+- NIST SP 800-88 Rev. 2, "Guidelines for Media Sanitization":
+  https://csrc.nist.gov/pubs/sp/800/88/r2/final
+- IETF RFC 9106 (Argon2, used for passphrase key derivation):
+  https://www.rfc-editor.org/rfc/rfc9106

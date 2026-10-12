@@ -1,6 +1,17 @@
 # Enterprise policy
 
-Rejection Rejector supports an optional, local administrator policy overlay. It is intentionally file-based and local-first: no management server is required, and the application remains usable in disconnected enterprise environments.
+Rejection Rejector supports an optional, local administrator policy overlay: a
+machine-wide settings file that can only make the application *more* restrictive than
+the user's own configuration. It is intentionally file-based and local-first: no
+management server is required, and the application remains usable in disconnected
+enterprise environments.
+
+Terms used on this page: a **digest** is a SHA-256 hash (FIPS 180-4) of exact file
+bytes; **pinning** means provisioning that digest out-of-band so a machine only accepts
+one exact policy file; a **detached signature** is a signature stored in its own file
+rather than inside the signed document; **Ed25519** (RFC 8032) is the public-key
+signature algorithm used here; **rollback** means an attacker or mistake re-deploys an
+older, weaker policy that is still internally valid.
 
 ## Default locations
 
@@ -8,18 +19,29 @@ Rejection Rejector supports an optional, local administrator policy overlay. It 
 - Linux: `/etc/rejection-rejector/policy.json`
 - Explicit override: absolute path in `RR_ENTERPRISE_POLICY`
 
-A configured relative override is rejected. A malformed or unsupported policy fails startup rather than silently disabling policy enforcement.
+A configured relative override is rejected. A malformed or unsupported policy fails
+startup rather than silently disabling policy enforcement (fail closed).
 
-For higher-assurance deployments, Rejection Rejector supports **two independent policy-authentication controls**:
+For higher-assurance deployments, Rejection Rejector supports **two independent
+policy-authentication controls**:
 
 - `RR_ENTERPRISE_POLICY_SHA256`: exact 64-hex SHA-256 digest pin of the deployed policy bytes.
 - `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY`: standard-base64 raw 32-byte Ed25519 public key. When present, the exact policy bytes must have a valid detached signature in `policy.json.sig` (or the absolute path in `RR_ENTERPRISE_POLICY_SIGNATURE`).
 
-The signature file is bounded to 4 KiB, rejects symlinks and unknown JSON fields, and uses the extensible envelope `{"version":1,"algorithm":"ed25519","signature":"BASE64"}`. The signature is over the **exact policy file bytes**, so whitespace changes require re-signing. SHA-256 pinning and Ed25519 verification may be enabled together; both must pass. The public key or digest should be provisioned independently from the policy/signature files through MDM, image management, or another administrator-controlled channel.
+The signature file is bounded to 4 KiB, rejects symlinks and unknown JSON fields, and
+uses the extensible envelope `{"version":1,"algorithm":"ed25519","signature":"BASE64"}`.
+The signature is over the **exact policy file bytes**, so whitespace changes require
+re-signing. SHA-256 pinning and Ed25519 verification may be enabled together; both must
+pass. The public key or digest should be provisioned independently from the
+policy/signature files through MDM, image management, or another
+administrator-controlled channel.
 
 ## Policy formats
 
-Policy v1 remains readable for backward compatibility, but it has no local anti-rollback identity. Policy v2 adds lifecycle/rollback controls. **Policy v3** adds managed independent-verifier enforcement and is recommended for new high-assurance deployments.
+Policy v1 remains readable for backward compatibility, but it has no local
+anti-rollback identity. Policy v2 adds lifecycle/rollback controls. **Policy v3** adds
+managed independent-verifier enforcement and is recommended for new high-assurance
+deployments.
 
 ### Policy v2
 
@@ -42,9 +64,16 @@ Policy v1 remains readable for backward compatibility, but it has no local anti-
 }
 ```
 
-For v2, `version`, `policy_id`, and `revision` are required. `policy_id` is a stable administrative namespace and `revision` is a monotonically increasing integer. `not_before` and `expires_at` are optional UTC timestamps. Omitted enforcement controls use their non-restrictive default.
+For v2, `version`, `policy_id`, and `revision` are required. `policy_id` is a stable
+administrative namespace and `revision` is a monotonically increasing integer.
+`not_before` and `expires_at` are optional UTC timestamps. Omitted enforcement controls
+use their non-restrictive default.
 
-The encrypted workspace remembers the highest accepted revision **and exact digest** for every v2 `policy_id`. A lower revision is rejected as rollback, and different bytes reusing the same revision are rejected. A higher revision advances the floor atomically with any settings restrictions that policy applies. Use a stable `policy_id`; deliberately changing it starts a new revision namespace.
+The encrypted workspace remembers the highest accepted revision **and exact digest**
+for every v2 `policy_id`. A lower revision is rejected as rollback, and different bytes
+reusing the same revision are rejected. A higher revision advances the floor atomically
+with any settings restrictions that policy applies. Use a stable `policy_id`;
+deliberately changing it starts a new revision namespace.
 
 Policy v1 is still supported, but the revision-floor mechanism does not apply to v1.
 
@@ -55,9 +84,16 @@ Policy v3 keeps all v2 lifecycle semantics and adds:
 - `require_independent_verifier`: forces verification to use a different pinned local Ollama model from the primary classification/drafting model.
 - `allowed_verifier_models`: exact verifier-model allow-list. Empty means unrestricted local verifier tags.
 
-The verifier runs sequentially: the primary model is checked for full GPU residency, unloaded, then the verifier is loaded and audits the current rejection evidence and proposed reply. Only one model is intentionally GPU-resident at a time. If verifier loading, transport, structured output, verification, or residency fails, unattended action is held; the system never falls back to same-model verification.
+The verifier runs sequentially: the primary model is checked for full GPU residency,
+unloaded, then the verifier is loaded and audits the current rejection evidence and
+proposed reply. Only one model is intentionally GPU-resident at a time. If verifier
+loading, transport, structured output, verification, or residency fails, unattended
+action is held; the system never falls back to same-model verification.
 
-Task qualification binds verifier enablement, verifier model tag and verifier digest. Changing any of them invalidates the evaluation and disarms Automatic mode.
+Task qualification binds verifier enablement, verifier model tag and verifier digest.
+Changing any of them invalidates the evaluation and disarms Automatic mode.
+
+### Field reference
 
 - `policy_id`: stable identifier for the managed policy lineage. ASCII letters, digits, `.`, `_`, `:`, and `-` only.
 - `revision`: monotonic revision within that `policy_id`; increment it for every changed policy payload.
@@ -73,7 +109,8 @@ Task qualification binds verifier enablement, verifier model tag and verifier di
 - `min_retention_days`: lower bound for completed-content retention.
 - `allowed_models`: exact Ollama tag allow-list. Empty means no model restriction.
 
-Policy can only make the user configuration more restrictive. It never grants capabilities.
+Policy can only make the user configuration more restrictive. It never grants
+capabilities.
 
 ## Deployment workflow
 
@@ -107,7 +144,13 @@ Policy can only make the user configuration more restrictive. It never grants ca
    rr.exe diagnostics --out diagnostics.json
    ```
 
-The runtime exposes the policy digest and effective constraints through diagnostics and the authenticated loopback health endpoint. The digest identifies exact policy bytes without exposing secrets; policy files must not contain secrets.
+Treat step 9 as required evidence, not a formality: record the policy digest reported
+by `policy-status` next to the digest you provisioned, exactly as release evidence
+elsewhere carries its identifiers (see [TESTING.md](TESTING.md)).
+
+The runtime exposes the policy digest and effective constraints through diagnostics and
+the authenticated loopback health endpoint. The digest identifies exact policy bytes
+without exposing secrets; policy files must not contain secrets.
 
 ## Security model
 
@@ -127,4 +170,21 @@ The runtime exposes the policy digest and effective constraints through diagnost
 - Policy application is re-run on every settings mutation and hot-reload.
 - Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by avoiding the desktop UI.
 
-This is an enforcement mechanism, not full Windows Group Policy/MDM integration. Ed25519 signatures authenticate policy provenance when the public-key provisioning channel is independently protected; the optional SHA-256 pin can additionally lock a machine to one exact byte representation. Policy v2's encrypted revision floor adds local rollback resistance. The release workflow now has an optional fail-closed Azure Artifact Signing path for the executables, while signed MSI/MSIX/Intune deployment remains a separate enterprise packaging concern.
+This is an enforcement mechanism, not full Windows Group Policy/MDM integration.
+Ed25519 signatures authenticate policy provenance when the public-key provisioning
+channel is independently protected; the optional SHA-256 pin can additionally lock a
+machine to one exact byte representation. Policy v2's encrypted revision floor adds
+local rollback resistance. The release workflow now has an optional fail-closed Azure
+Artifact Signing path for the executables, while signed MSI/MSIX/Intune deployment
+remains a separate enterprise packaging concern.
+
+## Sources (checked 2026-10-12)
+
+- IETF RFC 8032, "Edwards-Curve Digital Signature Algorithm (EdDSA)":
+  https://www.rfc-editor.org/rfc/rfc8032
+- NIST FIPS 180-4, Secure Hash Standard (SHA-256):
+  https://csrc.nist.gov/pubs/fips/180/4/final
+- NIST SP 800-53 Rev. 5, controls CM-3 (Configuration Change Control) and CM-5
+  (Access Restrictions for Change) as the general practice behind revision floors
+  and signed configuration:
+  https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final

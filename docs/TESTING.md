@@ -1,10 +1,22 @@
 # Verification and acceptance
 
+This page describes what the automated checks actually prove, what they deliberately do
+not prove, and how release evidence is kept honest. The evidence rules are the same
+ones summarized in `AGENTS.md`: state only what a tool run proved this turn, attach the
+identifier (commit, run id, count), and never report a check that did not run as a
+check that passed.
+
 ## Reproducible source selection
 
-The final CI pipeline has read-only repository permissions. It checks out and verifies the exact triggering commit, uses the tracked Cargo.lock, pins Rust 1.99.0 and pins all workflow actions to commit SHAs. It does not edit source, run a finalization script, commit formatting changes or push to main. It fails if tracked source changes during validation.
+The final CI pipeline has read-only repository permissions. It checks out and verifies
+the exact triggering commit, uses the tracked Cargo.lock, pins Rust 1.99.0 and pins all
+workflow actions to commit SHAs. It does not edit source, run a finalization script,
+commit formatting changes or push to main. It fails if tracked source changes during
+validation.
 
-This fixes source/dependency/toolchain selection. It is not a claim of bit-for-bit binary reproducibility: hosted runner images, OS packages and some external build inputs are not immutable snapshots.
+This fixes source/dependency/toolchain selection. It is not a claim of bit-for-bit
+binary reproducibility: hosted runner images, OS packages and some external build
+inputs are not immutable snapshots.
 
 ## Automated checks
 
@@ -17,21 +29,53 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo run --locked --no-default-features --bin rr -- demo
 ```
 
-Deterministic generated state-machine invariants use fixed seeded randomness to exercise thousands of enterprise-policy, anti-rollback and Automatic-readiness combinations on every all-feature suite run. They are reproducible regressions, not probabilistic fuzz claims. Production builds additionally deny `unwrap`, `expect`, `panic!` and `unreachable!` through clippy outside `#[cfg(test)]`; explicit error propagation is the required runtime behavior.
+Deterministic generated state-machine invariants use fixed seeded randomness to
+exercise thousands of enterprise-policy, anti-rollback and Automatic-readiness
+combinations on every all-feature suite run. They are reproducible regressions, not
+probabilistic fuzz claims. Production builds additionally deny `unwrap`, `expect`,
+`panic!` and `unreachable!` through clippy outside `#[cfg(test)]`; explicit error
+propagation is the required runtime behavior.
 
-Both Windows and Ubuntu run these checks and the Python operator-tool regression suite. Rust CI uploads diagnostic logs, source archives and applicable GUI/manifest evidence, not a deployable Windows ZIP. User-facing packages have one CI entry point: the manual Attested Windows package workflow, with explicit PACKAGE confirmation and all release gates. Local build scripts and the separate reproducibility job remain available for development verification; their output is not a certified release.
+Both Windows and Ubuntu run these checks and the Python operator-tool regression suite.
+Rust CI uploads diagnostic logs, source archives and applicable GUI/manifest evidence,
+not a deployable Windows ZIP. User-facing packages have one CI entry point: the manual
+Attested Windows package workflow, with explicit PACKAGE confirmation and all release
+gates. Local build scripts and the separate reproducibility job remain available for
+development verification; their output is not a certified release.
 
 ## Change-aware deep verification
 
-All five deep workflows share a conservative invalidation boundary: source, tests, fuzz targets, operator scripts, build and workflow configuration, checkout/encoding configuration, Windows resources and embedded API/policy documents. Their trigger paths must cover the release guard's exact input set. Ordinary documentation-only changes can reuse recent ancestor evidence only when those inputs are unchanged. See [release gates](RELEASE_GATES.md).
+All five deep workflows share a conservative invalidation boundary: source, tests, fuzz
+targets, operator scripts, build and workflow configuration, checkout/encoding
+configuration, Windows resources and embedded API/policy documents. Their trigger paths
+must cover the release guard's exact input set. Ordinary documentation-only changes can
+reuse recent ancestor evidence only when those inputs are unchanged. See [release
+gates](RELEASE_GATES.md).
+
+A workflow that did not run because of path filters produces no evidence. When a lane
+is skipped for your change, either run its equivalent locally and say so, or land the
+change through a path that triggers it. A skipped lane is not a green lane.
 
 ## Release evidence freshness and lineage
 
-The manual attested-package workflow does not accept an arbitrary recent green run. For all five deep workflows it queries the **latest** run on `main`, checks identity, success and age, and uses the full local Git history to prove ancestry and unchanged build/test inputs. Seven exact-commit workflows, including repository integrity, must also pass. A newer failed, cancelled or still-running job cannot be hidden by an older success. Evidence and the completed ZIP are checked again immediately before upload.
+The manual attested-package workflow does not accept an arbitrary recent green run. For
+all five deep workflows it queries the **latest** run on `main`, checks identity,
+success and age, and uses the full local Git history to prove ancestry and unchanged
+build/test inputs. Seven exact-commit workflows, including repository integrity, must
+also pass. A newer failed, cancelled or still-running job cannot be hidden by an older
+success. Evidence and the completed ZIP are checked again immediately before upload.
+
+The same rule applies when reading upstream fixes: `merged` is not `shipped in your
+release` — verify the fix commit is in the tag or branch you actually run.
 
 ## Scheduled enterprise deep verification
 
-A separate scheduled/manual workflow deliberately complements rather than replaces the fast cross-platform CI. It uses pinned `cargo-nextest 0.9.146` to execute the full all-feature test suite with fail-fast disabled, compiles all targets under the release profile (where integer overflow checks remain enabled), builds rustdoc with warnings denied, runs doctests, and exercises the real recovery CLI against an isolated synthetic encrypted workspace:
+A separate scheduled/manual workflow deliberately complements rather than replaces the
+fast cross-platform CI. It uses pinned `cargo-nextest 0.9.146` to execute the full
+all-feature test suite with fail-fast disabled, compiles all targets under the release
+profile (where integer overflow checks remain enabled), builds rustdoc with warnings
+denied, runs doctests, and exercises the real recovery CLI against an isolated
+synthetic encrypted workspace:
 
 ```text
 rr status
@@ -41,33 +85,88 @@ rr verify-backup <temporary-backup>
 rr recovery-drill <temporary-backup>
 ```
 
-The drill uses the production restore path in a temporary workspace, deeply authenticates the restored encrypted records/audit chain, and leaves the live test workspace unchanged. The workflow uploads nextest/rustdoc/recovery evidence plus the exact OpenAPI SHA-256 contract fingerprint. It does not authorize Gmail, run a live Ollama model, or make an external write.
+The drill uses the production restore path in a temporary workspace, deeply
+authenticates the restored encrypted records/audit chain, and leaves the live test
+workspace unchanged. The workflow uploads nextest/rustdoc/recovery evidence plus the
+exact OpenAPI SHA-256 contract fingerprint. It does not authorize Gmail, run a live
+Ollama model, or make an external write.
 
-Test counts evolve as controls are added. Treat the exact current GitHub Actions run, its COMMIT.txt and uploaded logs as the evidence for a particular source revision; historical test counts are intentionally not used as release evidence.
+Test counts evolve as controls are added. Treat the exact current GitHub Actions run,
+its COMMIT.txt and uploaded logs as the evidence for a particular source revision;
+historical test counts are intentionally not used as release evidence.
 
-The tests cover default disarming and exact presets; encryption/tampering/wrong keys and instance locks; stale revisions, durable reservations and caps; concurrent reservation races; mailbox/header injection and MIME threading; duplicate OAuth codes/state; failed history pages, cursor expiry, replay and changed lookback; exact model evidence, stale digest/context and offload rejection; the independent current-message rejection gate for Automatic mode, including quoted-history negatives; response-size limits, redirect/retry policy and redacted errors; editor message/revision binding and demo-only screenshot controls.
+The tests cover default disarming and exact presets; encryption/tampering/wrong keys
+and instance locks; stale revisions, durable reservations and caps; concurrent
+reservation races; mailbox/header injection and MIME threading; duplicate OAuth
+codes/state; failed history pages, cursor expiry, replay and changed lookback; exact
+model evidence, stale digest/context and offload rejection; the independent
+current-message rejection gate for Automatic mode, including quoted-history negatives;
+response-size limits, redirect/retry policy and redacted errors; editor message/revision
+binding and demo-only screenshot controls.
 
 ## Fuzzing toolchain
 
-The bounded libFuzzer workflow currently uses cargo-fuzz **0.13.2**, verified as the latest upstream release on 2026-09-28. It is installed with `cargo install --locked` rather than a convenience installer because the current install-action manifest does not recognize cargo-fuzz 0.13.2. Every fuzz invocation explicitly selects `+nightly-2026-09-26`; this is required because the repository-level `rust-toolchain.toml` deliberately pins stable Rust for normal builds and would otherwise override an ambient nightly default. Each target tees its raw output to an uploaded log while `pipefail` preserves the real fuzzer exit status.
+The bounded libFuzzer workflow currently uses cargo-fuzz **0.13.2**, verified as the
+latest upstream release on 2026-09-28. It is installed with `cargo install --locked`
+rather than a convenience installer because the current install-action manifest does
+not recognize cargo-fuzz 0.13.2. Every fuzz invocation explicitly selects
+`+nightly-2026-09-26`; this is required because the repository-level
+`rust-toolchain.toml` deliberately pins stable Rust for normal builds and would
+otherwise override an ambient nightly default. Each target tees its raw output to an
+uploaded log while `pipefail` preserves the real fuzzer exit status — piping a command
+into `tee`/`tail` otherwise hides its exit code, which is exactly how green-looking
+fuzz runs were historically faked.
 
 ## Coverage and mutation quality gates
 
-The safety-critical mutation workflow targets configuration, mail-policy, readiness, enterprise-policy, recovery, emergency-stop handling, API credential verification, retry/circuit semantics and crash-session safety. Large orchestration/store modules are intentionally kept out of the bounded 45-minute mutation campaign and are covered by dedicated deterministic, concurrency, recovery and deep-verification tests instead. Its current cargo-mutants 27.x configuration keeps concurrency on the CLI (`--jobs 2`) rather than the config file, so tool-schema drift fails visibly instead of being silently ignored. A workflow run now succeeds only when cargo-mutants reports that all viable tested mutants were caught; surviving mutants **or mutation timeouts fail the job**. Because the release workflow requires recent successful mutation evidence, an inconclusive or survivor-bearing run can no longer satisfy the release gate.
+The safety-critical mutation workflow targets configuration, mail-policy, readiness,
+enterprise-policy, recovery, emergency-stop handling, API credential verification,
+retry/circuit semantics and crash-session safety. Large orchestration/store modules are
+intentionally kept out of the bounded mutation campaign and are covered by dedicated
+deterministic, concurrency, recovery and deep-verification tests instead. Its current
+cargo-mutants **27.1.0** configuration keeps concurrency on the CLI (`--jobs 2`) rather
+than the config file, so tool-schema drift fails visibly instead of being silently
+ignored. A workflow run now succeeds only when cargo-mutants reports that all viable
+tested mutants were caught; surviving mutants **or mutation timeouts fail the job**.
+Because the release workflow requires recent successful mutation evidence, an
+inconclusive or survivor-bearing run can no longer satisfy the release gate.
 
-Coverage runs on relevant `main` changes as well as its schedule/manual trigger. The measured baseline from commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` was **61.48% line coverage** and **65.13% function coverage** (59.92% regions) on the pinned Ubuntu/Rust/cargo-llvm-cov workflow. The gate therefore ratchets at **61% lines** and **65% functions**: deliberately just below the measured values, so future changes cannot silently degrade below the observed baseline. Raise the floor only from new measured evidence; do not lower it to make a failing change pass.
+Coverage runs on relevant `main` changes as well as its schedule/manual trigger. The
+measured baseline from commit `555b708d42132d837e8cb291b47a9686f2a7f3b4` was **61.48%
+line coverage** and **65.13% function coverage** (59.92% regions) on the pinned
+Ubuntu/Rust/cargo-llvm-cov workflow. The gate therefore ratchets at **61% lines** and
+**65% functions**: deliberately just below the measured values, so future changes
+cannot silently degrade below the observed baseline. Raise the floor only from new
+measured evidence; do not lower it to make a failing change pass.
+
+Those thresholds are regression floors, not the goal. The coverage doctrine in
+`AGENTS.md` sets the standing goal at **100% line coverage of logical product code**
+(Rust `src/` and the Python operator tooling), with every remaining uncovered line in a
+changed area carrying a written reason. The coverage-wave commits on `main` report
+line coverage of **98.56%** at the time of writing; re-measure before citing this
+number, and cite the commit that produced it.
 
 ## Actual native interface checks
 
-The Linux job launches the native executable under Xvfb/Openbox with software OpenGL. It captures Overview, Review, Activity, Local AI and Settings at 1440x940, plus Review at 1180x760. Review capture additionally asserts that the rendered action row lies below the message cards and inside the visible viewport. The regression test rejects off-screen or misplaced action rectangles.
+The Linux job launches the native executable under Xvfb/Openbox with software OpenGL.
+It captures Overview, Review, Activity, Local AI and Settings at 1440x940, plus Review
+at 1180x760. Review capture additionally asserts that the rendered action row lies
+below the message cards and inside the visible viewport. The regression test rejects
+off-screen or misplaced action rectangles.
 
-Actual image inspection found and led to fixes for a horizontal-layout inheritance bug that hid the review controls, and colliding Activity-row widget IDs. Images from source 720143c show corrected visible controls and distinct Activity rows. A captured PNG alone is not proof of correct interactions. The Settings screen scrolls; its initial screenshot does not cover every lower control.
+Actual image inspection found and led to fixes for a horizontal-layout inheritance bug
+that hid the review controls, and colliding Activity-row widget IDs. Images from source
+720143c show corrected visible controls and distinct Activity rows. A captured PNG
+alone is not proof of correct interactions. The Settings screen scrolls; its initial
+screenshot does not cover every lower control.
 
-Screenshot/view/size switches require --demo, so automated capture cannot open a real mailbox. Demo content and responses are synthetic, not claims about real model behavior.
+Screenshot/view/size switches require --demo, so automated capture cannot open a real
+mailbox. Demo content and responses are synthetic, not claims about real model behavior.
 
 ## Model evaluation and task-specific model selection
 
-With the desktop application closed, run the configured model through the complete synthetic recruiting pipeline:
+With the desktop application closed, run the configured model through the complete
+synthetic recruiting pipeline:
 
 ```powershell
 .\rr.exe evaluate --out .\model-evaluation.json
@@ -79,13 +178,19 @@ To compare curated candidate models that you have **explicitly installed** in Ol
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
-To evaluate a new Ollama 0.35+ typed decision model without changing production authorization:
+To evaluate a new Ollama 0.35+ typed decision model without changing production
+authorization:
 
 ```powershell
 .\rr.exe evaluate-decision --model nimble:9b-q8_0 --out .\decision-evaluation.json
 ```
 
-The decision-model evaluator is deliberately R&D-only. It reuses the recruiting classification corpus, requires a closed four-category score contract, records only fixture IDs/labels/scores/latency, and never writes Automatic-mode task qualification or sends email. It additionally reports multiclass/rejection Brier scores plus mean/max rejection probability across critical negatives, so probability quality can be compared without pretending the scores are calibrated.
+The decision-model evaluator is deliberately R&D-only. It reuses the recruiting
+classification corpus, requires a closed four-category score contract, records only
+fixture IDs/labels/scores/latency, and never writes Automatic-mode task qualification
+or sends email. It additionally reports multiclass/rejection Brier scores plus mean/max
+rejection probability across critical negatives, so probability quality can be compared
+without pretending the scores are calibrated.
 
 To compare curated typed-decision candidates that are already installed:
 
@@ -93,30 +198,66 @@ To compare curated typed-decision candidates that are already installed:
 .\rr.exe compare-decision-models --out .\decision-model-bakeoff.json
 ```
 
-No candidate is downloaded implicitly. A comparison winner remains R&D evidence only and does not change production settings or Automatic authorization.
+No candidate is downloaded implicitly. A comparison winner remains R&D evidence only
+and does not change production settings or Automatic authorization.
 
-The comparison never downloads multiple large models implicitly. It skips absent candidates.
+The comparison never downloads multiple large models implicitly. It skips absent
+candidates.
 
-Each evaluated model first runs the same local qualification used by the app, then processes **74 stratified synthetic fixtures** through the complete classification/draft/verification pipeline. The corpus has explicit risk tags for ATS automation, interviews, offers, recruiter corrections, quoted history, prompt injection, ambiguity, pending-status wording and multilingual cases. The report tracks classification accuracy, rejection false positives/false negatives, verified rejection-draft success, unsafe drafts on non-rejections, latency, residency and per-tag metrics. The application-specific score weights non-rejection false-positive avoidance most heavily, and recommendation eligibility separately requires all critical hard negatives to complete with zero rejection false positives and zero generated drafts. The report includes exact digest/context, accuracy, rejection true/false positives and false negatives, precision, recall and mean per-case latency. No model score is prefilled. The corpus is still a regression aid, not representative production accuracy or a best-model ranking.
+Each evaluated model first runs the same local qualification used by the app, then
+processes **74 stratified synthetic fixtures** through the complete
+classification/draft/verification pipeline. The corpus has explicit risk tags for ATS
+automation, interviews, offers, recruiter corrections, quoted history, prompt
+injection, ambiguity, pending-status wording and multilingual cases. The report tracks
+classification accuracy, rejection false positives/false negatives, verified
+rejection-draft success, unsafe drafts on non-rejections, latency, residency and
+per-tag metrics. The application-specific score weights non-rejection false-positive
+avoidance most heavily, and recommendation eligibility separately requires all critical
+hard negatives to complete with zero rejection false positives and zero generated
+drafts. The report includes exact digest/context, accuracy, rejection true/false
+positives and false negatives, precision, recall and mean per-case latency. No model
+score is prefilled. The corpus is still a regression aid, not representative production
+accuracy or a best-model ranking.
+
+A separate synthetic profiling pass (`rr.exe profile-model --out model-profile.json`)
+measures cold-start, warm-repeat and near-context latency; it is capacity planning
+evidence, not a quality score.
 
 ## Remaining owner-environment acceptance
 
-Use a controlled Gmail test account for OAuth, one intentionally authorized reply and Sent reconciliation. Test pause/interruptions, age boundaries, changed conversations and edited drafts. Inspect Windows keyboard access and display scaling at 100%, 125%, 150% and 200%. Check real GPU/backend support, near-limit prompts, peak device memory and classification/draft quality on independently labelled private data before Automatic.
+Use a controlled Gmail test account for OAuth, one intentionally authorized reply and
+Sent reconciliation. Test pause/interruptions, age boundaries, changed conversations and
+edited drafts. Inspect Windows keyboard access and display scaling at 100%, 125%, 150%
+and 200%. Check real GPU/backend support, near-limit prompts, peak device memory and
+classification/draft quality on independently labelled private data before Automatic.
 
-CI does not authorize the owner's Gmail, send real email, run the actual model weights, measure a physical 16 GiB GPU or certify comprehensive Windows visual/accessibility behavior. The same-model reply audit is not an independent verifier. These limits must not be reported as passed tests.
+CI does not authorize the owner's Gmail, send real email, run the actual model weights,
+measure a physical 16 GiB GPU or certify comprehensive Windows visual/accessibility
+behavior. The same-model reply audit is not an independent verifier. These limits must
+not be reported as passed tests.
 
 ## Mutation testing scope
 
-The mutation gate (`.github/workflows/mutation.yml`) examines the safety-critical
-core only — `store.rs` (delivery state machine), `vault.rs` (crypto),
-`emergency.rs` (outbound stop), `decision.rs` (deterministic rejection gate),
-`audit_anchor.rs`, `policy.rs`, and `recovery.rs`/`recovery/` (restore
-integrity). This bounds the run so it completes as evidence instead of timing
-out mid-suite: an unscoped full-tree `cargo mutants` run over the whole crate
-exceeded the previous 45-minute job ceiling and was cancelled, which yielded no
-evidence at all. The job ceiling is now 180 minutes and `cancel-in-progress` is
-off so queued evidence runs are never dropped.
+The mutation gate (`.github/workflows/mutation.yml`) examines the safety-critical core
+only — `store.rs` (delivery state machine), `vault.rs` (crypto), `emergency.rs`
+(outbound stop), `decision.rs` (deterministic rejection gate), `audit_anchor.rs`,
+`policy.rs`, and `recovery.rs`/`recovery/` (restore integrity). This bounds the run so
+it completes as evidence instead of timing out mid-suite: an unscoped full-tree `cargo
+mutants` run over the whole crate exceeded the previous 45-minute job ceiling and was
+cancelled, which yielded no evidence at all. The job ceiling is now 180 minutes and
+`cancel-in-progress` is off so queued evidence runs are never dropped.
 
-Full-tree mutation is available on demand via **Run workflow** with
-`scope: full`. Timed-out mutants are inconclusive and cannot satisfy the gate;
-surviving viable mutants fail it.
+Full-tree mutation is available on demand via **Run workflow** with `scope: full`.
+Timed-out mutants are inconclusive and cannot satisfy the gate; surviving viable
+mutants fail it.
+
+## Sources (checked 2026-10-12)
+
+- Rust toolchain pin and components: `rust-toolchain.toml` in this repository.
+- cargo-nextest (pinned test runner): https://nexte.st/
+- cargo-mutants (mutation testing): https://mutants.rs/
+- cargo-llvm-cov (coverage measurement):
+  https://github.com/taiki-e/cargo-llvm-cov
+- cargo-fuzz / libFuzzer: https://rust-fuzz.github.io/
+- OpenSSF Scorecard and SLSA provenance as referenced by the release evidence gates:
+  https://securityscorecards.dev/ and https://slsa.dev/spec/v1/provenance

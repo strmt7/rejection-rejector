@@ -1,18 +1,38 @@
 # Operations and incident runbook
 
-This runbook covers the local operator surface. It does not replace Gmail/Google Workspace administration, Windows endpoint management, or an organization's incident-response process.
+This runbook covers the local operator surface: how to run, monitor, back up and
+recover a Rejection Rejector installation, and what to do when something goes wrong.
+It does not replace Gmail/Google Workspace administration, Windows endpoint
+management, or an organization's incident-response process (see NIST SP 800-61 for the
+general incident-response lifecycle this runbook slots into).
+
+Runbook discipline: preserve evidence before repair, record the exact commands you ran
+and their output (with identifiers such as backup names, policy digests and binary
+`build-info`), and never report a step as passed because "no error was observed".
 
 ## Process model
 
-The native GUI and `rr run` use the same exclusive workspace lock. Run **one** of them for a data directory. Do not start a second worker against the same workspace. The application must be running for scheduled mailbox checks.
+The native GUI and `rr run` use the same exclusive workspace lock. Run **one** of them
+for a data directory. Do not start a second worker against the same workspace. The
+application must be running for scheduled mailbox checks.
 
-Use the CLI with the GUI/worker closed for maintenance operations that open the workspace exclusively.
+Use the CLI with the GUI/worker closed for maintenance operations that open the
+workspace exclusively.
 
 ## Enterprise emergency stop
 
-For incident response, deployments can configure an **out-of-band outbound-email stop** with the `RR_EMERGENCY_STOP_FILE` environment variable. Configure it to an absolute path before starting the GUI/headless worker. The path itself is never exposed through health or doctor output.
+For incident response, deployments can configure an **out-of-band outbound-email stop**
+with the `RR_EMERGENCY_STOP_FILE` environment variable. "Out-of-band" means the control
+works independently of the application's own settings, model and GUI state. Configure
+it to an absolute path before starting the GUI/headless worker. The path itself is never
+exposed through health or doctor output.
 
-Once configured, creating a regular file at that path blocks both Human Review and Automatic Gmail dispatch. The sentinel is checked at dispatch entry and **again after the durable send reservation/audit checkpoint immediately before the Gmail network request**. If it appears in that interval, the unsent reservation is released and no Gmail request is made. A symlink, directory, unreadable metadata state, relative path, or otherwise malformed configuration fails closed.
+Once configured, creating a regular file at that path blocks both Human Review and
+Automatic Gmail dispatch. The sentinel is checked at dispatch entry and **again after
+the durable send reservation/audit checkpoint immediately before the Gmail network
+request**. If it appears in that interval, the unsent reservation is released and no
+Gmail request is made. A symlink, directory, unreadable metadata state, relative path,
+or otherwise malformed configuration fails closed.
 
 Example for a managed Windows workstation:
 
@@ -32,7 +52,11 @@ New-Item -ItemType File -Force "C:\\ProgramData\\RejectionRejector\\EMERGENCY_ST
 Remove-Item "C:\\ProgramData\\RejectionRejector\\EMERGENCY_STOP"
 ```
 
-Creating or removing the already-configured sentinel is observed by a running process; changing the environment variable itself requires a process restart. The emergency stop cannot recall a request already accepted by Gmail. `rr doctor --require automatic`, `/v1/health`, the GUI status bar and OpenMetrics expose only the privacy-safe active/configured state.
+Creating or removing the already-configured sentinel is observed by a running process;
+changing the environment variable itself requires a process restart. The emergency stop
+cannot recall a request already accepted by Gmail. `rr doctor --require automatic`,
+`/v1/health`, the GUI status bar and OpenMetrics expose only the privacy-safe
+active/configured state.
 
 ## Readiness and monitoring
 
@@ -45,18 +69,33 @@ Use the strictest readiness level appropriate to the deployment:
 .\rr.exe doctor --require automatic
 ```
 
-`automatic` intentionally requires the local workspace, Gmail/send permission, current model pin/task qualification, Automatic-mode consent, storage headroom and configured safety gates.
+`automatic` intentionally requires the local workspace, Gmail/send permission, current
+model pin/task qualification, Automatic-mode consent, storage headroom and configured
+safety gates. A non-zero exit code from `--require` is the machine-checkable result;
+check the exit code rather than parsing the text.
 
-Privacy-safe monitoring is available as JSON or OpenMetrics:
+Privacy-safe monitoring is available as JSON or OpenMetrics (an open standard text
+format for metrics):
 
 ```powershell
 .\rr.exe metrics
 .\rr.exe metrics --openmetrics
 ```
 
-When the authenticated read-only integration API is enabled, use its versioned live/health/readiness/metrics endpoints. Metrics are intentionally label-free for mailbox, employer and candidate values. Runtime operation durations are retained locally as aggregate supportability evidence; they are **not** a product SLA.
+When the authenticated read-only integration API is enabled, use its versioned
+live/health/readiness/metrics endpoints (see [INTEGRATION.md](INTEGRATION.md)). Metrics
+are intentionally label-free for mailbox, employer and candidate values. Runtime
+operation durations are retained locally as aggregate supportability evidence; they are
+**not** a product SLA.
 
-Scheduled Gmail synchronization and queued local-AI analysis use bounded exponential backoff with jitter and open a half-open circuit after repeated failures. Gmail `Retry-After` is honored (bounded to one hour). This protects Google/Ollama during outages and avoids synchronized retry storms. Explicit operator actions such as **Check email now** bypass the scheduled circuit and act as deliberate probes; a successful manual Gmail check closes the Gmail circuit.
+Scheduled Gmail synchronization and queued local-AI analysis use bounded exponential
+backoff with jitter (each retry waits longer, with randomness added so many clients do
+not retry in lockstep) and open a half-open circuit after repeated failures — the
+**circuit breaker** pattern: further attempts are suspended until a probe shows the
+dependency recovered. Gmail `Retry-After` is honored (bounded to one hour). This
+protects Google/Ollama during outages and avoids synchronized retry storms. Explicit
+operator actions such as **Check email now** bypass the scheduled circuit and act as
+deliberate probes; a successful manual Gmail check closes the Gmail circuit.
 
 For a local support report:
 
@@ -64,7 +103,9 @@ For a local support report:
 .\rr.exe diagnostics --out .\rejection-rejector-diagnostics.json
 ```
 
-The diagnostics JSON includes an `emergency_stop` field showing the current state of the `RR_EMERGENCY_STOP_FILE` sentinel (fail-closed), matching the `/v1/health` endpoint and `rr doctor` output.
+The diagnostics JSON includes an `emergency_stop` field showing the current state of
+the `RR_EMERGENCY_STOP_FILE` sentinel (fail-closed), matching the `/v1/health` endpoint
+and `rr doctor` output.
 
 The app never uploads this report automatically. Review it before sharing.
 
@@ -74,7 +115,15 @@ Before enabling unattended delivery, generate a read-only shadow audit:
 .\rr.exe shadow-automatic --out .\automatic-shadow.json
 ```
 
-The shadow audit temporarily simulates the Automatic arm state **in memory only** and includes existing reviewable backlog inside the selected age window. It reports aggregate stable policy-block codes, active/uncertain thread blocking, items held by the hard per-recipient unattended burst ceiling, daily-capacity remaining, Gmail/send-scope readiness, task qualification, enterprise-policy permission, storage headroom and pause state. It does **not** run the fresh Gmail conversation preflight and therefore cannot prove that any candidate would actually be sent. It performs no reservation, send or other external write and omits mailbox/employer/message/draft content.
+The shadow audit temporarily simulates the Automatic arm state **in memory only** and
+includes existing reviewable backlog inside the selected age window. It reports
+aggregate stable policy-block codes, active/uncertain thread blocking, items held by
+the hard per-recipient unattended burst ceiling, daily-capacity remaining,
+Gmail/send-scope readiness, task qualification, enterprise-policy permission, storage
+headroom and pause state. It does **not** run the fresh Gmail conversation preflight
+and therefore cannot prove that any candidate would actually be sent. It performs no
+reservation, send or other external write and omits mailbox/employer/message/draft
+content.
 
 ## Gmail incident
 
@@ -86,11 +135,13 @@ If Gmail becomes unavailable or authorization expires:
 4. run `rr doctor --require mailbox`;
 5. allow incremental synchronization to resume.
 
-A failed page does not advance the durable history cursor; replay is deduplicated by message identity.
+A failed page does not advance the durable history cursor; replay is deduplicated by
+message identity.
 
 ## Ollama or model incident
 
-If Ollama is unavailable, obsolete, the digest changed, or GPU residency no longer qualifies:
+If Ollama is unavailable, obsolete, the digest changed, or GPU residency no longer
+qualifies:
 
 1. keep delivery paused;
 2. restore/start the supported loopback Ollama runtime;
@@ -98,15 +149,24 @@ If Ollama is unavailable, obsolete, the digest changed, or GPU residency no long
 4. rerun the full task-specific model evaluation;
 5. run `rr doctor --require analysis`, then `--require automatic` only if unattended delivery is intended.
 
-Queued messages remain durable. A global inference-runtime outage must not consume per-message retries.
+Queued messages remain durable. A global inference-runtime outage must not consume
+per-message retries.
 
-A message-specific model/structured-output failure is isolated from the global Ollama circuit. Rejection Rejector records a stable processing-failure class, schedules a bounded retry, and continues with other due queue items. After three failed attempts the item is moved to **Needs attention** with Automatic sending unavailable. The redacted diagnostics report aggregates active failure classes and retry exhaustion without exposing message/error text.
+A message-specific model/structured-output failure is isolated from the global Ollama
+circuit. Rejection Rejector records a stable processing-failure class, schedules a
+bounded retry, and continues with other due queue items. After three failed attempts
+the item is moved to **Needs attention** with Automatic sending unavailable. The
+redacted diagnostics report aggregates active failure classes and retry exhaustion
+without exposing message/error text.
 
 ## Uncertain Gmail delivery
 
-If a send may have crossed Gmail's write boundary, Rejection Rejector records **Uncertain** and retains the durable reservation.
+If a send may have crossed Gmail's write boundary, Rejection Rejector records
+**Uncertain** and retains the durable reservation.
 
-Never resend merely because no immediate acknowledgement was observed. In the GUI use **Activity → Reconcile with Gmail Sent**. A missing Sent match does not prove non-delivery; the reservation remains authoritative.
+Never resend merely because no immediate acknowledgement was observed. In the GUI use
+**Activity → Reconcile with Gmail Sent**. A missing Sent match does not prove
+non-delivery; the reservation remains authoritative.
 
 There is currently no headless `rr reconcile` command. Do not invent one in automation.
 
@@ -118,13 +178,17 @@ Check the active store:
 .\rr.exe integrity
 ```
 
-If disk headroom is low, stop new work before the filesystem fills. After a verified backup and when operationally appropriate:
+If disk headroom is low, stop new work before the filesystem fills. After a verified
+backup and when operationally appropriate:
 
 ```powershell
 .\rr.exe compact
 ```
 
-If integrity fails, stop the worker. Do not replace files in the live SQLite/WAL set manually. Verify a known backup and exercise the isolated production restore path first.
+`compact` checkpoints, VACUUMs, optimizes and re-verifies the encrypted workspace. If
+integrity fails, stop the worker. Do not replace files in the live SQLite/WAL set
+manually. Verify a known backup and exercise the isolated production restore path
+first.
 
 ## Backup and recovery
 
@@ -142,30 +206,50 @@ Restore is destructive and requires explicit acknowledgement:
 .\rr.exe restore-backup D:\RR-Backups\rr-2026-09-29 --confirm RESTORE
 ```
 
-Prefer a backup destination on a different physical or administrative failure domain. The app reports when a scheduled destination appears to share the workspace filesystem.
+Prefer a backup destination on a different physical or administrative failure domain.
+The app reports when a scheduled destination appears to share the workspace filesystem.
 
-The desktop **Settings → Storage & integration** card can export a wrapped recovery key and verify a key/passphrase against a selected backup. The recovery passphrase is held only in zeroizing process memory for the operation and is never written to settings, diagnostics, audit text or the envelope. Fresh-machine recovery is available through the native pre-open UI:
+The desktop **Settings → Storage & integration** card can export a wrapped recovery key
+and verify a key/passphrase against a selected backup. The recovery passphrase is held
+only in zeroizing process memory for the operation and is never written to settings,
+diagnostics, audit text or the envelope. Fresh-machine recovery is available through
+the native pre-open UI:
 
 ```powershell
 .\rejection-rejector.exe --recovery
 ```
 
-Recovery Mode does not start the normal worker or create/open the normal vault. It requires the encrypted backup directory, separately stored wrapped recovery-key JSON, recovery passphrase, and an exact `RESTORE` acknowledgement. The backup/key pair is first authenticated and exercised through the production restore path in an isolated temporary workspace; only then is the target workspace locked and restored. Every successful offline restore leaves a small private, fail-closed reauthorization marker. The next normal startup durably switches the restored workspace to Human Review with sending disabled, audits that action and only then removes the marker. Re-enable delivery manually after inspecting the restored state. The lower-level `rr import-recovery-key` and `rr restore` commands remain available for scripted administration.
+Recovery Mode does not start the normal worker or create/open the normal vault. It
+requires the encrypted backup directory, separately stored wrapped recovery-key JSON,
+recovery passphrase, and an exact `RESTORE` acknowledgement. The backup/key pair is
+first authenticated and exercised through the production restore path in an isolated
+temporary workspace; only then is the target workspace locked and restored. Every
+successful offline restore leaves a small private, fail-closed reauthorization marker.
+The next normal startup durably switches the restored workspace to Human Review with
+sending disabled, audits that action and only then removes the marker. Re-enable
+delivery manually after inspecting the restored state. The lower-level
+`rr import-recovery-key` and `rr restore` commands remain available for scripted
+administration.
 
-For portable disaster recovery, store the encrypted recovery-key envelope **separately** from the backup:
+For portable disaster recovery, store the encrypted recovery-key envelope
+**separately** from the backup:
 
 ```powershell
 .\rr.exe export-recovery-key --out E:\Offline\rr-key.json --passphrase-file C:\Secure\rr-passphrase.txt
 .\rr.exe verify-recovery-key --backup D:\RR-Backups\rr-2026-09-29 --recovery-key E:\Offline\rr-key.json --passphrase-file C:\Secure\rr-passphrase.txt
 ```
 
-Import requires explicit acknowledgement and never overwrites an existing credential automatically:
+Import requires explicit acknowledgement and never overwrites an existing credential
+automatically:
 
 ```powershell
 .\rr.exe import-recovery-key --backup D:\RR-Backups\rr-2026-09-29 --recovery-key E:\Offline\rr-key.json --passphrase-file C:\Secure\rr-passphrase.txt --confirm IMPORT
 ```
 
-Protect the passphrase file with OS ACLs. Do not store it beside both the backup and recovery-key envelope.
+Protect the passphrase file with OS ACLs. Do not store it beside both the backup and
+recovery-key envelope. Deleting old backups or pruning retained content is a logical
+removal, not guaranteed physical erasure of SSD media; if your organization requires
+media sanitization, follow NIST SP 800-88 Rev. 2 at the storage layer.
 
 ## Audit-chain incident
 
@@ -181,7 +265,8 @@ Later verify that the active semantic audit chain still extends it:
 .\rr.exe verify-audit-anchor E:\Offline\rr-audit-anchor.json
 ```
 
-If verification fails, treat it as an integrity incident. Preserve the workspace and evidence; do not delete audit rows to make the check pass.
+If verification fails, treat it as an integrity incident. Preserve the workspace and
+evidence; do not delete audit rows to make the check pass.
 
 ## Enterprise-policy incident
 
@@ -197,19 +282,43 @@ Validate a candidate policy without applying it:
 .\rr.exe validate-policy C:\ProgramData\RejectionRejector\enterprise-policy.json
 ```
 
-A signature, hash or revision failure is fail-closed. Fix the policy artifact/deployment process; do not bypass authentication or lower the revision floor.
+A signature, hash or revision failure is fail-closed. Fix the policy artifact/deployment
+process; do not bypass authentication or lower the revision floor.
 
 ## Release and deployment evidence
 
-A release candidate is built only from the exact current `main` commit. The attested package workflow checks exact-commit CI, Rust public-API compatibility and security evidence plus recent deep-quality evidence before packaging.
+A release candidate is built only from the exact current `main` commit. The attested
+package workflow checks exact-commit CI, Rust public-API compatibility and security
+evidence plus recent deep-quality evidence before packaging.
 
-The source provides native Windows artifacts, checksums, embedded build identity, embedded compatibility-contract identity, binary RustSec audit, CycloneDX SBOM and GitHub attestations. The package workflow immediately verifies both its SLSA provenance and CycloneDX SBOM attestation against the exact repository, `.github/workflows/release.yml`, `refs/heads/main`, source commit, and GitHub-hosted runner policy before upload. The manual package workflow has two explicit flavors: `unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging stops. The package records `signing.json`, `build-info.json` and `contract-info.json`. MSI/MSIX/Intune packaging remains separate release-engineering work.
+The source provides native Windows artifacts, checksums, embedded build identity,
+embedded compatibility-contract identity, binary RustSec audit, CycloneDX SBOM and
+GitHub attestations. The package workflow immediately verifies both its SLSA provenance
+and CycloneDX SBOM attestation against the exact repository,
+`.github/workflows/release.yml`, `refs/heads/main`, source commit, and GitHub-hosted
+runner policy before upload. The manual package workflow has two explicit flavors:
+`unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login
+and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to
+report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging
+stops. The package records `signing.json`, `build-info.json` and `contract-info.json`.
+MSI/MSIX/Intune packaging remains separate release-engineering work.
 
 ### Azure publisher-signing provisioning
 
-Use the signed flavor only after an administrator has created an Azure Artifact Signing account/certificate profile and a GitHub OIDC federated identity for this repository/workflow. Configure repository variables `AZURE_ARTIFACT_SIGNING_ENDPOINT`, `AZURE_ARTIFACT_SIGNING_ACCOUNT`, and `AZURE_ARTIFACT_SIGNING_PROFILE`; configure `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` in the repository's protected secret channel. No long-lived Azure client secret is required by the workflow.
+Use the signed flavor only after an administrator has created an Azure Artifact Signing
+account/certificate profile and a GitHub OIDC federated identity for this
+repository/workflow. Configure repository variables `AZURE_ARTIFACT_SIGNING_ENDPOINT`,
+`AZURE_ARTIFACT_SIGNING_ACCOUNT`, and `AZURE_ARTIFACT_SIGNING_PROFILE`; configure
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` in the repository's
+protected secret channel. No long-lived Azure client secret is required by the
+workflow.
 
-From GitHub Actions, run **Attested Windows package**, type `PACKAGE`, and choose `azure-artifact-signing`. The workflow rechecks exact-main CI/security/deep evidence, builds auditable binaries, validates `build-info` and `contract-info`, signs both executables, verifies Authenticode, emits `signing.json`, then creates and attests the signed ZIP. Choosing `unsigned` creates a separately named unsigned ZIP and explicitly refuses to relabel an already publisher-signed binary as unsigned.
+From GitHub Actions, run **Attested Windows package**, type `PACKAGE`, and choose
+`azure-artifact-signing`. The workflow rechecks exact-main CI/security/deep evidence,
+builds auditable binaries, validates `build-info` and `contract-info`, signs both
+executables, verifies Authenticode, emits `signing.json`, then creates and attests the
+signed ZIP. Choosing `unsigned` creates a separately named unsigned ZIP and explicitly
+refuses to relabel an already publisher-signed binary as unsigned.
 
 Enterprise consumers can independently verify a downloaded ZIP:
 
@@ -228,9 +337,13 @@ gh attestation verify .\rejection-rejector-windows-x64-signed.zip `
   --predicate-type https://cyclonedx.org/bom
 ```
 
-For a specific deployment, also pass `--source-digest <release-commit-sha>` so verification is bound to the exact approved commit. Provenance proves build identity, not that the code is vulnerability-free.
+For a specific deployment, also pass `--source-digest <release-commit-sha>` so
+verification is bound to the exact approved commit. Provenance proves build identity,
+not that the code is vulnerability-free.
 
-Microsoft's newer WinApp CLI is intentionally not a production dependency here while it remains public preview; stable Windows SDK/Artifact Signing primitives remain the release foundation.
+Microsoft's newer WinApp CLI is intentionally not a production dependency here while it
+remains public preview; stable Windows SDK/Artifact Signing primitives remain the
+release foundation.
 
 ## Escalation principles
 
@@ -239,21 +352,48 @@ Microsoft's newer WinApp CLI is intentionally not a production dependency here w
 - Never bypass an at-most-once delivery reservation.
 - Never copy secrets into diagnostics, tickets or chat.
 - Never treat "no error observed" as proof of delivery, backup recoverability, GPU residency or model quality.
-
+- When reporting status upward, attach identifiers: backup names, policy digests, run ids, commit SHAs, and counts.
 
 ## Windows background worker
 
-For a workstation deployment where the user remains signed in but the GUI should not stay open, prefer the built-in per-user Task Scheduler registration over a Windows service:
+For a workstation deployment where the user remains signed in but the GUI should not
+stay open, prefer the built-in per-user Task Scheduler registration over a Windows
+service:
 
 ```powershell
 .\rr.exe autostart install
 .\rr.exe autostart status
 ```
 
-The registered task triggers 30 seconds after the current user logs on, uses `InteractiveToken` + `LeastPrivilege`, runs the same workspace through `rr.exe --data-dir <workspace> run`, sets `MultipleInstancesPolicy=IgnoreNew`, does not stop on battery transition, has no execution-time limit, and retries failure after one minute up to three times.
+The registered task triggers 30 seconds after the current user logs on, uses
+`InteractiveToken` + `LeastPrivilege`, runs the same workspace through
+`rr.exe --data-dir <workspace> run`, sets `MultipleInstancesPolicy=IgnoreNew`, does not
+stop on battery transition, has no execution-time limit, and retries failure after one
+minute up to three times.
 
-`autostart status` checks the exported task XML for the expected executable, workspace arguments, least-privilege principal, single-instance rule and restart policy. A task that exists but has drifted is reported as mismatched; reinstall rather than silently trusting it.
+`autostart status` checks the exported task XML for the expected executable, workspace
+arguments, least-privilege principal, single-instance rule and restart policy. A task
+that exists but has drifted is reported as mismatched; reinstall rather than silently
+trusting it.
 
 Remove it with `.\rr.exe autostart remove`.
 
-This is intentionally not a LocalSystem service. The vault key is protected in the signed-in user's Credential Manager, so changing to a service identity would change the secret-access boundary. Logoff ends this availability model. Domain policy can prohibit scheduled-task creation, and the application does not attempt to bypass such policy.
+This is intentionally not a LocalSystem service. The vault key is protected in the
+signed-in user's Credential Manager, so changing to a service identity would change the
+secret-access boundary. Logoff ends this availability model. Domain policy can prohibit
+scheduled-task creation, and the application does not attempt to bypass such policy.
+
+## Sources (checked 2026-10-12)
+
+- NIST SP 800-61 Rev. 3, "Incident Response Recommendations and Considerations for
+  Cybersecurity Risk Management" (general incident lifecycle):
+  https://csrc.nist.gov/pubs/sp/800/61/r3/final
+- NIST SP 800-88 Rev. 2, "Guidelines for Media Sanitization" (logical removal vs media
+  erasure, September 2025):
+  https://csrc.nist.gov/pubs/sp/800/88/r2/final
+- IETF RFC 9110 §10.2.3 (`Retry-After` semantics honored from Gmail):
+  https://www.rfc-editor.org/rfc/rfc9110
+- OpenMetrics 1.0 (the `--openmetrics` text format):
+  https://openmetrics.io/
+- SLSA provenance (release attestation model):
+  https://slsa.dev/spec/v1/provenance
