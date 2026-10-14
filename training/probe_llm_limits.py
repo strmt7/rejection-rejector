@@ -187,6 +187,15 @@ def main() -> int:
                 "done": len(results), "total": len(rows),
                 "elapsed_seconds": round(time.time() - began, 1), "status": "running",
             })
+            # Incremental durable write: a silent process death must never
+            # lose completed rows (this exact flaw lost the first run).
+            report["conditions"][cond] = {
+                "accuracy": round(
+                    sum(1 for r in results if r["pred"] == r["true"]) / len(results), 4
+                ) if results else None,
+                "results": results,
+            }
+            args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
         total = len(results)
         correct = sum(1 for r in results if r["pred"] == r["true"])
         false_accept = sum(1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection")
