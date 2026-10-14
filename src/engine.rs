@@ -186,6 +186,38 @@ fn dispatch_require(
     }
 }
 
+/// Refuse an Automatic dispatch when the local model changed since analysis.
+///
+/// Inputs: `runtime_digest` — digest of the model currently loaded in the
+/// local runtime; `analyzed_digest` — digest recorded with the job's analysis.
+/// Output: `Ok(())` while the digests match; a review-required
+/// [`DispatchFailure`] naming the drift otherwise.
+fn require_analysis_model_current(
+    runtime_digest: &str,
+    analyzed_digest: &str,
+) -> std::result::Result<(), DispatchFailure> {
+    dispatch_require(
+        runtime_digest == analyzed_digest,
+        DispatchFailureKind::ReviewRequired,
+        "Model changed since analysis",
+    )
+}
+
+/// Refuse dispatch when durable send state cannot be written safely.
+///
+/// Inputs: `storage` — measured runtime-write headroom. Output: `Ok(())` while
+/// `runtime_write_safe` holds; a retryable [`DispatchFailure`] otherwise, so
+/// the dispatch can be retried when headroom recovers.
+fn require_runtime_write_safe(
+    storage: &crate::storage::StorageHealth,
+) -> std::result::Result<(), DispatchFailure> {
+    dispatch_require(
+        storage.runtime_write_safe,
+        DispatchFailureKind::Retryable,
+        "Storage headroom is too low for durable send state",
+    )
+}
+
 /// Presentation-independent inputs for the send gate.
 ///
 /// Each interface (desktop, terminal, web) collects these from its own state
@@ -1466,11 +1498,7 @@ impl Engine {
                 .as_ref()
                 .ok_or_else(|| DispatchFailure::review("Missing analysis"))?
                 .model_digest;
-            dispatch_require(
-                &status.digest == analyzed_digest,
-                DispatchFailureKind::ReviewRequired,
-                "Model changed since analysis",
-            )?;
+            require_analysis_model_current(&status.digest, analyzed_digest)?;
         }
 
         let gmail = self.gmail.as_mut().ok_or_else(|| {
@@ -1545,11 +1573,7 @@ impl Engine {
         let headroom = crate::storage::ensure_runtime_write_headroom(&self.directory)
             .map_err(storage_headroom_unknown);
         let storage = headroom?;
-        dispatch_require(
-            storage.runtime_write_safe,
-            DispatchFailureKind::Retryable,
-            "Storage headroom is too low for durable send state",
-        )?;
+        require_runtime_write_safe(&storage)?;
         self.db
             .reserve_send_with_recipient_limit(
                 &job,
@@ -2123,6 +2147,58 @@ mod dispatch_failure_taxonomy_tests {
             assert!(dispatch_require(true, kind, "ok").is_ok());
             assert!(dispatch_require(false, kind, "x").is_err());
         }
+    }
+
+    /// Why: the model-drift gate is the defence behind the deterministic
+    /// rejection gate — a reply drafted under one model must never dispatch
+    /// from another without human review. Both arms are pinned here with the
+    /// exact operator-facing attribution the review UI branches on.
+    /// Inputs: matching and mismatching runtime/analysis digests. Output: pass
+    /// while they match; a review-required, non-retryable failure naming the
+    /// drift otherwise.
+    #[test]
+    fn analysis_model_drift_is_refused_for_human_review() {
+        assert!(
+            require_analysis_model_current("a".repeat(64).as_str(), "a".repeat(64).as_str())
+                .is_ok()
+        );
+        let error =
+            require_analysis_model_current("a".repeat(64).as_str(), "b".repeat(64).as_str())
+                .unwrap_err();
+        assert_eq!(error.kind, DispatchFailureKind::ReviewRequired);
+        assert!(!error.retryable_for_operator());
+        assert_eq!(error.message, "Model changed since analysis");
+    }
+
+    /// Why: dispatch may only reserve send state when the durable write is
+    /// guaranteed to succeed; a headroom refusal must be retryable so the
+    /// dispatch resumes when space recovers, never silently dropped.
+    /// Inputs: storage measurements with and without runtime-write headroom.
+    /// Output: pass while safe; a retryable failure naming the headroom
+    /// otherwise.
+    #[test]
+    fn runtime_write_headroom_refusal_is_retryable() {
+        let health = |runtime_write_safe: bool| crate::storage::StorageHealth {
+            schema_version: 1,
+            database_bytes: 0,
+            wal_bytes: 0,
+            shm_bytes: 0,
+            workspace_database_bytes: 0,
+            available_bytes: 0,
+            total_bytes: 0,
+            runtime_required_bytes: 0,
+            backup_required_bytes: 0,
+            runtime_write_safe,
+            backup_safe: true,
+        };
+        assert!(require_runtime_write_safe(&health(true)).is_ok());
+        let error = require_runtime_write_safe(&health(false)).unwrap_err();
+        assert_eq!(error.kind, DispatchFailureKind::Retryable);
+        assert!(error.retryable_for_operator());
+        assert_eq!(
+            error.message,
+            "Storage headroom is too low for durable send state"
+        );
     }
 
     /// Failure kinds route to recovery paths and carry stable operation codes.

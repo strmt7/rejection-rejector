@@ -143,7 +143,7 @@ Those thresholds are regression floors, not the goal. The coverage doctrine in
 `AGENTS.md` sets the standing goal at **100% line coverage of logical product code**
 (Rust `src/` and the Python operator tooling), with every remaining uncovered line in a
 changed area carrying a written reason. The coverage-wave commits on `main` report
-line coverage of **98.72%** at the time of writing; re-measure before citing this
+line coverage of **98.95%** at the time of writing; re-measure before citing this
 number, and cite the commit that produced it.
 
 ## Actual native interface checks

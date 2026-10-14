@@ -2036,3 +2036,408 @@ mod prompt_contract_tests {
         }
     }
 }
+
+/// Deterministic runtime-fixture tests for the local model transport layer.
+#[cfg(test)]
+mod runtime_contract_tests {
+    use super::*;
+    use crate::test_support::MockServer;
+
+    /// Build a client from prepared settings without the settings-validity
+    /// floor, so a 1-second inference timeout can script transport faults
+    /// deterministically.
+    ///
+    /// Inputs: `settings` — prepared settings. Output: [`Ollama`] using them
+    /// verbatim.
+    fn raw_client(settings: Settings) -> Ollama {
+        Ollama {
+            settings,
+            counters: Arc::new(Mutex::new(InferenceCounters::default())),
+        }
+    }
+
+    /// The canned structured response for one scripted `/api/chat` answer.
+    fn chat_answer() -> serde_json::Value {
+        serde_json::json!({"model":"m","message":{"role":"assistant","content":"{\"ok\":true}"},"done":true,"done_reason":"stop","prompt_eval_count":10,"eval_count":10})
+    }
+
+    /// Why: the cold-profile measurement must exit on its deadline instead of
+    /// hanging forever on a runtime that accepts the unload request but never
+    /// releases the model; the bounded bail is the only thing standing between
+    /// a stuck daemon and a wedged profile run.
+    /// Inputs: a scripted runtime whose `/api/ps` always reports the model
+    /// loaded, with the unload acknowledged. Output: the deadline error naming
+    /// the cold profile, and evidence that the unload was requested.
+    #[test]
+    fn cold_profile_deadline_fails_when_the_runtime_never_releases_the_model() {
+        let runtime = MockServer::new(|route, _| match route {
+            "/api/ps" => Some(serde_json::json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": "a".repeat(64),
+                "size": 7_200_000_000u64,
+                "size_vram": 7_200_000_000u64,
+                "context_length": 32768u32
+            }]})),
+            "/api/generate" => {
+                Some(serde_json::json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+            }
+            _ => None,
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let error = llm.unload_and_wait().unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("did not unload the selected model before the cold-profile deadline"),
+            "unexpected: {error:#}"
+        );
+        assert!(
+            runtime.routes().contains(&"/api/generate".to_owned()),
+            "the unload must still have been requested: {:?}",
+            runtime.routes()
+        );
+    }
+
+    /// Why: download progress must render the provider's own completion
+    /// numbers as a percentage when they are present and degrade to the plain
+    /// status otherwise — the desktop progress line is built from these exact
+    /// strings, and an unparseable stream must not crash the pull.
+    /// Inputs: a streamed pull record set with and without totals. Output: the
+    /// documented progress transcript in order.
+    #[test]
+    fn pull_progress_reports_percent_when_the_provider_sends_totals() {
+        let runtime = MockServer::new_raw(|route, _| {
+            match route {
+            "/api/pull" => Some((
+                200,
+                "{\"status\":\"pulling manifest\"}\n{\"status\":\"pulling\",\"completed\":50,\"total\":100}\n{\"status\":\"success\"}\n".to_owned(),
+            )),
+            _ => None,
+        }
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let mut lines = Vec::new();
+        llm.pull(&std::sync::atomic::AtomicBool::new(false), |progress| {
+            lines.push(progress)
+        })
+        .unwrap();
+        assert_eq!(lines, vec!["pulling manifest", "pulling: 50.0%", "success"]);
+    }
+
+    /// Why: a download stream that never reports completion must be refused —
+    /// accepting it would silently drop a partially fetched model.
+    /// Inputs: a streamed pull record set without a `success` status. Output:
+    /// the documented completion refusal.
+    #[test]
+    fn pull_without_a_completion_record_is_refused() {
+        let runtime = MockServer::new_raw(|route, _| match route {
+            "/api/pull" => Some((200, "{\"status\":\"pulling manifest\"}\n".to_owned())),
+            _ => None,
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let error = llm
+            .pull(&std::sync::atomic::AtomicBool::new(false), |_| {})
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Download did not complete"),
+            "unexpected: {error:#}"
+        );
+    }
+
+    /// Why: a local transport failure triggers exactly one runner-recovery
+    /// attempt — unload the model, then retry once — and a recovered retry
+    /// must return the parsed result as if nothing happened. More retries
+    /// would mask a flapping runtime; fewer would strand healthy runtimes on
+    /// one dropped connection.
+    /// Inputs: a scripted runtime whose first `/api/chat` stalls past the
+    /// 1-second client timeout while the unload and the retry answer
+    /// normally. Output: the retried response, with the exact wire sequence
+    /// `chat -> generate (unload) -> chat`.
+    #[test]
+    fn runner_recovery_retries_once_after_unloading_the_model() {
+        // The request log is written at request start: the server's own
+        // call log lags behind a responder that is still sleeping when the
+        // client has already moved on.
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let chats = std::sync::atomic::AtomicUsize::new(0);
+        let runtime = MockServer::new(move |route, _| {
+            log.lock().unwrap().push(route.to_owned());
+            match route {
+                "/api/chat" => {
+                    if chats.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        std::thread::sleep(Duration::from_millis(2500));
+                    }
+                    Some(chat_answer())
+                }
+                "/api/generate" => {
+                    Some(serde_json::json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+                }
+                _ => None,
+            }
+        });
+        let llm = raw_client(Settings {
+            ollama_url: runtime.url.clone(),
+            llm_timeout_seconds: 1,
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ..Settings::default()
+        });
+        let value = llm
+            .chat::<serde_json::Value>(
+                "system",
+                serde_json::json!({}),
+                serde_json::json!({"type":"object"}),
+                16,
+            )
+            .expect("the recovery retry must succeed");
+        assert_eq!(value, serde_json::json!({"ok": true}));
+        // The retry request may still be entering the mock when the call
+        // returns; give the request log a bounded moment.
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(50));
+            if seen.lock().unwrap().len() >= 3 {
+                break;
+            }
+        }
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "/api/chat".to_owned(),
+                "/api/generate".to_owned(),
+                "/api/chat".to_owned()
+            ]
+        );
+    }
+
+    /// Why: when the recovery retry also fails, the error must name the
+    /// runner-recovery attempt AND preserve the first transport failure, so an
+    /// operator can tell one outage from a repeated one.
+    /// Inputs: a scripted runtime whose `/api/chat` always stalls past the
+    /// client timeout. Output: the attributed two-failure error, after exactly
+    /// one recovery attempt.
+    #[test]
+    fn runner_recovery_failure_names_both_attempts() {
+        // The request log is written at request start: the server's own
+        // call log lags behind a responder that is still sleeping when the
+        // client has already moved on.
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let runtime = MockServer::new(move |route, _| {
+            log.lock().unwrap().push(route.to_owned());
+            match route {
+                "/api/chat" => {
+                    std::thread::sleep(Duration::from_millis(2500));
+                    Some(chat_answer())
+                }
+                "/api/generate" => {
+                    Some(serde_json::json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+                }
+                _ => None,
+            }
+        });
+        let llm = raw_client(Settings {
+            ollama_url: runtime.url.clone(),
+            llm_timeout_seconds: 1,
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ..Settings::default()
+        });
+        let error = llm
+            .chat::<serde_json::Value>(
+                "system",
+                serde_json::json!({}),
+                serde_json::json!({"type":"object"}),
+                16,
+            )
+            .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("failed after one runner-recovery attempt"),
+            "unexpected: {text}"
+        );
+        assert!(
+            text.contains("Local Ollama inference failed"),
+            "the first transport failure must be preserved: {text}"
+        );
+        // The retry request may still be entering the (still-sleeping) mock
+        // when the client error returns; give the request log a bounded moment.
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(50));
+            if seen.lock().unwrap().len() >= 3 {
+                break;
+            }
+        }
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "/api/chat".to_owned(),
+                "/api/generate".to_owned(),
+                "/api/chat".to_owned()
+            ],
+            "exactly one recovery attempt is allowed"
+        );
+    }
+
+    /// Why: if the recovery unload itself cannot reach the runtime, the error
+    /// must attribute the unload failure and keep the original transport
+    /// failure — a bare unload error would hide the real outage.
+    /// Inputs: a runtime endpoint with no listener, so both the inference call
+    /// and the unload fail on connect. Output: the layered recovery error.
+    #[test]
+    fn runner_recovery_unload_failure_names_the_first_transport_error() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_url = format!("http://{}", probe.local_addr().unwrap());
+        drop(probe);
+        let llm = raw_client(Settings {
+            ollama_url: dead_url,
+            llm_timeout_seconds: 1,
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ..Settings::default()
+        });
+        let error = llm
+            .chat::<serde_json::Value>(
+                "system",
+                serde_json::json!({}),
+                serde_json::json!({"type":"object"}),
+                16,
+            )
+            .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("runner recovery could not unload the model"),
+            "unexpected: {text}"
+        );
+        assert!(
+            text.contains("Local Ollama inference failed"),
+            "the first transport failure must be preserved: {text}"
+        );
+    }
+
+    /// Why: every analysis flag is a fail-closed hold on unattended sending,
+    /// and each one must fire on its own documented trigger — a verification
+    /// outage, lost GPU residency, truncated input and a draft carrying
+    /// escalation/link language. Dropping any of these flags would let a reply
+    /// through that a human must review.
+    /// Inputs: a scripted runtime whose verification call fails, whose
+    /// residency probe turns partially swapped once the preflight has admitted
+    /// the run, and whose draft contains an escalation phrase, plus an input
+    /// larger than the classification budget. Output: exactly the four
+    /// documented hold flags, in code order, with no verification recorded.
+    #[test]
+    fn analysis_flags_hold_the_reply_on_every_documented_trigger() {
+        let signature = "Test Applicant";
+        let conflict_body = format!(
+            "Dear Recruitment Team,\n\nYour process was incompetent and your handling of my \
+             application deserves public scrutiny on social media. I ask again for the specific \
+             criteria used to reject me and the composition of the interview panel. A generic \
+             response will not answer these questions and I will consider further steps.\n\n{signature}"
+        );
+        // The residency probe is scripted per call: fully resident when the
+        // preflight admits the run, partially swapped afterwards — the
+        // documented "lost during analysis" condition.
+        let ps_calls = std::sync::atomic::AtomicUsize::new(0);
+        let runtime = MockServer::new(move |route, body| match route {
+            "/api/version" => Some(serde_json::json!({"version": "0.35.1"})),
+            "/api/tags" => Some(serde_json::json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": "a".repeat(64),
+                "size": 7_200_000_000u64
+            }]})),
+            "/api/show" => Some(crate::test_support::show_ok()),
+            "/api/generate" => {
+                Some(serde_json::json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+            }
+            "/api/ps" => {
+                let size = 7_200_000_000u64;
+                let vram = if ps_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    size
+                } else {
+                    1_000_000_000u64
+                };
+                Some(serde_json::json!({"models": [{
+                    "name": crate::config::DEFAULT_MODEL,
+                    "digest": "a".repeat(64),
+                    "size": size,
+                    "size_vram": vram,
+                    "context_length": 8192u32
+                }]}))
+            }
+            "/api/chat" => {
+                let payload: Value = serde_json::from_str(
+                    body.unwrap_or(serde_json::json!({}))["messages"][1]["content"]
+                        .as_str()
+                        .unwrap_or("{}"),
+                )
+                .unwrap_or(serde_json::json!({}));
+                if payload.get("proposed_reply").is_some() {
+                    // The verification call fails outright.
+                    return None;
+                }
+                let content = if payload.get("tone").is_some() {
+                    serde_json::json!({"body": conflict_body})
+                } else {
+                    crate::test_support::verdict(
+                        "We have decided not to move forward with your application.",
+                    )
+                };
+                Some(
+                    serde_json::json!({"model":"m","message":{"role":"assistant","content":content.to_string()},"done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                )
+            }
+            _ => None,
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            signature: signature.into(),
+            num_ctx: 8192,
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        // Larger than the 8192-tier classification budget (3500 bytes).
+        let mut long_text = String::from(
+            "Thank you for applying. We have decided not to move forward with your application. ",
+        );
+        while long_text.len() < 4000 {
+            long_text.push_str("The role remains closed. ");
+        }
+        let email = sample_email("Your application — R&D Engineer", &long_text);
+        let (analysis, draft, flags) = llm.analyze(&email).unwrap();
+        assert!(
+            draft.is_some(),
+            "the draft must exist so its conflict is observable"
+        );
+        assert!(
+            analysis.verification.is_none(),
+            "a failed verification must never be recorded as evidence"
+        );
+        assert_eq!(
+            flags,
+            vec![
+                "Verification failed; human review required",
+                "Full GPU residency was lost during analysis",
+                "Input was too long or incomplete; automatic sending blocked",
+                "Draft contains escalation, abusive language, or an unsolicited link; Human review required",
+            ]
+        );
+    }
+}

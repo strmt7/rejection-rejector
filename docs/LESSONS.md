@@ -32,6 +32,11 @@ rule exists because it previously caused a real defect or delay.
   cross-process lock (file lock), not an in-process mutex.
 - A test fixture that triggers a production safety gate (e.g. file
   permissions) must satisfy the gate to exercise the intended path.
+- Fixtures that allocate entries in shared cross-process state (OS credential
+  stores, registries, service managers) must also clean up entries created by
+  spawned subprocesses: saturation of the shared store surfaces much later as
+  mysterious failures in unrelated tests (write refusals, quota codes) long
+  after the leaking runs finished.
 
 ## Upstream and versions
 

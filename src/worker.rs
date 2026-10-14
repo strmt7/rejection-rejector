@@ -3915,4 +3915,589 @@ mod orchestration_tests {
             "arming must never bypass the sending-disabled guard"
         );
     }
+
+    /// The observable fields of one runtime-journal record.
+    #[derive(Debug)]
+    struct JournalRecord {
+        event: String,
+        operation: Option<String>,
+        state: Option<String>,
+        code: Option<String>,
+    }
+
+    /// Every runtime-journal record.
+    ///
+    /// Why: the runtime journal is the durable record of every scheduled
+    /// attempt; counting attempts there is the only race-free way to observe a
+    /// timer's backoff (a live snapshot misses short operations).
+    /// Inputs: `dir` — workspace directory. Output: one [`JournalRecord`] per
+    /// record in `logs/` and its archives, in file order.
+    fn journaled_records(dir: &std::path::Path) -> Vec<JournalRecord> {
+        let mut records = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir.join("logs")) else {
+            return records;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                records.push(JournalRecord {
+                    event: record["event"].as_str().unwrap_or_default().to_owned(),
+                    operation: record["operation"].as_str().map(str::to_owned),
+                    state: record["state"].as_str().map(str::to_owned),
+                    code: record["code"].as_str().map(str::to_owned),
+                });
+            }
+        }
+        records
+    }
+
+    /// Terminal (`succeeded`/`failed`) attempt records for one operation kind.
+    ///
+    /// Inputs: `dir` — workspace directory; `kind` — serialized operation-kind
+    /// name (snake case); `state` — serialized terminal state name. Output:
+    /// number of recorded attempts.
+    fn journaled_attempts(dir: &std::path::Path, kind: &str, state: &str) -> usize {
+        journaled_records(dir)
+            .into_iter()
+            .filter(|record| {
+                record.event == "operation"
+                    && record.operation.as_deref() == Some(kind)
+                    && record.state.as_deref() == Some(state)
+            })
+            .count()
+    }
+
+    /// Seed a connected (non-demo) workspace and let `seed` adjust settings and
+    /// queue state before the worker opens it.
+    ///
+    /// Inputs: `dir` — workspace directory; `mock` — Gmail provider stand-in
+    /// used for the login seam and profile; `seed` — runs against the live
+    /// engine after `connect`, with the resulting settings persisted. Output:
+    /// none.
+    fn seed_worker_workspace_with(
+        dir: &std::path::Path,
+        mock: &MockServer,
+        seed: impl FnOnce(&mut Engine),
+    ) {
+        let mut e = live_engine(dir);
+        crate::test_support::with_login(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &mock.url,
+            &mock.url,
+            || {
+                e.connect(&dir.join("oauth.json"), true).unwrap();
+            },
+        );
+        e.settings.api_enabled = false;
+        seed(&mut e);
+        e.db.set_meta("settings", &e.settings).unwrap();
+    }
+
+    /// Why: the scheduled-backup timer must create and verify exactly one real
+    /// encrypted backup while overdue, record the success, and then stay quiet
+    /// until the configured interval elapses — a regression that re-fires on
+    /// every loop pass would fill the backup disk under a zero test interval
+    /// and in production after every settings change.
+    /// Inputs: a workspace with scheduled backups enabled and no prior backup.
+    /// Output: one verified backup directory plus exactly one journaled Backup
+    /// success across the observation window.
+    #[test]
+    fn scheduled_backup_timer_backs_off_after_one_verified_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        let backups = dir.path().join("scheduled-backups");
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            e.settings.scheduled_backup_enabled = true;
+            e.settings.scheduled_backup_directory = backups.to_string_lossy().into_owned();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| journaled_attempts(dir.path(), "backup", "succeeded") >= 1),
+                    "the overdue scheduled-backup timer never ran: {:?}",
+                    journaled_records(dir.path())
+                );
+                // The loop keeps ticking every iteration under the zero
+                // interval; the recorded success must hold the next backup
+                // back to the configured interval.
+                std::thread::sleep(Duration::from_secs(2));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "backup", "succeeded"),
+                    1,
+                    "a recorded backup success must push the next run out"
+                );
+                let entries: Vec<_> = std::fs::read_dir(&backups)
+                    .expect("scheduled backup root must exist")
+                    .flatten()
+                    .collect();
+                assert_eq!(entries.len(), 1, "exactly one scheduled backup expected");
+                assert!(
+                    entries[0].path().join("backup-manifest.json").is_file(),
+                    "the scheduled backup must be a verified bundle: {:?}",
+                    entries[0].path()
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// Why: a scheduled backup that cannot write its destination must fail
+    /// once and back the timer off (bounded backoff), not re-run the whole
+    /// backup attempt on every loop pass against a broken destination.
+    /// Inputs: a workspace whose scheduled-backup directory sits under a
+    /// regular file, so every create attempt fails.
+    /// Output: exactly one journaled failed Backup attempt across the
+    /// observation window.
+    #[test]
+    fn scheduled_backup_failure_backs_the_timer_off() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        let blocked = dir.path().join("blocked-target");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            e.settings.scheduled_backup_enabled = true;
+            e.settings.scheduled_backup_directory =
+                blocked.join("backups").to_string_lossy().into_owned();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| journaled_attempts(dir.path(), "backup", "failed") >= 1),
+                    "the scheduled-backup failure never surfaced: {:?}",
+                    journaled_records(dir.path())
+                );
+                std::thread::sleep(Duration::from_secs(2));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "backup", "failed"),
+                    1,
+                    "a failed backup must back the timer off instead of hot-looping"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// Why: when the retention purge fails mid-operation, the worker must back
+    /// the retention timer off (bounded backoff) instead of hammering a broken
+    /// store on every loop pass. The contrast with the policy reload — whose
+    /// backoff is interval-driven and therefore retries every loop under the
+    /// zero test interval — is what proves the retention backoff held.
+    /// Inputs: a worker whose protected-audit checkpoint fails for every
+    /// operation, so the purge fails at its audit boundary.
+    /// Output: exactly one failed PurgeRetention attempt against repeated
+    /// failed policy reloads.
+    #[test]
+    fn retention_purge_failure_backs_the_timer_off() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace_with(dir.path(), &mock, |_| {});
+        // The workspace's own open must pass its protected-audit checkpoint;
+        // every later operation boundary fails, so exactly the mid-operation
+        // failure paths are exercised.
+        let checkpoint_calls = std::sync::atomic::AtomicUsize::new(0);
+        let refusing: crate::test_support::Gate = std::sync::Arc::new(move || {
+            if checkpoint_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                anyhow::bail!("synthetic protected-audit checkpoint outage")
+            }
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            Some(refusing),
+            None,
+            Some(Duration::ZERO),
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| journaled_attempts(dir.path(), "purge_retention", "failed") >= 1),
+                    "the failing retention purge never surfaced: {:?}",
+                    journaled_records(dir.path())
+                );
+                std::thread::sleep(Duration::from_secs(2));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "purge_retention", "failed"),
+                    1,
+                    "a failed purge must back the retention timer off"
+                );
+                assert!(
+                    journaled_attempts(dir.path(), "enterprise_policy_reload", "failed") >= 2,
+                    "the interval-driven policy timer retries every loop; it is the contrast case"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// Why: a refused automatic dispatch must fail the tick with the
+    /// emergency-stop attribution and back the next tick off (bounded backoff)
+    /// instead of re-evaluating dispatch on every loop pass against a stop
+    /// that is still in force.
+    /// Inputs: an Automatic-armed workspace whose dispatch gate refuses every
+    /// send. Output: exactly one failed AutomaticDispatch attempt, attributed
+    /// to the emergency stop.
+    #[test]
+    fn refused_automatic_dispatch_backs_the_tick_off() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            crate::test_support::arm_automatic(&mut e.settings);
+        });
+        let refusing: crate::test_support::Gate =
+            std::sync::Arc::new(|| anyhow::bail!("synthetic enterprise emergency stop"));
+        crate::test_support::arm_worker_seams(
+            None,
+            Some(refusing),
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(
+                        || journaled_attempts(dir.path(), "automatic_dispatch", "failed") >= 1
+                    ),
+                    "the refused automatic tick never surfaced: {:?}",
+                    journaled_records(dir.path())
+                );
+                assert!(
+                    w.view().error.contains("emergency stop"),
+                    "the refused tick must be attributed to the emergency stop: {}",
+                    w.view().error
+                );
+                std::thread::sleep(Duration::from_secs(3));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "automatic_dispatch", "failed"),
+                    1,
+                    "a refused tick must back the next evaluation off"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// Why: the local-AI timer must drain queued mail through the pinned local
+    /// pipeline and leave a durable reviewed draft behind — the observable
+    /// contract of the AnalyzeQueuedMail arm.
+    /// Inputs: a connected workspace with a pinned model, a queued message and
+    /// a scripted local runtime that classifies the message as a verified
+    /// rejection. Output: the queued job reaches Ready with a draft recorded.
+    #[test]
+    fn local_ai_timer_classifies_queued_mail() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let email = crate::test_support::gmail_email(
+            "applicant@example.invalid",
+            1,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let stub = email.stub.clone();
+        let job_id = stub.id();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![email],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000001".into()),
+        );
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(crate::config::DEFAULT_MODEL.into(), "a".repeat(64))],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        let seed_stub = stub.clone();
+        // The closure borrows `runtime`: moving the mock in would drop the
+        // scripted server before the worker ever queried it.
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            e.settings.signature = "Test Applicant".into();
+            e.settings.model_digest = Some("a".repeat(64));
+            e.settings.ollama_url = runtime.url.clone();
+            let job = Job::new(seed_stub, Utc::now());
+            e.db.insert_stubs([job.stub.clone()], Utc::now()).unwrap();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(
+                        || journaled_attempts(dir.path(), "analyze_queued_mail", "succeeded") >= 1
+                    ),
+                    "the local-AI timer never classified the queued message: {} / {:?}",
+                    w.view().error,
+                    journaled_records(dir.path())
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+        // The durable record: the queued identity now holds an analyzed draft.
+        let e = live_engine(dir.path());
+        let after =
+            e.db.get(&job_id)
+                .expect("the queued job must survive processing");
+        assert_eq!(
+            after.state,
+            JobState::Ready,
+            "state: {:?}, flags: {:?}",
+            after.state,
+            after.flags
+        );
+        assert!(after.draft.is_some(), "classification must leave a draft");
+        assert!(
+            after.analysis.is_some(),
+            "classification must record its analysis"
+        );
+    }
+
+    /// Why: when the local runtime is unreachable the AnalyzeQueuedMail arm
+    /// must fail the attempt and hold the next attempt back through the retry
+    /// gate instead of retrying every loop pass — and it must leave the queue
+    /// intact for when the runtime returns.
+    /// Inputs: a connected workspace with a pinned model and a queued message,
+    /// against a runtime that answers nothing. Output: exactly one failed
+    /// attempt within the observation window; the job stays queued.
+    #[test]
+    fn local_ai_failure_holds_the_next_attempt_back() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let email = crate::test_support::gmail_email(
+            "applicant@example.invalid",
+            2,
+            "Your application — R&D Engineer",
+            "Thank you for applying. We have decided not to move forward with your application.",
+        );
+        let job_id = email.stub.id();
+        let job_stub = email.stub.clone();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![email],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000002".into()),
+        );
+        let dead = MockServer::new(|_, _| None);
+        // The closure borrows `dead`: moving the mock in would drop the
+        // scripted server before the worker ever queried it.
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            e.settings.signature = "Test Applicant".into();
+            e.settings.model_digest = Some("a".repeat(64));
+            e.settings.ollama_url = dead.url.clone();
+            let job = Job::new(job_stub, Utc::now());
+            e.db.insert_stubs([job.stub.clone()], Utc::now()).unwrap();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(
+                        || journaled_attempts(dir.path(), "analyze_queued_mail", "failed") >= 1
+                    ),
+                    "the failed local-AI attempt never surfaced: {:?}",
+                    journaled_records(dir.path())
+                );
+                std::thread::sleep(Duration::from_secs(2));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "analyze_queued_mail", "failed"),
+                    1,
+                    "the retry gate must hold the next attempt back"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+        let e = live_engine(dir.path());
+        let after =
+            e.db.get(&job_id)
+                .expect("the queued job must survive the failure");
+        assert!(
+            matches!(after.state, JobState::Queued),
+            "a global runtime failure must leave the queue intact: {:?}",
+            after.state
+        );
+    }
+
+    /// Why: a scheduled Gmail check that fails at the provider must fail the
+    /// attempt and hold the next scheduled check back through the retry gate
+    /// instead of hammering a failing provider.
+    /// Inputs: a connected workspace whose worker-side Gmail endpoints point at
+    /// a provider stand-in that answers nothing. Output: exactly one failed
+    /// SyncMailbox attempt within the observation window.
+    #[test]
+    fn gmail_sync_failure_backs_the_next_scheduled_check_off() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace_with(dir.path(), &mock, |_| {});
+        let failing = MockServer::new(|_, _| None);
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((failing.url.clone(), failing.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                assert!(
+                    wait_for(|| journaled_attempts(dir.path(), "sync_mailbox", "failed") >= 1),
+                    "the failed scheduled Gmail check never surfaced: {:?}",
+                    journaled_records(dir.path())
+                );
+                std::thread::sleep(Duration::from_secs(2));
+                assert_eq!(
+                    journaled_attempts(dir.path(), "sync_mailbox", "failed"),
+                    1,
+                    "the retry gate must hold the next scheduled check back"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// Why: the EvaluateModel command must report a failing model evaluation
+    /// through the typed operation status and keep the worker loop alive —
+    /// an evaluation failure is a report, never a dead worker.
+    /// Inputs: a connected workspace whose local runtime answers nothing, so
+    /// the full task evaluation fails. Output: one journaled failed
+    /// EvaluateModel attempt carrying its typed failure code, and a
+    /// still-responsive loop.
+    #[test]
+    fn evaluate_model_command_reports_failures_without_wedging_the_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        let dead = MockServer::new(|_, _| None);
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            e.settings.ollama_url = dead.url.clone();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut w = Worker::spawn(dir.path().to_path_buf(), false);
+                w.command(Command::EvaluateModel);
+                // The journal's durable operation record is the race-free
+                // observation point; the live snapshot is republished by every
+                // later operation.
+                assert!(
+                    wait_for(|| {
+                        journaled_records(dir.path()).iter().any(|record| {
+                            record.operation.as_deref() == Some("evaluate_model")
+                                && record.state.as_deref() == Some("failed")
+                        })
+                    }),
+                    "the evaluation command never finished: {:?}",
+                    journaled_records(dir.path())
+                );
+                assert_eq!(
+                    journaled_attempts(dir.path(), "evaluate_model", "failed"),
+                    1,
+                    "a failing evaluation must be reported as a failed attempt: {:?}",
+                    journaled_records(dir.path())
+                );
+                let failure = journaled_records(dir.path()).into_iter().find(|record| {
+                    record.operation.as_deref() == Some("evaluate_model")
+                        && record.state.as_deref() == Some("failed")
+                });
+                assert!(
+                    failure.is_some_and(|record| record.code.is_some()),
+                    "the failed evaluation must carry its typed failure code"
+                );
+                assert!(
+                    !w.view().fatal,
+                    "an evaluation failure must not kill the worker: {}",
+                    w.view().error
+                );
+                // The loop still serves commands after the failure.
+                let before = w.view().operation.operation_id.clone();
+                w.command(Command::Refresh);
+                assert!(
+                    wait_for(|| {
+                        let s = w.view();
+                        s.operation.operation_id != before && s.busy.is_empty()
+                    }),
+                    "the worker loop must stay responsive after an evaluation failure"
+                );
+                w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
 }
