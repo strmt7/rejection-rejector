@@ -413,11 +413,13 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
         use std::path::Component;
         fn volume_prefix(path: &Path) -> Result<Option<String>> {
             let canonical = fs::canonicalize(path)?;
+            // Every canonical Windows path holds at most one prefix component;
+            // scanning the full component list is equivalent to stopping at the
+            // first and keeps the loop free of diverging exits.
             let mut prefix = None;
             for component in canonical.components() {
                 if let Component::Prefix(value) = component {
                     prefix = Some(value.as_os_str().to_string_lossy().to_ascii_lowercase());
-                    break;
                 }
             }
             Ok(prefix)
@@ -1015,9 +1017,14 @@ mod tests {
         let status = backup_isolation_status(&data, &settings).unwrap();
         assert!(status.configured);
         assert!(status.destination_exists);
-        if cfg!(any(unix, windows)) {
-            assert_eq!(status.distinct_failure_domain, Some(false));
-        }
+        // The failure-domain measurement is defined on unix/windows hosts
+        // only; the disjunction keeps the assertion exactly equivalent to the
+        // platform guard without a block the macro's failure path skips.
+        assert!(
+            !cfg!(any(unix, windows)) || status.distinct_failure_domain == Some(false),
+            "a same-directory backup must share the workspace failure domain: {:?}",
+            status.distinct_failure_domain
+        );
     }
 
     #[test]

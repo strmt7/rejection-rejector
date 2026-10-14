@@ -1164,6 +1164,24 @@ impl Store {
         self.conn.execute_batch(statement).unwrap();
     }
 
+    /// Test-only seam: make the items table refuse one state transition with an
+    /// SQL error, simulating a corrupt store failing mid-write.
+    ///
+    /// Inputs: `state` — one of `sent`, `uncertain`; any other name panics.
+    /// Output: none. The refusal fires only on the state UPDATE into that
+    /// value, so reads and every other write keep working.
+    #[cfg(test)]
+    pub(crate) fn refuse_state_transition_for_tests(&self, state: &str) {
+        let statement = match state {
+            "sent" | "uncertain" => format!(
+                "CREATE TRIGGER refuse_state BEFORE UPDATE OF state ON items \
+                 WHEN NEW.state = '{state}' BEGIN SELECT RAISE(ABORT, 'synthetic SQL failure'); END"
+            ),
+            other => panic!("unsupported test refusal state {other}"),
+        };
+        self.conn.execute_batch(&statement).unwrap();
+    }
+
     pub fn save_processing_failure(
         &mut self,
         job: &mut Job,
@@ -2907,6 +2925,45 @@ mod tests {
         db.reserve_send(&a, 1, Utc::now()).unwrap();
         db.finish_send(&a.id, None).unwrap();
         assert!(db.reserve_send(&b, 1, Utc::now()).is_err());
+    }
+
+    /// Why: the state+revision CAS write is the at-most-once boundary: when its
+    /// SQL fails mid-transaction the whole delivery must roll back — the item
+    /// stays unresolved at its old revision and no provider id is recorded —
+    /// instead of half-updating the delivery row. A store that dropped this
+    /// rollback could mark a message sent without proof of delivery.
+    /// Inputs: a reserved (Sending) job in a store whose items table refuses
+    /// the transition into `sent`. Output: the SQL failure surfaces, and the
+    /// delivery stays `Sending` at its original revision with no provider id.
+    #[test]
+    fn a_sql_failure_in_the_finish_send_cas_rolls_back_the_delivery() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "cas-sql-failure", "cas-thread");
+        let reserved = db.reserve_send(&job, 10, Utc::now()).unwrap();
+        assert_eq!(reserved.state, JobState::Sending);
+        db.refuse_state_transition_for_tests("sent");
+        let error = db
+            .finish_send(&job.id, Some("provider-cas".into()))
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("synthetic SQL failure"),
+            "the SQL failure must surface instead of being swallowed: {error:#}"
+        );
+        let after = db.get(&job.id).unwrap();
+        assert_eq!(
+            after.state,
+            JobState::Sending,
+            "a failed CAS write must leave the delivery unresolved"
+        );
+        assert_eq!(
+            after.revision, reserved.revision,
+            "a failed CAS write must not bump the revision"
+        );
+        assert!(
+            after.provider_sent_id.is_none(),
+            "no provider id may be recorded when the CAS write fails"
+        );
     }
     #[test]
     fn retention_prunes_private_processing_state_but_keeps_identity() {
