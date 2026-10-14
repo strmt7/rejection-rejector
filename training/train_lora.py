@@ -112,6 +112,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "hip"), default="auto")
     parser.add_argument("--max-seq-len", type=int, default=2048)
+    parser.add_argument(
+        "--pad-to-length", type=int, default=0,
+        help="Fixed token length per row (0 = off): over-long rows keep "
+             "head+tail, short rows pad with label -100. Uniform lengths "
+             "give uniform GPU bursts, required by the utilization ceiling",
+    )
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=8)
@@ -332,11 +338,32 @@ def main() -> int:
     def tokenize_row(row: dict) -> dict:
         """Tokenize one chat row for causal-LM training.
 
-        Inputs: `row` — a `messages` row. Output: dict with `input_ids` and
-        `labels` (identical, so the loss trains on the full transcript and the
-        assistant answer), truncated to `--max-seq-len`.
+        Inputs: `row` — a `messages` row. Output: dict with `input_ids`,
+        `attention_mask` and `labels` (labels mirror `input_ids` so the
+        loss trains on the full transcript including the assistant
+        answer). Without `--pad-to-length`, rows are truncated to
+        `--max-seq-len`. With `--pad-to-length N`, every row becomes
+        EXACTLY N tokens: over-long rows keep the head (subject + opening)
+        and the tail (the hiring decision is usually in the closing) and
+        drop the middle; short rows are pad-filled with label -100 so
+        pads never contribute to the loss. Fixed lengths make GPU bursts
+        uniform — the phase-proof guarantee behind the GPU utilization
+        ceiling (bursts must stay below half a meter window).
         """
         text = tokenizer.apply_chat_template(row["messages"], tokenize=False)
+        if args.pad_to_length:
+            n = args.pad_to_length
+            ids = tokenizer(text)["input_ids"][: args.max_seq_len]
+            if len(ids) > n:
+                tail = n // 4
+                ids = ids[: n - tail] + ids[-tail:]
+            pad_id = tokenizer.pad_token_id
+            if pad_id is None:
+                pad_id = tokenizer.eos_token_id
+            attn = [1] * len(ids) + [0] * (n - len(ids))
+            ids = ids + [pad_id] * (n - len(ids))
+            labels = [tok if keep else -100 for tok, keep in zip(ids, attn)]
+            return {"input_ids": ids, "attention_mask": attn, "labels": labels}
         encoded = tokenizer(text, truncation=True, max_length=args.max_seq_len)
         encoded["labels"] = list(encoded["input_ids"])
         return encoded
