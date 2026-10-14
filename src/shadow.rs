@@ -478,4 +478,96 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+
+    /// Why: the shadow report refuses a symlinked parent directory so a local
+    /// observer cannot redirect the simulated-arm report into an attacker
+    /// chosen location, and a sink that refuses the write must surface its own
+    /// error. The refusal must fire before any bytes are rendered.
+    /// Inputs: a symlinked parent directory and a write-refusing sink.
+    /// Output: the documented symlink refusal and the sink's own error.
+    #[test]
+    fn write_report_refuses_a_symlinked_parent_and_propagates_write_failures() {
+        struct RefusingSink {
+            fail_write: bool,
+        }
+        impl std::io::Write for RefusingSink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    return Err(std::io::Error::other("sink write refused"));
+                }
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("sink flush refused"))
+            }
+        }
+
+        let data = serde_json::json!({"report_version": 1});
+        let error = write_report_to(
+            &data,
+            Path::new("shadow-report.json"),
+            &mut RefusingSink { fail_write: true },
+        )
+        .expect_err("write failures must propagate");
+        assert!(
+            error.to_string().contains("sink write refused"),
+            "unexpected error: {error}"
+        );
+        let error = write_report_to(
+            &data,
+            Path::new("shadow-report.json"),
+            &mut RefusingSink { fail_write: false },
+        )
+        .expect_err("flush failures must propagate");
+        assert!(
+            error.to_string().contains("sink flush refused"),
+            "unexpected error: {error}"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = root.path().join("link");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&real, &link);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&real, &link);
+        if made.is_err() {
+            // Symlink creation is unavailable for this host user; the refusal
+            // path cannot be exercised here.
+            return;
+        }
+        let error = write_report_to(&data, &link.join("shadow.json"), &mut Vec::new())
+            .expect_err("a symlinked parent must be refused");
+        assert!(
+            error.to_string().contains("must not be a symlink"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: the shadow report must never replace an existing destination —
+    /// the prior simulated-arm evidence is operator data a failed render must
+    /// not destroy.
+    /// Inputs: a writable destination used twice. Output: first write stored,
+    /// second write refused with the original bytes intact.
+    #[test]
+    fn write_report_keeps_existing_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+        let output = root.path().join("shadow.json");
+        write_report(&engine, &output).unwrap();
+        let first = std::fs::read(&output).unwrap();
+        assert!(write_report(&engine, &output).is_err());
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            first,
+            "the existing shadow report must survive a refused overwrite"
+        );
+    }
 }

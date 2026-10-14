@@ -1157,6 +1157,38 @@ mod tests {
             .is_err()
         );
 
+        // Why: a recovery key must never be exported for a workspace the
+        // active vault key cannot actually open — exporting one would produce
+        // a credential that cannot decrypt the very database it is meant to
+        // save, discovered only during a real disaster.
+        let foreign = root.path().join("foreign-workspace");
+        private_dir(&foreign).unwrap();
+        // The export opens the workspace vault through the OS credential
+        // store; serialize that access and remove the minted credential even
+        // when an assertion panics.
+        let _foreign_lock = lock_credential_store();
+        crate::test_support::headless_vault_seam();
+        let minted = Vault::open(&foreign).unwrap();
+        let foreign_id = vault_id(&foreign).unwrap();
+        let _foreign_cleanup = CredentialCleanup(foreign_id.clone());
+        drop(minted);
+        // The live database was written under a different vault key than the
+        // one the workspace credential resolves.
+        let _foreign_store = Store::open(&foreign.join(DATABASE_NAME), Vault::random()).unwrap();
+        let foreign_key = root.path().join("foreign-recovery-key.json");
+        let error = export_recovery_key(&foreign, b"correct horse battery staple", &foreign_key)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Current workspace does not authenticate under the active vault key"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !foreign_key.exists(),
+            "no key may be exported for a workspace that cannot be opened"
+        );
+
         let serialized = fs::read(&recovery_file).unwrap();
         assert!(
             !serialized

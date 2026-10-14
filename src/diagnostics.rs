@@ -454,4 +454,69 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+
+    /// Why: a sink that refuses the write itself must surface its own error
+    /// (not a flush-stage or generic one), and a report must never replace an
+    /// existing destination — otherwise a failed render could destroy the only
+    /// good report an operator has.
+    /// Inputs: a write-refusing sink and a destination that already holds a
+    /// report. Output: the sink's error for the first, a refused overwrite
+    /// with the original bytes intact for the second.
+    #[test]
+    fn report_write_failures_propagate_and_existing_destinations_are_kept() {
+        struct RefusingSink {
+            fail_write: bool,
+        }
+        impl std::io::Write for RefusingSink {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    return Err(std::io::Error::other("sink write refused"));
+                }
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("sink flush refused"))
+            }
+        }
+
+        let data = json!({"report_version": 5});
+        let error = write_report_to(
+            &data,
+            Path::new("diagnostics-report.json"),
+            &mut RefusingSink { fail_write: true },
+        )
+        .expect_err("write failures must propagate");
+        assert!(
+            error.to_string().contains("sink write refused"),
+            "unexpected error: {error}"
+        );
+        let error = write_report_to(
+            &data,
+            Path::new("diagnostics-report.json"),
+            &mut RefusingSink { fail_write: false },
+        )
+        .expect_err("flush failures must propagate");
+        assert!(
+            error.to_string().contains("sink flush refused"),
+            "unexpected error: {error}"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(
+            root.path().to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let output = root.path().join("diagnostics.json");
+        write_report(&engine, &output).unwrap();
+        let first = std::fs::read(&output).unwrap();
+        assert!(write_report(&engine, &output).is_err());
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            first,
+            "the existing report must survive a refused overwrite"
+        );
+    }
 }

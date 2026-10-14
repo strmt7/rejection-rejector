@@ -2230,6 +2230,107 @@ mod tests {
         );
     }
 
+    /// Why: a cursor is client-supplied input. A malformed cursor (zero or
+    /// negative progress, or a continuation past the snapshot high-water mark)
+    /// must be refused before any page work, or an integration could walk rows
+    /// outside the snapshot it was promised. The valid edge — a continuation
+    /// exactly at the high-water mark — must still be accepted.
+    #[test]
+    fn cursor_validation_refuses_malformed_shapes_and_accepts_the_valid_edge() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.insert_stub(stub("edge-1", "thread-1"), Utc::now())
+            .unwrap();
+        let page = db.list_cursor("me@example.com", false, None, 10).unwrap();
+        let high = page.items.len() as i64;
+        for invalid in [
+            ItemCursor {
+                snapshot_rowid: -1,
+                last_rowid: 1,
+            },
+            ItemCursor {
+                snapshot_rowid: high,
+                last_rowid: 0,
+            },
+            ItemCursor {
+                snapshot_rowid: high,
+                last_rowid: high + 1,
+            },
+        ] {
+            let error = db
+                .list_cursor("me@example.com", false, Some(&invalid), 10)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("Invalid item cursor"),
+                "unexpected error for {invalid:?}: {error}"
+            );
+        }
+        // A continuation exactly at the high-water mark is valid.
+        let edge = ItemCursor {
+            snapshot_rowid: high,
+            last_rowid: high,
+        };
+        let last = db
+            .list_cursor("me@example.com", false, Some(&edge), 10)
+            .unwrap();
+        assert!(
+            last.items.is_empty(),
+            "a continuation at the high-water mark must page only earlier rows"
+        );
+    }
+
+    /// Why: the limit clamp is a documented bound (1..=100) shared by the page
+    /// and cursor feeds. A drift here lets an integration request unbounded
+    /// pages (0 silently empty) or walk past the bound, and the `limit + 1`
+    /// peek must set `next_cursor` exactly when another row exists — not one
+    /// page early or late.
+    #[test]
+    fn feed_limits_clamp_to_the_documented_bounds_and_set_next_cursor_exactly() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let base = Utc::now() - chrono::Duration::minutes(10);
+        for index in 0..4 {
+            db.insert_stub(
+                stub(&format!("bound-{index}"), &format!("thread-{index}")),
+                base + chrono::Duration::seconds(index),
+            )
+            .unwrap();
+        }
+
+        // limit 0 clamps up to 1; limit above 100 clamps down to 100.
+        assert_eq!(db.list("me@example.com", false, 0, 0).unwrap().len(), 1);
+        assert_eq!(db.list("me@example.com", false, 0, 500).unwrap().len(), 4);
+        let cursor_first = db.list_cursor("me@example.com", false, None, 0).unwrap();
+        assert_eq!(cursor_first.items.len(), 1);
+        assert!(
+            cursor_first.next_cursor.is_some(),
+            "4 rows behind a 1-row page must continue"
+        );
+        let cursor_all = db.list_cursor("me@example.com", false, None, 500).unwrap();
+        assert_eq!(cursor_all.items.len(), 4);
+        assert!(
+            cursor_all.next_cursor.is_none(),
+            "a full page under the clamp must be terminal"
+        );
+
+        // Exactly `limit` rows: terminal. `limit + 1`: continues once.
+        let exact = db.list_cursor("me@example.com", false, None, 4).unwrap();
+        assert_eq!(exact.items.len(), 4);
+        assert!(
+            exact.next_cursor.is_none(),
+            "exactly `limit` rows must be terminal (no phantom continuation)"
+        );
+        let continues = db.list_cursor("me@example.com", false, None, 3).unwrap();
+        assert_eq!(continues.items.len(), 3);
+        let cursor = continues.next_cursor.clone().expect("one row must remain");
+        let tail = db
+            .list_cursor("me@example.com", false, Some(&cursor), 3)
+            .unwrap();
+        assert_eq!(tail.items.len(), 1);
+        assert!(tail.next_cursor.is_none(), "the last page must be terminal");
+    }
+
     #[test]
     fn review_queue_orders_by_email_received_time() {
         let d = tempfile::tempdir().unwrap();
