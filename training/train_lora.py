@@ -186,6 +186,17 @@ def main() -> int:
                             f"({self._probe_errors}x): {exc!r}",
                             file=sys.stderr,
                         )
+            # Drain the async GPU queue every step: the known ROCm
+            # AsyncEventsLoop spin class (ROCm#6406) builds up in an
+            # undrained queue; a per-step synchronize keeps it empty (same
+            # mitigation family as pytorch#160759's exit synchronize).
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+            except Exception:
+                pass
             self._write(state, "running")
 
         def on_train_end(self, args, state, control, **kwargs):
@@ -376,22 +387,14 @@ def main() -> int:
         )
         trainer.control.should_training_stop = True
 
-    # Continuous observation: a second process eating VRAM/RAM, or runaway
-    # output growth, ends the run BEFORE anything approaches a limit.
-    with rg.ResourceWatchdog(
-        limits=rg.Thresholds(require_vram=(device == "cuda")),
-        soft_resources=frozenset({"vram"}),
-        vram_probe=vram_reading_or_raise,
-        on_violation=stop_on_resource_breach,
-        disk_path=str(args.output_dir.parent),
-    ):
-        result = trainer.train(resume_from_checkpoint=str(args.resume) if args.resume else None)
     # Mid-step stall instrument: the trainer callback only runs between
     # steps, so a wedge INSIDE a step is invisible to it. This daemon watch
     # the heartbeat file's mtime instead and dumps every thread's stack when
-    # it goes stale (the wedge we must root-cause happens mid-step).
+    # it goes stale, then exits with code 97 so a wrapper loop can resume
+    # from the latest checkpoint (a wedge costs one checkpoint interval).
     def stall_watchdog() -> None:
         import faulthandler
+        import os as _os
         import time as _t
 
         dumped = False
@@ -409,10 +412,22 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 faulthandler.dump_traceback(file=sys.stderr)
+                _t.sleep(10)  # let the dump flush through tee
+                _os._exit(97)
 
     threading_mod = __import__("threading")
     threading_mod.Thread(target=stall_watchdog, daemon=True).start()
 
+    # Continuous observation: a second process eating VRAM/RAM, or runaway
+    # output growth, ends the run BEFORE anything approaches a limit.
+    with rg.ResourceWatchdog(
+        limits=rg.Thresholds(require_vram=(device == "cuda")),
+        soft_resources=frozenset({"vram"}),
+        vram_probe=vram_reading_or_raise,
+        on_violation=stop_on_resource_breach,
+        disk_path=str(args.output_dir.parent),
+    ):
+        result = trainer.train(resume_from_checkpoint=str(args.resume) if args.resume else None)
     # Termination fix for ROCm process hangs: an explicit synchronize lets
     # the runtime wind down (pytorch/pytorch#160759).
     if device == "cuda":
