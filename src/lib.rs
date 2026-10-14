@@ -46,6 +46,7 @@ pub mod store;
 pub mod sync;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod train_monitor;
 pub mod tui;
 pub mod types;
 pub mod vault;

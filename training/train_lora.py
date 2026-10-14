@@ -128,11 +128,19 @@ def main() -> int:
         "--resume", type=Path, default=None,
         help="Checkpoint directory to resume from (Trainer resume_from_checkpoint)",
     )
+    parser.add_argument(
+        "--max-gpu-utilization", type=float, default=100.0,
+        help="GPU utilization ceiling in percent (20-100): enforced purely "
+             "by pacing this loop's own steps (duty-cycle sleeps), never via "
+             "driver/fan/clock/power controls. Seeded into duty.json when "
+             "absent; the monitor GUI tunes it live mid-run",
+    )
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
     parser.add_argument("--progress-file", type=Path, help="Heartbeat JSON for live probing (default: output-dir/progress.json)")
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
+    import duty_cycle
     import torch
     from datasets import Dataset
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
@@ -162,9 +170,8 @@ def main() -> int:
             self._time = time
             self.vram_probe = vram_probe
             self._probe_errors = 0
-            self._last_step = -1
-            self._last_change = self._time.time()
-            self._dumped = False
+            # Cooperative-stop channel (GPU utilization watchdog).
+            self.duty_path = duty_cycle.control_path_for(path)
 
         def on_train_begin(self, args, state, control, **kwargs):
             self._write(state, "running")
@@ -198,29 +205,32 @@ def main() -> int:
             except Exception:
                 pass
             self._write(state, "running")
+            self._maybe_stop(control)
+
+        def _maybe_stop(self, control) -> None:
+            """Honour a cooperative stop request from the control file.
+
+            Input: the trainer `control` (sets `should_training_stop`).
+            Output: none. The GPU utilization watchdog (and the operator)
+            can request a clean stop via duty.json; the run then ends at
+            the next step boundary with checkpoints intact. No signals.
+            """
+            try:
+                if duty_cycle.read_stop_flag(self.duty_path):
+                    print(
+                        "resource-guard: cooperative stop requested via duty control file",
+                        file=sys.stderr,
+                    )
+                    control.should_training_stop = True
+            except Exception as exc:
+                print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
 
         def on_train_end(self, args, state, control, **kwargs):
             self._write(state, "complete")
 
         def _write(self, state, status: str) -> None:
-            import faulthandler
-
             now = self._time.time()
             step = int(state.global_step)
-            if step == self._last_step and status == "running":
-                if now - self._last_change > 120.0 and not self._dumped:
-                    # Stall evidence: dump every thread's stack so the wedge
-                    # is root-caused by location, not by theory.
-                    self._dumped = True
-                    print(
-                        f"resource-guard: STALLED at step {step} for "
-                        f"{now - self._last_change:.0f}s; dumping stacks",
-                        file=sys.stderr,
-                    )
-                    faulthandler.dump_traceback(file=sys.stderr)
-            else:
-                self._last_step = step
-                self._last_change = now
             record = {
                 "job": "train_lora",
                 "step": step,
@@ -367,13 +377,116 @@ def main() -> int:
             raise RuntimeError("no fresh main-thread VRAM reading")
         return reading
 
+    class PacedTrainer(Trainer):
+        """Trainer with GPU-burst pacing between micro-batches.
+
+        The GPU utilization ceiling is enforced at MICRO-BATCH granularity:
+        before every training_step (each gradient-accumulation unit) the
+        trainer sleeps the duty-cycle off-time computed from the PREVIOUS
+        micro-batch's measured duration and the live duty.json target.
+        This chops GPU work into one-micro-batch bursts instead of whole-
+        optimizer-step runs, which is what per-second GPU meters (the
+        Windows GPU Engine counters Task Manager displays) require to stay
+        within the ceiling. Pure host-side sleeping: no driver, fan, clock
+        or power interaction. Fail-closed: a missing/corrupt control file
+        falls back to the CLI-seeded target (throttle, never uncapped).
+        """
+
+        def __init__(self, *args, duty_path, seed_target, progress_path, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.duty_path = duty_path
+            self.seed_target = duty_cycle.validate_target_pct(seed_target)
+            self.progress_path = progress_path
+            # Robust pacing baseline: median of recent micro-batch
+            # on-times (a one-time Triton-JIT spike or a variable-length
+            # batch cannot skew the sleep the way a mean or a growth cap
+            # does — the cap under-slept on variable batches and the raw
+            # mean over-slept after JIT; both were verified wrong live).
+            self._recent_on: list[float] = []
+            self._step_index = 0
+
+        def training_step(self, *args, **kwargs):
+            """Run one micro-batch behind the duty-cycle pacing.
+
+            Input: passthrough to `Trainer::training_step`.
+            Output: the micro-batch loss (unchanged semantics; pacing is
+            pure host-side sleeping before the call).
+            """
+            import json
+            import os
+            import time as _t
+
+            try:
+                if duty_cycle.read_stop_flag(self.duty_path):
+                    print(
+                        "resource-guard: cooperative stop requested via duty control file",
+                        file=sys.stderr,
+                    )
+                    self.control.should_training_stop = True
+            except Exception as exc:
+                print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
+            try:
+                target = duty_cycle.read_target(self.duty_path)
+                if target is None:
+                    target = self.seed_target
+                if self._recent_on:
+                    baseline = sorted(self._recent_on)[len(self._recent_on) // 2]
+                    off = duty_cycle.sleep_seconds(baseline, target)
+                    if off > 0.0:
+                        # Sliced sleep with heartbeat touches so the
+                        # stall instruments stay quiet during pacing.
+                        duty_cycle.paced_sleep(
+                            off,
+                            touch=lambda: os.utime(self.progress_path),
+                        )
+            except Exception as exc:
+                print(f"resource-guard: micro-batch pacing skipped: {exc!r}", file=sys.stderr)
+            t0 = _t.perf_counter()
+            loss = super().training_step(*args, **kwargs)
+            measured = _t.perf_counter() - t0
+            self._recent_on.append(measured)
+            if len(self._recent_on) > 8:
+                self._recent_on.pop(0)
+            # Durable per-micro-batch evidence: the operator's GPU
+            # utilization ceiling must be verifiable from logs, not
+            # taken on faith.
+            self._step_index += 1
+            try:
+                with self.progress_path.parent.joinpath("pace-log.jsonl").open(
+                    "a", encoding="utf-8"
+                ) as fh:
+                    fh.write(
+                        json.dumps(
+                            {
+                                "step": self._step_index,
+                                "on_s": round(measured, 4),
+                                "target_pct": duty_cycle.read_target(self.duty_path),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            return loss
+
     progress_path = args.progress_file or (args_out / "progress.json")
-    trainer = Trainer(
+    # Seed the duty control file only when absent: a monitor-chosen ceiling
+    # must SURVIVE a resume (the live value wins over the CLI default).
+    duty_path = duty_cycle.control_path_for(progress_path)
+    if duty_cycle.read_target(duty_path) is None:
+        duty_cycle.write_target(duty_path, duty_cycle.validate_target_pct(args.max_gpu_utilization))
+    trainer = PacedTrainer(
         model=model,
         args=train_args,
         train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
         data_collator=make_causal_collator(tokenizer),
-        callbacks=[ProgressCallback(progress_path, vram_probe=sample_vram)],
+        duty_path=duty_path,
+        seed_target=args.max_gpu_utilization,
+        progress_path=progress_path,
+        callbacks=[ProgressCallback(
+            progress_path,
+            vram_probe=sample_vram,
+        )],
     )
     def stop_on_resource_breach(v):
         """Stop training before any resource limit is reached. Inputs:

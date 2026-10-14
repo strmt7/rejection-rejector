@@ -86,3 +86,8 @@ strip = true
 overflow-checks = true
 
 # This Cargo.toml follows the 2024 edition and requires Rust 1.99.0 or newer
+
+[[bin]]
+name = "rr-train-monitor"
+path = "src/bin/rr-train-monitor.rs"
+required-features = ["gui"]
