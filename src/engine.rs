@@ -2675,6 +2675,47 @@ mod dispatch_tests {
         );
     }
 
+    /// Why: the automatic branch re-validates the analysis provenance on the
+    /// job as re-read at dispatch time — an analysis recorded under a
+    /// different model digest must fail closed with the reason named and leave
+    /// the job untouched for the operator. This is the dispatch-time gate of
+    /// the layered provenance defence; the `Model changed since analysis`
+    /// check behind it is defence in depth for the same invariant.
+    #[test]
+    fn automatic_pre_send_refuses_an_analysis_recorded_under_another_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        crate::test_support::arm_automatic(&mut e.settings);
+        e.account = "applicant@example.invalid".into();
+        let (mut job, body_hash) = seed_send_job(&mut e, 27);
+        // The analysis recorded a digest the pinned model never had.
+        job.analysis.as_mut().unwrap().model_digest = "c".repeat(64);
+        e.db.save(&mut job, "test.seed", "provenance drift")
+            .unwrap();
+        let job_id = job.id.clone();
+        let revision = job.revision;
+
+        let failure = e
+            .send_attempt(&job_id, revision, &body_hash, true)
+            .expect_err("a drifted analysis provenance must not dispatch");
+        assert!(
+            failure
+                .to_string()
+                .contains("Automatic send conditions were not satisfied"),
+            "unexpected failure: {failure}"
+        );
+        assert!(!failure.retryable_for_operator());
+        let after = e.db.get(&job_id).unwrap();
+        assert_eq!(
+            after.state,
+            JobState::Ready,
+            "the job must be left untouched"
+        );
+        assert!(after.flags.is_empty(), "no flags on an untouched job");
+    }
+
     /// Manual dispatch enforces the human-review pipeline end to end and maps
     /// every provider outcome onto the durable delivery state machine.
     #[test]
@@ -2893,6 +2934,84 @@ mod dispatch_tests {
             e
         });
         assert!(e.enterprise_policy.is_some());
+    }
+
+    /// Why: `update_settings` must route every candidate through the active
+    /// enterprise policy before anything is persisted — the policy clamps
+    /// out-of-range values and a refused change must leave the durable
+    /// settings untouched. Skipping enforcement would let a local edit
+    /// silently override enterprise constraints.
+    #[test]
+    fn update_settings_enforces_enterprise_policy_before_persisting() {
+        use crate::policy::EnterprisePolicy;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let e = live(dir.path());
+            drop(e);
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let policy = crate::test_support::loaded_policy(
+            "digest-clamp",
+            EnterprisePolicy {
+                version: 1,
+                max_daily_send_limit: Some(2),
+                ..Default::default()
+            },
+        );
+        let _cleanup = Cleanup(vault);
+        let mut e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
+        assert!(e.enterprise_policy.is_some(), "policy must be active");
+
+        let mut candidate = e.settings.clone();
+        candidate.daily_send_limit = 50;
+        e.update_settings(candidate).unwrap();
+        assert_eq!(
+            e.settings.daily_send_limit, 2,
+            "the policy clamp must apply before persistence"
+        );
+    }
+
+    /// Why: a settings change naming a model outside the enterprise
+    /// allow-list must be refused by the policy gate and must not reach the
+    /// persisted settings; a silently accepted model swap would change the
+    /// whole classification pipeline under enterprise control.
+    #[test]
+    fn update_settings_refuses_models_the_policy_does_not_approve() {
+        use crate::policy::EnterprisePolicy;
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let e = live(dir.path());
+            drop(e);
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let policy = crate::test_support::loaded_policy(
+            "digest-allow-list",
+            EnterprisePolicy {
+                version: 1,
+                allowed_models: vec!["approved-model".into()],
+                ..Default::default()
+            },
+        );
+        let _cleanup = Cleanup(vault);
+        let mut e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
+        assert_eq!(
+            e.settings.model, "approved-model",
+            "startup must repair to the approved model"
+        );
+
+        let mut refused = e.settings.clone();
+        refused.model = "unapproved-model".into();
+        let error = e.update_settings(refused).unwrap_err().to_string();
+        assert!(
+            error.contains("Selected model is not approved by enterprise policy"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            e.settings.model, "approved-model",
+            "the refused change must not reach the persisted settings"
+        );
     }
 
     /// Reload semantics: restrictive changes apply and are audited, identical

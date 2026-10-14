@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -1123,14 +1123,38 @@ impl Ollama {
     /// Inputs: none beyond the client. Output: `Ok(())` when a runtime is serving;
     /// a daemon already owning the port is reused, never replaced.
     pub fn start(&self) -> Result<()> {
+        self.start_with(
+            &ollama_executable()?,
+            spawn_detached,
+            30,
+            Duration::from_millis(500),
+        )
+    }
+    /// Start the local runtime through an injected process launcher and
+    /// readiness schedule.
+    ///
+    /// Inputs: `executable` — runtime executable to launch; `launch` — process
+    /// launcher ([`spawn_detached`] in production, a recording fake in tests);
+    /// `ready_attempts` — number of readiness polls; `ready_poll` — wait before
+    /// each poll. Output: `Ok(())` once a serving daemon owns the configured
+    /// port; a daemon that already answers is reused and never replaced, a
+    /// failed launch is attributed as `Cannot start Ollama`, and a runtime that
+    /// never reports a supported version is an explicit error.
+    fn start_with(
+        &self,
+        executable: &Path,
+        launch: CommandRunner,
+        ready_attempts: u32,
+        ready_poll: Duration,
+    ) -> Result<()> {
         if self.reachable() {
             // A daemon already owns the configured port. Never attempt to launch a
             // second process just because the existing runtime is obsolete.
             self.runtime_version()?;
             return Ok(());
         }
-        let executable = ollama_executable()?;
-        Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("serve")
             .env(
                 "OLLAMA_HOST",
@@ -1143,11 +1167,10 @@ impl Ollama {
             .env("OLLAMA_KV_CACHE_TYPE", "q8_0")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Cannot start Ollama")?;
-        for _ in 0..30 {
-            std::thread::sleep(Duration::from_millis(500));
+            .stderr(Stdio::null());
+        launch(executable, &mut command).context("Cannot start Ollama")?;
+        for _ in 0..ready_attempts {
+            std::thread::sleep(ready_poll);
             if self.healthy() {
                 return Ok(());
             }
@@ -1155,6 +1178,25 @@ impl Ollama {
         anyhow::bail!("Ollama did not become ready; inspect its local logs")
     }
 }
+
+/// Runner for one local-runtime process launch: receives the resolved runtime
+/// executable and the fully configured launch command. This mirrors
+/// `background::CommandRunner`: production runs [`spawn_detached`], tests
+/// inject fakes so no real process is ever spawned from the suite.
+pub type CommandRunner = fn(&Path, &mut Command) -> Result<()>;
+
+/// Launch one local-runtime process exactly as configured by
+/// [`Ollama::start_with`].
+///
+/// Inputs: `executable` — runtime executable (already resolved; echoed for
+/// runner-level inspection); `command` — fully configured launch command.
+/// Output: `Ok(())` once the OS accepted the spawn; spawn failures propagate
+/// so the caller can attribute them to `Cannot start Ollama`.
+pub fn spawn_detached(_executable: &Path, command: &mut Command) -> Result<()> {
+    command.spawn()?;
+    Ok(())
+}
+
 fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     let core = value
         .trim()
@@ -1213,15 +1255,26 @@ pub fn validate_verdict(v: &Verdict, source: &str) -> Result<()> {
 /// Inputs: none. Output: `Result<PathBuf>` — the executable path; errors when
 /// Ollama is not installed.
 pub fn ollama_executable() -> Result<PathBuf> {
+    ollama_executable_from(std::env::var_os("LOCALAPPDATA"))
+}
+/// Resolve the Ollama executable from an injected per-user program root.
+///
+/// Inputs: `local_app_data` — the host's local application-data root, or `None`
+/// where none is configured. Output: `Result<PathBuf>` — the per-user install
+/// when present, otherwise the PATH lookup; errors with the install guidance
+/// when Ollama is not installed at all.
+fn ollama_executable_from(local_app_data: Option<std::ffi::OsString>) -> Result<PathBuf> {
     #[cfg(windows)]
     {
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        if let Some(local) = local_app_data {
             let p = PathBuf::from(local).join("Programs/Ollama/ollama.exe");
             if p.is_file() {
                 return Ok(p);
             }
         }
     }
+    #[cfg(not(windows))]
+    let _ = local_app_data;
     which::which("ollama")
         .context("Ollama is not installed; use Install Ollama in the Local AI tab")
 }
@@ -1230,34 +1283,65 @@ pub fn ollama_executable() -> Result<PathBuf> {
 /// Inputs: none. Output: `Ok(())` once the installer completes; Windows uses
 /// winget, other platforms open the download page.
 pub fn install() -> Result<()> {
-    #[cfg(windows)]
-    {
-        let exe = which::which("winget").context(
-            "Install Microsoft App Installer or install Ollama from ollama.com/download/windows",
-        )?;
-        let status = Command::new(exe)
-            .args([
-                "install",
-                "--id",
-                "Ollama.Ollama",
-                "--exact",
-                "--source",
-                "winget",
-                "--accept-source-agreements",
-                "--accept-package-agreements",
-            ])
-            .status()?;
-        ensure!(
-            status.success(),
-            "Ollama installer did not complete successfully"
-        );
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        webbrowser::open("https://ollama.com/download")?;
-        Ok(())
-    }
+    install_with(system_installer)
+}
+/// Runner for one OS-installer invocation: receives the installer program name
+/// and its exact argument vector and answers whether the installer completed
+/// successfully. Production runs [`system_installer`]; tests inject fakes so no
+/// real installer is ever launched from the suite.
+pub type InstallerRunner = fn(&str, &[&str]) -> Result<bool>;
+
+/// The exact winget contract `install` submits: the pinned Ollama package id,
+/// no interactive prompts.
+pub const INSTALL_ARGS: &[&str] = &[
+    "install",
+    "--id",
+    "Ollama.Ollama",
+    "--exact",
+    "--source",
+    "winget",
+    "--accept-source-agreements",
+    "--accept-package-agreements",
+];
+
+/// Run the platform Ollama installer through an injected runner.
+///
+/// Inputs: `run` — installer runner (production [`system_installer`], tests
+/// inject a recording fake). Output: `Ok(())` once the installer reports
+/// success; a refused exit becomes `Ollama installer did not complete
+/// successfully` and spawn failures propagate unchanged.
+pub fn install_with(run: InstallerRunner) -> Result<()> {
+    let completed = run("winget", INSTALL_ARGS)?;
+    ensure!(completed, "Ollama installer did not complete successfully");
+    Ok(())
+}
+
+/// Production [`InstallerRunner`]: resolve the installer on the host and run
+/// it with the submitted argument vector.
+///
+/// Inputs: `program` — installer program name to resolve; `args` — its exact
+/// argument vector. Output: `Result<bool>` — the installer's exit verdict;
+/// an unresolvable installer or spawn failure is an error naming the manual
+/// fallback.
+#[cfg(windows)]
+pub fn system_installer(program: &str, args: &[&str]) -> Result<bool> {
+    let exe = which::which(program).context(
+        "Install Microsoft App Installer or install Ollama from ollama.com/download/windows",
+    )?;
+    let status = Command::new(exe).args(args).status()?;
+    Ok(status.success())
+}
+
+/// Production [`InstallerRunner`]: other platforms open the download page
+/// instead of running an installer command.
+///
+/// Inputs: ignored (no local installer command exists). Output: `Result<bool>`
+/// — `Ok(true)` once the download page has been opened; a failure to open it
+/// propagates unchanged.
+#[cfg(not(windows))]
+pub fn system_installer(_program: &str, _args: &[&str]) -> Result<bool> {
+    webbrowser::open("https://ollama.com/download")?;
+    Ok(true)
 }
 /// Build a synthetic sample rejection email.
 ///
@@ -1521,6 +1605,369 @@ mod tests {
         assert!(!verifier.settings.independent_verifier_enabled);
         assert_eq!(verifier.settings.mode, crate::config::Mode::HumanReview);
         assert!(!verifier.settings.sending_enabled);
+    }
+    // =====================================================================
+    // Local-runtime lifecycle: process-launch and OS-installer seams.
+    // =====================================================================
+
+    use std::collections::VecDeque;
+
+    // Recorded launch attempts: (program, args, sorted environment pairs).
+    type LaunchRecord = (String, Vec<String>, Vec<(String, String)>);
+    thread_local! {
+        static LAUNCHES: std::cell::RefCell<Vec<LaunchRecord>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static LAUNCH_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static INSTALLS: std::cell::RefCell<Vec<(String, Vec<String>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static INSTALL_OUTCOME: std::cell::RefCell<VecDeque<std::result::Result<bool, String>>> =
+            const { std::cell::RefCell::new(VecDeque::new()) };
+    }
+
+    /// Drop every recorded launch/install and script state.
+    fn reset_process_fakes() {
+        LAUNCHES.with(|l| l.borrow_mut().clear());
+        LAUNCH_FAIL.with(|f| f.set(false));
+        INSTALLS.with(|l| l.borrow_mut().clear());
+        INSTALL_OUTCOME.with(|o| o.borrow_mut().clear());
+    }
+
+    /// Fake [`CommandRunner`]: record the full launch configuration (program,
+    /// arguments and environment) and then accept or fail the spawn as armed.
+    ///
+    /// Inputs: `executable` — resolved runtime executable; `command` — the
+    /// launch command the product built. Output: `Ok(())` unless the fake is
+    /// armed to fail like an unspawnable binary.
+    fn recording_launch(executable: &Path, command: &mut Command) -> Result<()> {
+        let program = command.get_program().to_string_lossy().into_owned();
+        assert_eq!(
+            program,
+            executable.to_string_lossy().into_owned(),
+            "the launcher must receive the exact executable the command runs"
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let mut env: Vec<(String, String)> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value
+                        .map(|v| v.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        env.sort();
+        LAUNCHES.with(|l| l.borrow_mut().push((program, args, env)));
+        if LAUNCH_FAIL.with(|f| f.get()) {
+            anyhow::bail!("injected spawn failure");
+        }
+        Ok(())
+    }
+
+    /// Fake [`InstallerRunner`]: record the submitted installer contract and
+    /// replay the next scripted outcome.
+    ///
+    /// Inputs: `program` — installer program name; `args` — installer argument
+    /// vector. Output: the next scripted outcome, `Ok(true)` by default.
+    fn recording_installer(program: &str, args: &[&str]) -> Result<bool> {
+        INSTALLS.with(|l| {
+            l.borrow_mut().push((
+                program.to_owned(),
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+            ))
+        });
+        match INSTALL_OUTCOME.with(|o| o.borrow_mut().pop_front()) {
+            Some(Ok(verdict)) => Ok(verdict),
+            Some(Err(message)) => Err(anyhow::anyhow!(message)),
+            None => Ok(true),
+        }
+    }
+
+    /// Why: a daemon that already owns the configured port must be reused
+    /// (never replaced by a second process), and reuse must still enforce the
+    /// supported-version floor instead of silently accepting an obsolete
+    /// runtime.
+    #[test]
+    fn start_reuses_a_serving_runtime_and_still_enforces_the_version_floor() {
+        reset_process_fakes();
+        let serving = crate::test_support::MockServer::new(|route, _| {
+            (route == "/api/version").then(crate::test_support::version_ok)
+        });
+        let settings = Settings {
+            ollama_url: serving.url.clone(),
+            ..Settings::default()
+        };
+        let client = Ollama::new(&settings).unwrap();
+        client
+            .start_with(
+                Path::new("rr-fake-ollama"),
+                recording_launch,
+                3,
+                Duration::from_millis(1),
+            )
+            .unwrap();
+        assert!(
+            LAUNCHES.with(|l| l.borrow().is_empty()),
+            "a serving daemon must be reused, never replaced"
+        );
+
+        let obsolete = crate::test_support::MockServer::new(|route, _| {
+            (route == "/api/version").then(|| json!({"version": "0.1.0"}))
+        });
+        let settings = Settings {
+            ollama_url: obsolete.url.clone(),
+            ..Settings::default()
+        };
+        let client = Ollama::new(&settings).unwrap();
+        let error = client
+            .start_with(
+                Path::new("rr-fake-ollama"),
+                recording_launch,
+                3,
+                Duration::from_millis(1),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("too old"), "unexpected error: {error}");
+        assert!(
+            LAUNCHES.with(|l| l.borrow().is_empty()),
+            "an obsolete serving daemon must still be reused, never replaced"
+        );
+    }
+
+    /// Why: the launch is the only OS-process spawn in the runtime lifecycle,
+    /// and its configuration is a safety contract: `serve` on the configured
+    /// loopback origin with the cloud, parallelism and cache budgets pinned.
+    /// A regression here would silently open a second daemon or disable the
+    /// hardening. Readiness must then be awaited on the injected schedule.
+    #[test]
+    fn start_launches_the_hardened_serve_command_and_waits_for_readiness() {
+        reset_process_fakes();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = requests.clone();
+        // No daemon answers until after the launch; readiness arrives on the
+        // first poll after the launcher ran.
+        let serving = crate::test_support::MockServer::new(move |route, _| {
+            (route == "/api/version")
+                .then(|| {
+                    // The first probe must fail (no daemon yet); once the
+                    // launcher has run, the runtime answers.
+                    (seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0)
+                        .then(crate::test_support::version_ok)
+                })
+                .flatten()
+        });
+        let settings = Settings {
+            ollama_url: serving.url.clone(),
+            ..Settings::default()
+        };
+        let client = Ollama::new(&settings).unwrap();
+        client
+            .start_with(
+                Path::new("rr-fake-ollama"),
+                recording_launch,
+                5,
+                Duration::from_millis(1),
+            )
+            .unwrap();
+        let launches = LAUNCHES.with(|l| l.borrow().clone());
+        assert_eq!(launches.len(), 1, "exactly one launch attempt");
+        let (_, args, env) = &launches[0];
+        assert_eq!(args, &vec!["serve".to_owned()], "serve subcommand only");
+        assert_eq!(
+            env,
+            &vec![
+                ("OLLAMA_FLASH_ATTENTION".to_owned(), "1".to_owned()),
+                (
+                    "OLLAMA_HOST".to_owned(),
+                    serving.url.trim_start_matches("http://").to_owned()
+                ),
+                ("OLLAMA_KV_CACHE_TYPE".to_owned(), "q8_0".to_owned()),
+                ("OLLAMA_MAX_LOADED_MODELS".to_owned(), "1".to_owned()),
+                ("OLLAMA_NO_CLOUD".to_owned(), "1".to_owned()),
+                ("OLLAMA_NUM_PARALLEL".to_owned(), "1".to_owned()),
+            ],
+            "hardened serve environment"
+        );
+        assert!(
+            requests.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "start must poll readiness after the launch"
+        );
+    }
+
+    /// Why: a launch failure must be attributed to `Cannot start Ollama` with
+    /// the underlying cause preserved, and the readiness loop must not run (no
+    /// 15-second silent wait after a dead spawn).
+    #[test]
+    fn start_attributes_a_failed_launch_without_waiting_for_readiness() {
+        reset_process_fakes();
+        LAUNCH_FAIL.with(|f| f.set(true));
+        let silent = crate::test_support::MockServer::new(|_, _| None);
+        let settings = Settings {
+            ollama_url: silent.url.clone(),
+            ..Settings::default()
+        };
+        let client = Ollama::new(&settings).unwrap();
+        let error = client
+            .start_with(
+                Path::new("rr-fake-ollama"),
+                recording_launch,
+                30,
+                Duration::from_secs(500),
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Cannot start Ollama"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            format!("{error:#}").contains("injected spawn failure"),
+            "the spawn cause must survive attribution: {error:#}"
+        );
+    }
+
+    /// Why: a spawned runtime that never reports a supported version must fail
+    /// with the documented operator guidance on the bounded injected schedule,
+    /// instead of hanging or claiming success.
+    #[test]
+    fn start_reports_a_runtime_that_never_becomes_ready() {
+        reset_process_fakes();
+        let silent = crate::test_support::MockServer::new(|_, _| None);
+        let settings = Settings {
+            ollama_url: silent.url.clone(),
+            ..Settings::default()
+        };
+        let client = Ollama::new(&settings).unwrap();
+        let started = std::time::Instant::now();
+        let error = client
+            .start_with(
+                Path::new("rr-fake-ollama"),
+                recording_launch,
+                2,
+                Duration::from_millis(1),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Ollama did not become ready"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the readiness wait must respect the injected schedule"
+        );
+    }
+
+    /// Why: the installer contract is pinned (`Ollama.Ollama`, exact, winget,
+    /// both agreement switches) — a drifted argument vector would install the
+    /// wrong package or stall on an interactive prompt — and a refused installer
+    /// exit must never be reported as success.
+    #[test]
+    fn install_submits_the_pinned_contract_and_maps_a_refused_exit() {
+        reset_process_fakes();
+        install_with(recording_installer).unwrap();
+        let installs = INSTALLS.with(|l| l.borrow().clone());
+        assert_eq!(
+            installs,
+            vec![(
+                "winget".to_owned(),
+                vec![
+                    "install".to_owned(),
+                    "--id".to_owned(),
+                    "Ollama.Ollama".to_owned(),
+                    "--exact".to_owned(),
+                    "--source".to_owned(),
+                    "winget".to_owned(),
+                    "--accept-source-agreements".to_owned(),
+                    "--accept-package-agreements".to_owned(),
+                ]
+            )]
+        );
+
+        INSTALL_OUTCOME.with(|o| o.borrow_mut().push_back(Ok(false)));
+        let error = install_with(recording_installer).unwrap_err().to_string();
+        assert!(
+            error.contains("Ollama installer did not complete successfully"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Why: a spawn failure inside the installer runner must propagate
+    /// unchanged so the operator sees the real cause, not a masked success or a
+    /// generic refusal.
+    #[test]
+    fn install_propagates_an_installer_spawn_failure() {
+        reset_process_fakes();
+        INSTALL_OUTCOME.with(|o| {
+            o.borrow_mut()
+                .push_back(Err("injected installer spawn failure".to_owned()))
+        });
+        let error = install_with(recording_installer).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("injected installer spawn failure"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: when the installer cannot even be resolved the error must name the
+    /// manual fallback instead of a bare lookup failure.
+    #[cfg(windows)]
+    #[test]
+    fn system_installer_names_the_manual_fallback_when_the_installer_is_missing() {
+        let error = system_installer("rr-no-such-installer-binary", &[]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Install Microsoft App Installer"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: executable resolution prefers the per-user install exactly when its
+    /// binary exists and otherwise falls back to the PATH lookup; returning a
+    /// missing per-user path would spawn nothing, and skipping a present one
+    /// would run a different binary than the user installed. The per-user
+    /// program root is Windows behaviour, so this runs on that lane only.
+    #[cfg(windows)]
+    #[test]
+    fn executable_prefers_the_per_user_install_then_falls_back_to_the_path_lookup() {
+        let root = tempfile::tempdir().unwrap();
+        let installed = root
+            .path()
+            .join("Programs")
+            .join("Ollama")
+            .join("ollama.exe");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, b"stub").unwrap();
+        assert_eq!(
+            ollama_executable_from(Some(root.path().as_os_str().to_owned())).unwrap(),
+            installed
+        );
+        let empty = tempfile::tempdir().unwrap();
+        // The PATH fallback outcome is host-dependent (Ollama may or may not be
+        // installed), but it must never answer with the missing per-user path.
+        let fallback = ollama_executable_from(Some(empty.path().as_os_str().to_owned())).ok();
+        assert_ne!(
+            fallback,
+            Some(installed),
+            "a missing per-user install must fall through to the PATH lookup"
+        );
+    }
+
+    /// Why: on hosts without a per-user program root the resolution must be
+    /// exactly the PATH lookup — the injected root must not change the answer
+    /// where the per-user layout does not exist (that preference is Windows
+    /// behaviour, tested on that lane).
+    #[cfg(not(windows))]
+    #[test]
+    fn executable_resolution_ignores_the_program_root_on_hosts_without_one() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            ollama_executable_from(Some(root.path().as_os_str().to_owned())).ok(),
+            ollama_executable_from(None).ok()
+        );
     }
 }
 

@@ -3066,6 +3066,100 @@ mod orchestration_tests {
         assert!(worker.shutdown(Duration::from_secs(2)));
     }
 
+    /// Event codes published to the runtime journal so far.
+    ///
+    /// Why: the runtime journal is the durable record of worker lifecycle
+    /// events, so reading it observes crash outcomes deterministically while
+    /// sampling live state can race the crash teardown.
+    /// Inputs: `dir` — workspace directory. Output: every `event` code recorded
+    /// in `logs/runtime.jsonl` and its archives.
+    fn journaled_events(dir: &std::path::Path) -> std::collections::BTreeSet<String> {
+        let mut events = std::collections::BTreeSet::new();
+        let Ok(entries) = std::fs::read_dir(dir.join("logs")) else {
+            return events;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                if let Some(event) = record["event"].as_str() {
+                    events.insert(event.to_owned());
+                }
+            }
+        }
+        events
+    }
+
+    /// Why: the worker boundary is fail-closed. A panic anywhere on the worker
+    /// thread must latch delivery closed (paused and stop set), publish the
+    /// typed fatal state instead of dying silently, and leave a durable
+    /// `worker_panicked` record. A regression here turns a worker crash into a
+    /// process that looks alive while delivery silently continues or wedges.
+    #[test]
+    fn a_panicking_worker_latches_the_fail_closed_state_and_journals_the_crash() {
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        crate::test_support::headless_vault_seam();
+        let dir = tempfile::tempdir().unwrap();
+        // The worker adopts armed seams before doing any fail-closed work, so a
+        // policy loader that panics exercises the catch_unwind crash arm on the
+        // worker thread itself.
+        let panicking: crate::test_support::PolicyLoader = std::sync::Arc::new(|| {
+            panic!("synthetic policy-loader crash");
+        });
+        crate::test_support::arm_worker_seams(
+            Some(panicking),
+            None,
+            None,
+            None,
+            None,
+            None,
+            || {
+                let mut worker = Worker::spawn(dir.path().into(), false);
+                let start = Instant::now();
+                loop {
+                    let snapshot = worker.view();
+                    if snapshot.fatal {
+                        assert!(
+                            snapshot
+                                .error
+                                .contains("Background worker crashed unexpectedly"),
+                            "unexpected fatal state: {}",
+                            snapshot.error
+                        );
+                        break;
+                    }
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "worker did not publish the crash state"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(
+                    worker.paused.load(Ordering::SeqCst),
+                    "delivery must be latched paused after a worker panic"
+                );
+                assert!(
+                    worker.stop.load(Ordering::SeqCst),
+                    "the stop latch must be set after a worker panic"
+                );
+                assert!(worker.shutdown(Duration::from_secs(2)));
+                let events = journaled_events(dir.path());
+                assert!(
+                    events.contains("worker_panicked"),
+                    "the crash must be recorded in the runtime journal: {events:?}"
+                );
+                assert!(
+                    events.contains("process_started"),
+                    "the journal must also keep the normal startup record: {events:?}"
+                );
+            },
+        );
+    }
+
     /// Recovery commands must round-trip on a real (non-demo) workspace:
     /// backup, isolated drill, key export and key verification all succeed
     /// without stalling the worker.
