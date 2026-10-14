@@ -124,6 +124,10 @@ def main() -> int:
         help="Base model size in billions of parameters; used only by the "
              "fail-closed resource guard to estimate peak VRAM before start",
     )
+    parser.add_argument(
+        "--resume", type=Path, default=None,
+        help="Checkpoint directory to resume from (Trainer resume_from_checkpoint)",
+    )
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
     parser.add_argument("--progress-file", type=Path, help="Heartbeat JSON for live probing (default: output-dir/progress.json)")
     parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
@@ -381,7 +385,38 @@ def main() -> int:
         on_violation=stop_on_resource_breach,
         disk_path=str(args.output_dir.parent),
     ):
-        result = trainer.train()
+        result = trainer.train(resume_from_checkpoint=str(args.resume) if args.resume else None)
+    # Mid-step stall instrument: the trainer callback only runs between
+    # steps, so a wedge INSIDE a step is invisible to it. This daemon watch
+    # the heartbeat file's mtime instead and dumps every thread's stack when
+    # it goes stale (the wedge we must root-cause happens mid-step).
+    def stall_watchdog() -> None:
+        import faulthandler
+        import time as _t
+
+        dumped = False
+        while True:
+            _t.sleep(30)
+            try:
+                age = _t.time() - progress_path.stat().st_mtime
+            except OSError:
+                continue
+            if age > 120.0 and not dumped:
+                dumped = True
+                print(
+                    f"resource-guard: STALLED {age:.0f}s (heartbeat stale "
+                    f"mid-run); dumping all thread stacks",
+                    file=sys.stderr,
+                )
+                faulthandler.dump_traceback(file=sys.stderr)
+
+    threading_mod = __import__("threading")
+    threading_mod.Thread(target=stall_watchdog, daemon=True).start()
+
+    # Termination fix for ROCm process hangs: an explicit synchronize lets
+    # the runtime wind down (pytorch/pytorch#160759).
+    if device == "cuda":
+        torch.cuda.synchronize()
 
     model.save_pretrained(args_out)
     tokenizer.save_pretrained(args_out)
