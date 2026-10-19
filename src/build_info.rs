@@ -18,15 +18,27 @@ pub struct BuildInfo {
     pub identity_sha256: String,
 }
 
+/// Hash bytes to lowercase hex.
+///
+/// Inputs: `bytes` — any byte buffer. Output: `String` — the lowercase hex
+/// SHA-256 digest.
 fn hash_hex(bytes: &[u8]) -> String {
     crate::hex_lower(Sha256::digest(bytes))
 }
 
+/// Return the cached `Cargo.lock` fingerprint.
+///
+/// Inputs: none. Output: `&'static str` — the lowercase hex SHA-256 of the
+/// bundled `Cargo.lock`, computed once.
 fn lock_hash() -> &'static str {
     static HASH: OnceLock<String> = OnceLock::new();
     HASH.get_or_init(|| hash_hex(include_bytes!("../Cargo.lock")))
 }
 
+/// Whether a source commit identifies a verified build.
+///
+/// Inputs: `value` — commit string from the build. Output: `true` only for 40
+/// lowercase hex characters that are not the unverified placeholder.
 fn verified_commit(value: &str) -> bool {
     value.len() == 40
         && value != UNVERIFIED_COMMIT
@@ -34,6 +46,12 @@ fn verified_commit(value: &str) -> bool {
         && value.bytes().all(|byte| !byte.is_ascii_uppercase())
 }
 
+/// Hash the build identity fields into one digest.
+///
+/// Inputs: `application_version` — package version; `source_commit` — source
+/// commit; `rustc_version` — compiler version; `target` — target triple;
+/// `profile` — build profile; `cargo_lock_sha256` — lockfile digest. Output:
+/// `String` — the lowercase hex identity digest.
 fn identity_hash(
     application_version: &str,
     source_commit: &str,
