@@ -1,0 +1,12 @@
+# cargo-audit triage for this repository. Mirrors osv-scanner.toml so every
+# advisory tool reports the same documented decision. See that file for the
+# full rationale: the three ignores below are Linux-only accessibility
+# crates (accesskit_unix -> atspi -> zvariant 5 / zbus_names 4), unreachable
+# in the shipped Windows binary, with no patched version inside our
+# semver-compatible range ("unmaintained" notices, not exploitable defects).
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+]
