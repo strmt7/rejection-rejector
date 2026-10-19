@@ -118,6 +118,13 @@ def main() -> int:
              "head+tail, short rows pad with label -100. Uniform lengths "
              "give uniform GPU bursts, required by the utilization ceiling",
     )
+    parser.add_argument(
+        "--pace-load", action=argparse.BooleanOptionalAction, default=True,
+        help="Place the model onto the GPU leaf-module by leaf-module with "
+             "duty sleeps between moves (a direct device_map load produces "
+             "minutes of un-throttled bursts that breach the utilization "
+             "ceiling; verified live). Disable only for non-metered hosts",
+    )
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--grad-accum", type=int, default=8)
@@ -298,12 +305,47 @@ def main() -> int:
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=compute,
         )
+    pace_load = device == "cuda" and args.pace_load
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
         quantization_config=quant,
-        device_map={"": 0} if device == "cuda" else None,
+        device_map={"": "cpu"} if pace_load else ({"": 0} if device == "cuda" else None),
         dtype=torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float32,
     )
+    if pace_load:
+        # Paced GPU placement: a direct device_map={"": 0} load produces
+        # minutes of un-throttled GPU bursts that breach the utilization
+        # ceiling (verified live: the meter watchdog stopped every attempt
+        # inside its load phase). Load to CPU first, then move leaf modules
+        # one at a time with duty sleeps between — each burst is a single
+        # module move (~20-100ms), each gap follows the same duty formula
+        # as training steps.
+        import time as _tl
+
+        load_target = duty_cycle.validate_target_pct(args.max_gpu_utilization)
+
+        def _place(module: torch.nn.Module) -> None:
+            children = list(module.children())
+            if children:
+                for child in children:
+                    _place(child)
+                return
+            started = _tl.perf_counter()
+            module.to("cuda")
+            torch.cuda.synchronize()
+            on_time = _tl.perf_counter() - started
+            duty_cycle.paced_sleep(duty_cycle.sleep_seconds(on_time, load_target))
+
+        _place(model)
+        leftovers = sorted(
+            {str(p.device) for p in model.parameters()}
+            | {str(b.device) for b in model.buffers()}
+        )
+        if leftovers != ["cuda:0"]:
+            raise RuntimeError(
+                f"paced load must land every parameter/buffer on cuda:0; "
+                f"devices seen: {leftovers}"
+            )
     if args.load_in_4bit:
         if args.bf16:
             # Memory-lean path: peft's prepare casts embeddings/lm-head to
