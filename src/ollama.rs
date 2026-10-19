@@ -1369,6 +1369,12 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
 }
 #[cfg(test)]
 mod tests {
+    // Uncovered-by-design lines carry no product signal and are
+    // deliberately left alone: the real OS seams (`start`,
+    // `spawn_detached`, `install`, `system_installer`) spawn a runtime or
+    // open a browser and run only in production (tests inject runners),
+    // mock `_ => None` fallbacks only run on routes the protocol does not
+    // use, and `assert!` message arguments only evaluate on failure.
     use super::*;
 
     /// Why: each analysis failure stage maps to its own processing-failure code
@@ -1470,6 +1476,215 @@ mod tests {
                 .is_some_and(Verification::passed)
         );
         assert!(analysis.gpu_resident);
+    }
+
+    /// Wire-protocol runtime with scriptable verification answers and
+    /// per-probe GPU-residency answers.
+    ///
+    /// Why: the independent-verifier flags and the qualification failure
+    /// reason are fail-closed holds on unattended sending; each fires on
+    /// its own documented trigger and only a mock that can turn one probe
+    /// at a time distinguishes "preflight admitted the run" from
+    /// "residency lost afterwards".
+    fn scripted_verifier_runtime(
+        verify: &'static str,
+        resident_probes: &'static [bool],
+    ) -> crate::test_support::MockServer {
+        use serde_json::json;
+        let state: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let loaded = state.clone();
+        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = probes.clone();
+        crate::test_support::MockServer::new(move |route, body| {
+            let body = body.unwrap_or(json!({}));
+            let model = body["model"].as_str().unwrap_or("").to_owned();
+            match route {
+                "/api/version" => Some(crate::test_support::version_ok()),
+                "/api/tags" => Some(json!({"models": [
+                    {"name": crate::config::DEFAULT_MODEL, "digest": "a".repeat(64), "size": 7_200_000_000u64},
+                    {"name": crate::config::DEFAULT_VERIFIER_MODEL, "digest": "b".repeat(64), "size": 7_200_000_000u64}
+                ]})),
+                "/api/show" => Some(crate::test_support::show_ok()),
+                "/api/generate" => {
+                    if body["keep_alive"] == json!(0) {
+                        *loaded.lock().unwrap() = None;
+                    } else {
+                        *loaded.lock().unwrap() = Some(model);
+                    }
+                    Some(json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+                }
+                "/api/ps" => {
+                    let current = loaded.lock().unwrap().clone();
+                    let Some(name) = current else {
+                        return Some(json!({"models": []}));
+                    };
+                    let name_digest = if name == crate::config::DEFAULT_VERIFIER_MODEL {
+                        "b".repeat(64)
+                    } else {
+                        "a".repeat(64)
+                    };
+                    let index = probe.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let full = *resident_probes
+                        .get(index)
+                        .or_else(|| resident_probes.last())
+                        .unwrap_or(&true);
+                    let size = 7_200_000_000u64;
+                    Some(json!({"models": [{
+                        "name": name,
+                        "digest": name_digest,
+                        "size": size,
+                        "size_vram": if full { size } else { 1_000_000_000u64 },
+                        "context_length": 32768u32
+                    }]}))
+                }
+                "/api/chat" => {
+                    *loaded.lock().unwrap() = Some(model);
+                    let payload: serde_json::Value = serde_json::from_str(
+                        body["messages"][1]["content"].as_str().unwrap_or("{}"),
+                    )
+                    .unwrap_or(json!({}));
+                    let content = if payload.get("proposed_reply").is_some() {
+                        match verify {
+                            "error" => return None,
+                            "failed" => json!({"genuine_rejection":true,"claims_supported":true,
+                                "professional":false,"injection_free":true,"purpose_aligned":true,
+                                "reason":"Synthetic verification failure"}),
+                            _ => crate::test_support::verification_ok(),
+                        }
+                    } else if payload.get("tone").is_some() {
+                        json!({"body": crate::test_support::draft_body("Test Applicant")})
+                    } else {
+                        crate::test_support::verdict(
+                            "We have decided not to move forward with your application.",
+                        )
+                    };
+                    Some(
+                        json!({"model":"m","message":{"role":"assistant","content":content.to_string()},
+                        "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                    )
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// Settings for the verifier pipeline fixture (both models pinned).
+    fn verifier_settings(url: &str) -> Settings {
+        use crate::config::{DEFAULT_MODEL, DEFAULT_VERIFIER_MODEL, ReplyLanguage};
+        Settings {
+            signature: "Test Applicant".into(),
+            reply_language: ReplyLanguage::English,
+            model: DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            independent_verifier_enabled: true,
+            verifier_model: DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some("b".repeat(64)),
+            ollama_url: url.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Why: a verification that does not pass and a verifier that loses full
+    /// GPU residency after preflight admitted the run are independent holds
+    /// on unattended sending — both flags must fire (plus the pipeline-level
+    /// residency hold) so a human reviews the reply instead of it sending.
+    #[test]
+    fn independent_verifier_non_pass_and_lost_residency_hold_the_reply() {
+        // Resident at every preflight gate, partially swapped afterwards:
+        // the documented "lost during analysis" condition. Probes in order:
+        // primary preflight, primary pre-verification, the unload peek,
+        // verifier preflight, then the two verifier residency reads.
+        let runtime = scripted_verifier_runtime("failed", &[true, true, true, true, false, false]);
+        let settings = verifier_settings(&runtime.url);
+        let llm = Ollama::new(&settings).unwrap();
+        let email = sample_email(
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        let (analysis, _draft, flags) = llm.analyze(&email).unwrap();
+        assert_eq!(
+            flags,
+            [
+                "Independent verifier did not pass",
+                "Independent verifier lost full GPU residency",
+                "Full GPU residency was lost during analysis",
+            ]
+        );
+        assert!(analysis.verification.is_some(), "the verdict is recorded");
+        assert!(
+            !analysis
+                .verification
+                .as_ref()
+                .is_some_and(Verification::passed),
+            "the recorded verdict must read as not passed"
+        );
+        assert_eq!(analysis.verification_model_digest, "b".repeat(64));
+    }
+
+    /// Why: a verifier outage is not a pass — the reply must be held for
+    /// human review with the outage named, and no verification may be
+    /// recorded (a fabricated pass would clear the hold).
+    #[test]
+    fn independent_verifier_outage_holds_the_reply() {
+        let runtime = scripted_verifier_runtime("error", &[]);
+        let settings = verifier_settings(&runtime.url);
+        let llm = Ollama::new(&settings).unwrap();
+        let email = sample_email(
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        let (analysis, _draft, flags) = llm.analyze(&email).unwrap();
+        assert_eq!(
+            flags,
+            ["Independent verification failed; human review required"]
+        );
+        assert!(analysis.verification.is_none());
+    }
+
+    /// Why: a failed qualification must name every hold reason so the
+    /// operator knows what to fix; silently failing (or qualifying a model
+    /// whose flags are non-empty) would arm a broken pipeline.
+    #[test]
+    fn qualification_failure_names_the_joined_flag_reasons() {
+        use crate::config::{DEFAULT_MODEL, ReplyLanguage};
+        // Resident for the preflight gate, partially swapped for the
+        // pipeline's own residency probe.
+        let runtime = scripted_verifier_runtime("ok", &[true, false]);
+        let settings = Settings {
+            signature: "Test Applicant".into(),
+            reply_language: ReplyLanguage::English,
+            model: DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Default::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let error = llm.qualify().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Full local pipeline qualification failed: Full GPU residency was lost during analysis"
+        );
+    }
+
+    /// Why: with the independent verifier enabled the runtime profile must
+    /// measure the VERIFIER's residency (it is the model left on the GPU
+    /// after verification), not the primary model's — profiling the wrong
+    /// model would qualify a runtime configuration that cannot verify.
+    #[test]
+    fn runtime_profile_with_the_independent_verifier_measures_its_residency() {
+        let runtime = scripted_verifier_runtime("ok", &[]);
+        let settings = verifier_settings(&runtime.url);
+        let llm = Ollama::new(&settings).unwrap();
+        let profile = llm
+            .profile_synthetic_runtime()
+            .expect("profile is measured");
+        assert_eq!(profile.model, crate::config::DEFAULT_MODEL);
+        assert_eq!(profile.digest, "a".repeat(64));
+        assert!(
+            runtime.routes().contains(&"/api/ps".to_owned()),
+            "residency probes must have run: {:?}",
+            runtime.routes()
+        );
     }
 
     #[test]

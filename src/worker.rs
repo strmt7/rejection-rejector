@@ -2470,6 +2470,15 @@ mod tests {
 
 #[cfg(test)]
 mod orchestration_tests {
+    // Uncovered-by-design lines in these tests carry no product signal and
+    // are deliberately left alone: `assert!` message arguments only
+    // evaluate when an assertion fails, the `journaled_*`/`wait_for` test
+    // helpers' fallback branches only run on fixture anomalies or test
+    // failure, the timer-wait poll internals only run when the first check
+    // misses, and the `Api`/`OpenMetrics`/`ApiWrite` arm and the
+    // channel-disconnect arm of the command dispatcher are defense-in-depth
+    // kept for future refactors (those commands are pre-routed above the
+    // match, and the loop holds its own channel sender for timer work).
     use super::*;
     use crate::engine::Engine;
     use crate::gmail::{FetchFailure, FetchFailureKind};
