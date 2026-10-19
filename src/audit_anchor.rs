@@ -29,6 +29,10 @@ pub struct AuditAnchor {
     pub audit_head: String,
 }
 
+/// Hash one value under a domain tag.
+///
+/// Inputs: `domain` — domain-separation tag; `value` — bytes to hash. Output:
+/// `String` — the lowercase hex SHA-256 of the tagged, length-prefixed value.
 fn sha256_domain(domain: &[u8], value: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -37,10 +41,19 @@ fn sha256_domain(domain: &[u8], value: &[u8]) -> String {
     crate::hex_lower(digest.finalize())
 }
 
+/// Whether a string is a well-formed audit hash.
+///
+/// Inputs: `value` — candidate hash. Output: `true` only for exactly 64 ASCII
+/// hex characters.
 fn valid_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Read one small regular file, refusing symlinks.
+///
+/// Inputs: `path` — file to read (must exist, be regular, and not be a
+/// symlink). Output: `Result<Vec<u8>>` — the file bytes within the size limit;
+/// error otherwise.
 fn read_small_regular_file(path: &Path) -> Result<Vec<u8>> {
     ensure!(path.is_file(), "{} is missing", path.display());
     ensure!(
@@ -119,6 +132,11 @@ pub fn write_anchor(store: &Store, data_dir: &Path, out: &Path) -> Result<AuditA
     Ok(anchor)
 }
 
+/// Parse and validate one serialized audit anchor.
+///
+/// Inputs: `bytes` — anchor JSON bytes within the size limit. Output:
+/// `Result<AuditAnchor>` — the parsed anchor; error for oversized, invalid, or
+/// out-of-range anchors.
 fn parse_anchor(bytes: &[u8]) -> Result<AuditAnchor> {
     ensure!(
         bytes.len() as u64 <= MAX_ANCHOR_BYTES,
@@ -157,6 +175,12 @@ pub fn read_anchor(path: &Path) -> Result<AuditAnchor> {
     parse_anchor(&read_small_regular_file(path)?)
 }
 
+/// Verify one anchor against the workspace and audit journal.
+///
+/// Inputs: `store` — store whose journal is checked; `data_dir` — workspace
+/// directory fingerprinted; `anchor` — anchor to verify. Output: `Result<()>` —
+/// `Ok` when the anchor belongs to this workspace and extends the journal;
+/// error otherwise (fail closed).
 fn verify_anchor_value(store: &Store, data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
     ensure!(
         anchor.workspace_fingerprint == workspace_fingerprint(data_dir)?,
@@ -225,6 +249,11 @@ fn os_anchor_required_from(value: std::result::Result<String, std::env::VarError
 // Linux has no credential store). Every `cfg(any(windows, ...))` site in this
 // module is OS-store product code, not a test gate; the `cfg(not(...))` arms
 // below fail closed with the documented wording on other platforms.
+/// Open the OS credential-store entry for the audit anchor.
+///
+/// Inputs: `data_dir` — workspace directory supplying the vault id. Output:
+/// `Result<keyring::Entry>` — the service entry; error when the credential
+/// store is unreachable.
 #[cfg(any(windows, target_os = "macos"))]
 fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
     let id = vault_id(data_dir)?;
@@ -232,6 +261,11 @@ fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
         .context("Cannot access the OS credential-store audit anchor")
 }
 
+/// Read the OS-protected audit anchor.
+///
+/// Inputs: `data_dir` — workspace directory. Output:
+/// `Result<Option<AuditAnchor>>` — the stored anchor, `None` when absent; error
+/// when the credential store fails (fail closed).
 #[cfg(any(windows, target_os = "macos"))]
 fn read_os_anchor(data_dir: &Path) -> Result<Option<AuditAnchor>> {
     let entry = os_anchor_entry(data_dir)?;
@@ -258,6 +292,11 @@ fn parse_os_credential(
     }
 }
 
+/// Write the OS-protected audit anchor.
+///
+/// Inputs: `data_dir` — workspace directory; `anchor` — anchor to store.
+/// Output: `Result<()>` — `Ok` once the serialized anchor is written within the
+/// size limit.
 #[cfg(any(windows, target_os = "macos"))]
 fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
     let serialized = serde_json::to_string(anchor)?;
