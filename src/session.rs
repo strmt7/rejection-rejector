@@ -30,6 +30,10 @@ pub(crate) fn ensure_restore_complete(directory: &Path) -> Result<()> {
     }
 }
 
+/// Flush a directory entry to disk where the platform supports it.
+///
+/// Inputs: `directory` — directory to sync. Output: `Result<()>` — `Ok` after
+/// the sync (a no-op on non-Unix).
 fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     fs::File::open(directory)?.sync_all()?;
@@ -129,6 +133,11 @@ impl SessionLease {
 }
 
 impl Drop for SessionLease {
+    /// Release the session marker when the lease ends cleanly.
+    ///
+    /// Inputs: none (`&mut self`). Output: none — the marker is removed under the
+    /// instance lock, except while panicking, when it stays to record the unclean
+    /// exit.
     fn drop(&mut self) {
         if std::thread::panicking() {
             return;
@@ -155,6 +164,10 @@ impl Drop for SessionLease {
     }
 }
 
+/// Refuse a symlinked session marker path.
+///
+/// Inputs: `path` — marker path to check. Output: `Result<()>` — `Ok` when the
+/// path is absent or a regular non-symlink file; error otherwise.
 fn reject_symlink_if_present(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => ensure!(
@@ -167,6 +180,10 @@ fn reject_symlink_if_present(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write one session marker within the size limit.
+///
+/// Inputs: `path` — marker file path; `marker` — marker to serialize. Output:
+/// `Result<()>` — `Ok` once the JSON marker is written privately.
 fn write_marker(path: &Path, marker: &SessionMarker) -> Result<()> {
     reject_symlink_if_present(path)?;
     let data = serde_json::to_vec(marker)?;
@@ -189,6 +206,10 @@ fn write_marker(path: &Path, marker: &SessionMarker) -> Result<()> {
     Ok(())
 }
 
+/// Read one session marker within the size limit.
+///
+/// Inputs: `path` — marker file path. Output: `Result<Vec<u8>>` — the marker
+/// bytes; error for symlinks or oversized markers.
 fn read_bounded(path: &Path) -> Result<Vec<u8>> {
     reject_symlink_if_present(path)?;
     let metadata = fs::metadata(path)?;
