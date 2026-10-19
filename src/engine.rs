@@ -66,6 +66,12 @@ pub struct AutomaticPolicyDecision {
     pub blocks: Vec<AutomaticPolicyBlock>,
 }
 
+/// Append one automatic-policy block, deduplicated by code.
+///
+/// Inputs: `blocks` — the block list being built; `code` — policy code
+/// identifying the block; `message` — operator-facing policy explanation.
+/// Output: none — the block is pushed only when no block with `code` exists
+/// yet.
 fn push_policy_block(
     blocks: &mut Vec<AutomaticPolicyBlock>,
     code: AutomaticPolicyCode,
@@ -101,6 +107,11 @@ impl DispatchFailure {
     pub(crate) fn retryable(message: impl Into<String>) -> Self {
         Self::retryable_code("retryable_dispatch", message)
     }
+    /// Build a retryable dispatch failure with an explicit code.
+    ///
+    /// Inputs: `code` — stable failure code; `message` — operator-facing failure
+    /// description. Output: [`Self`] with `DispatchFailureKind::Retryable` and the
+    /// given code.
     fn retryable_code(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::Retryable,
@@ -115,6 +126,11 @@ impl DispatchFailure {
     pub(crate) fn review(message: impl Into<String>) -> Self {
         Self::review_code("review_required_dispatch", message)
     }
+    /// Build a review-required dispatch failure with an explicit code.
+    ///
+    /// Inputs: `code` — stable failure code; `message` — operator-facing failure
+    /// description. Output: [`Self`] with `DispatchFailureKind::ReviewRequired` and
+    /// the given code.
     fn review_code(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::ReviewRequired,
@@ -133,6 +149,11 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
+    /// Build a state-handled dispatch failure.
+    ///
+    /// Inputs: `message` — operator-facing failure description. Output: [`Self`]
+    /// with `DispatchFailureKind::StateHandled` and the stable
+    /// `dispatch_state_handled` code.
     fn handled(message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::StateHandled,
@@ -140,6 +161,11 @@ impl DispatchFailure {
             message: message.into(),
         }
     }
+    /// Build a state-handled dispatch failure with an explicit code.
+    ///
+    /// Inputs: `code` — stable failure code; `message` — operator-facing failure
+    /// description. Output: [`Self`] with `DispatchFailureKind::StateHandled` and
+    /// the given code.
     fn handled_code(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind: DispatchFailureKind::StateHandled,
@@ -162,12 +188,22 @@ impl DispatchFailure {
     }
 }
 impl std::fmt::Display for DispatchFailure {
+    /// Render the failure as its operator-facing message.
+    ///
+    /// Inputs: `f` — formatter to write into. Output: [`std::fmt::Result`] — writes
+    /// `self.message` only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 impl std::error::Error for DispatchFailure {}
 
+/// Turn one dispatch precondition into the typed failure.
+///
+/// Inputs: `condition` — invariant that must hold; `kind` — failure kind
+/// assigned when it does not; `message` — operator-facing failure description.
+/// Output: `Ok(())` when the condition holds, else a [`DispatchFailure`]
+/// carrying the kind and message.
 fn dispatch_require(
     condition: bool,
     kind: DispatchFailureKind,
@@ -296,6 +332,12 @@ pub struct Engine {
     _temporary: Option<tempfile::TempDir>,
     pub directory: PathBuf,
 }
+/// Disarm delivery settings after an unclean shutdown.
+///
+/// Inputs: `settings` — settings mutated in place; `unclean` — whether the
+/// previous session ended uncleanly. Output: `true` when the disarm changed
+/// `settings` and the caller must persist; `false` when the session was clean
+/// or nothing changed.
 fn disarm_after_unclean_session(settings: &mut Settings, unclean: bool) -> bool {
     if !unclean {
         return false;
@@ -305,6 +347,13 @@ fn disarm_after_unclean_session(settings: &mut Settings, unclean: bool) -> bool 
     *settings != before
 }
 
+/// Observe the loaded enterprise policy against the persisted revision floor.
+///
+/// Inputs: `db` — state store holding the `enterprise_policy_revision_floor`
+/// meta value; `loaded` — the policy currently loaded, if any. Output:
+/// `Result<(Option<PolicyRevisionFloor>, bool)>` — the observed floor and
+/// whether observing changed it; `(None, false)` without a loaded policy or for
+/// policy version 1.
 fn staged_policy_revision_floor(
     db: &Store,
     loaded: Option<&LoadedPolicy>,
@@ -1213,6 +1262,12 @@ impl Engine {
         }
         Ok(true)
     }
+    /// Run the analysis stage for one job whose message content is loaded.
+    ///
+    /// Inputs: `job` — job to analyze, mutated in place; the message content must
+    /// already be fetched. Output: `Result<()>` — on success the job carries its
+    /// analysis outcome; messages outside the configured age window are deferred
+    /// and their content cleared instead.
     fn analyze_job(&mut self, job: &mut Job) -> Result<()> {
         let Some(email) = job.email.as_ref() else {
             anyhow::bail!("Message content must be fetched before analysis");
@@ -1390,6 +1445,13 @@ impl Engine {
             .map_err(anyhow::Error::new)
     }
 
+    /// Validate every dispatch precondition and send one approved reply.
+    ///
+    /// Inputs: `id` — job identifier; `revision` — the job revision the approval
+    /// was given for; `expected_hash` — draft body hash the operator confirmed;
+    /// `automatic` — whether this is an automatic send. Output: `Result<(),
+    /// DispatchFailure>` — `Ok(())` once the reply is sent; otherwise the first
+    /// violated precondition as the matching typed failure.
     fn send_attempt(
         &mut self,
         id: &str,
@@ -1763,6 +1825,11 @@ impl Engine {
         }
         Ok(())
     }
+    /// Seed the demo engine with sample settings and jobs.
+    ///
+    /// Inputs: none (`&mut self` — the demo engine state to populate). Output:
+    /// `Result<()>` — the engine holds a demo account, signature, and sample
+    /// recruiting messages.
     fn seed_demo(&mut self) -> Result<()> {
         self.account = "demo@example.invalid".into();
         self.settings.signature = "Alex Morgan".into();
