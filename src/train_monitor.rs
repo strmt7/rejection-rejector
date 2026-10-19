@@ -298,8 +298,10 @@ mod tests {
     // and the CLI default must never drift apart from it.
     #[test]
     fn slider_max_is_the_operator_ceiling() {
-        assert_eq!(SLIDER_MAX_PCT, 50.0);
-        assert!(SLIDER_MAX_PCT <= MAX_TARGET_PCT);
+        const {
+            assert!(SLIDER_MAX_PCT <= MAX_TARGET_PCT);
+            assert!(SLIDER_MAX_PCT == 50.0);
+        }
         assert!(validate_target(SLIDER_MAX_PCT).is_some());
     }
 
