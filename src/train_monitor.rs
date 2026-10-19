@@ -59,7 +59,7 @@ pub struct ProgressSnapshot {
 impl ProgressSnapshot {
     /// Age of this heartbeat.
     ///
-    /// Input: `now_unix` — current unix time in seconds.
+    /// Inputs: `now_unix` — current unix time in seconds.
     /// Output: seconds since the heartbeat was written (0.0 when the
     /// timestamp is missing or in the future).
     pub fn staleness(&self, now_unix: f64) -> f64 {
@@ -71,7 +71,7 @@ impl ProgressSnapshot {
 
     /// Completed fraction of the run.
     ///
-    /// Input: none.
+    /// Inputs: none.
     /// Output: `step / total_steps` clamped to [0.0, 1.0] (0.0 when the
     /// total is zero).
     pub fn fraction(&self) -> f32 {
@@ -83,7 +83,7 @@ impl ProgressSnapshot {
 
     /// Minutes to completion at the observed rate.
     ///
-    /// Input: none.
+    /// Inputs: none.
     /// Output: `Some(minutes)` when the rate is computable and positive,
     /// `None` otherwise.
     pub fn eta_minutes(&self) -> Option<f64> {
@@ -97,7 +97,7 @@ impl ProgressSnapshot {
 
 /// Parse the trainer heartbeat file.
 ///
-/// Input: raw JSON text of `progress.json`.
+/// Inputs: raw JSON text of `progress.json`.
 /// Output: `Some(ProgressSnapshot)` when the document is well-formed with
 /// numeric `step`/`total_steps`, `None` on any malformed input (fail
 /// closed: the monitor shows "no data" rather than invented numbers).
@@ -108,7 +108,7 @@ pub fn parse_progress(json: &str) -> Option<ProgressSnapshot> {
 
 /// Path of the live duty control file for a given heartbeat path.
 ///
-/// Input: path to `progress.json`.
+/// Inputs: path to `progress.json`.
 /// Output: the sibling `duty.json` path.
 pub fn duty_path_for(progress_path: &Path) -> PathBuf {
     progress_path
@@ -119,7 +119,7 @@ pub fn duty_path_for(progress_path: &Path) -> PathBuf {
 
 /// Validate a utilization target.
 ///
-/// Input: any float.
+/// Inputs: any float.
 /// Output: `Some(pct)` within [MIN_TARGET_PCT, MAX_TARGET_PCT],
 /// `None` otherwise (fail closed).
 pub fn validate_target(pct: f64) -> Option<f64> {
@@ -132,7 +132,7 @@ pub fn validate_target(pct: f64) -> Option<f64> {
 
 /// Read the live utilization target.
 ///
-/// Input: control-file path (`{"target_pct": <float>}`).
+/// Inputs: control-file path (`{"target_pct": <float>}`).
 /// Output: `Some(pct)` for a valid document, `None` when the file is
 /// missing, malformed or out of range (caller keeps its last value).
 /// Never panics.
@@ -144,7 +144,7 @@ pub fn read_duty(path: &Path) -> Option<f64> {
 
 /// Atomically write the live utilization target.
 ///
-/// Input: control-file path, target percentage.
+/// Inputs: control-file path, target percentage.
 /// Output: `Ok(())` after the file is replaced atomically (tmp + rename,
 /// so the trainer never observes a partial write); `Err` for out-of-range
 /// targets or filesystem failures.
@@ -159,7 +159,7 @@ pub fn write_duty(path: &Path, target_pct: f64) -> io::Result<()> {
 
 /// Duty-cycle off-time for one step.
 ///
-/// Input: measured on-time of the step in seconds, target utilization
+/// Inputs: measured on-time of the step in seconds, target utilization
 /// percentage (validated range; clamped defensively).
 /// Output: seconds to sleep so time-averaged utilization matches the
 /// target (0.0 at 100%; `on * (100 - t) / t` otherwise; never negative).
@@ -173,7 +173,7 @@ pub fn pacing_sleep_seconds(step_seconds: f64, target_pct: f64) -> f64 {
 
 /// Current unix time in seconds.
 ///
-/// Input: none.
+/// Inputs: none.
 /// Output: seconds since the unix epoch (0.0 if the system clock is
 /// before 1970).
 pub fn now_unix() -> f64 {
