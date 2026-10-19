@@ -160,3 +160,21 @@ rule exists because it previously caused a real defect or delay.
   (per-window enumeration with class names, not the first handle a
   convenience API returns).
 
+## HF Trainer resume-from-checkpoint can report 0 steps (2026-10-19)
+
+- `trainer.train(resume_from_checkpoint=...)` on a valid checkpoint
+  (global_step 175 < max_steps 294, epoch 1.79) ran 1.09 s, reported
+  `train_steps_per_second: 0`, and exited 0 at the resumed epoch — zero
+  optimizer steps. Not the dataloader-skip bug (`ignore_data_skip=True`
+  did not change it), not the resource guard (no stop message). Root cause
+  not yet isolated in transformers' `_init_training_state` / epoch-range
+  math. WORKAROUND: a fresh run (no `--resume`) trains to completion; the
+  checkpoints remain valid for weight state. If this recurs, capture
+  `transformers` INFO logs (`Resuming training ... epoch X`) to see the
+  computed `epochs_trained`, and compare `len_dataloader` at resume vs save.
+- Detached WSL launches (`wsl bash -c '... nohup ... & disown'`) are
+  UNRELIABLE — the process sometimes never starts and the redirect log is
+  never created. Verify a launch actually produced a live process + a
+  growing log before trusting it; re-launch through a known-good wrapper
+  (e.g. tools/train_guarded.sh) rather than hand-rolled nohup lines.
+
