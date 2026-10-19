@@ -211,6 +211,11 @@ fn write_report_to(data: &Value, path: &Path, out: &mut dyn std::io::Write) -> R
     Ok(())
 }
 
+/// Write the diagnostics report to one path.
+///
+/// Inputs: `engine` — engine carrying the state to report; `path` — destination
+/// file. Output: `Result<()>` — `Ok` once the rendered report is written
+/// privately.
 pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
     let data = report(engine)?;
     let mut rendered = Vec::new();

@@ -29,6 +29,10 @@ enum CaseTag {
 }
 
 impl CaseTag {
+    /// Render one case tag as its wire string.
+    ///
+    /// Inputs: `self` — the case tag. Output: `&'static str` — the stable report
+    /// key.
     fn as_str(self) -> &'static str {
         match self {
             Self::Multilingual => "multilingual",
@@ -48,6 +52,11 @@ impl CaseTag {
         }
     }
 
+    /// Whether the tag marks a critical negative outcome that must fail closed.
+    ///
+    /// Inputs: `self` — the case tag to classify. Output: `true` for the
+    /// critical-negative tags (interview, offer, recruiter correction, quoted
+    /// history, prompt injection).
     fn critical_negative(self) -> bool {
         matches!(
             self,
@@ -137,6 +146,10 @@ fn fixtures() -> Result<Vec<Case>> {
 }
 
 /// Evaluate the complete configured local pipeline on synthetic recruiting mail.
+///
+/// Inputs: `settings` — settings describing the configured pipeline (delivery
+/// is disarmed during evaluation). Output: `Result<serde_json::Value>` — the
+/// evaluation report over the synthetic fixture corpus.
 ///
 /// This is deliberately application-specific. False rejection replies are weighted
 /// more heavily than missed rejections because an unattended reply to an interview,
@@ -494,11 +507,21 @@ fn tag_summary_mut<'a>(
         .ok_or_else(|| anyhow::anyhow!("Evaluation tag registry invariant failed"))
 }
 
+/// Divide two counts into a ratio, guarding the zero denominator.
+///
+/// Inputs: `numerator` — count above the line; `denominator` — count below it.
+/// Output: `Some(f64)` with the quotient, or `None` when `denominator` is zero.
 fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     (denominator != 0).then(|| numerator as f64 / denominator as f64)
 }
 
 /// Weighted task score over the five aggregation components.
+///
+/// Inputs: `fp_avoidance` — false-positive avoidance rate; `recall` — rejection
+/// recall; `pipeline_rate` — pipeline completion rate; `accuracy` —
+/// classification accuracy; `completion_rate` — end-to-end completion rate.
+/// Output: `f64` — the weighted task score on a 0..=100 scale (missing
+/// components score 0.0).
 ///
 /// False-positive avoidance carries the largest weight (0.35): replying to an
 /// offer, interview or adversarial message is materially worse than holding a
@@ -519,6 +542,10 @@ fn task_score(
 }
 
 /// Pick the recommendation among evaluated candidates.
+///
+/// Inputs: `candidates` — evaluated candidate reports. Output: `Option<(String,
+/// f64)>` — the winning (model name, task score) among eligible candidates;
+/// `None` when none is eligible.
 ///
 /// Only candidates that passed every eligibility gate may win; among those the
 /// highest task score wins, with earlier candidate order breaking exact ties.

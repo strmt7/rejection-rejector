@@ -88,6 +88,11 @@ fn ensure_dispatch_allowed_for(value: Option<OsString>) -> Result<()> {
     Ok(())
 }
 
+/// Evaluate the emergency-stop configuration value.
+///
+/// Inputs: `value` — `RR_EMERGENCY_STOP` environment value, if set. Output:
+/// `Result<EmergencyStopStatus>` — the configured/active status with its
+/// reason; error on invalid values (fail closed).
 fn evaluate(value: Option<OsString>) -> Result<EmergencyStopStatus> {
     let Some(value) = value else {
         return Ok(EmergencyStopStatus {
@@ -108,6 +113,11 @@ fn evaluate(value: Option<OsString>) -> Result<EmergencyStopStatus> {
     status_for_path(&path)
 }
 
+/// Evaluate the emergency-stop sentinel file.
+///
+/// Inputs: `path` — sentinel path. Output: `Result<EmergencyStopStatus>` — the
+/// status derived from the sentinel (symlinks and oversized files refused);
+/// error otherwise.
 fn status_for_path(path: &Path) -> Result<EmergencyStopStatus> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {

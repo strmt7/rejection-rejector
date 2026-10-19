@@ -33,6 +33,10 @@ const SUBSTANTIVE_SEGMENT_WORDS: usize = 3;
 /// Minimum words before a drafted reply's language counts as verifiable.
 const MIN_VERIFIABLE_REPLY_WORDS: usize = 5;
 
+/// Build the language detector with preloaded models.
+///
+/// Inputs: none. Output: `LanguageDetector` — the detector over all supported
+/// languages.
 fn detector() -> LanguageDetector {
     LanguageDetectorBuilder::from_all_languages()
         .with_preloaded_language_models()

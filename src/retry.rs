@@ -121,10 +121,19 @@ impl RetryGate {
     }
 }
 
+/// Add random jitter to one retry delay.
+///
+/// Inputs: `delay` — base delay; `cap` — maximum delay. Output: `Duration` —
+/// the jittered, capped delay.
 fn jitter(delay: Duration, cap: Duration) -> Duration {
     jitter_with_rng(delay, cap, &mut rand::rng())
 }
 
+/// Add jitter to one retry delay using a supplied RNG.
+///
+/// Inputs: `delay` — base delay; `cap` — maximum delay; `rng` — randomness
+/// source. Output: `Duration` — the delay spread by up to a fifth and clamped
+/// to `cap` (un-jittered when randomness fails).
 fn jitter_with_rng(delay: Duration, cap: Duration, rng: &mut impl TryRng) -> Duration {
     let spread_seconds = delay.as_secs() / 5;
     if spread_seconds == 0 || delay >= cap {

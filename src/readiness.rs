@@ -33,6 +33,11 @@ pub struct OperationalContext<'a> {
     pub now: DateTime<Utc>,
 }
 
+/// Derive the operational indicators behind readiness reporting.
+///
+/// Inputs: `context` — operational context (settings, counts, liveness,
+/// integrity, storage, and backup state). Output: `OperationalIndicators` — the
+/// derived indicator set.
 pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalIndicators {
     let OperationalContext {
         settings,
@@ -119,6 +124,13 @@ pub struct RuntimeReadinessContext<'a> {
     pub emergency_stop_active: bool,
 }
 
+/// Assess runtime readiness from named inputs.
+///
+/// Inputs: `settings` — current settings; `database_integrity_ok` — integrity
+/// verdict; `storage_write_safe` — storage headroom verdict; `connected` —
+/// mailbox connection state; `send_scope` — whether sending is in scope;
+/// `paused` — worker pause flag; `stopping` — shutdown flag. Output:
+/// `RuntimeReadiness` — the readiness verdict.
 pub fn assess(
     settings: &Settings,
     database_integrity_ok: bool,
@@ -143,6 +155,13 @@ pub fn assess(
 /// Compatibility wrapper retained because it was published as an additive v0.2 API.
 /// New code should prefer assess_context so readiness inputs remain named and
 /// auditable as the enterprise gate evolves.
+///
+/// Inputs: `settings` — current settings; `database_integrity_ok` — integrity
+/// verdict; `storage_write_safe` — storage headroom verdict; `connected` —
+/// mailbox connection state; `send_scope` — whether sending is in scope;
+/// `paused` — worker pause flag; `stopping` — shutdown flag;
+/// `emergency_stop_active` — whether the emergency stop is engaged. Output:
+/// `RuntimeReadiness` — the readiness verdict.
 #[allow(clippy::too_many_arguments)]
 pub fn assess_with_emergency(
     settings: &Settings,
@@ -166,6 +185,10 @@ pub fn assess_with_emergency(
     })
 }
 
+/// Assess runtime readiness from one named context.
+///
+/// Inputs: `context` — readiness context carrying the named verdict fields.
+/// Output: `RuntimeReadiness` — the readiness verdict.
 pub fn assess_context(context: RuntimeReadinessContext<'_>) -> RuntimeReadiness {
     let RuntimeReadinessContext {
         settings,
