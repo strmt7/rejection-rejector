@@ -97,7 +97,11 @@ jobs:
               echo "No code lines changed since $since; no mutants to run."
             fi
           fi
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
+            # Weekly schedule = the deep safety-critical-core pass. On push this
+            # list must NOT be added: combining --in-diff with the whole core
+            # made cargo-mutants mutate the entire core on every push (2.5h for
+            # a non-Rust diff), instead of only the changed lines.
             scope_args+=(
               --file src/store.rs
               --file src/vault.rs
