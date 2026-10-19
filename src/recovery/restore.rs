@@ -40,6 +40,7 @@ pub(crate) mod failpoints {
 
     thread_local! {
         static FAIL_POST_INSTALL_VALIDATION: Cell<bool> = const { Cell::new(false) };
+        static FAIL_INSTALL_RENAME: Cell<bool> = const { Cell::new(false) };
     }
 
     /// Run `body` with the post-install validation forced to fail on this thread.
@@ -53,6 +54,26 @@ pub(crate) mod failpoints {
     /// Whether the post-install validation must fail on this thread.
     pub(crate) fn post_install_validation_failing() -> bool {
         FAIL_POST_INSTALL_VALIDATION.with(|flag| flag.get())
+    }
+
+    /// Run `body` with the final install rename forced to fail on this thread.
+    ///
+    /// Why: the mid-install rollback path (every moved live file restored,
+    /// the restore transaction completed, the failure named) is otherwise
+    /// only reachable through a filesystem failure between the validated
+    /// moves and the final rename — the platform trigger is a Windows
+    /// share-lock refusal, so injecting it keeps the rollback semantics
+    /// pinned on every platform.
+    pub(crate) fn with_install_rename_failure<T>(body: impl FnOnce() -> T) -> T {
+        FAIL_INSTALL_RENAME.with(|flag| flag.set(true));
+        let result = body();
+        FAIL_INSTALL_RENAME.with(|flag| flag.set(false));
+        result
+    }
+
+    /// Whether the final install rename must fail on this thread.
+    pub(crate) fn install_rename_failing() -> bool {
+        FAIL_INSTALL_RENAME.with(|flag| flag.get())
     }
 }
 
@@ -185,6 +206,11 @@ pub(super) fn restore_backup_with_vault(
                 moved.push(((*source).clone(), destination.clone()));
             }
         }
+        #[cfg(test)]
+        ensure!(
+            !failpoints::install_rename_failing(),
+            "Injected install failure"
+        );
         fs::rename(&candidate, &live)?;
         Ok(())
     })();
@@ -462,6 +488,35 @@ mod tests {
         assert_no_staging(&data);
         crate::session::ensure_restore_complete(&data).unwrap();
         drop(locked);
+    }
+
+    /// The same mid-install rollback on every platform: when the filesystem
+    /// refuses the final install rename, every moved live file must be put
+    /// back, the restore transaction completed and the failure named.
+    ///
+    /// Why: the Windows share-lock test drives the OS-level trigger for
+    /// this path; without an injected refusal the rollback semantics would
+    /// only ever be asserted on one platform.
+    #[test]
+    fn injected_install_rename_failure_rolls_back_the_moved_live_files() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, backup, vault, manifest) = fixture(root.path());
+        let wal = data.join(format!("{DATABASE_NAME}-wal"));
+        fs::write(&wal, b"stale wal").unwrap();
+        let before = fs::read(data.join(DATABASE_NAME)).unwrap();
+
+        let error = failpoints::with_install_rename_failure(|| {
+            restore_backup_with_vault(&data, &backup, &manifest, vault)
+        })
+        .expect_err("a refused install rename must abort the restore");
+        assert!(
+            error.to_string().contains("Restore installation failed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(data.join(DATABASE_NAME)).unwrap(), before);
+        assert_eq!(fs::read(&wal).unwrap(), b"stale wal");
+        assert_no_staging(&data);
+        crate::session::ensure_restore_complete(&data).unwrap();
     }
 
     #[test]
