@@ -82,6 +82,10 @@ impl WorkerPulse {
         }
     }
 
+    /// Mark the start of one operation.
+    ///
+    /// Inputs: `kind` — operation kind being started. Output: none — the pulse
+    /// records the start time and the current operation.
     fn begin(&self, kind: OperationKind) {
         if let Ok(mut state) = self.inner.lock() {
             let now = Utc::now();
@@ -91,12 +95,19 @@ impl WorkerPulse {
         }
     }
 
+    /// Record forward progress on the current operation.
+    ///
+    /// Inputs: none (`&self`). Output: none — `last_progress_at` is refreshed.
     fn progress(&self) {
         if let Ok(mut state) = self.inner.lock() {
             state.last_progress_at = Utc::now();
         }
     }
 
+    /// Mark the current operation finished.
+    ///
+    /// Inputs: none (`&self`). Output: none — the pulse returns to `Idle` with no
+    /// operation start time.
     fn finish(&self) {
         if let Ok(mut state) = self.inner.lock() {
             state.last_progress_at = Utc::now();
@@ -105,6 +116,10 @@ impl WorkerPulse {
         }
     }
 
+    /// Record an idle heartbeat.
+    ///
+    /// Inputs: none (`&self`). Output: none — `last_progress_at` is refreshed only
+    /// while no operation is running.
     fn idle_tick(&self) {
         if let Ok(mut state) = self.inner.lock()
             && state.current_operation == OperationKind::Idle
@@ -152,6 +167,9 @@ impl WorkerPulse {
 }
 
 impl Default for WorkerPulse {
+    /// Construct the default pulse.
+    ///
+    /// Inputs: none. Output: `Self` — identical to [`Self::new`].
     fn default() -> Self {
         Self::new()
     }
@@ -243,6 +261,10 @@ pub enum Command {
 }
 
 impl Command {
+    /// Map one command onto its operation kind.
+    ///
+    /// Inputs: `self` — command being executed. Output: `OperationKind` — the kind
+    /// recorded in the operation journal for this command.
     fn kind(&self) -> OperationKind {
         match self {
             Self::Refresh => OperationKind::Refresh,
@@ -284,6 +306,11 @@ impl Command {
 
 /// Rejected commands must never mask a running operation. In particular a
 /// queue overflow may not make an in-flight Gmail send appear safe to interrupt.
+///
+/// Inputs: `snapshot` — shared snapshot to update; `kind` — the rejected
+/// command's operation kind; `disconnected` — whether the worker channel is
+/// gone. Output: none — the snapshot records a failed operation with the
+/// matching stable code.
 fn report_unqueued_command(snapshot: &mut Snapshot, kind: OperationKind, disconnected: bool) {
     let (message, code, retryable) = if disconnected {
         (
@@ -462,11 +489,20 @@ impl Worker {
     }
 }
 impl Drop for Worker {
+    /// Shut the worker down briefly when the handle drops.
+    ///
+    /// Inputs: none (`&mut self`). Output: none — a best-effort two-second shutdown
+    /// is attempted.
     fn drop(&mut self) {
         let _ = self.shutdown(Duration::from_secs(2));
     }
 }
 
+/// Mark the shared snapshot fatally failed.
+///
+/// Inputs: `shared` — shared snapshot; `message` — operator-facing failure
+/// description. Output: none — the snapshot records the error, sets `fatal`,
+/// and clears busy state.
 fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
     if let Ok(mut view) = shared.lock() {
         view.error = message.clone();
@@ -485,6 +521,12 @@ fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
     }
 }
 
+/// Rebuild the shared snapshot from current store state.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot to refresh; `selected` —
+/// currently selected item id, if any; `review` — whether the review list is
+/// active; `page` — page to render. Output: `Result<()>` — `Ok` once the
+/// snapshot reflects the counts, listing, and selection.
 fn refresh(
     e: &Engine,
     shared: &Arc<Mutex<Snapshot>>,
@@ -523,6 +565,11 @@ fn refresh(
     s.review_only = review;
     Ok(())
 }
+/// Start one operation in the pulse and the shared snapshot.
+///
+/// Inputs: `shared` — shared snapshot; `pulse` — worker pulse; `kind` —
+/// operation kind; `text` — operator-facing operation description. Output:
+/// none.
 fn begin_operation(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
@@ -546,6 +593,11 @@ fn begin_operation(
     }
 }
 
+/// Persist the current operation status to the runtime journal.
+///
+/// Inputs: `journal` — runtime journal, when enabled; `shared` — shared
+/// snapshot. Output: none — the record is best-effort and never fails the
+/// operation.
 fn record_current_operation(journal: &Option<RuntimeJournal>, shared: &Arc<Mutex<Snapshot>>) {
     let Some(journal) = journal else {
         return;
@@ -556,6 +608,9 @@ fn record_current_operation(journal: &Option<RuntimeJournal>, shared: &Arc<Mutex
 }
 
 /// Run the Ollama installer for `Command::InstallOllama`.
+///
+/// Inputs: none. Output: `anyhow::Result<()>` — `Ok` when the installer
+/// completes; failures surface to the operation report.
 ///
 /// Tests substitute a stand-in through
 /// `crate::test_support::with_installer` so the dispatch arm can be
@@ -571,6 +626,10 @@ fn install_ollama() -> anyhow::Result<()> {
     ollama::install()
 }
 
+/// Report forward progress with an updated busy message.
+///
+/// Inputs: `shared` — shared snapshot; `pulse` — worker pulse; `text` —
+/// operator-facing progress text. Output: none.
 fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
     pulse.progress();
     if let Ok(mut s) = shared.lock() {
@@ -581,6 +640,11 @@ fn busy(shared: &Arc<Mutex<Snapshot>>, pulse: &WorkerPulse, text: &str) {
     }
 }
 
+/// Classify one operation failure into its stable code and retryability.
+///
+/// Inputs: `kind` — operation kind that failed; `error` — operation error.
+/// Output: `(String, bool)` — the stable operation code and whether the
+/// operator may retry.
 fn classify_operation_failure(kind: OperationKind, error: &anyhow::Error) -> (String, bool) {
     if let Some(dispatch) = error.downcast_ref::<crate::engine::DispatchFailure>() {
         return (
@@ -601,6 +665,11 @@ fn classify_operation_failure(kind: OperationKind, error: &anyhow::Error) -> (St
     (kind.failure_code().into(), kind.retryable())
 }
 
+/// Finish one operation and publish its outcome.
+///
+/// Inputs: `shared` — shared snapshot; `pulse` — worker pulse; `kind` —
+/// operation kind; `result` — operation outcome. Output: none — the snapshot
+/// records the operation state and, on failure, its classified code.
 fn report(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
@@ -645,6 +714,10 @@ fn report(
         }
     }
 }
+/// Finish one operation as a quiet success with a fixed message.
+///
+/// Inputs: `shared` — shared snapshot; `pulse` — worker pulse; `kind` —
+/// operation kind; `message` — operator-facing status message. Output: none.
 fn report_silent_success(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
@@ -668,6 +741,12 @@ fn report_silent_success(
     }
 }
 
+/// Rotate the API bearer token and publish the replacement once.
+///
+/// Inputs: `e` — engine whose store holds the verifier material; `shared` —
+/// shared snapshot carrying the exposed token; `api_disabled` — flag that
+/// disables the API while rotation runs. Output: `Result<()>` — `Ok` once the
+/// rotated plaintext is exposed for the operator exactly once.
 fn rotate_api_token(
     e: &mut Engine,
     shared: &Arc<Mutex<Snapshot>>,
@@ -938,6 +1017,10 @@ fn handle_api_write(
     }
 }
 
+/// Map a result onto its operation state.
+///
+/// Inputs: `result` — operation outcome. Output: `OperationState` — `Succeeded`
+/// for `Ok`, `Failed` otherwise.
 fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> OperationState {
     if result.is_ok() {
         OperationState::Succeeded
@@ -946,6 +1029,12 @@ fn operation_state_for_result<T, E>(result: &std::result::Result<T, E>) -> Opera
     }
 }
 
+/// Guard one operation's result with the engine's audit-protection policy.
+///
+/// Inputs: `engine` — engine supplying the pause flag and checkpoint
+/// protection; `result` — operation outcome to guard. Output: `Result<T>` — the
+/// outcome unchanged when protection allows it; otherwise the protection
+/// failure fails closed.
 fn protect_audit_boundary<T>(engine: &Engine, result: Result<T>) -> Result<T> {
     protect_audit_boundary_with(&engine.paused, result, engine.checkpoint_audit_protection())
 }
@@ -976,11 +1065,21 @@ fn protect_audit_boundary_with<T>(
     }
 }
 
+/// Compute an exponential retry backoff with a hard cap.
+///
+/// Inputs: `base_seconds` — first-failure delay; `failures` — consecutive
+/// failure count; `cap_seconds` — maximum delay. Output: `Duration` — the
+/// capped exponential delay.
 fn bounded_backoff(base_seconds: u64, failures: u32, cap_seconds: u64) -> Duration {
     let shift = failures.saturating_sub(1).min(6);
     Duration::from_secs(base_seconds.saturating_mul(1u64 << shift).min(cap_seconds))
 }
 
+/// Record one circuit-breaker transition in the runtime journal.
+///
+/// Inputs: `journal` — runtime journal, when enabled; `transition` — transition
+/// to record; `opened` — signal logged when the circuit opens; `closed` —
+/// signal logged when it closes. Output: none — the record is best-effort.
 fn record_circuit_transition(
     journal: &Option<RuntimeJournal>,
     transition: CircuitTransition,
@@ -1013,6 +1112,12 @@ fn worker_interval(default: Duration) -> Duration {
     default
 }
 
+/// Run the background worker command loop.
+///
+/// Inputs: `e` — engine; `rx` — command channel; `shared` — shared snapshot;
+/// `sender` — command channel handle for self-queued work; `journal` — runtime
+/// journal, when enabled; `pulse` — worker pulse. Output: `Result<()>` — `Ok`
+/// when the loop exits cleanly; error on a fatal worker failure.
 fn run(
     mut e: Engine,
     rx: Receiver<Command>,
@@ -1640,6 +1745,10 @@ fn run(
     }
     Ok(())
 }
+/// Parse a URL query string, refusing duplicate parameters.
+///
+/// Inputs: `url` — URL whose query to parse. Output: `Result<BTreeMap<String,
+/// String>>` — the unique query pairs; error on a repeated key.
 fn unique_query(url: &url::Url) -> Result<std::collections::BTreeMap<String, String>> {
     let mut query = std::collections::BTreeMap::new();
     for (key, value) in url.query_pairs() {
@@ -1652,10 +1761,18 @@ fn unique_query(url: &url::Url) -> Result<std::collections::BTreeMap<String, Str
     Ok(query)
 }
 
+/// Encode one item cursor as an opaque URL-safe token.
+///
+/// Inputs: `cursor` — cursor to encode. Output: `Result<String>` — the
+/// base64url (no padding) encoding of the serialized cursor.
 fn encode_item_cursor(cursor: &ItemCursor) -> Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(serde_json::to_vec(cursor)?))
 }
 
+/// Decode and validate one opaque item cursor token.
+///
+/// Inputs: `value` — token supplied by the client. Output: `Result<ItemCursor>`
+/// — the decoded cursor; error for empty, oversized, or non-token input.
 fn decode_item_cursor(value: &str) -> Result<ItemCursor> {
     ensure!(
         !value.is_empty()
@@ -1680,6 +1797,10 @@ fn decode_item_cursor(value: &str) -> Result<ItemCursor> {
     Ok(cursor)
 }
 
+/// Validate one API item identifier.
+///
+/// Inputs: `id` — candidate identifier. Output: `Result<()>` — `Ok` only for
+/// exactly 64 ASCII hex characters.
 fn validate_api_item_id(id: &str) -> Result<()> {
     ensure!(
         id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -1693,6 +1814,11 @@ fn api_query(e: &Engine, path: &str) -> Result<Value> {
     api_query_with_operation(e, path, None)
 }
 
+/// Answer one read-only API query, optionally reporting a running operation.
+///
+/// Inputs: `e` — engine; `path` — request path with its query string;
+/// `operation` — current operation status to include, if any. Output:
+/// `Result<Value>` — the JSON response body for the routed read path.
 fn api_query_with_operation(
     e: &Engine,
     path: &str,
