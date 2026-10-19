@@ -452,6 +452,10 @@ pub fn automatic_draft_conflict(body: &str, signature: &str) -> bool {
     .any(|pattern| content.contains(pattern))
 }
 
+/// Encode one subject as MIME encoded words.
+///
+/// Inputs: `subject` — raw subject text. Output: `String` — the subject with
+/// long runs base64-encoded as `=?UTF-8?B?...?=` chunks.
 fn encoded_subject(subject: &str) -> String {
     let mut out = Vec::new();
     let mut part = String::new();
