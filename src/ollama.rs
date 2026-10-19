@@ -117,6 +117,12 @@ enum ModelPurpose {
     Decision,
 }
 
+/// Check a model's reported capabilities against its intended purpose.
+///
+/// Inputs: `show` — `/api/show` response for the model; `purpose` — how the
+/// model will be used. Output: `Result<()>` — `Ok` when the capability metadata
+/// satisfies the purpose; error when metadata is missing/empty or the purpose
+/// is unsupported.
 fn validate_model_capabilities(show: &Value, purpose: ModelPurpose) -> Result<()> {
     let capabilities = show.get("capabilities").and_then(Value::as_array).context(
         "Ollama model capability metadata is missing; upgrade Ollama and re-pull the model",
@@ -162,6 +168,10 @@ enum AnalysisFailureStage {
     VerificationRuntime,
 }
 impl AnalysisFailureStage {
+    /// Map the failing analysis stage onto its processing-failure code.
+    ///
+    /// Inputs: `self` — the failing stage. Output: `ProcessingFailureCode` — the
+    /// stable code recorded for that stage.
     fn code(self) -> ProcessingFailureCode {
         match self {
             Self::Preflight => ProcessingFailureCode::ModelPreflight,
@@ -177,12 +187,21 @@ struct AnalysisPipelineError {
     detail: String,
 }
 impl std::fmt::Display for AnalysisPipelineError {
+    /// Render the pipeline error as `<stage code>: <detail>`.
+    ///
+    /// Inputs: `formatter` — formatter to write into. Output: [`std::fmt::Result`]
+    /// — writes the stage code and detail.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}: {}", self.stage.code().as_str(), self.detail)
     }
 }
 impl std::error::Error for AnalysisPipelineError {}
 
+/// Run one analysis stage, tagging failures with their stage.
+///
+/// Inputs: `stage` — stage being executed; `operation` — the stage's work.
+/// Output: `Result<T>` — the stage's value; errors wrapped in
+/// [`AnalysisPipelineError`] with the stage and detail.
 fn analysis_stage<T>(
     stage: AnalysisFailureStage,
     operation: impl FnOnce() -> Result<T>,
@@ -224,6 +243,11 @@ pub struct Ollama {
     counters: Arc<Mutex<InferenceCounters>>,
 }
 
+/// Whether a pulled model name matches the configured name.
+///
+/// Inputs: `configured` — configured model name; `actual` — name reported by
+/// Ollama. Output: `true` on an exact match, or when the untagged configured
+/// name implicitly means `:latest`.
 fn model_name_matches(configured: &str, actual: &str) -> bool {
     actual == configured
         || (!configured
@@ -234,6 +258,10 @@ fn model_name_matches(configured: &str, actual: &str) -> bool {
             && actual == format!("{configured}:latest"))
 }
 
+/// Whether an error is a transient local transport failure.
+///
+/// Inputs: `error` — error chain to inspect. Output: `true` when any cause is a
+/// request timeout or connection failure.
 fn retryable_local_transport_error(error: &Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -272,10 +300,19 @@ impl Ollama {
             counters: Arc::new(Mutex::new(InferenceCounters::default())),
         })
     }
+    /// Build one Ollama endpoint URL.
+    ///
+    /// Inputs: `path` — endpoint path (e.g. `/api/tags`). Output: `String` — the
+    /// configured base URL with the path appended.
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.settings.ollama_url.trim_end_matches('/'))
     }
 
+    /// Clone the client as a dedicated verifier client.
+    ///
+    /// Inputs: `pinned` — whether to pin the verifier model digest. Output:
+    /// `Result<Self>` — a client with delivery disarmed, task qualification
+    /// removed, and the verifier model configured.
     fn verifier_client(&self, pinned: bool) -> Result<Self> {
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
@@ -345,9 +382,17 @@ impl Ollama {
         ensure!(resident.gpu_resident, "{}", resident.message);
         Ok(resident)
     }
+    /// Snapshot the inference counters.
+    ///
+    /// Inputs: none (`&self`). Output: `InferenceCounters` — the current
+    /// request/token counts (the default when the lock is poisoned).
     fn counter_snapshot(&self) -> InferenceCounters {
         self.counters.lock().map(|value| *value).unwrap_or_default()
     }
+    /// Record one request's token usage.
+    ///
+    /// Inputs: `prompt_tokens` — prompt token count; `completion_tokens` —
+    /// completion token count. Output: none — the counters accumulate.
     fn record_usage(&self, prompt_tokens: u32, completion_tokens: u32) {
         if let Ok(mut counters) = self.counters.lock() {
             counters.requests = counters.requests.saturating_add(1);
@@ -412,6 +457,11 @@ impl Ollama {
         );
         Ok(version)
     }
+    /// Inspect the configured model for one intended purpose.
+    ///
+    /// Inputs: `purpose` — how the model will be used. Output:
+    /// `Result<ModelStatus>` — the validated model status; error when the runtime
+    /// is unavailable or the model or capabilities are wrong.
     fn inspect_for_purpose(&self, purpose: ModelPurpose) -> Result<ModelStatus> {
         self.runtime_version()?;
         let tags: Tags = net::json(
@@ -507,6 +557,12 @@ impl Ollama {
         Ok(ModelStatus{installed:true,digest:m.digest,size:m.size,size_vram:m.size_vram,context:m.context_length,gpu_resident:resident,
             message:if resident{"Ollama reports full GPU residency within 14 GiB; not whole-device peak certification"}else{"GPU check failed: close other models, check GPU support/context, then qualify again"}.into()})
     }
+    /// Run one structured chat request against the local model.
+    ///
+    /// Inputs: `system` — system prompt; `payload` — request payload; `schema` —
+    /// JSON schema the answer must satisfy; `predict` — prediction token cap.
+    /// Output: `Result<T>` — the deserialized answer; error on transport or
+    /// validation failure.
     fn chat_once<T: DeserializeOwned>(
         &self,
         system: &str,
@@ -562,6 +618,10 @@ impl Ollama {
             .context("Model returned invalid structured output")
     }
 
+    /// Free the loaded model to recover from transport failures.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<()>` — `Ok` once the unload request
+    /// succeeds.
     fn unload_for_transport_recovery(&self) -> Result<()> {
         let unloaded = net::json(
             net::client(30, true)?
@@ -579,6 +639,9 @@ impl Ollama {
         Ok(())
     }
 
+    /// Unload any loaded model and wait until none remains.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<()>` — `Ok` once no model is loaded.
     fn unload_and_wait(&self) -> Result<()> {
         let ps: Ps = net::json(
             net::client(10, true)?.get(self.url("/api/ps")).send()?,
@@ -659,6 +722,12 @@ impl Ollama {
         }
     }
 
+    /// Run one structured chat request, retrying transient transport failures.
+    ///
+    /// Inputs: `system` — system prompt; `payload` — request payload; `schema` —
+    /// JSON schema the answer must satisfy; `predict` — prediction token cap.
+    /// Output: `Result<T>` — the deserialized answer as [`Self::chat_once`]
+    /// returns, after a recovery retry on transient transport errors.
     fn chat<T: DeserializeOwned>(
         &self,
         system: &str,
@@ -683,6 +752,10 @@ impl Ollama {
             Err(error) => Err(error),
         }
     }
+    /// Run the full analysis pipeline once, measuring its cost.
+    ///
+    /// Inputs: `email` — message to analyze. Output: `Result<PipelineProfile>` —
+    /// the analysis outcome with timing, token counters, and verifier status.
     fn profile_pipeline(&self, email: &Email) -> Result<PipelineProfile> {
         let before = self.counter_snapshot();
         let started = std::time::Instant::now();
@@ -817,6 +890,11 @@ impl Ollama {
         ensure!(status.gpu_resident, "{}", status.message);
         Ok(status)
     }
+    /// Preflight the private inference path before real work.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<ModelStatus>` — the validated model
+    /// status after a warm-up generation; error when the runtime or model is not
+    /// ready.
     fn preflight_private_inference(&self) -> Result<ModelStatus> {
         let info = self.inspect()?;
         let warm = net::json(
@@ -1197,6 +1275,11 @@ pub fn spawn_detached(_executable: &Path, command: &mut Command) -> Result<()> {
     Ok(())
 }
 
+/// Parse a semver-style version string into its numeric core.
+///
+/// Inputs: `value` — version string (leading `v` and pre/build suffixes are
+/// ignored). Output: `Option<(u32, u32, u32)>` — the (major, minor, patch)
+/// numbers; `None` when the core is not numeric.
 fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     let core = value
         .trim()
