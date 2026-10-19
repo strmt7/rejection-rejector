@@ -1060,4 +1060,19 @@ mod tests {
             .to_string();
         assert!(error.contains("utf-8"), "{error}");
     }
+
+    /// Why: on non-Windows hosts the scheduler stub is the production
+    /// runner for autostart; it must refuse loudly with the platform named
+    /// and never touch anything — silent success would make autostart look
+    /// installed on machines where the Task Scheduler cannot exist.
+    #[cfg(not(windows))]
+    #[test]
+    fn schtasks_stub_refuses_on_non_windows_hosts() {
+        assert!(
+            schtasks(&["/query"])
+                .unwrap_err()
+                .to_string()
+                .contains("supported only on Windows")
+        );
+    }
 }

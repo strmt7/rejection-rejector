@@ -412,4 +412,20 @@ mod session_drop_guard_tests {
         assert!(begin_restore_transaction(bogus).is_err());
         assert!(reject_symlink_if_present(&bogus.join(RESTORE_MARKER_NAME)).is_err());
     }
+
+    /// The same fail-closed contract on hosts without reserved names: a
+    /// marker path whose parent is a regular file yields a non-NotFound
+    /// I/O error that must propagate from every marker check — treating
+    /// an unreadable workspace path as "nothing pending" could skip
+    /// required recovery.
+    #[cfg(not(windows))]
+    #[test]
+    fn io_errors_other_than_absence_propagate_on_posix_hosts() {
+        let root = tempfile::tempdir().unwrap();
+        let blocker = root.path().join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+        assert!(ensure_restore_complete(&blocker).is_err());
+        assert!(begin_restore_transaction(&blocker).is_err());
+        assert!(reject_symlink_if_present(&blocker.join(RESTORE_MARKER_NAME)).is_err());
+    }
 }

@@ -677,6 +677,10 @@ pub(crate) enum SendOutcome {
     Uncertain,
 }
 
+// Uncovered-by-design lines in the mocks below carry no product signal:
+// the `None` / `_ => None` route fallbacks answer 404 for wire routes the
+// protocol never uses — they fire only if a test's client starts speaking
+// a protocol the product does not, which is what they guard against.
 /// A scripted Gmail API covering token refresh, profile, message and thread
 /// fetches, Sent search and one send governed by `outcome`.
 ///
