@@ -37,6 +37,10 @@ struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Create a token-bucket rate limiter starting full.
+    ///
+    /// Inputs: `now` — the instant the bucket clock starts from. Output: `Self`
+    /// with `tokens` at `API_RATE_LIMIT_BURST` and `last` set to `now`.
     fn new(now: Instant) -> Self {
         Self {
             tokens: f64::from(API_RATE_LIMIT_BURST),
@@ -44,6 +48,11 @@ impl RateLimiter {
         }
     }
 
+    /// Spend one token if the replenished bucket has one.
+    ///
+    /// Inputs: `now` — instant of the current request, used to refill the bucket.
+    /// Output: `true` when a token was available and consumed; `false` when the
+    /// request must be rate-limited.
     fn allow(&mut self, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
         self.last = now;
@@ -64,6 +73,13 @@ pub fn openapi_sha256() -> String {
     crate::hex_lower(Sha256::digest(OPENAPI_DOCUMENT.as_bytes()))
 }
 
+/// Build the stable API error envelope.
+///
+/// Inputs: `code` — machine-readable error code; `message` — operator-facing
+/// description; `retryable` — whether the client may retry the request;
+/// `request_id` — per-request correlation identifier. Output:
+/// `serde_json::Value` envelope carrying `api_version`, `request_id`, and the
+/// typed error object.
 fn error_body(code: &str, message: &str, retryable: bool, request_id: &str) -> serde_json::Value {
     json!({
         "api_version": API_VERSION,
@@ -76,6 +92,12 @@ fn error_body(code: &str, message: &str, retryable: bool, request_id: &str) -> s
     })
 }
 
+/// Answer the direct read routes from a worker liveness snapshot.
+///
+/// Inputs: `path` — request path; `pulse` — worker liveness source backing the
+/// snapshot. Output: `Some` JSON body for a known read route (`/v1/live`,
+/// `/v1/openapi.json`); `None` for any other path, which falls through to the
+/// routed handlers.
 fn direct_get(path: &str, pulse: &WorkerPulse) -> Option<serde_json::Value> {
     match path {
         "/v1/live" => {
@@ -96,6 +118,12 @@ fn direct_get(path: &str, pulse: &WorkerPulse) -> Option<serde_json::Value> {
     }
 }
 
+/// Read one strictly-unique request header value.
+///
+/// Inputs: `headers` — request header list; `name` — header name, matched ASCII
+/// case-insensitively. Output: `Some(&str)` with the value only when exactly
+/// one matching header exists; `None` when it is missing or repeated, so
+/// ambiguous input fails closed.
 fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a str> {
     let mut values = headers
         .iter()
@@ -108,6 +136,11 @@ fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a
     Some(value)
 }
 
+/// Check one request's bearer header against the verifier.
+///
+/// Inputs: `value` — raw `Authorization` header value, if present; `verifier` —
+/// API token verifier. Output: `true` only when the header authorizes the
+/// request.
 fn authorized(value: Option<&str>, verifier: &ApiTokenVerifier) -> bool {
     verifier.authorize_header(value)
 }
