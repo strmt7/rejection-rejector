@@ -61,6 +61,11 @@ struct RecoveryDialog {
     confirmation: Zeroizing<String>,
 }
 
+/// Validate one recovery passphrase and its confirmation.
+///
+/// Inputs: `passphrase` — candidate passphrase (20..=4096 bytes);
+/// `confirmation` — repeated passphrase, if any. Output: `true` when the
+/// passphrase is in range and matches the confirmation.
 fn recovery_passphrase_valid(passphrase: &str, confirmation: Option<&str>) -> bool {
     (20..=4096).contains(&passphrase.len()) && confirmation.is_none_or(|value| value == passphrase)
 }
@@ -99,6 +104,11 @@ impl FilePickers {
 }
 
 impl ShortcutAction {
+    /// Map one shortcut action onto its tab.
+    ///
+    /// Inputs: `self` — the shortcut action; `mode` — current application mode
+    /// (Review requires Human review mode). Output: `Option<Tab>` — the tab to
+    /// switch to, or `None` when unavailable in this mode.
     fn tab(self, mode: Mode) -> Option<Tab> {
         match self {
             Self::Overview => Some(Tab::Overview),
@@ -112,6 +122,10 @@ impl ShortcutAction {
     }
 }
 
+/// Consume one keyboard shortcut from the input state.
+///
+/// Inputs: `ctx` — egui context. Output: `Option<ShortcutAction>` — the bound
+/// action (number keys with no modifiers); `None` when no shortcut was pressed.
 fn consume_shortcut(ctx: &egui::Context) -> Option<ShortcutAction> {
     ctx.input_mut(|input| {
         for (action, key) in [
@@ -198,6 +212,10 @@ impl App {
             emergency: crate::emergency::status_fail_closed,
         }
     }
+    /// Switch to one tab, refreshing the list where needed.
+    ///
+    /// Inputs: `tab` — tab to activate. Output: none — the active tab changes and
+    /// Review/Activity tabs re-queue a listing.
     fn navigate(&mut self, tab: Tab) {
         self.tab = tab;
         if matches!(tab, Tab::Review | Tab::Activity) {
@@ -208,6 +226,10 @@ impl App {
         }
     }
 
+    /// Handle keyboard shortcuts and modal escape for one frame.
+    ///
+    /// Inputs: `ctx` — egui context; `s` — current worker snapshot. Output: none —
+    /// shortcuts navigate while Escape dismisses an open modal or confirms closing.
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context, s: &Snapshot) {
         if self.modal_open() {
             if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -237,11 +259,19 @@ impl App {
         }
     }
 
+    /// Render one section heading.
+    ///
+    /// Inputs: `ui` — target ui; `title` — heading text; `subtitle` — muted
+    /// subtitle text. Output: none.
     fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
         ui.heading(title);
         ui.label(RichText::new(subtitle).color(MUTED));
         ui.add_space(12.0);
     }
+    /// Render one card frame around a body.
+    ///
+    /// Inputs: `ui` — target ui; `body` — closure drawing the card contents.
+    /// Output: none.
     fn card(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
         egui::Frame::default()
             .fill(PANEL)
@@ -253,9 +283,17 @@ impl App {
                 body(ui);
             });
     }
+    /// Render one status badge.
+    ///
+    /// Inputs: `ui` — target ui; `text` — badge label; `color` — badge text color.
+    /// Output: none.
     fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
         ui.label(RichText::new(text).color(color).strong());
     }
+    /// Select one job, deferring while a modal is open or the editor is dirty.
+    ///
+    /// Inputs: `id` — job id to select. Output: none — the selection is queued to
+    /// the worker or held as pending.
     fn select(&mut self, id: String) {
         if self.modal_open() {
             return;
@@ -266,6 +304,10 @@ impl App {
             self.worker.command(Command::Select(id));
         }
     }
+    /// Synchronize the editor state with the worker snapshot.
+    ///
+    /// Inputs: `s` — current worker snapshot. Output: none — editor fields reset
+    /// when the account or selection changes under the app.
     fn sync_view(&mut self, s: &Snapshot) {
         if s.initialized && self.editor_account != s.account {
             self.editor_account = s.account.clone();
@@ -298,6 +340,9 @@ impl App {
             }
         }
     }
+    /// Render the overview tab.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn overview(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::heading(
             ui,
@@ -463,6 +508,9 @@ impl App {
             ui.label(RichText::new("Scheduled checks run only while the desktop app or the headless worker is running.").color(AMBER));
         });
     }
+    /// Render the rejection queue list with paging.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn queue(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         ui.label(RichText::new("REJECTION QUEUE").strong().color(MUTED));
         ui.horizontal(|ui| {
@@ -557,6 +605,9 @@ impl App {
                 }
             });
     }
+    /// Render the activity and delivery history tab.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn activity(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::heading(
             ui,
@@ -650,6 +701,9 @@ impl App {
             ui.separator();
         }
     }
+    /// Render the local AI configuration tab.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn local_ai(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         let model_config_dirty = self.settings.model != s.settings.model
             || self.settings.independent_verifier_enabled
@@ -983,6 +1037,9 @@ impl App {
             ui.label(RichText::new("Qualify & pin is only a smoke/residency test. Automatic mode additionally requires the full task-specific evaluation to pass for the exact model digest, prompt version, signature/tone/candidate facts and context size. Editing those inputs invalidates that qualification. The suite is synthetic and sends no email; independently labelled private mailbox acceptance is still required for serious deployment.").small().color(AMBER));
         });
     }
+    /// Render the settings tab.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn settings(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         let qualified_model_matches_draft = s.settings.model_digest.is_some()
             && self.settings.model == s.settings.model
@@ -1540,6 +1597,9 @@ impl App {
                 .command(Command::Settings(Box::new(self.settings.clone())));
         }
     }
+    /// Render the frame's modal dialogs.
+    ///
+    /// Inputs: `ctx` — egui context; `s` — current worker snapshot. Output: none.
     fn dialogs(&mut self, ctx: &egui::Context, s: &Snapshot) {
         if self.close_confirmation {
             let sensitive_operation = s.operation.state == OperationState::Running
@@ -1749,6 +1809,10 @@ if ui.add_enabled(s.busy.is_empty()&&!self.worker.paused.load(Ordering::SeqCst),
     }
 }
 impl eframe::App for App {
+    /// Render one application frame.
+    ///
+    /// Inputs: `root_ui` — root ui; `_frame` — the enclosing frame (unused).
+    /// Output: none.
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         ctx.request_repaint_after(Duration::from_millis(250));
@@ -1939,6 +2003,10 @@ impl RecoveryApp {
 }
 
 impl eframe::App for RecoveryApp {
+    /// Render one recovery-application frame.
+    ///
+    /// Inputs: `root_ui` — root ui; `_frame` — the enclosing frame (unused).
+    /// Output: none.
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
 
@@ -2152,6 +2220,11 @@ impl eframe::App for RecoveryApp {
     }
 }
 
+/// Whether closing the window needs confirmation.
+///
+/// Inputs: `dirty` — whether the reply editor has unsaved changes; `operation`
+/// — current operation status. Output: `true` when the editor is dirty or a
+/// shutdown-sensitive operation is running.
 fn requires_close_confirmation(dirty: bool, operation: &OperationStatus) -> bool {
     dirty || (operation.state == OperationState::Running && operation.kind.shutdown_sensitive())
 }
@@ -2161,6 +2234,10 @@ use crate::engine::visible_draft_matches;
 use crate::engine::{editor_binding_matches, send_gate_eligible};
 mod review;
 impl App {
+    /// Whether any modal dialog is open.
+    ///
+    /// Inputs: none (`&self`). Output: `true` while a selection, send, install,
+    /// recovery, or close dialog is pending.
     fn modal_open(&self) -> bool {
         self.pending_select.is_some()
             || self.send_confirmation.is_some()

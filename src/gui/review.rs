@@ -169,6 +169,10 @@ impl App {
 }
 
 /// Actual screenshot runs call this on rendered widget rectangles, not mock coordinates.
+///
+/// Inputs: `cards` — rect of the review cards; `actions` — rect of the actions
+/// row; `clip` — visible clip rect. Output: `bool` — `true` when the actions
+/// row sits fully below the cards and inside the clip.
 fn review_actions_visible(cards: egui::Rect, actions: egui::Rect, clip: egui::Rect) -> bool {
     actions.top() >= cards.bottom() - 1.0 && clip.contains_rect(actions.shrink(0.5))
 }
