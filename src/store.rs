@@ -96,6 +96,12 @@ enum ProcessingFailureMutation<'a> {
     Clear,
 }
 
+/// Decrypt one stored job record and authenticate its metadata.
+///
+/// Inputs: `vault` — vault key; `id` — expected job id; `bytes` — sealed
+/// payload; `revision` — expected revision; `state` — expected database state
+/// string. Output: `Result<Job>` — the decrypted job; error when the record
+/// metadata does not match (fail closed).
 fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> Result<Job> {
     let job: Job = vault.open_value(&format!("item/{id}"), bytes)?;
     ensure!(
@@ -106,6 +112,12 @@ fn decode(vault: &Vault, id: &str, bytes: &[u8], revision: u64, state: &str) -> 
 }
 const AUDIT_GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// Compute one chained audit-journal hash.
+///
+/// Inputs: `previous_hash` — hex hash of the previous event; `event_id` — this
+/// event's identifier; `payload` — sealed event payload. Output: `String` —
+/// lowercase hex SHA-256 binding the domain tag, previous hash, event id, and
+/// payload.
 fn audit_hash(previous_hash: &str, event_id: &str, payload: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"rejection-rejector-audit-v1\0");
@@ -116,10 +128,20 @@ fn audit_hash(previous_hash: &str, event_id: &str, payload: &[u8]) -> String {
     crate::hex_lower(digest.finalize())
 }
 
+/// Whether a string is a well-formed audit hash.
+///
+/// Inputs: `value` — candidate hash. Output: `true` only for exactly 64 ASCII
+/// hex characters.
 fn valid_audit_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Append one chained audit event inside an open transaction.
+///
+/// Inputs: `tx` — transaction to write in; `vault` — vault sealing the event
+/// payload; `kind` — event kind; `item` — related item id, if any; `detail` —
+/// operator-facing detail; `at` — event timestamp. Output: `Result<()>` — `Ok`
+/// once the chained event row is inserted.
 fn event(
     tx: &Transaction<'_>,
     vault: &Vault,
@@ -166,6 +188,10 @@ fn event(
     Ok(())
 }
 
+/// Create the processing-failure table when the schema predates it.
+///
+/// Inputs: `conn` — open database connection. Output: `Result<()>` — `Ok` once
+/// the table and its indexes exist (idempotent migration).
 fn migrate_processing_failures(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
@@ -185,6 +211,11 @@ fn migrate_processing_failures(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Backfill tamper-evident chain columns for pre-chain audit journals.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to read the
+/// sealed event payloads. Output: `Result<()>` — `Ok` once every event carries
+/// its chain hash in sequence order and the head is stored.
 fn migrate_audit_chain(conn: &Connection, vault: &Vault) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
@@ -220,6 +251,11 @@ fn migrate_audit_chain(conn: &Connection, vault: &Vault) -> Result<()> {
     Ok(())
 }
 
+/// Verify the whole audit chain against its authenticated head.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to read the
+/// sealed head and payloads. Output: `Result<()>` — `Ok` when the recomputed
+/// chain matches the stored head; error on any mismatch (tamper or corruption).
 fn verify_audit_chain_connection(conn: &Connection, vault: &Vault) -> Result<()> {
     let encrypted_head: Vec<u8> = conn
         .query_row(
@@ -266,6 +302,12 @@ fn verify_audit_chain_connection(conn: &Connection, vault: &Vault) -> Result<()>
     );
     Ok(())
 }
+/// Copy the database file aside before a schema migration.
+///
+/// Inputs: `source_path` — database file path; `source` — open connection to
+/// checkpoint; `from_version` — schema version being migrated from (must be in
+/// `(0, DATABASE_SCHEMA_VERSION)`). Output: `Result<PathBuf>` — path of the
+/// written backup copy; error on an invalid version or copy failure.
 fn create_pre_migration_backup(
     source_path: &Path,
     source: &Connection,
@@ -314,6 +356,11 @@ fn create_pre_migration_backup(
     Ok(destination)
 }
 
+/// Run SQLite structural integrity and foreign-key checks.
+///
+/// Inputs: `conn` — open database connection. Output: `Result<()>` — `Ok` when
+/// `quick_check` reports no errors and no foreign-key violations exist; error
+/// otherwise.
 fn check_connection_integrity(conn: &Connection) -> Result<()> {
     let quick: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     ensure!(quick == "ok", "SQLite quick_check failed: {quick}");
@@ -328,6 +375,11 @@ fn check_connection_integrity(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Authenticate and count every record class behind the application invariants.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads. Output: `Result<ApplicationIntegritySummary>` — the
+/// per-record-class counts; error when a record cannot be authenticated.
 fn verify_application_invariants_connection(
     conn: &Connection,
     vault: &Vault,
@@ -509,6 +561,12 @@ fn verify_application_invariants_connection(
     })
 }
 
+/// Count durable send attempts to one recipient since a cutoff.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// delivery records; `recipient` — normalized reply mailbox; `cutoff` —
+/// earliest attempt timestamp (unix seconds) counted. Output: `Result<u64>` —
+/// the number of matching attempts.
 fn recipient_attempts_since(
     conn: &Connection,
     vault: &Vault,
@@ -546,6 +604,11 @@ fn recipient_attempts_since(
 }
 
 impl Store {
+    /// Open (or create) the encrypted workspace store.
+    ///
+    /// Inputs: `path` — database file path (created private and empty when absent;
+    /// symlinks refused); `vault` — vault sealing all stored payloads. Output:
+    /// `Result<Self>` — the migrated, ready store.
     pub fn open(path: &Path, vault: Vault) -> Result<Self> {
         if !path.exists() {
             write_new_private(path, b"")?;
@@ -678,6 +741,10 @@ impl Store {
         }
         Ok(db)
     }
+    /// Read the database schema version.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<i64>` — the stored `PRAGMA
+    /// user_version` value.
     pub fn schema_version(&self) -> Result<i64> {
         Ok(self
             .conn
@@ -685,6 +752,10 @@ impl Store {
     }
 
     /// Bounded runtime readiness check suitable for health endpoints.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<()>` — `Ok` when the probe query,
+    /// schema version, vault marker, and audit head all authenticate; error
+    /// otherwise.
     ///
     /// This authenticates the vault marker and audit-head metadata and confirms
     /// the migrated schema, but deliberately does not scan every row/event.
@@ -708,6 +779,10 @@ impl Store {
 
     /// Deep database integrity check for explicit diagnostics/recovery operations.
     /// This may scan SQLite structures and the complete tamper-evident audit chain.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<()>` — `Ok` when the readiness
+    /// probe, SQLite structural checks, full audit chain, and application
+    /// invariants all pass.
     pub fn integrity_check(&self) -> Result<()> {
         self.readiness_check()?;
         check_connection_integrity(&self.conn)?;
@@ -716,14 +791,26 @@ impl Store {
         Ok(())
     }
 
+    /// Run the application invariant scan.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<ApplicationIntegritySummary>` — the
+    /// per-record-class integrity counts.
     pub fn application_integrity(&self) -> Result<ApplicationIntegritySummary> {
         verify_application_invariants_connection(&self.conn, &self.vault)
     }
 
+    /// Verify the tamper-evident audit chain end to end.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<()>` — `Ok` when the chain
+    /// recomputes to its authenticated head.
     pub fn verify_audit_chain(&self) -> Result<()> {
         verify_audit_chain_connection(&self.conn, &self.vault)
     }
 
+    /// Read the authenticated audit-journal head hash.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<String>` — the stored head hash;
+    /// error when it is missing or malformed.
     pub fn audit_head(&self) -> Result<String> {
         let head = self
             .meta::<String>("audit_head")?
@@ -733,6 +820,9 @@ impl Store {
     }
 
     /// Return the current tamper-evident audit point after validating the full chain.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<(i64, String)>` — the (sequence,
+    /// event hash) of the newest event; error when the chain fails verification.
     pub fn audit_point(&self) -> Result<(i64, String)> {
         self.verify_audit_chain()?;
         let row: Option<(i64, String)> = self
@@ -767,6 +857,11 @@ impl Store {
     /// Verify that an externally persisted sequence/hash pair is an exact prefix
     /// of the current audit journal. A newer current head is allowed; rollback,
     /// chain replacement and sequence/hash mismatch fail closed.
+    ///
+    /// Inputs: `sequence` — externally stored event sequence; `anchor` — externally
+    /// stored event hash. Output: `Result<()>` — `Ok` when the pair is an exact
+    /// prefix of the current journal (a newer head is allowed); error on rollback,
+    /// chain replacement, or mismatch.
     pub fn verify_audit_point(&self, sequence: i64, anchor: &str) -> Result<()> {
         ensure!(sequence >= 0, "Audit anchor sequence is invalid");
         ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
@@ -796,6 +891,11 @@ impl Store {
     }
 
     /// Verify only the audit suffix after an already trusted external point.
+    ///
+    /// Inputs: `sequence` — trusted external sequence; `anchor` — trusted external
+    /// hash. Output: `Result<(i64, String)>` — the current (sequence, head hash)
+    /// once the suffix after the trusted point verifies; error when the journal
+    /// does not extend the anchor.
     ///
     /// This is suitable for frequent protected-anchor checkpoints: it proves
     /// that the current authenticated head extends the trusted sequence/hash
@@ -871,6 +971,10 @@ impl Store {
     /// Check whether an externally persisted audit anchor is still represented
     /// by this database's history. This enables rollback detection when another
     /// trusted component stores previously observed heads.
+    ///
+    /// Inputs: `anchor` — externally persisted event hash. Output: `Result<bool>` —
+    /// `true` when this journal still contains the anchor (genesis always matches);
+    /// error when the chain fails verification.
     pub fn contains_audit_anchor(&self, anchor: &str) -> Result<bool> {
         ensure!(valid_audit_hash(anchor), "Invalid audit anchor");
         self.verify_audit_chain()?;
@@ -887,6 +991,10 @@ impl Store {
     }
 
     /// Create a consistent online copy of the encrypted SQLite database.
+    ///
+    /// Inputs: `path` — destination file, which must not already exist. Output:
+    /// `Result<()>` — `Ok` after the online backup copy is written through
+    /// `write_new_private`.
     ///
     /// This is a same-vault backup: application payloads remain encrypted and
     /// the matching vault identifier / OS-protected key is still required.
@@ -918,6 +1026,10 @@ impl Store {
 
     /// Verify a backup without modifying it. The encrypted vault marker must
     /// authenticate under this Store's current master key.
+    ///
+    /// Inputs: `path` — backup database file to inspect (never modified). Output:
+    /// `Result<BackupVerificationSummary>` — the verification results; error when
+    /// the file is missing, a symlink, or fails authentication.
     pub fn verify_backup_file(&self, path: &Path) -> Result<BackupVerificationSummary> {
         ensure!(path.is_file(), "Backup database file is missing");
         ensure!(
@@ -1035,6 +1147,11 @@ impl Store {
         })
     }
 
+    /// Read one encrypted metadata value.
+    ///
+    /// Inputs: `name` — metadata key. Output: `Result<Option<T>>` — the
+    /// deserialized value or `None` when absent; error when the record fails
+    /// authentication.
     pub fn meta<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
         let bytes: Option<Vec<u8>> = self
             .conn
@@ -1046,10 +1163,18 @@ impl Store {
             .map(|b| self.vault.open_value(&format!("meta/{name}"), &b))
             .transpose()
     }
+    /// Write one encrypted metadata value (insert or update).
+    ///
+    /// Inputs: `name` — metadata key; `value` — value to seal and store. Output:
+    /// `Result<()>` — `Ok` once the sealed value is written.
     pub fn set_meta<T: Serialize>(&mut self, name: &str, value: &T) -> Result<()> {
         self.conn.execute("INSERT INTO meta(name,payload) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload", params![name, self.vault.seal(&format!("meta/{name}"), value)?])?;
         Ok(())
     }
+    /// Delete one metadata value.
+    ///
+    /// Inputs: `name` — metadata key. Output: `Result<()>` — `Ok` once removed (an
+    /// absent key is a no-op).
     pub fn delete_meta(&mut self, name: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM meta WHERE name=?1", [name])?;
@@ -1057,6 +1182,11 @@ impl Store {
     }
 
     /// Atomically update related encrypted metadata and its audit event.
+    ///
+    /// Inputs: `upserts` — (name, value) pairs to seal and write; `deletes` — names
+    /// to remove; `audit_kind` — audit event kind; `audit_detail` — audit event
+    /// detail. Output: `Result<()>` — `Ok` when every metadata change and the audit
+    /// event commit in one transaction.
     pub fn change_meta(
         &mut self,
         upserts: &[(&str, serde_json::Value)],
@@ -1090,6 +1220,10 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Whether an item id exists in the store.
+    ///
+    /// Inputs: `id` — item identifier. Output: `Result<bool>` — `true` when a row
+    /// with that id exists.
     pub fn contains(&self, id: &str) -> Result<bool> {
         let found = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
@@ -1101,6 +1235,10 @@ impl Store {
     }
     /// Insert a Gmail page worth of message identities in one durable transaction.
     /// Existing identities are ignored without rewriting their encrypted payloads.
+    ///
+    /// Inputs: `stubs` — message identities to insert; `now` — insertion timestamp.
+    /// Output: `Result<usize>` — the number of newly inserted identities
+    /// (already-present identities are ignored).
     pub fn insert_stubs<I>(&mut self, stubs: I, now: DateTime<Utc>) -> Result<usize>
     where
         I: IntoIterator<Item = Stub>,
@@ -1129,9 +1267,17 @@ impl Store {
         Ok(inserted)
     }
 
+    /// Insert one message identity.
+    ///
+    /// Inputs: `stub` — message identity; `now` — insertion timestamp. Output:
+    /// `Result<bool>` — `true` when the identity was new and inserted.
     pub fn insert_stub(&mut self, stub: Stub, now: DateTime<Utc>) -> Result<bool> {
         Ok(self.insert_stubs(std::iter::once(stub), now)? == 1)
     }
+    /// Load and decrypt one job.
+    ///
+    /// Inputs: `id` — item identifier. Output: `Result<Job>` — the job with its
+    /// authenticated revision and state; error when absent or corrupt.
     pub fn get(&self, id: &str) -> Result<Job> {
         let (b, r, s): (Vec<u8>, u64, String) = self
             .conn
@@ -1144,6 +1290,12 @@ impl Store {
             .context("Message not found")?;
         decode(&self.vault, id, &b, r, &s)
     }
+    /// Persist one job mutation with an audit event, keeping any recorded
+    /// processing failure.
+    ///
+    /// Inputs: `job` — job to save (its revision is bumped in place); `kind` —
+    /// audit event kind; `detail` — audit event detail. Output: `Result<()>` — `Ok`
+    /// once the sealed record and audit event commit.
     pub fn save(&mut self, job: &mut Job, kind: &str, detail: &str) -> Result<()> {
         self.save_internal(job, kind, detail, ProcessingFailureMutation::Keep)
     }
@@ -1182,6 +1334,12 @@ impl Store {
         self.conn.execute_batch(&statement).unwrap();
     }
 
+    /// Persist one job mutation together with a processing failure record.
+    ///
+    /// Inputs: `job` — job to save (its revision is bumped in place); `failure` —
+    /// processing failure to record; `kind` — audit event kind; `detail` — audit
+    /// event detail. Output: `Result<()>` — `Ok` once the sealed record, failure
+    /// row, and audit event commit.
     pub fn save_processing_failure(
         &mut self,
         job: &mut Job,
@@ -1192,6 +1350,11 @@ impl Store {
         self.save_internal(job, kind, detail, ProcessingFailureMutation::Set(failure))
     }
 
+    /// Persist one job mutation and clear any recorded processing failure.
+    ///
+    /// Inputs: `job` — job to save (its revision is bumped in place); `kind` —
+    /// audit event kind; `detail` — audit event detail. Output: `Result<()>` — `Ok`
+    /// once the sealed record and audit event commit.
     pub fn save_clearing_processing_failure(
         &mut self,
         job: &mut Job,
@@ -1201,6 +1364,12 @@ impl Store {
         self.save_internal(job, kind, detail, ProcessingFailureMutation::Clear)
     }
 
+    /// Shared save path: seal the job, bump its revision, and audit the change.
+    ///
+    /// Inputs: `job` — job to save (mutated in place); `kind` — audit event kind;
+    /// `detail` — audit event detail; `failure` — how to treat the stored
+    /// processing failure (keep, set, or clear). Output: `Result<()>` — `Ok` once
+    /// the transaction commits.
     fn save_internal(
         &mut self,
         job: &mut Job,
@@ -1294,6 +1463,12 @@ impl Store {
         *job = next;
         Ok(())
     }
+    /// List one account's jobs as one page.
+    ///
+    /// Inputs: `account` — account whose items to list; `review_only` — restrict to
+    /// reviewable states; `page` — zero-based page number; `limit` — page size,
+    /// clamped to 1..=100. Output: `Result<Vec<Job>>` — the jobs on the requested
+    /// page.
     pub fn list(
         &self,
         account: &str,
@@ -1327,6 +1502,12 @@ impl Store {
         .collect()
     }
     /// Snapshot-consistent cursor feed for integrations.
+    ///
+    /// Inputs: `account` — account whose items to list; `review_only` — restrict to
+    /// reviewable states; `cursor` — continuation cursor (`None` opens a new
+    /// snapshot); `limit` — page size, clamped to 1..=100. Output:
+    /// `Result<ItemCursorPage>` — the page of jobs plus the continuation cursor
+    /// bounded by the snapshot's high-water mark.
     ///
     /// The first page captures the current maximum SQLite rowid for the account.
     /// Traversal is ordered only by immutable rowid and every continuation is
@@ -1425,10 +1606,19 @@ impl Store {
         Ok(ItemCursorPage { items, next_cursor })
     }
 
+    /// Fetch the next queued job that is due for processing.
+    ///
+    /// Inputs: `account` — account key; `now` — current time (jobs whose retry time
+    /// is later are skipped). Output: `Result<Option<Job>>` — the oldest due queued
+    /// job, or `None`.
     pub fn next_queued(&self, account: &str, now: DateTime<Utc>) -> Result<Option<Job>> {
         let id: Option<String> = self.conn.query_row("SELECT id FROM items WHERE account_key=?1 AND state='queued' AND retry_at<=?2 ORDER BY created_at,id LIMIT 1", params![hash(account),now.timestamp()], |r| r.get(0)).optional()?;
         id.map(|id| self.get(&id)).transpose()
     }
+    /// List the ids of an account's ready jobs in review order.
+    ///
+    /// Inputs: `account` — account key. Output: `Result<Vec<String>>` — the ids
+    /// ordered by received (or created) time.
     pub fn ready_ids(&self, account: &str) -> Result<Vec<String>> {
         let mut q = self.conn.prepare(
             "SELECT id FROM items WHERE account_key=?1 AND state='ready' ORDER BY COALESCE(received_at,created_at),id",
@@ -1436,6 +1626,10 @@ impl Store {
         let rows = q.query_map([hash(account)], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
+    /// Return an account's deferred jobs to the ready state.
+    ///
+    /// Inputs: `account` — account key. Output: `Result<usize>` — the number of
+    /// jobs requeued.
     pub fn wake_deferred(&mut self, account: &str) -> Result<usize> {
         let ids: Vec<String> = {
             let mut q = self
@@ -1456,6 +1650,10 @@ impl Store {
     /// Remove actionable content that falls outside a newly tightened age window.
     /// Provider identities remain as deduplication tombstones and can be requeued if the
     /// lookback is expanded later.
+    ///
+    /// Inputs: `account` — account key; `cutoff` — earliest message age kept; `now`
+    /// — current time. Output: `Result<usize>` — the number of jobs deferred and
+    /// stripped of actionable content.
     pub fn defer_review_outside_window(
         &mut self,
         account: &str,
@@ -1496,6 +1694,11 @@ impl Store {
         Ok(deferred)
     }
 
+    /// Read the stored processing failure for one item.
+    ///
+    /// Inputs: `item_id` — item identifier. Output:
+    /// `Result<Option<ProcessingFailureRecord>>` — the failure record (code,
+    /// attempts, retry state, payload), or `None` when none is stored.
     pub fn processing_failure(&self, item_id: &str) -> Result<Option<ProcessingFailureRecord>> {
         let row: Option<(String, u32, bool, i64, Vec<u8>)> = self
             .conn
@@ -1530,6 +1733,10 @@ impl Store {
         .transpose()
     }
 
+    /// Summarize active processing failures for one account.
+    ///
+    /// Inputs: `account` — account key. Output: `Result<ProcessingFailureSummary>`
+    /// — per-code counts of failed items in `queued`/`attention` states.
     pub fn processing_failure_summary(&self, account: &str) -> Result<ProcessingFailureSummary> {
         let mut summary = ProcessingFailureSummary::default();
         let mut query = self.conn.prepare(
@@ -1559,6 +1766,10 @@ impl Store {
         Ok(summary)
     }
 
+    /// Count one account's jobs per state.
+    ///
+    /// Inputs: `account` — account key. Output: `Result<Counts>` — the per-state
+    /// counts.
     pub fn counts(&self, account: &str) -> Result<Counts> {
         let mut c = Counts::default();
         let mut q = self
@@ -1586,6 +1797,10 @@ impl Store {
         c.attempts_24h = attempts?;
         Ok(c)
     }
+    /// Whether a thread holds an unresolved delivery.
+    ///
+    /// Inputs: `key` — thread key. Output: `Result<bool>` — `true` while a delivery
+    /// for the thread is `reserved` or `uncertain`.
     pub fn thread_blocked(&self, key: &str) -> Result<bool> {
         let found = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM deliveries WHERE thread_key=?1 AND status IN ('reserved','uncertain'))",
@@ -1597,6 +1812,11 @@ impl Store {
     }
 
     /// Count recent durable send attempts to the same normalized reply mailbox.
+    ///
+    /// Inputs: `snapshot` — job whose reply recipient is counted; `now` — current
+    /// time marking the 24-hour window. Output: `Result<u64>` — the number of
+    /// durable send attempts to that recipient in the window; error when the job
+    /// has no original message.
     ///
     /// No recipient index is persisted. The global daily cap bounds this scan to
     /// a small set of encrypted rows and recent completed content is retained for
@@ -1616,11 +1836,20 @@ impl Store {
     }
 
     /// Backward-compatible manual/global-cap reservation API.
+    ///
+    /// Inputs: `snapshot` — job snapshot to reserve; `limit` — global send cap;
+    /// `now` — current time. Output: `Result<Job>` — the job in its reserved
+    /// `Sending` state.
     pub fn reserve_send(&mut self, snapshot: &Job, limit: u16, now: DateTime<Utc>) -> Result<Job> {
         self.reserve_send_with_recipient_limit(snapshot, limit, None, now)
     }
 
     /// Reserve a send with an optional additional rolling recipient ceiling.
+    ///
+    /// Inputs: `snapshot` — job snapshot to reserve; `limit` — global send cap;
+    /// `recipient_limit` — optional rolling per-recipient ceiling; `now` — current
+    /// time. Output: `Result<Job>` — the job in its reserved `Sending` state; error
+    /// when any cap would be exceeded.
     ///
     /// Automatic dispatch uses this stronger path; the legacy public API above
     /// remains source-compatible for explicit Human Review/integrations.
@@ -1717,6 +1946,11 @@ impl Store {
         tx.commit()?;
         Ok(j)
     }
+    /// Cancel a reserved send that has not gone out.
+    ///
+    /// Inputs: `id` — job identifier; `detail` — audit detail explaining the
+    /// cancellation. Output: `Result<Job>` — the job returned to its
+    /// pre-reservation state; error when no reservation is held.
     pub fn release_unsent_reservation(&mut self, id: &str, detail: &str) -> Result<Job> {
         let mut job = self.get(id)?;
         ensure!(
@@ -1766,6 +2000,11 @@ impl Store {
         Ok(job)
     }
 
+    /// Resolve a reserved delivery as sent.
+    ///
+    /// Inputs: `id` — job identifier; `provider_id` — provider message id, when
+    /// known. Output: `Result<Job>` — the completed job; error when no unresolved
+    /// delivery exists.
     pub fn finish_send(&mut self, id: &str, provider_id: Option<String>) -> Result<Job> {
         let mut j = self.get(id)?;
         ensure!(
@@ -1830,6 +2069,10 @@ impl Store {
         tx.commit()?;
         Ok(j)
     }
+    /// Whether the audit journal records a dispatch attempt for an item.
+    ///
+    /// Inputs: `item_id` — item identifier. Output: `Result<bool>` — `true` when
+    /// such an event exists.
     pub fn has_dispatch_attempt_event(&self, item_id: &str) -> Result<bool> {
         let mut statement = self
             .conn
@@ -1853,6 +2096,10 @@ impl Store {
         Ok(false)
     }
 
+    /// Reconcile jobs left in `Sending` by an interrupted session.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<usize>` — the number of jobs
+    /// reconciled.
     pub fn recover_interrupted_sends(&mut self) -> Result<usize> {
         let ids: Vec<String> = {
             let mut q = self
@@ -1874,6 +2121,10 @@ impl Store {
         }
         Ok(ids.len())
     }
+    /// Read SQLite page accounting for compaction reports.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<(u64, u64, u64)>` — (page count,
+    /// freelist count, page size in bytes).
     fn page_stats(&self) -> Result<(u64, u64, u64)> {
         let page_count: u64 = self
             .conn
@@ -1888,6 +2139,9 @@ impl Store {
     }
 
     /// Reclaim free SQLite pages under the exclusive workspace writer.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<DatabaseCompactionReport>` —
+    /// before/after page statistics for the maintenance pass.
     ///
     /// This is storage maintenance, not secure erasure. Application payloads
     /// remain encrypted, and SSD/controller remapping remains outside SQLite's
@@ -1927,17 +2181,31 @@ impl Store {
         Ok(report)
     }
 
+    /// Append one audit event in its own transaction.
+    ///
+    /// Inputs: `kind` — event kind; `item` — related item id, if any; `detail` —
+    /// operator-facing detail. Output: `Result<()>` — `Ok` once the chained event
+    /// commits.
     pub fn log(&mut self, kind: &str, item: Option<&str>, detail: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
         event(&tx, &self.vault, kind, item, detail, Utc::now())?;
         tx.commit()?;
         Ok(())
     }
+    /// Read the newest audit event sequence number.
+    ///
+    /// Inputs: none (`&self`). Output: `Result<i64>` — the maximum sequence, or `0`
+    /// for an empty journal.
     pub fn latest_event_seq(&self) -> Result<i64> {
         Ok(self
             .conn
             .query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))?)
     }
+    /// Read a page of audit events after a sequence.
+    ///
+    /// Inputs: `after` — exclusive lower sequence bound; `limit` — page size,
+    /// clamped to 1..=500. Output: `Result<Vec<AuditEvent>>` — the events in
+    /// sequence order.
     pub fn events(&self, after: i64, limit: u32) -> Result<Vec<AuditEvent>> {
         let mut q = self.conn.prepare(
             "SELECT seq,event_id,payload FROM events WHERE seq>?1 ORDER BY seq LIMIT ?2",
@@ -1958,6 +2226,9 @@ impl Store {
         .collect()
     }
     /// Prune message content while retaining deduplication and delivery identities.
+    ///
+    /// Inputs: `days` — retention window in days (30..=3650). Output:
+    /// `Result<usize>` — the number of items whose content was pruned.
     pub fn purge(&mut self, days: u16) -> Result<usize> {
         ensure!((30..=3650).contains(&days), "Invalid retention");
         let before = (Utc::now() - chrono::Duration::days(i64::from(days))).timestamp();
