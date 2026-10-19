@@ -28,12 +28,11 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(gw.clamp_target(25.0, 50.0), 20.0)
         self.assertEqual(gw.clamp_target(20.0, 50.0), 20.0)
 
-    def test_should_stop_only_at_floor_after_threshold(self):
+    def test_should_stop_is_absolute_at_the_floor(self):
         # Not at the floor yet: keep throttling, never stop.
         self.assertFalse(gw.should_stop(40.0, 99))
-        # At the floor: stop after 3 consecutive breaches.
-        self.assertFalse(gw.should_stop(20.0, 2))
-        self.assertTrue(gw.should_stop(20.0, 3))
+        # At the floor: the first breach stops (threshold 1).
+        self.assertTrue(gw.should_stop(20.0, 1))
         self.assertTrue(gw.should_stop(20.0, 10))
 
 
@@ -63,22 +62,23 @@ class HandleSampleTests(unittest.TestCase):
         self.assertEqual(dc.read_target(self.duty), 40.0)
         self.assertEqual(self._events()[-1]["event"], "breach")
 
-    def test_breach_at_floor_stops_after_three_consecutive(self):
+    def test_breach_at_floor_stops_immediately(self):
+        # Why: the operator's rule is absolute — at the minimum duty
+        # target there is no further throttle available, so the first
+        # breach at the floor must stop the workload (training pauses
+        # beat ceiling violations).
         dc.write_target(self.duty, 20.0)
-        self.assertTrue(self.wd.handle_sample(80))
-        self.assertTrue(self.wd.handle_sample(80))
         self.assertFalse(self.wd.handle_sample(80))
         self.assertTrue(dc.read_stop_flag(self.duty))
         self.assertEqual(self._events()[-1]["event"], "cooperative_stop_requested")
 
-    def test_compliant_sample_between_breaches_resets_the_floor_count(self):
-        dc.write_target(self.duty, 20.0)
-        self.assertTrue(self.wd.handle_sample(80))
-        self.assertTrue(self.wd.handle_sample(80))
-        self.assertTrue(self.wd.handle_sample(10))  # resets
-        self.assertTrue(self.wd.handle_sample(80))
-        self.assertTrue(self.wd.handle_sample(80))
-        self.assertFalse(self.wd.handle_sample(80))
+    def test_breach_above_floor_throttles_but_does_not_stop(self):
+        # Why: throttle room exists above the floor, so breaches there
+        # must only lower the live duty, never stop the run.
+        self.assertTrue(self.wd.handle_sample(80))  # 50 -> 40
+        self.assertTrue(self.wd.handle_sample(80))  # 40 -> 30
+        self.assertFalse(dc.read_stop_flag(self.duty))
+        self.assertEqual(dc.read_target(self.duty), 30.0)
 
 
 class CliTests(unittest.TestCase):
