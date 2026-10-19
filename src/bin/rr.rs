@@ -281,11 +281,16 @@ fn print_decision_summary(
 
 /// Evaluate one typed decision model and print its summary.
 ///
-/// Inputs: `e` — open engine (settings locate Ollama); `model` — model tag;
-/// `out` — destination for the evidence report. Output: `Ok(())` after the
-/// summary is printed; evaluation errors propagate unchanged.
-fn evaluate_decision(e: &Engine, model: &str, out: &std::path::Path) -> Result<()> {
-    print_decision_summary(&decision::evaluate(&e.settings, model, out)?, model, out)
+/// Inputs: `settings` — open workspace settings (they locate Ollama);
+/// `model` — model tag; `out` — destination for the evidence report.
+/// Output: `Ok(())` after the summary is printed; evaluation errors
+/// propagate unchanged (no report is written when the runtime fails).
+fn evaluate_decision(
+    settings: &config::Settings,
+    model: &str,
+    out: &std::path::Path,
+) -> Result<()> {
+    print_decision_summary(&decision::evaluate(settings, model, out)?, model, out)
 }
 
 /// Open the workspace engine for one command-line action.
@@ -318,11 +323,24 @@ fn print_decision_comparison(report: &serde_json::Value, out: &std::path::Path) 
 
 /// Compare installed typed decision models and print the summary.
 ///
-/// Inputs: `e` — open engine; `out` — destination for the comparison
-/// report. Output: `Ok(())` after the summary is printed; comparison errors
-/// propagate unchanged.
-fn compare_decision_models(e: &Engine, out: &std::path::Path) -> Result<()> {
-    print_decision_comparison(&decision::compare_installed(&e.settings, out)?, out)
+/// Inputs: `settings` — open workspace settings (they locate Ollama);
+/// `out` — destination for the comparison report. Output: `Ok(())` after
+/// printing the summary; comparison errors propagate unchanged.
+fn compare_decision_models(settings: &config::Settings, out: &std::path::Path) -> Result<()> {
+    print_decision_comparison(&decision::compare_installed(settings, out)?, out)
+}
+
+/// Compare installed curated models and print the summary.
+///
+/// Inputs: `settings` — open workspace settings (they locate Ollama);
+/// `out` — destination for the comparison report. Output: `Ok(())` after
+/// the report is announced; comparison errors propagate unchanged.
+fn compare_models(settings: &config::Settings, out: &std::path::Path) -> Result<()> {
+    announce(
+        rejection_rejector::evaluation::compare_installed(settings, out),
+        "Task-specific model comparison written to",
+        out,
+    )
 }
 
 /// Resolve one autostart-management action to its JSON report.
@@ -653,6 +671,13 @@ fn main() -> Result<()> {
             let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":build_info::current(),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()});
             println!("{}", serde_json::to_string_pretty(&payload)?);
         }
+        // Model-evidence commands below need a reachable model runtime to
+        // take their success paths. Their positive paths are pinned by the
+        // model-command suites in tests/cli_workspace.rs, which must pin the
+        // workspace at a fake runtime through an in-process workspace open —
+        // only possible where an OS credential store exists (Windows). The
+        // headless lanes cover the fail-closed paths instead of fabricating
+        // evidence.
         Action::Evaluate { out } => {
             let dir = resolve_dir(&args.data_dir)?;
             let mut e = open_engine(dir, false, true)?;
@@ -665,12 +690,12 @@ fn main() -> Result<()> {
         Action::EvaluateDecision { model, out } => {
             let dir = resolve_dir(&args.data_dir)?;
             let e = open_engine(dir, false, true)?;
-            evaluate_decision(&e, &model, &out)?;
+            evaluate_decision(&e.settings, &model, &out)?;
         }
         Action::CompareDecisionModels { out } => {
             let dir = resolve_dir(&args.data_dir)?;
             let e = open_engine(dir, false, true)?;
-            compare_decision_models(&e, &out)?;
+            compare_decision_models(&e.settings, &out)?;
         }
         Action::ProfileModel { out } => {
             let dir = resolve_dir(&args.data_dir)?;
@@ -684,8 +709,7 @@ fn main() -> Result<()> {
         Action::CompareModels { out } => {
             let dir = resolve_dir(&args.data_dir)?;
             let e = open_engine(dir, false, true)?;
-            let result = rejection_rejector::evaluation::compare_installed(&e.settings, &out);
-            announce(result, "Task-specific model comparison written to", &out)?;
+            compare_models(&e.settings, &out)?;
         }
         Action::Integrity => {
             let dir = resolve_dir(&args.data_dir)?;
@@ -955,6 +979,82 @@ mod tests {
         assert!(print_decision_comparison(&serde_json::json!({}), out).is_ok());
     }
 
+    /// Settings pinned to a closed loopback port.
+    ///
+    /// Why: a live Ollama may run on this machine; no test may depend on
+    /// what is installed there (the same pin the model-command suite uses).
+    fn offline_settings() -> config::Settings {
+        config::Settings {
+            ollama_url: "http://127.0.0.1:9".into(),
+            signature: "Test Applicant".into(),
+            ..Default::default()
+        }
+    }
+
+    /// R&D decision evidence fails closed when the runtime is unreachable.
+    ///
+    /// Why: the evaluation helper must propagate the transport failure
+    /// instead of writing an evidence report — a report written without a
+    /// runtime would read like a model qualification to operator tooling.
+    #[test]
+    fn evaluate_decision_fails_closed_without_the_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("decision-evidence.json");
+        evaluate_decision(&offline_settings(), "nimble:9b-q8_0", &out)
+            .expect_err("an unreachable runtime cannot produce evidence");
+        assert!(!out.exists(), "no evidence file is fabricated");
+    }
+
+    /// R&D model comparison degrades to per-candidate skips.
+    ///
+    /// Why: with no runtime reachable the comparison must still write its
+    /// report with every candidate skipped and the recommendation empty —
+    /// the "never authorizes, never invents a winner" note has to hold even
+    /// for the empty case, and operator tooling consumes the report shape.
+    #[test]
+    fn compare_decision_models_reports_skips_and_never_invents_a_winner() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("decision-compare.json");
+        compare_decision_models(&offline_settings(), &out).expect("skip-only comparison succeeds");
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(
+            report.get("recommended_model"),
+            Some(&serde_json::Value::Null)
+        );
+        let candidates = report
+            .get("candidates")
+            .and_then(serde_json::Value::as_array)
+            .expect("candidates listed");
+        assert!(!candidates.is_empty());
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c.get("skipped") == Some(&serde_json::Value::Bool(true)))
+        );
+    }
+
+    /// Task-specific model comparison degrades to skips the same way.
+    ///
+    /// Why: the "no runtime, no winner" contract must hold for the curated
+    /// pipeline too: the report lands on disk with every candidate skipped
+    /// and no eligible recommendation, never an invented winner.
+    #[test]
+    fn compare_models_reports_skips_and_no_eligible_recommendation() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("model-compare.json");
+        compare_models(&offline_settings(), &out).expect("skip-only comparison succeeds");
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert!(
+            report
+                .pointer("/summary/recommendation_eligible")
+                .and_then(serde_json::Value::as_bool)
+                .is_none_or(|eligible| !eligible),
+            "an unreachable runtime never recommends a model"
+        );
+    }
+
     /// A fake task-scheduler runner records the exact registration commands.
     ///
     /// Why: install/status/remove must drive the scheduler through the
@@ -1086,13 +1186,12 @@ mod tests {
         }
         // Park the worker in "still starting" so the poll loop has to wait.
         worker.snapshot.lock().unwrap().initialized = false;
-        let error = match wait_for_ready(
+        let error = wait_for_ready(
             &worker,
             std::time::Instant::now() + std::time::Duration::from_millis(150),
-        ) {
-            Ok(_) => panic!("an expired deadline refuses to wait"),
-            Err(error) => error,
-        };
+        )
+        .err()
+        .expect("an expired deadline refuses to wait");
         assert!(error.to_string().contains("did not initialize"));
     }
 
@@ -1186,7 +1285,7 @@ mod tests {
         // The workspace fails only after startup, so the serving loop itself
         // has to notice and end.
         let shared = worker.snapshot.clone();
-        let error = match web_serve(&worker, move |_| {
+        let error = web_serve(&worker, move |_| {
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(1200));
                 let mut snapshot = shared.lock().unwrap();
@@ -1194,10 +1293,8 @@ mod tests {
                 snapshot.error = "workspace lost".into();
             });
             Ok(())
-        }) {
-            Ok(()) => panic!("a fatal workspace must end web serving"),
-            Err(error) => error,
-        };
+        })
+        .expect_err("a fatal workspace must end web serving");
         assert!(error.to_string().contains("workspace lost"));
     }
 }
