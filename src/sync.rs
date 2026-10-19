@@ -14,6 +14,12 @@ use std::{
 const MAX_SYNC_PAGES: usize = 512;
 const MAX_SYNC_IDENTITIES: usize = 250_000;
 
+/// Charge one sync page against the traversal budget.
+///
+/// Inputs: `pages_seen` — page counter, incremented with an overflow check;
+/// `identities_seen` — identity counter, accumulated; `page_identities` —
+/// identities seen on this page. Output: `Result<()>` — `Ok` while the counters
+/// advance; error on overflow (the cursor is retained).
 fn charge_sync_budget(
     pages_seen: &mut usize,
     identities_seen: &mut usize,
@@ -37,17 +43,40 @@ fn charge_sync_budget(
 }
 
 pub trait Provider {
+    /// Fetch the provider account profile.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the account profile.
     fn profile(&mut self) -> Result<Profile>;
+    /// List one page of provider messages.
+    ///
+    /// Inputs: `query` — provider search query; `page` — continuation token, if
+    /// any. Output: `Result<MessagePage>` — the page of message identities.
     fn list(&mut self, query: &str, page: Option<&str>) -> Result<MessagePage>;
+    /// List one page of provider history since a start point.
+    ///
+    /// Inputs: `start` — history start token; `page` — continuation token, if any.
+    /// Output: `Result<HistoryResult>` — the history page and its new start token.
     fn history(&mut self, start: &str, page: Option<&str>) -> Result<HistoryResult>;
 }
 impl Provider for Gmail {
+    /// Fetch the Gmail account profile.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the account profile,
+    /// as the inherent `Gmail::profile` method returns.
     fn profile(&mut self) -> Result<Profile> {
         Gmail::profile(self)
     }
+    /// List one page of Gmail messages.
+    ///
+    /// Inputs: `q` — Gmail search query; `p` — continuation token, if any. Output:
+    /// `Result<MessagePage>` — the page of message identities.
     fn list(&mut self, q: &str, p: Option<&str>) -> Result<MessagePage> {
         Gmail::list(self, q, p)
     }
+    /// List one page of Gmail history since a start point.
+    ///
+    /// Inputs: `s` — history start token; `p` — continuation token, if any. Output:
+    /// `Result<HistoryResult>` — the history page and its new start token.
     fn history(&mut self, s: &str, p: Option<&str>) -> Result<HistoryResult> {
         Gmail::history(self, s, p)
     }
@@ -143,6 +172,13 @@ pub fn synchronize<P: Provider>(
     )?;
     Ok(inserted)
 }
+/// Run one full mailbox sync pass.
+///
+/// Inputs: `provider` — message provider; `db` — store receiving the
+/// identities; `settings` — sync settings; `account` — account key; `now` —
+/// sync start time; `cancelled` — cancellation flag; `baseline` — history start
+/// token to advance. Output: `Result<usize>` — the number of new identities
+/// inserted.
 fn full_sync<P: Provider>(
     provider: &mut P,
     db: &mut Store,
