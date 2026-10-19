@@ -44,12 +44,20 @@ fn fresh_nonce() -> XNonce {
     nonce
 }
 
+/// Build the recovery-key additional authenticated data.
+///
+/// Inputs: `vault_id` — workspace vault identifier. Output: `Vec<u8>` — the
+/// domain tag bound with the vault id.
 fn recovery_aad(vault_id: &str) -> Vec<u8> {
     let mut aad = b"rejection-rejector/recovery-key/v1\0".to_vec();
     aad.extend_from_slice(vault_id.as_bytes());
     aad
 }
 
+/// Validate one vault identifier.
+///
+/// Inputs: `value` — candidate identifier. Output: `Result<()>` — `Ok` only for
+/// a parseable UUID.
 fn validate_vault_id(value: &str) -> Result<()> {
     ensure!(
         uuid::Uuid::parse_str(value).is_ok(),
@@ -58,6 +66,12 @@ fn validate_vault_id(value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build the recovery-key KDF within its safety bounds.
+///
+/// Inputs: `memory_kib` — memory cost (19 KiB..=512 KiB); `time_cost` — time
+/// cost (1..=10); `lanes` — parallelism lanes. Output:
+/// `Result<Argon2<'static>>` — the configured KDF; error for out-of-range
+/// parameters.
 fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2<'static>> {
     ensure!(
         (19 * 1024..=512 * 1024).contains(&memory_kib),
@@ -181,6 +195,10 @@ pub struct Vault {
     key: Arc<Zeroizing<[u8; 32]>>,
 }
 impl Vault {
+    /// Wrap a raw key as a vault.
+    ///
+    /// Inputs: `key` — 32-byte master key (zeroized on drop). Output: `Self` — the
+    /// vault wrapping the key.
     fn from_zeroizing_key(key: Zeroizing<[u8; 32]>) -> Self {
         Self { key: Arc::new(key) }
     }
