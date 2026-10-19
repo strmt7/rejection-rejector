@@ -90,6 +90,10 @@ fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
+// Windows/macOS only: encodes the OS credential-store protocol and speaks
+// `keyring::Error`; the keyring crate is a target-scoped dependency and Linux
+// derives vault keys from RR_VAULT_PASSPHRASE instead.
+#[cfg(any(windows, target_os = "macos"))]
 /// Resolve the vault key from an OS credential-store lookup.
 ///
 /// Inputs: `lookup` — the raw credential-store read result; `is_new` — whether
@@ -98,10 +102,6 @@ fn recovery_argon2(memory_kib: u32, time_cost: u32, lanes: u32) -> Result<Argon2
 /// the 32-byte vault key, or an error that never silently mints a replacement
 /// for an existing vault. Test seam: the lookup result is injected so every
 /// credential-store failure mode is exercised deterministically.
-// Windows/macOS only: encodes the OS credential-store protocol and speaks
-// `keyring::Error`; the keyring crate is a target-scoped dependency and Linux
-// derives vault keys from RR_VAULT_PASSPHRASE instead.
-#[cfg(any(windows, target_os = "macos"))]
 fn key_from_credential_store(
     lookup: std::result::Result<String, keyring::Error>,
     is_new: bool,
@@ -132,6 +132,7 @@ fn key_from_credential_store(
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 /// Install a recovered vault key into the OS credential store exactly once.
 ///
 /// Inputs: `lookup` — the raw credential-store read result; `key` — the
@@ -139,7 +140,6 @@ fn key_from_credential_store(
 /// `Ok(())` after one install; an existing credential is never overwritten and
 /// credential-store failures surface as errors. Test seam: the lookup result
 /// is injected so the error arms are exercised deterministically.
-#[cfg(any(windows, target_os = "macos"))]
 fn install_key_into_credential_store(
     lookup: std::result::Result<String, keyring::Error>,
     key: &[u8],
@@ -171,6 +171,7 @@ pub fn vault_id(dir: &Path) -> Result<String> {
     Ok(id)
 }
 
+#[cfg(not(any(windows, target_os = "macos")))]
 /// Read the headless vault input for hosts without an OS credential store.
 ///
 /// Why: Linux has no credential store, so [`Vault::open`] derives the workspace
@@ -181,7 +182,6 @@ pub fn vault_id(dir: &Path) -> Result<String> {
 /// parallel tests. Inputs: none. Output: the passphrase, or the fail-closed
 /// error naming the variable when neither the seam nor the environment
 /// supplies one.
-#[cfg(not(any(windows, target_os = "macos")))]
 fn linux_vault_passphrase() -> Result<Zeroizing<String>> {
     #[cfg(test)]
     if let Some(pass) = test_support::HEADLESS_PASSPHRASE.get() {
@@ -379,11 +379,11 @@ impl Vault {
         Ok(Self::from_zeroizing_key(key))
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     /// Install the master key into the OS credential store when missing.
     ///
     /// Inputs: `dir` — workspace directory. Output: `Ok(())`; existing credentials
     /// are never replaced.
-    #[cfg(any(windows, target_os = "macos"))]
     pub fn install_os_key_if_missing(&self, dir: &Path) -> Result<()> {
         let id = vault_id(dir)?;
         let entry = keyring::Entry::new("rejection-rejector.v1", &id)?;
@@ -398,11 +398,11 @@ impl Vault {
         )
     }
 
+    #[cfg(not(any(windows, target_os = "macos")))]
     /// Refuse portable recovery-key import on this platform.
     ///
     /// Inputs: `_dir` — workspace directory (unused). Output: always an error
     /// naming the supported platforms.
-    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn install_os_key_if_missing(&self, _dir: &Path) -> Result<()> {
         anyhow::bail!(
             "Portable recovery-key import targets Windows Credential Manager or macOS Keychain; Linux recovery uses the original RR_VAULT_PASSPHRASE plus vault-id"

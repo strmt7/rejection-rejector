@@ -1399,6 +1399,7 @@ pub fn install_with(run: InstallerRunner) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 /// Production [`InstallerRunner`]: resolve the installer on the host and run
 /// it with the submitted argument vector.
 ///
@@ -1406,7 +1407,6 @@ pub fn install_with(run: InstallerRunner) -> Result<()> {
 /// argument vector. Output: `Result<bool>` — the installer's exit verdict;
 /// an unresolvable installer or spawn failure is an error naming the manual
 /// fallback.
-#[cfg(windows)]
 pub fn system_installer(program: &str, args: &[&str]) -> Result<bool> {
     let exe = which::which(program).context(
         "Install Microsoft App Installer or install Ollama from ollama.com/download/windows",
@@ -1415,13 +1415,13 @@ pub fn system_installer(program: &str, args: &[&str]) -> Result<bool> {
     Ok(status.success())
 }
 
+#[cfg(not(windows))]
 /// Production [`InstallerRunner`]: other platforms open the download page
 /// instead of running an installer command.
 ///
 /// Inputs: ignored (no local installer command exists). Output: `Result<bool>`
 /// — `Ok(true)` once the download page has been opened; a failure to open it
 /// propagates unchanged.
-#[cfg(not(windows))]
 pub fn system_installer(_program: &str, _args: &[&str]) -> Result<bool> {
     webbrowser::open("https://ollama.com/download")?;
     Ok(true)

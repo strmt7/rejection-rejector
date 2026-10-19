@@ -249,29 +249,30 @@ fn os_anchor_required_from(value: std::result::Result<String, std::env::VarError
 // Linux has no credential store). Every `cfg(any(windows, ...))` site in this
 // module is OS-store product code, not a test gate; the `cfg(not(...))` arms
 // below fail closed with the documented wording on other platforms.
+#[cfg(any(windows, target_os = "macos"))]
 /// Open the OS credential-store entry for the audit anchor.
 ///
 /// Inputs: `data_dir` — workspace directory supplying the vault id. Output:
 /// `Result<keyring::Entry>` — the service entry; error when the credential
 /// store is unreachable.
-#[cfg(any(windows, target_os = "macos"))]
 fn os_anchor_entry(data_dir: &Path) -> Result<keyring::Entry> {
     let id = vault_id(data_dir)?;
     keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &id)
         .context("Cannot access the OS credential-store audit anchor")
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 /// Read the OS-protected audit anchor.
 ///
 /// Inputs: `data_dir` — workspace directory. Output:
 /// `Result<Option<AuditAnchor>>` — the stored anchor, `None` when absent; error
 /// when the credential store fails (fail closed).
-#[cfg(any(windows, target_os = "macos"))]
 fn read_os_anchor(data_dir: &Path) -> Result<Option<AuditAnchor>> {
     let entry = os_anchor_entry(data_dir)?;
     parse_os_credential(entry.get_password())
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 /// Parse the OS credential-store audit-anchor lookup result.
 ///
 /// Inputs: `lookup` — the raw credential-store read result. Output: the stored
@@ -279,7 +280,6 @@ fn read_os_anchor(data_dir: &Path) -> Result<Option<AuditAnchor>> {
 /// store outage (an unavailable store must never look like "not required").
 /// Test seam: the lookup result is injected so the store-outage arm is
 /// exercised deterministically.
-#[cfg(any(windows, target_os = "macos"))]
 fn parse_os_credential(
     lookup: std::result::Result<String, keyring::Error>,
 ) -> Result<Option<AuditAnchor>> {
@@ -292,12 +292,12 @@ fn parse_os_credential(
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 /// Write the OS-protected audit anchor.
 ///
 /// Inputs: `data_dir` — workspace directory; `anchor` — anchor to store.
 /// Output: `Result<()>` — `Ok` once the serialized anchor is written within the
 /// size limit.
-#[cfg(any(windows, target_os = "macos"))]
 fn write_os_anchor(data_dir: &Path, anchor: &AuditAnchor) -> Result<()> {
     let serialized = serde_json::to_string(anchor)?;
     ensure!(

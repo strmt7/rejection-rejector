@@ -457,6 +457,10 @@ fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool
     #[cfg(windows)]
     {
         use std::path::Component;
+        /// Extract the lowercase volume prefix of a canonical Windows path.
+        ///
+        /// Inputs: `path` — path to canonicalize. Output: `Result<Option<String>>` —
+        /// the volume prefix component, `None` when the path carries no prefix.
         fn volume_prefix(path: &Path) -> Result<Option<String>> {
             let canonical = fs::canonicalize(path)?;
             // Every canonical Windows path holds at most one prefix component;
