@@ -36,6 +36,9 @@ pub(crate) enum RuntimeSignal {
 }
 
 impl RuntimeEvent {
+    /// Render one runtime event as its stable code.
+    ///
+    /// Inputs: `self` — the event. Output: `&'static str` — the wire code.
     fn code(self) -> &'static str {
         match self {
             Self::ProcessStarted => "process_started",
@@ -47,6 +50,10 @@ impl RuntimeEvent {
         }
     }
 
+    /// Classify one runtime event's severity.
+    ///
+    /// Inputs: `self` — the event. Output: `&'static str` — `error` for failure
+    /// events, `info` otherwise.
     fn level(self) -> &'static str {
         match self {
             Self::WorkerStartupFailed | Self::WorkerPanicked | Self::ApiListenerFailed => "error",
@@ -56,6 +63,9 @@ impl RuntimeEvent {
 }
 
 impl RuntimeSignal {
+    /// Render one runtime signal as its stable code.
+    ///
+    /// Inputs: `self` — the signal. Output: `&'static str` — the wire code.
     fn code(self) -> &'static str {
         match self {
             Self::GmailCircuitOpened => "gmail_circuit_opened",
@@ -65,6 +75,10 @@ impl RuntimeSignal {
         }
     }
 
+    /// Classify one runtime signal's severity.
+    ///
+    /// Inputs: `self` — the signal. Output: `&'static str` — `warning` when a
+    /// circuit opens, `info` when it closes.
     fn level(self) -> &'static str {
         match self {
             Self::GmailCircuitOpened | Self::LocalAiCircuitOpened => "warning",
@@ -139,6 +153,11 @@ impl RuntimeJournal {
         Self::open_with_limits(data_dir, DEFAULT_MAX_CURRENT_BYTES, DEFAULT_MAX_ARCHIVES)
     }
 
+    /// Open (or create) the runtime journal under size limits.
+    ///
+    /// Inputs: `data_dir` — workspace data directory (logs live in `logs/`);
+    /// `max_bytes` — rotation size limit (at least 256); `max_archives` — archive
+    /// count to keep (1..=16). Output: `Result<Self>` — the open journal.
     fn open_with_limits(data_dir: &Path, max_bytes: u64, max_archives: usize) -> Result<Self> {
         ensure!(max_bytes >= 256, "Runtime log size limit is too small");
         ensure!(
@@ -240,6 +259,10 @@ impl RuntimeJournal {
         })
     }
 
+    /// Append one record to the runtime journal.
+    ///
+    /// Inputs: `record` — record to serialize. Output: `Result<()>` — `Ok` once the
+    /// JSONL line is appended (the journal rotates when full).
     fn write(&self, record: RuntimeRecord) -> Result<()> {
         let mut line = serde_json::to_vec(&record)?;
         line.push(b'\n');
@@ -270,6 +293,11 @@ impl RuntimeJournal {
     }
 }
 
+/// Compute one operation's duration in milliseconds.
+///
+/// Inputs: `status` — operation status carrying both timestamps. Output:
+/// `Option<u64>` — the non-negative duration; `None` when either timestamp is
+/// missing or time ran backwards.
 fn operation_duration_ms(status: &OperationStatus) -> Option<u64> {
     let (Some(started), Some(finished)) = (status.started_at, status.finished_at) else {
         return None;
@@ -365,6 +393,12 @@ pub fn status(data_dir: &Path) -> Result<RuntimeLogStatus> {
     )
 }
 
+/// Report the runtime log's on-disk status.
+///
+/// Inputs: `directory` — log directory; `max_bytes` — rotation size limit;
+/// `max_archives` — archive count. Output: `Result<RuntimeLogStatus>` — byte
+/// totals and rotation limits (`available: false` when the directory is
+/// absent).
 fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<RuntimeLogStatus> {
     if !directory.exists() {
         return Ok(RuntimeLogStatus {
@@ -407,6 +441,11 @@ fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<R
     })
 }
 
+/// Rotate the runtime log archives.
+///
+/// Inputs: `directory` — log directory; `max_archives` — archive count to keep.
+/// Output: `Result<()>` — `Ok` once the oldest archive is dropped and the rest
+/// shift up.
 fn rotate(directory: &Path, max_archives: usize) -> Result<()> {
     let oldest = archive_path(directory, max_archives);
     if oldest.exists() {
@@ -428,10 +467,18 @@ fn rotate(directory: &Path, max_archives: usize) -> Result<()> {
     Ok(())
 }
 
+/// Build one archive file path.
+///
+/// Inputs: `directory` — log directory; `index` — archive index. Output:
+/// `PathBuf` — the `runtime.<index>.jsonl` path.
 fn archive_path(directory: &Path, index: usize) -> PathBuf {
     directory.join(format!("runtime.{index}.jsonl"))
 }
 
+/// Refuse a symlinked runtime log path.
+///
+/// Inputs: `path` — file path to check. Output: `Result<()>` — `Ok` when the
+/// path is absent or a regular file; error for symlinks.
 fn reject_symlink_if_present(path: &Path) -> Result<()> {
     if path.exists() {
         ensure!(
@@ -442,6 +489,10 @@ fn reject_symlink_if_present(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Append bytes to one private file.
+///
+/// Inputs: `path` — file to append to (created when absent); `bytes` — content
+/// to append. Output: `Result<()>` — `Ok` once written.
 fn append_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.create(true).append(true);
