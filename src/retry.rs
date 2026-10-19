@@ -144,6 +144,10 @@ fn jitter_with_rng(delay: Duration, cap: Duration, rng: &mut impl TryRng) -> Dur
 mod tests {
     use super::*;
 
+    // Uncovered-by-design: `TryRng` requires all three methods, but the
+    // jitter path under test only ever calls `try_fill_bytes`, so the
+    // u32/u64 arms of this failure double never run. They stay as the
+    // trait-mandated outage surface, not as coverage targets.
     struct EntropyFailure;
 
     impl TryRng for EntropyFailure {

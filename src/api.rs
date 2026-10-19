@@ -589,6 +589,10 @@ pub fn start(
 }
 #[cfg(test)]
 mod tests {
+    // Uncovered-by-design lines here carry no product signal: the
+    // `_ => panic!(...)` arms of the scripted worker dispatchers fire only
+    // when the code under test sends a command the scenario does not
+    // expect (which is exactly what they pin), so they never run green.
     use super::*;
     use crate::web::{CODE_CONFIRM_REPLY_MISMATCH, CODE_METHOD_NOT_ALLOWED, WriteOutcome};
     use crossbeam_channel::Receiver;
