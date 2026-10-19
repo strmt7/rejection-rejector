@@ -1573,4 +1573,83 @@ mod configuration_seam_tests {
             .allows_send_scope()
         );
     }
+
+    /// Why: the digest pin arrives as an OS environment string — valid pins
+    /// must normalize (trimmed, lowercased, exactly 64 hex) or a rollout pin
+    /// silently never applies, and invalid content must error rather than
+    /// disable the pin.
+    #[test]
+    fn digest_pin_normalizes_valid_os_values_and_rejects_the_rest() {
+        let pin = "AB".repeat(32);
+        assert_eq!(
+            digest_pin_from(Some(format!("  {pin}  ").into())).unwrap(),
+            Some(pin.to_ascii_lowercase())
+        );
+        assert!(digest_pin_from(Some("not-hex".into())).is_err());
+        assert!(digest_pin_from(None).unwrap().is_none());
+    }
+
+    /// Why: a configured Ed25519 signer must resolve to a concrete
+    /// requirement — the decoded key, its SHA-256 identity and the signature
+    /// file (default `<policy>.sig`, or the validated absolute override) —
+    /// or enforcement could verify against the wrong file or key. The
+    /// canonicalization branch of the distinctness check runs whenever both
+    /// files exist.
+    #[test]
+    fn signature_requirement_resolves_the_signer_and_signature_file() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = root.path().join("policy.json");
+        std::fs::write(&policy, b"{}").unwrap();
+        let key_bytes = [7u8; 32];
+        let key = STANDARD.encode(key_bytes);
+
+        let req = signature_requirement_from(&policy, Some(key.clone().into()), None)
+            .unwrap()
+            .expect("a configured key always produces a requirement");
+        assert_eq!(req.public_key, key_bytes);
+        assert_eq!(
+            req.signer_key_sha256,
+            crate::hex_lower(Sha256::digest(key_bytes))
+        );
+        assert_eq!(req.signature_path, signature_path_for_policy(&policy));
+
+        // Both files present: the canonicalized distinctness check passes.
+        std::fs::write(&req.signature_path, b"sig").unwrap();
+        signature_requirement_from(&policy, Some(key.clone().into()), None)
+            .unwrap()
+            .expect("both files present and distinct");
+
+        // An absolute override wins; a relative one is refused up front.
+        let override_path = root.path().join("explicit.sig");
+        std::fs::write(&override_path, b"sig").unwrap();
+        let req = signature_requirement_from(
+            &policy,
+            Some(key.clone().into()),
+            Some(override_path.clone().into()),
+        )
+        .unwrap()
+        .expect("absolute override");
+        assert_eq!(req.signature_path, override_path);
+        assert!(
+            signature_requirement_from(&policy, Some(key.into()), Some("relative.sig".into()))
+                .is_err(),
+            "relative signature paths must be refused before any file access"
+        );
+    }
+
+    /// Why: an explicit `RR_ENTERPRISE_POLICY` path is a security control
+    /// input — it must be validated before use (absolute; a relative path
+    /// would resolve against whatever directory the service happens to
+    /// start in).
+    #[test]
+    fn explicit_policy_path_is_validated_before_use() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = root.path().join("policy.json");
+        std::fs::write(&policy, b"{}").unwrap();
+        assert_eq!(
+            policy_path_from(Some(policy.clone().into_os_string()), None).unwrap(),
+            Some(policy)
+        );
+        assert!(policy_path_from(Some("relative.json".into()), None).is_err());
+    }
 }

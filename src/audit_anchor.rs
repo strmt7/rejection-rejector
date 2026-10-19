@@ -513,6 +513,110 @@ mod tests {
         std::fs::remove_file(&name).unwrap();
         assert_eq!(stored, anchor);
     }
+
+    /// Why: the environment requirement is read through an injected lookup
+    /// so every raw shape is deterministic — the exact literal enables
+    /// enforcement, an unset variable keeps it off, a non-Unicode value
+    /// must error (never silently disable the control), and the raw-set
+    /// arm must interpret the same grammar as the parsed arm.
+    #[test]
+    fn os_anchor_required_from_reads_the_injected_lookup() {
+        assert!(os_anchor_required_from(Ok(OS_AUDIT_ANCHOR_REQUIRED.to_owned())).unwrap());
+        assert!(!os_anchor_required_from(Err(std::env::VarError::NotPresent)).unwrap());
+        assert!(
+            os_anchor_required_from(Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from("unpaired")
+            )))
+            .expect_err("a non-Unicode value must fail closed")
+            .to_string()
+            .contains("Could not read")
+        );
+        assert!(os_anchor_required_from(Ok("REQUIRED".to_owned())).is_err());
+    }
+
+    /// Why: `RR_AUDIT_ANCHOR_FILE` verification must run the full anchor
+    /// check through the injected value — identity, workspace binding and
+    /// audit extension — abort with the configured path named when the
+    /// anchor does not match, and refuse relative paths before any file
+    /// access (the path is resolved from a service context).
+    #[test]
+    fn configured_external_anchor_is_verified_through_the_injected_value() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut store, dir) = workspace(root.path());
+        store
+            .insert_stub(
+                Stub {
+                    account: "me@example.com".into(),
+                    provider_id: "one".into(),
+                    thread_id: "thread".into(),
+                    source: Source::Gmail,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let anchor_path = root.path().join("external-anchor.json");
+        let written = write_anchor(&store, &dir, &anchor_path).unwrap();
+        let verified =
+            verify_configured_anchor_from(&store, &dir, Some(anchor_path.clone().into_os_string()))
+                .unwrap();
+        assert_eq!(verified, Some(written));
+
+        // A forged anchor must abort startup with the configured path named.
+        let mut forged = read_anchor(&anchor_path).unwrap();
+        forged.audit_sequence += 1;
+        let forged_path = root.path().join("forged.json");
+        write_new_private(&forged_path, &serde_json::to_vec_pretty(&forged).unwrap()).unwrap();
+        let error =
+            verify_configured_anchor_from(&store, &dir, Some(forged_path.clone().into_os_string()))
+                .expect_err("a forged configured anchor must abort startup");
+        assert!(
+            error
+                .to_string()
+                .contains("Configured external audit anchor failed"),
+            "the failure must name the configured path: {error}"
+        );
+        assert!(
+            verify_configured_anchor_from(&store, &dir, Some("relative.json".into())).is_err(),
+            "relative anchor paths must be refused before any file access"
+        );
+    }
+
+    /// Why: with `RR_AUDIT_ANCHOR_ENV=required` and no OS credential store,
+    /// both anchored paths must fail closed naming the platform — silently
+    /// skipping rollback anchoring would defeat the control. (On credential
+    /// stores the required read is satisfied by the bootstrapped anchor,
+    /// pinned by the platform-keyring suites; the checkpoint half mutates
+    /// the OS store and stays there.)
+    #[test]
+    fn required_os_anchoring_fails_closed_without_a_credential_store() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let result = verify_os_anchor(&store, &dir, true);
+        #[cfg(any(windows, target_os = "macos"))]
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "an unbootstrapped anchor verifies as absent"
+        );
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let error = result.expect_err("headless hosts cannot anchor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("supported only with the Windows/macOS"),
+                "the refusal names the platform: {error}"
+            );
+            let error =
+                checkpoint_os_anchor(&store, &dir, true).expect_err("headless hosts cannot anchor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("supported only with the Windows/macOS"),
+                "the refusal names the platform: {error}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
