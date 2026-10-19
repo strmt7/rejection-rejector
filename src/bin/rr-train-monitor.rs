@@ -40,7 +40,7 @@ struct MonitorApp {
 impl MonitorApp {
     /// Create the app state.
     ///
-    /// Input: path to the trainer's `progress.json`.
+    /// Inputs: path to the trainer's `progress.json`.
     /// Output: app state with the duty target seeded from the control
     /// file (100% = uncapped when absent).
     fn new(progress_path: PathBuf) -> Self {
@@ -63,6 +63,9 @@ impl MonitorApp {
     }
 
     /// Re-read both files (throttled by the logic tick).
+    ///
+    /// Inputs: none (`&mut self`). Output: none — the progress snapshot and duty
+    /// target are refreshed and any file error recorded.
     fn poll(&mut self) {
         self.file_error = None;
         match std::fs::read_to_string(&self.progress_path) {
@@ -78,6 +81,9 @@ impl MonitorApp {
 impl eframe::App for MonitorApp {
     /// Background tick: runs even while the window is hidden/minimised,
     /// so polling and the startup minimize never depend on repainting.
+    ///
+    /// Inputs: `ctx` — egui context whose input events are inspected; `frame` — the
+    /// enclosing frame. Output: none.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Start MINIMIZED: no popup, no focus steal (the window is also
         // created with with_active(false) in main). The minimize is
@@ -119,7 +125,10 @@ impl eframe::App for MonitorApp {
         ctx.request_repaint_after(POLL_INTERVAL);
     }
 
-    /// Render one frame. Input: the window ui. Output: none.
+    /// Render one frame.
+    ///
+    /// Inputs: `ui` — the window ui; `_frame` — the enclosing frame (unused).
+    /// Output: none.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Rejection Rejector — training monitor");
@@ -211,7 +220,7 @@ const DEFAULT_PROGRESS: &str = "training-runs/mimo-9b-lora-v2data/progress.json"
 
 /// Parse the monitor command line.
 ///
-/// Input: full argv (program name at index 0). Output: the heartbeat path
+/// Inputs: full argv (program name at index 0). Output: the heartbeat path
 /// to watch — `--progress <path>` wins (last occurrence), unknown tokens
 /// are ignored, and a dangling `--progress` keeps the previously parsed
 /// value instead of swallowing the next flag or crashing.
@@ -231,7 +240,7 @@ fn parse_progress_arg(args: &[String]) -> PathBuf {
 
 /// The native window options.
 ///
-/// Input: none. Output: [`eframe::NativeOptions`] for the monitor window:
+/// Inputs: none. Output: [`eframe::NativeOptions`] for the monitor window:
 /// the viewport is created with `with_active(false)` so it never becomes
 /// the foreground window or steals focus from other applications.
 fn monitor_options() -> eframe::NativeOptions {
@@ -248,7 +257,7 @@ fn monitor_options() -> eframe::NativeOptions {
 
 /// Entry point.
 ///
-/// Input: CLI arg `--progress <path>` (optional; default
+/// Inputs: CLI arg `--progress <path>` (optional; default
 /// `training-runs/mimo-9b-lora-v2data/progress.json`).
 /// Output: process exit code (0 on clean close). The window is created
 /// MINIMIZED and inactive: it never pops up and never steals focus.
