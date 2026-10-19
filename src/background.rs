@@ -158,6 +158,11 @@ fn render_task_xml(user: &str, executable: &Path, data_dir: &Path) -> Result<Str
     ))
 }
 
+/// Resolve one System32 binary under `SystemRoot`.
+///
+/// Inputs: `name` — binary file name (e.g. `whoami.exe`). Output:
+/// `Result<PathBuf>` — the absolute path; error when `SystemRoot` is unusable
+/// or the binary is missing.
 #[cfg(windows)]
 fn system32_binary(name: &str) -> Result<PathBuf> {
     let root = std::env::var_os("SystemRoot").context("SystemRoot is unavailable")?;
@@ -168,6 +173,10 @@ fn system32_binary(name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Query the current Windows identity.
+///
+/// Inputs: none. Output: `Result<String>` — the trimmed `whoami` result; error
+/// when the query fails or returns empty.
 #[cfg(windows)]
 fn current_user() -> Result<String> {
     let output = std::process::Command::new(system32_binary("whoami.exe")?)
@@ -193,6 +202,12 @@ fn is_msix_managed_path(executable: &Path) -> bool {
         .any(|part| part.eq_ignore_ascii_case("WindowsApps"))
 }
 
+/// Canonicalize the autostart task inputs.
+///
+/// Inputs: `executable` — rr executable path (MSIX-managed paths refused);
+/// `data_dir` — workspace data directory (created as needed). Output:
+/// `Result<(PathBuf, PathBuf)>` — the canonical (executable, data directory)
+/// pair.
 #[cfg(windows)]
 fn canonical_inputs(executable: &Path, data_dir: &Path) -> Result<(PathBuf, PathBuf)> {
     ensure!(
@@ -213,6 +228,10 @@ fn canonical_inputs(executable: &Path, data_dir: &Path) -> Result<(PathBuf, Path
     Ok((executable, data_dir))
 }
 
+/// Write one task XML document as a private UTF-16 file.
+///
+/// Inputs: `data_dir` — directory to write into; `xml` — task XML text. Output:
+/// `Result<PathBuf>` — the written file path (BOM-prefixed UTF-16LE).
 #[cfg(windows)]
 fn write_task_xml(data_dir: &Path, xml: &str) -> Result<PathBuf> {
     let path = data_dir.join(format!(".autostart-task-{}.xml", uuid::Uuid::new_v4()));
