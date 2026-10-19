@@ -2,6 +2,11 @@
 use super::*;
 use crate::store::DATABASE_SCHEMA_VERSION;
 
+/// Enforce that a live database path is a regular file or absent.
+///
+/// Inputs: `path` — file path to check. Output: `Result<()>` — `Ok` when the
+/// path is missing or is a regular non-symlink file; error for symlinks or
+/// other file kinds.
 fn regular_or_absent(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => ensure!(
@@ -14,6 +19,11 @@ fn regular_or_absent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Undo staged file moves after a failed operation.
+///
+/// Inputs: `moved` — (original, saved) path pairs in move order. Output:
+/// `Result<()>` — `Ok` when every file is renamed back in reverse order; error
+/// when any restore rename fails.
 fn rollback_files(moved: &[(PathBuf, PathBuf)]) -> Result<()> {
     let mut failures = 0usize;
     for (original, saved) in moved.iter().rev() {
@@ -94,6 +104,13 @@ fn write_optional_restore_report(rollback_dir: &Path, report: &mut RestoreReport
     }
 }
 
+/// Restore a validated backup bundle into the workspace using a supplied vault.
+///
+/// Inputs: `data_dir` — workspace data directory to restore into; `backup_dir`
+/// — directory holding the backup bundle; `manifest` — backup manifest
+/// describing the bundle; `vault` — vault used to authenticate the restored
+/// material. Output: `Result<RestoreReport>` summarizing the restore; errors
+/// when the bundle or vault fails validation.
 pub(super) fn restore_backup_with_vault(
     data_dir: &Path,
     backup_dir: &Path,
