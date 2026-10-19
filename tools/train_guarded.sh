@@ -66,12 +66,15 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
         echo "run-complete-cleanly"
         break
     fi
-    if [ "$CODE" != "97" ] && [ "$CODE" != "137" ] && ! grep -q '"stop": true' "$RUN_DIR/duty.json" 2>/dev/null; then
-        echo "hard-failure-exit=$CODE (not retried)"
+    if [ "$CODE" = "2" ]; then
+        echo "configuration-error-exit=2 (not retried: fix args/dataset first)"
         break
     fi
-    # 4. Watchdog stop (ceiling breach) or stall/OOM: cooldown, retry.
-    echo "retrying-after-cooldown (watchdog-stop or self-heal exit $CODE)"
+    # Anything else — watchdog ceiling stop, stall self-heal (97/137), OOM,
+    # or a transient GPU-link death (verified case: dxgkrnl ioctl -512 killed
+    # the CUDA process mid-step; classified as transient, must retry) — is
+    # retried with a cooldown. MAX_ATTEMPTS bounds genuine hard failures.
+    echo "retrying-after-cooldown (exit $CODE)"
     sleep 90
 done
 echo "guarded-chain-finished"
