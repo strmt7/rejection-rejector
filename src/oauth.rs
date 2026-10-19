@@ -32,6 +32,10 @@ pub struct Credentials {
     pub can_send: bool,
 }
 impl Drop for Credentials {
+    /// Zeroize the stored client credentials on drop.
+    ///
+    /// Inputs: none (`&mut self`). Output: none — the client secret and refresh
+    /// token are wiped.
     fn drop(&mut self) {
         self.client_secret.zeroize();
         self.refresh_token.zeroize();
@@ -47,6 +51,9 @@ struct Installed {
     client_secret: String,
 }
 impl Drop for Installed {
+    /// Zeroize the installed-app client secret on drop.
+    ///
+    /// Inputs: none (`&mut self`). Output: none — the client secret is wiped.
     fn drop(&mut self) {
         self.client_secret.zeroize();
     }
@@ -59,6 +66,10 @@ pub struct Tokens {
     pub scope: Option<String>,
 }
 impl Zeroize for Tokens {
+    /// Wipe the stored tokens in place.
+    ///
+    /// Inputs: none (`&mut self`). Output: none — the access token and any refresh
+    /// token are zeroized.
     fn zeroize(&mut self) {
         self.access_token.zeroize();
         if let Some(token) = &mut self.refresh_token {
@@ -77,6 +88,9 @@ pub fn secret() -> String {
 
 /// RFC 7636 S256 code challenge: BASE64URL-ENCODE(SHA256(ASCII(verifier))).
 ///
+/// Inputs: `verifier` — PKCE code verifier. Output: `String` — the base64url
+/// (no padding) S256 code challenge.
+///
 /// Split out of `login()` so the exact challenge construction is pinned by the
 /// RFC test vector; a subtly wrong digest encoding would break authorization
 /// only at the Google redirect, far from any test.
@@ -84,6 +98,12 @@ fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+/// Extract the authorization code from one loopback callback target.
+///
+/// Inputs: `target` — request target (path and query); `state` — the expected
+/// OAuth state. Output: `Result<Option<String>>` — `Some(code)` for a matching
+/// OAuth callback, `None` for other valid targets; error when the target is
+/// malformed (fail closed).
 fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
     ensure!(
         target.starts_with('/')
