@@ -66,6 +66,10 @@ pub const PROMPT_VERSION: &str = "rr-prompts-v1";
 pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v5";
 pub const SETTINGS_FORMAT_VERSION: u32 = 2;
 
+/// Return the current settings format version.
+///
+/// Inputs: none. Output: `u32` — the current `SETTINGS_FORMAT_VERSION`, used as
+/// the serde default.
 fn default_settings_format_version() -> u32 {
     SETTINGS_FORMAT_VERSION
 }
@@ -269,6 +273,10 @@ pub struct Settings {
     pub scheduled_backup_keep: u8,
 }
 impl Default for Settings {
+    /// Construct the safe default settings.
+    ///
+    /// Inputs: none. Output: `Self` — human-review mode with sending disabled and
+    /// conservative limits.
     fn default() -> Self {
         Self {
             settings_format_version: SETTINGS_FORMAT_VERSION,
