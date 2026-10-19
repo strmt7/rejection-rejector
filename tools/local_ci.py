@@ -26,6 +26,20 @@ GATES = [
         "clippy (exact CI flags)",
         ["cargo", "clippy", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"],
     ),
+    # Advisory gate (RUSTSEC/OSV). The three ignores are the documented triage
+    # in osv-scanner.toml: Linux-only accessibility stack (accesskit_unix ->
+    # atspi -> zvariant 5 / zbus_names 4), unreachable in the shipped Windows
+    # binary, "unmaintained" notices with no in-range patched version. Any NEW
+    # advisory must block this gate until it is fixed or triaged with reasons.
+    (
+        "cargo audit (advisories)",
+        [
+            "cargo", "audit", "--deny", "warnings",
+            "--ignore", "RUSTSEC-2026-0370",
+            "--ignore", "RUSTSEC-2026-0371",
+            "--ignore", "RUSTSEC-2026-0372",
+        ],
+    ),
 ]
 
 
