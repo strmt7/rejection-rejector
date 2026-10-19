@@ -43,6 +43,10 @@ pub struct MetricsSnapshot {
 
 /// Collect a privacy-safe metrics snapshot from the engine.
 ///
+/// Inputs: `engine` — engine to sample; `now` — collection time. Output:
+/// `Result<MetricsSnapshot>` — the privacy-safe operational snapshot; error
+/// when a source check fails.
+///
 /// This function gathers all non-sensitive operational metrics for export
 /// via the authenticated loopback API. It deliberately excludes:
 /// - Mailbox addresses, message content, or recipient information
@@ -113,10 +117,19 @@ pub fn collect(engine: &Engine, now: DateTime<Utc>) -> Result<MetricsSnapshot> {
     })
 }
 
+/// Render a boolean metric value.
+///
+/// Inputs: `value` — boolean to encode. Output: `u8` — `1` for true, `0` for
+/// false.
 fn metric_bool(value: bool) -> u8 {
     u8::from(value)
 }
 
+/// Append one OpenMetrics gauge to the exposition text.
+///
+/// Inputs: `out` — text being built; `name` — metric name; `help` — help text;
+/// `unit` — optional unit suffix; `value` — gauge value to render. Output: none
+/// — the HELP, TYPE, and sample lines are appended.
 fn push_gauge(
     out: &mut String,
     name: &str,
@@ -146,6 +159,9 @@ fn push_gauge(
 }
 
 /// Render a privacy-safe OpenMetrics 1.0 snapshot.
+///
+/// Inputs: `snapshot` — metrics snapshot to render. Output: `String` — the
+/// label-free OpenMetrics 1.0 exposition text ending in `# EOF`.
 ///
 /// Metric names and semantics are deliberately stable and label-free so mailbox,
 /// employer, account and candidate data can never become high-cardinality labels.
@@ -380,6 +396,11 @@ pub fn render_openmetrics(snapshot: &MetricsSnapshot) -> String {
     out
 }
 
+/// Render the metrics text including runtime and emergency-stop gauges.
+///
+/// Inputs: `snapshot` — metrics snapshot; `runtime` — runtime performance
+/// summary; `emergency_stop_active` — whether the emergency stop is engaged.
+/// Output: `String` — the exposition text with the extra gauges before `# EOF`.
 pub fn render_openmetrics_with_runtime_and_emergency(
     snapshot: &MetricsSnapshot,
     runtime: &crate::runtime_log::RuntimePerformanceSummary,
@@ -400,6 +421,11 @@ pub fn render_openmetrics_with_runtime_and_emergency(
     out
 }
 
+/// Render the metrics text including runtime gauges.
+///
+/// Inputs: `snapshot` — metrics snapshot; `runtime` — runtime performance
+/// summary. Output: `String` — the exposition text with the runtime gauges
+/// before `# EOF`.
 pub fn render_openmetrics_with_runtime(
     snapshot: &MetricsSnapshot,
     runtime: &crate::runtime_log::RuntimePerformanceSummary,
