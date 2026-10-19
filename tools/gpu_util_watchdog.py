@@ -176,62 +176,123 @@ class Watchdog:
                     return False
             return True
 
+    def _stream_loop(self, cmd: list[str]) -> int:
+        """Consume a sampler's CSV stream until stop or death.
+
+        Input: sampler argv emitting "max,sum" lines (" -1,-1" on error).
+        Output: process exit code (0 clean, 3 enforcement stop, 4 sampler
+        failure -> fail-closed stop).
+        """
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        try:
+            assert proc.stdout is not None
+            bad_samples = 0
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                if len(parts) != 2 or not parts[0].lstrip("-").isdigit():
+                    continue
+                max_pct, sum_pct = int(parts[0]), int(parts[1])
+                if max_pct < 0:
+                    # Transient sampler failure: tolerate briefly, fail closed
+                    # when the stream goes dark (an unobserved workload must
+                    # never run unbounded).
+                    bad_samples += 1
+                    self._log({"event": "sample_error", "consecutive": bad_samples})
+                    if bad_samples >= 5:
+                        self._log({"event": "sampler_dark_fail_closed"})
+                        duty_cycle.write_stop_flag(self.duty_path)
+                        return 4
+                    continue
+                bad_samples = 0
+                if not self.handle_sample(max_pct, sum_pct):
+                    return 3
+            # Stream ended unexpectedly: fail closed.
+            self._log({"event": "sampler_died"})
+            duty_cycle.write_stop_flag(self.duty_path)
+            return 4
+        finally:
+            proc.terminate()
+
     def run(self) -> int:
         """Run the sampler loop until stop or sampler death.
 
         Input: none (state in the constructor).
-        Output: process exit code (0 clean, 3 enforcement stop, 4
-        sampler failure -> fail-closed stop).
+        Output: process exit code (see _stream_loop).
         """
-        with tempfile_script() as script_path:
-            proc = subprocess.Popen(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script_path),
-                    "-TargetPid",
-                    str(self.pid),
-                    "-MatchName",
-                    self.match_name,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            try:
-                assert proc.stdout is not None
-                bad_samples = 0
-                for line in proc.stdout:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split(",")
-                    if len(parts) != 2 or not parts[0].lstrip("-").isdigit():
-                        continue
-                    max_pct, sum_pct = int(parts[0]), int(parts[1])
-                    if max_pct < 0:
-                        # Transient sampler failure: tolerate briefly,
-                        # fail closed when the stream goes dark (an
-                        # unobserved workload must never run unbounded).
-                        bad_samples += 1
-                        self._log({"event": "sample_error", "consecutive": bad_samples})
-                        if bad_samples >= 5:
-                            self._log({"event": "sampler_dark_fail_closed"})
-                            duty_cycle.write_stop_flag(self.duty_path)
-                            return 4
-                        continue
-                    bad_samples = 0
-                    if not self.handle_sample(max_pct, sum_pct):
-                        return 3
-                # Stream ended unexpectedly: fail closed.
-                self._log({"event": "sampler_died"})
-                duty_cycle.write_stop_flag(self.duty_path)
-                return 4
-            finally:
-                proc.terminate()
+        shell = _find_powershell()
+        if shell is not None:
+            with tempfile_script() as script_path:
+                return self._stream_loop(
+                    [
+                        shell,
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        str(script_path),
+                        "-TargetPid",
+                        str(self.pid),
+                        "-MatchName",
+                        self.match_name,
+                    ]
+                )
+        # No PowerShell (bare-metal Linux): a native sysfs / nvidia-smi sampler
+        # keeps enforcement host-agnostic instead of depending on Windows.
+        self._log({"event": "powershell_unavailable_linux_fallback"})
+        return self._stream_loop(["sh", "-c", LINUX_SAMPLER])
+
+
+def _find_powershell() -> str | None:
+    """Locate a PowerShell executable across Windows, WSL, and pwsh installs.
+
+    Input: none. Output: an executable path, or None when no PowerShell is
+    reachable (bare-metal Linux) so the caller can fall back to a native
+    sampler. Tries PATH names first, then WSL/Windows interop locations that a
+    detached launch may not inherit via PATH.
+    """
+    import os
+    import shutil
+
+    for name in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for candidate in (
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+    ):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+# Native Linux GPU-busy sampler for hosts without PowerShell. Emits the same
+# "max,sum" CSV contract (with "-1,-1" on read failure) at ~5 Hz so the stream
+# loop is identical to the PowerShell path. Reads AMD sysfs first, then
+# nvidia-smi, so it is host-agnostic across common Linux GPU stacks.
+LINUX_SAMPLER = """\
+while :; do
+    busy=-1
+    for f in /sys/class/drm/card*/device/gpu_busy_percent; do
+        [ -r "$f" ] || continue
+        busy=$(tr -dc '0-9' < "$f" 2>/dev/null)
+        [ -n "$busy" ] && break
+    done
+    if [ -z "$busy" ] || [ "$busy" = "-1" ]; then
+        busy=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9')
+    fi
+    if [ -n "$busy" ] && [ "$busy" != "-1" ]; then echo "$busy,$busy"; else echo "-1,-1"; fi
+    sleep 0.2
+done
+"""
 
 
 class tempfile_script:

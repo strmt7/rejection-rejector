@@ -32,7 +32,31 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${RR_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-PY="${RR_PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null)}"
+
+# Pick a python interpreter that can import torch (training requires it).
+# Order: explicit RR_PYTHON > active venv > repo-local venvs > any home venv
+# whose python imports torch > PATH python3/python. Fully automatic and
+# host-agnostic: finds a torch venv by capability, not by a baked-in name.
+_resolve_python() {
+    local cand
+    for cand in ${RR_PYTHON:+"$RR_PYTHON"} \
+                ${VIRTUAL_ENV:+"$VIRTUAL_ENV/bin/python"} \
+                "$REPO/.venv/bin/python" "$REPO/venv/bin/python" \
+                "$HOME/.venv/bin/python" "$HOME/venv/bin/python"; do
+        if [ -n "$cand" ] && [ -x "$cand" ] && "$cand" -c "import torch" 2>/dev/null; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    done
+    for cand in "$HOME"/*/bin/python "$HOME"/*/bin/python3; do
+        if [ -x "$cand" ] && "$cand" -c "import torch" 2>/dev/null; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    done
+    command -v python3 2>/dev/null || command -v python 2>/dev/null
+}
+PY="${RR_PYTHON:-$(_resolve_python)}"
 RUN_NAME="${RR_RUN_NAME:-mimo-9b-lora-v2data}"
 RUNS_BASE="${RR_TRAIN_RUN_DIR:-$REPO/../training-runs}"
 RUN_DIR="$RUNS_BASE/$RUN_NAME"
