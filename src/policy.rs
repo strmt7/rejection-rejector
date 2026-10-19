@@ -479,6 +479,11 @@ pub fn inactive_status() -> PolicyStatus {
     }
 }
 
+/// Normalize and validate a configured policy digest pin.
+///
+/// Inputs: `value` — raw `RR_ENTERPRISE_POLICY_SHA256` value. Output:
+/// `Result<String>` — the trimmed lowercase digest; error unless it is exactly
+/// 64 hex characters.
 fn normalize_digest_pin(value: &str) -> Result<String> {
     let normalized = value.trim().to_ascii_lowercase();
     ensure!(
@@ -488,6 +493,11 @@ fn normalize_digest_pin(value: &str) -> Result<String> {
     Ok(normalized)
 }
 
+/// Normalize a digest pin supplied as an OS string.
+///
+/// Inputs: `value` — raw environment value. Output: `Result<String>` — the
+/// normalized digest as [`normalize_digest_pin`] returns; error when the value
+/// is not valid Unicode.
 fn normalize_digest_pin_os(value: std::ffi::OsString) -> Result<String> {
     let value = value
         .into_string()
@@ -495,6 +505,10 @@ fn normalize_digest_pin_os(value: std::ffi::OsString) -> Result<String> {
     normalize_digest_pin(&value)
 }
 
+/// Read the policy digest pin from the environment.
+///
+/// Inputs: none. Output: `Result<Option<String>>` — the normalized pin, `None`
+/// when the variable is unset; error when it is set but invalid.
 fn configured_digest_pin() -> Result<Option<String>> {
     digest_pin_from(std::env::var_os("RR_ENTERPRISE_POLICY_SHA256"))
 }
@@ -508,6 +522,11 @@ fn digest_pin_from(value: Option<std::ffi::OsString>) -> Result<Option<String>> 
     value.map(normalize_digest_pin_os).transpose()
 }
 
+/// Normalize and validate a configured Ed25519 public key.
+///
+/// Inputs: `value` — raw `RR_ENTERPRISE_POLICY_ED25519_PUBLIC_KEY` value.
+/// Output: `Result<Vec<u8>>` — the 32 decoded key bytes; error for non-base64
+/// or wrong-length input.
 fn normalize_public_key(value: &str) -> Result<Vec<u8>> {
     let decoded = STANDARD
         .decode(value.trim().as_bytes())
@@ -519,12 +538,20 @@ fn normalize_public_key(value: &str) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
+/// Derive the default detached signature path for a policy file.
+///
+/// Inputs: `policy_path` — policy file path. Output: `PathBuf` — the policy
+/// path with `.sig` appended.
 fn signature_path_for_policy(policy_path: &Path) -> PathBuf {
     let mut path = policy_path.as_os_str().to_os_string();
     path.push(".sig");
     PathBuf::from(path)
 }
 
+/// Validate a configured signature file path.
+///
+/// Inputs: `path` — `RR_ENTERPRISE_POLICY_SIGNATURE` value. Output:
+/// `Result<PathBuf>` — the path unchanged; error when it is not absolute.
 fn validate_signature_path(path: PathBuf) -> Result<PathBuf> {
     ensure!(
         path.is_absolute(),
@@ -533,6 +560,11 @@ fn validate_signature_path(path: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Ensure the signature file is distinct from the policy file.
+///
+/// Inputs: `policy_path` — policy file path; `signature_path` — signature file
+/// path. Output: `Result<()>` — `Ok` when the paths differ (and canonicalize to
+/// different files when both exist); error otherwise.
 fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Result<()> {
     ensure!(
         policy_path != signature_path,
@@ -551,6 +583,12 @@ fn validate_signature_distinct(policy_path: &Path, signature_path: &Path) -> Res
     Ok(())
 }
 
+/// Build the signature requirement from the environment.
+///
+/// Inputs: `policy_path` — policy file path used for the default signature
+/// path. Output: `Result<Option<SignatureRequirement>>` — the requirement when
+/// the public key is configured, `None` otherwise; error on invalid
+/// configuration.
 fn configured_signature_requirement(policy_path: &Path) -> Result<Option<SignatureRequirement>> {
     signature_requirement_from(
         policy_path,
@@ -596,6 +634,11 @@ fn signature_requirement_from(
     }))
 }
 
+/// Verify the detached Ed25519 signature over the policy bytes.
+///
+/// Inputs: `requirement` — public key and signature path; `policy_bytes` —
+/// exact policy file content. Output: `Result<()>` — `Ok` when the signature
+/// authenticates; error otherwise (fail closed).
 fn verify_detached_signature(
     requirement: &SignatureRequirement,
     policy_bytes: &[u8],
@@ -646,6 +689,10 @@ fn verify_detached_signature(
     Ok(())
 }
 
+/// Validate an explicitly configured policy path.
+///
+/// Inputs: `path` — `RR_ENTERPRISE_POLICY` value. Output: `Result<PathBuf>` —
+/// the path unchanged; error when it is not absolute.
 fn validate_explicit_policy_path(path: PathBuf) -> Result<PathBuf> {
     ensure!(
         path.is_absolute(),
@@ -758,6 +805,12 @@ pub fn load_file(path: &Path) -> Result<LoadedPolicy> {
     load_file_with_controls(path, None, None)
 }
 
+/// Load a policy file under its configured digest and signature controls.
+///
+/// Inputs: `path` — absolute policy file path; `expected_digest` — pinned
+/// SHA-256 digest, when configured; `signature_requirement` — signature
+/// requirement, when configured. Output: `Result<LoadedPolicy>` — the
+/// authenticated policy; error when any control fails.
 fn load_file_with_controls(
     path: &Path,
     expected_digest: Option<String>,
