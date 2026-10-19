@@ -337,6 +337,15 @@ def main() -> int:
             duty_cycle.paced_sleep(duty_cycle.sleep_seconds(on_time, load_target))
 
         _place(model)
+        # Completeness catch-all: leaf placement above is paced per leaf module,
+        # but a non-leaf module can carry its own direct parameters or buffers
+        # (rotary tables, causal-conv state, attention masks) that leaf-only
+        # recursion never touches. `model.to` moves any remaining CPU tensors
+        # with proper PyTorch semantics (preserves weight tying, moves
+        # bitsandbytes quant_state); already-placed tensors are cheap no-ops.
+        # This closes the placement gap the device assert below verifies.
+        model.to("cuda")
+        torch.cuda.synchronize()
         leftovers = sorted(
             {str(p.device) for p in model.parameters()}
             | {str(b.device) for b in model.buffers()}
