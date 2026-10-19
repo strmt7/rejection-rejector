@@ -2345,6 +2345,12 @@ mod send_gate_tests {
 
 #[cfg(test)]
 mod dispatch_tests {
+    // Uncovered-by-design lines in these tests carry no product signal and
+    // are deliberately left alone: mock `_ => None` fallbacks only run when
+    // a test sends a route the protocol does not use, mock verdict closures
+    // only run when a test drives model calls it is deliberately avoiding,
+    // and `assert!` message arguments only evaluate when the assertion
+    // fails. Covering them would mean padding the suite with noise.
     use super::*;
     use crate::config::DEFAULT_VERIFIER_MODEL;
     use crate::test_support::{MockServer, draft_body, gmail_email, verified_analysis};
@@ -3288,6 +3294,53 @@ mod dispatch_tests {
         );
         e.settings.ollama_url = runtime.url.clone();
         assert!(!e.process_one().unwrap());
+    }
+
+    /// The runtime profile report lands wherever the operator asked, even
+    /// under directories that do not exist yet.
+    ///
+    /// Why: `rr profile-model --out <fresh>/nested/profile.json` is invoked
+    /// by scripted tooling into new directories — failing on the first run
+    /// because a parent is absent would break every cold invocation.
+    #[test]
+    fn profile_model_runtime_to_creates_the_report_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live(dir.path());
+        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let runtime = crate::test_support::ollama_runtime(
+            vec![(e.settings.model.clone(), "a".repeat(64))],
+            "Test Applicant",
+            |_| crate::test_support::verdict_category("other"),
+        );
+        e.settings.ollama_url = runtime.url.clone();
+        let out = dir.path().join("fresh").join("nested").join("profile.json");
+        e.profile_model_runtime_to(&out)
+            .expect("profile is written");
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(report.get("schema_version"), Some(&serde_json::json!(1)));
+        for pass in [
+            "cold_pipeline",
+            "warm_repeat_pipeline",
+            "near_context_pipeline",
+        ] {
+            assert!(report.get(pass).is_some(), "{pass} must be measured");
+        }
+    }
+
+    /// The real login path (outside the test seam) fails closed when the
+    /// OAuth client file is missing.
+    ///
+    /// Why: credentials must only ever come from the consent flow; a bad
+    /// client file has to propagate before any browser or listener is
+    /// touched, never fabricate a connection.
+    #[test]
+    fn login_client_without_a_client_file_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-oauth-client.json");
+        let stop = AtomicBool::new(false);
+        assert!(Engine::login_client(&missing, false, &stop).is_err());
     }
 
     /// One queued message per run: provider fetch outcomes route each message
