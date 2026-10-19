@@ -314,4 +314,31 @@ mod tests {
             PathBuf::from("/tmp/run/duty.json")
         );
     }
+
+    // Why: the progress bar must show an empty track before the trainer
+    // declares a plan (total 0) instead of NaN/inf, and a heartbeat that
+    // reports more steps than planned must clamp to a full track instead
+    // of overshooting the widget's 0..=1 range.
+    #[test]
+    fn fraction_is_zero_without_a_total_and_clamps_overshoot() {
+        let mk = |step, total| ProgressSnapshot {
+            step,
+            total_steps: total,
+            loss: None,
+            status: String::new(),
+            elapsed_seconds: 0.0,
+            updated_at_unix: 0.0,
+        };
+        assert_eq!(mk(7, 0).fraction(), 0.0);
+        assert_eq!(mk(15, 10).fraction(), 1.0);
+    }
+
+    // Why: staleness, ETA and pacing all hang off this clock; the 0.0
+    // fallback must not be what production sees (it would age every
+    // heartbeat to "fresh" and silence the stall warning forever), so pin
+    // that the installed clock really reads post-2020 unix time.
+    #[test]
+    fn now_unix_reads_a_real_post_2020_clock() {
+        assert!(now_unix() > 1_577_836_800.0); // 2020-01-01 UTC
+    }
 }
