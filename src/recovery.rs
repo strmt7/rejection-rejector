@@ -2139,6 +2139,142 @@ mod tests {
         assert!(!foreign.join(DATABASE_NAME).exists());
     }
 
+    // Uncovered-by-design lines carry their reasons: the import success
+    // return runs only where `install_os_key_if_missing` can succeed
+    // (Windows/macOS credential stores; Linux always refuses by design),
+    // the `restore_backup` vault-open rollback mirrors the restore-failure
+    // rollback pinned below its call and its trigger is the platform
+    // credential lookup (pinned by the platform-gated tests above), and
+    // the symlink-permission test guard only runs where symlinks are
+    // disabled.
+
+    /// Why: without an OS credential store the import must still enforce
+    /// vault identity end to end and roll back the minted vault identifier —
+    /// a refused import must never leave a fresh workspace looking
+    /// authentic, and the refusal must name the documented recovery path.
+    /// (Both halves run everywhere: the credential-store success half is
+    /// additionally pinned by the platform-gated test above.)
+    /// Inputs: backup plus envelope against two target directories.
+    /// Output: the non-authenticating live database refuses with the minted
+    /// identifier removed; the clean import installs where a credential
+    /// store exists and refuses with the documented recovery path where it
+    /// does not — never leaving a minted identifier behind on refusal.
+    #[test]
+    fn import_recovery_key_enforces_identity_and_rolls_back_refusals() {
+        let _lock = lock_credential_store();
+        let root = tempfile::tempdir().unwrap();
+        let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let backup = root.path().join("backup");
+        create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+        write_new_private(
+            &recovery_file,
+            &serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+
+        let mismatched = root.path().join("mismatched-live");
+        private_dir(&mismatched).unwrap();
+        drop(Store::open(&mismatched.join(DATABASE_NAME), Vault::random()).unwrap());
+        let error =
+            import_recovery_key_for_backup(&mismatched, &backup, &recovery_file, passphrase)
+                .expect_err("a live database of another vault must refuse the import");
+        assert!(
+            error.to_string().contains("does not authenticate"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !mismatched.join(VAULT_ID_NAME).exists(),
+            "a refused import must remove its minted vault identifier"
+        );
+
+        let clean = root.path().join("clean");
+        private_dir(&clean).unwrap();
+        let outcome = import_recovery_key_for_backup(&clean, &backup, &recovery_file, passphrase);
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let _cleanup = CredentialCleanup(id.clone());
+            assert!(
+                outcome.is_ok(),
+                "with a credential store the clean import installs the key"
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let error =
+                outcome.expect_err("headless hosts have no OS credential store to import into");
+            assert!(
+                error.to_string().contains("RR_VAULT_PASSPHRASE"),
+                "the refusal names the documented recovery path: {error}"
+            );
+            assert!(
+                !clean.join(VAULT_ID_NAME).exists(),
+                "a refused import must remove its minted vault identifier"
+            );
+        }
+    }
+
+    /// Why: the disaster scenario is a workspace that lost its vault
+    /// identifier but still holds its live database — portable recovery must
+    /// re-mint the identity, authenticate the surviving database under the
+    /// recovered key, verify the active vault against the backup and install
+    /// the restored state. (The credential-store variants of this flow are
+    /// pinned by the platform-gated test above.)
+    /// Inputs: real workspace, its backup and recovery key; one target that
+    /// holds only the live database. Output: the target is fully restored
+    /// and re-armed under its re-minted identity.
+    #[test]
+    fn recover_workspace_from_backup_recovers_a_target_that_lost_its_vault_id() {
+        // Serialize OS credential-store access (see `vault::test_support`).
+        let _lock = lock_credential_store();
+        // Arm the documented headless vault input so `Vault::open` derives the
+        // workspace key on hosts without an OS credential store.
+        crate::test_support::headless_vault_seam();
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        private_dir(&data).unwrap();
+        let vault = Vault::open(&data).unwrap();
+        let id = vault_id(&data).unwrap();
+        let _cleanup = CredentialCleanup(id.clone());
+        let mut store = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
+        store
+            .insert_stub(
+                Stub {
+                    account: "me@example.com".into(),
+                    provider_id: "seed-message".into(),
+                    thread_id: "seed-thread".into(),
+                    source: Source::Gmail,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        let backup = root.path().join("backup");
+        let manifest = create_backup(&store, &data, &backup).unwrap();
+        let passphrase = b"correct horse battery staple";
+        let recovery_file = root.path().join("recovery-key.json");
+        let envelope = export_recovery_key(&data, passphrase, &recovery_file).unwrap();
+        assert_eq!(envelope.vault_id, id);
+
+        let target = root.path().join("target");
+        private_dir(&target).unwrap();
+        store.backup_to(&target.join(DATABASE_NAME)).unwrap();
+        assert!(!target.join(VAULT_ID_NAME).exists());
+
+        let report =
+            recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase).unwrap();
+        assert_eq!(report.source_database_sha256, manifest.database_sha256);
+        assert!(
+            target.join(VAULT_ID_NAME).exists(),
+            "the identity is re-minted for the restored workspace"
+        );
+        assert!(restore_rearm_required(&target).unwrap());
+        let restored =
+            Store::open(&target.join(DATABASE_NAME), Vault::open(&target).unwrap()).unwrap();
+        assert_eq!(restored.counts("me@example.com").unwrap().stored, 1);
+    }
+
     /// Why: when an OS credential already claims the target vault identifier but
     /// holds a different key, recovery must abort instead of installing the
     /// backup under a credential that cannot authenticate it; otherwise a
