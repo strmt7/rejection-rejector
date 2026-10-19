@@ -135,3 +135,28 @@ rule exists because it previously caused a real defect or delay.
   crate", vanishing unused-import warnings, rustc crashes, mmap/commit
   errors) are host memory exhaustion from concurrent builds, not corrupted
   caches: serialise the builds and lower `-j` before chasing compiler bugs.
+
+## Enforcement, not memory (2026-10-15)
+
+- Gates run AFTER THE LAST EDIT: a test added after the last clippy run
+  (`assertions_on_constants` in a constant-value assert) red-denied every
+  CI lane while local runs looked green. `tools/local_ci.py` is now the
+  mandatory pre-commit gate (exact CI flags). When a known rule gets
+  violated mid-flow anyway, the fix is a tool that makes the mistake
+  impossible — not another reminder.
+- CI/PR state is the FULL check matrix, counted. `gh pr checks | tail`
+  showed "pass" while 3 of 6 checks had failed; never infer state from
+  tailed or filtered output, and never merge with any `fail`.
+- Metric verdicts aggregate every event type: a max computed over
+  "sample" events alone missed the breach events entirely and nearly
+  produced a false compliance claim.
+- A meter-compliance claim needs window-phase math, not duty averages:
+  a 0.68s burst is 68% of any 1s meter window at ANY duty. Bursts must
+  stay under half the meter window (verified forensics in
+  `tools/gpu_util_watchdog.py` docs and the training pace-log).
+- Verify your instruments before blaming the system: `MainWindowHandle`
+  pointed at winit's internal helper window and made a working minimize
+  look broken for an hour. Probe with the strongest available truth
+  (per-window enumeration with class names, not the first handle a
+  convenience API returns).
+

@@ -90,14 +90,15 @@ def clamp_target(current: float, ceiling_pct: float) -> float:
     return max(duty_cycle.MIN_TARGET_PCT, current - 10.0)
 
 
-def should_stop(target_pct: float, breaches_at_floor: int, threshold: int = 3) -> bool:
+def should_stop(target_pct: float, breaches_at_floor: int, threshold: int = 1) -> bool:
     """Decide whether to request a cooperative stop.
 
-    Input: current duty target, consecutive breach count while at the
-    floor, and the consecutive-breach threshold.
-    Output: True when the ceiling is still exceeded at the minimum duty
-    target for `threshold` consecutive samples — the regime cannot meet
-    the operator's ceiling, so the workload must stop.
+    Input: current duty target, breach count while at the floor, and the
+    breach threshold.
+    Output: True when the ceiling is exceeded at the minimum duty target
+    — the operator's rule is absolute (never exceed the ceiling), so ANY
+    breach at the floor stops the workload immediately; training pauses
+    are always preferable to a ceiling violation.
     """
     return target_pct <= duty_cycle.MIN_TARGET_PCT and breaches_at_floor >= threshold
 

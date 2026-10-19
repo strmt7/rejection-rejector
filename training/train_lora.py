@@ -457,7 +457,12 @@ def main() -> int:
                 if target is None:
                     target = self.seed_target
                 if self._recent_on:
-                    baseline = sorted(self._recent_on)[len(self._recent_on) // 2]
+                    # P90 baseline (not median): on a shared GPU the
+                    # desktop occasionally stretches bursts; pacing
+                    # against the 90th percentile is conservative and
+                    # keeps even stretched windows under the ceiling.
+                    ordered = sorted(self._recent_on)
+                    baseline = ordered[min(len(ordered) - 1, int(0.9 * len(ordered)))]
                     off = duty_cycle.sleep_seconds(baseline, target)
                     if off > 0.0:
                         # Sliced sleep with heartbeat touches so the
@@ -557,6 +562,23 @@ def main() -> int:
 
     threading_mod = __import__("threading")
     threading_mod.Thread(target=stall_watchdog, daemon=True).start()
+
+    # Warmup passes: warm the CUDA allocator and the common kernels with
+    # TINY bursts (<50ms each) so the first paced micro-batches are not
+    # inflated — a resume previously produced 0.6-0.7s warmup bursts that
+    # breached the utilization ceiling (verified in pace-log evidence).
+    try:
+        import time as _tw
+
+        warm_ids = torch.zeros((1, 16), dtype=torch.long, device=model.device)
+        for _ in range(3):
+            out = model(input_ids=warm_ids, labels=warm_ids)
+            out.loss.backward()
+            model.zero_grad(set_to_none=True)
+            torch.cuda.synchronize()
+            _tw.sleep(0.3)
+    except Exception as exc:
+        print(f"resource-guard: warmup skipped: {exc!r}", file=sys.stderr)
 
     # Continuous observation: a second process eating VRAM/RAM, or runaway
     # output growth, ends the run BEFORE anything approaches a limit.
