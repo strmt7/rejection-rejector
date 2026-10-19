@@ -65,6 +65,10 @@ struct ShadowQueue {
     dispatchable_now_by_local_gates_and_daily_capacity: u64,
 }
 
+/// Render one policy code as its storage key string.
+///
+/// Inputs: `code` — automatic policy code. Output: `Result<String>` — the
+/// serialized string form; error when the code does not serialize as a string.
 fn code_key(code: AutomaticPolicyCode) -> Result<String> {
     let value = serde_json::to_value(code)?;
     Ok(value
@@ -222,6 +226,11 @@ fn write_report_to(
     Ok(())
 }
 
+/// Write the shadow evaluation report to one path.
+///
+/// Inputs: `engine` — engine carrying the state to report; `path` — destination
+/// file. Output: `Result<()>` — `Ok` once the rendered report is written
+/// privately.
 pub fn write_report(engine: &Engine, path: &Path) -> Result<()> {
     let data = report(engine)?;
     let mut rendered = Vec::new();
