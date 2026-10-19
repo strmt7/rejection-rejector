@@ -152,6 +152,7 @@ pub fn assess(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Compatibility wrapper retained because it was published as an additive v0.2 API.
 /// New code should prefer assess_context so readiness inputs remain named and
 /// auditable as the enterprise gate evolves.
@@ -162,7 +163,6 @@ pub fn assess(
 /// `paused` — worker pause flag; `stopping` — shutdown flag;
 /// `emergency_stop_active` — whether the emergency stop is engaged. Output:
 /// `RuntimeReadiness` — the readiness verdict.
-#[allow(clippy::too_many_arguments)]
 pub fn assess_with_emergency(
     settings: &Settings,
     database_integrity_ok: bool,

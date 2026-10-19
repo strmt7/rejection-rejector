@@ -19,6 +19,11 @@ pub struct AutostartStatus {
 }
 
 #[cfg(any(windows, test))]
+/// Escape the five XML metacharacters for embedding text in task XML.
+///
+/// Inputs: `value` — raw text destined for an XML element or attribute.
+/// Output: `String` — the text with `&`, `<`, `>`, `"` and `'` replaced by
+/// entities.
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -29,6 +34,11 @@ fn xml_escape(value: &str) -> String {
 }
 
 #[cfg(any(windows, test))]
+/// Quote one argument for a Windows CreateProcess command line.
+///
+/// Inputs: `value` — raw argument text. Output: `String` — the argument,
+/// returned unchanged when it needs no quoting, otherwise double-quoted with
+/// CommandLineToArgvW-compatible backslash escaping.
 fn quote_windows_argument(value: &str) -> String {
     const QUOTE: char = '\u{22}';
     const BACKSLASH: char = '\u{5c}';
@@ -74,6 +84,11 @@ fn quote_windows_argument(value: &str) -> String {
 }
 
 #[cfg(any(windows, test))]
+/// Render the worker task's command-line arguments.
+///
+/// Inputs: `data_dir` — workspace data directory. Output: `Result<String>` —
+/// the `--data-dir <quoted path> run` argument string; error when the path is
+/// not valid Unicode or contains control characters.
 fn expected_arguments(data_dir: &Path) -> Result<String> {
     let value = data_dir
         .to_str()
@@ -86,6 +101,12 @@ fn expected_arguments(data_dir: &Path) -> Result<String> {
 }
 
 #[cfg(any(windows, test))]
+/// Render the Task Scheduler XML definition for the worker task.
+///
+/// Inputs: `user` — current Windows identity; `executable` — worker
+/// executable path; `data_dir` — workspace data directory. Output:
+/// `Result<String>` — the task XML document; error when any input is invalid
+/// or unusable.
 fn render_task_xml(user: &str, executable: &Path, data_dir: &Path) -> Result<String> {
     ensure!(
         !user.trim().is_empty() && !user.chars().any(char::is_control),
@@ -158,12 +179,12 @@ fn render_task_xml(user: &str, executable: &Path, data_dir: &Path) -> Result<Str
     ))
 }
 
+#[cfg(windows)]
 /// Resolve one System32 binary under `SystemRoot`.
 ///
 /// Inputs: `name` — binary file name (e.g. `whoami.exe`). Output:
 /// `Result<PathBuf>` — the absolute path; error when `SystemRoot` is unusable
 /// or the binary is missing.
-#[cfg(windows)]
 fn system32_binary(name: &str) -> Result<PathBuf> {
     let root = std::env::var_os("SystemRoot").context("SystemRoot is unavailable")?;
     let root = PathBuf::from(root);
@@ -173,11 +194,11 @@ fn system32_binary(name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(windows)]
 /// Query the current Windows identity.
 ///
 /// Inputs: none. Output: `Result<String>` — the trimmed `whoami` result; error
 /// when the query fails or returns empty.
-#[cfg(windows)]
 fn current_user() -> Result<String> {
     let output = std::process::Command::new(system32_binary("whoami.exe")?)
         .output()
@@ -191,9 +212,11 @@ fn current_user() -> Result<String> {
     Ok(user)
 }
 
+#[cfg(any(windows, test))]
 /// MSIX physical paths can change on update; registering them as Task Scheduler
 /// executables would silently break the background worker after installation.
-#[cfg(any(windows, test))]
+/// Inputs: `executable` — path to classify. Output: `bool` — `true` when any
+/// path segment is the MSIX `WindowsApps` install directory.
 fn is_msix_managed_path(executable: &Path) -> bool {
     executable
         .to_string_lossy()
@@ -202,13 +225,13 @@ fn is_msix_managed_path(executable: &Path) -> bool {
         .any(|part| part.eq_ignore_ascii_case("WindowsApps"))
 }
 
+#[cfg(windows)]
 /// Canonicalize the autostart task inputs.
 ///
 /// Inputs: `executable` — rr executable path (MSIX-managed paths refused);
 /// `data_dir` — workspace data directory (created as needed). Output:
 /// `Result<(PathBuf, PathBuf)>` — the canonical (executable, data directory)
 /// pair.
-#[cfg(windows)]
 fn canonical_inputs(executable: &Path, data_dir: &Path) -> Result<(PathBuf, PathBuf)> {
     ensure!(
         !is_msix_managed_path(executable),
@@ -228,11 +251,11 @@ fn canonical_inputs(executable: &Path, data_dir: &Path) -> Result<(PathBuf, Path
     Ok((executable, data_dir))
 }
 
+#[cfg(windows)]
 /// Write one task XML document as a private UTF-16 file.
 ///
 /// Inputs: `data_dir` — directory to write into; `xml` — task XML text. Output:
 /// `Result<PathBuf>` — the written file path (BOM-prefixed UTF-16LE).
-#[cfg(windows)]
 fn write_task_xml(data_dir: &Path, xml: &str) -> Result<PathBuf> {
     let path = data_dir.join(format!(".autostart-task-{}.xml", uuid::Uuid::new_v4()));
     let utf16: Vec<u16> = xml.encode_utf16().collect();
@@ -245,13 +268,13 @@ fn write_task_xml(data_dir: &Path, xml: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(windows)]
 /// Run one Windows Task Scheduler command with the real `schtasks.exe`.
 ///
 /// Inputs: `args` — exact `schtasks` argument vector. Output: the process
 /// output, or an error when the command cannot be spawned. This is the
 /// production [`CommandRunner`]; tests inject fakes so registration flows
 /// never touch the real scheduler.
-#[cfg(windows)]
 pub fn schtasks(args: &[&str]) -> Result<std::process::Output> {
     std::process::Command::new(system32_binary("schtasks.exe")?)
         .args(args)
@@ -259,11 +282,11 @@ pub fn schtasks(args: &[&str]) -> Result<std::process::Output> {
         .context("Unable to execute Windows Task Scheduler command")
 }
 
+#[cfg(not(windows))]
 /// Non-Windows stand-in for [`schtasks`]: the autostart entry points refuse
 /// before any command runs, so the runner only satisfies the shared API.
 ///
 /// Inputs: `args` — ignored. Output: always the unsupported-platform error.
-#[cfg(not(windows))]
 pub fn schtasks(_args: &[&str]) -> Result<std::process::Output> {
     Err(anyhow::anyhow!(
         "Windows Task Scheduler autostart is supported only on Windows"
@@ -274,6 +297,7 @@ pub fn schtasks(_args: &[&str]) -> Result<std::process::Output> {
 /// argument vector and returns the process output or a spawn failure.
 pub type CommandRunner = fn(&[&str]) -> Result<std::process::Output>;
 
+#[cfg(windows)]
 /// Register the worker as a per-user logon task and report the resulting
 /// registration state.
 ///
@@ -284,7 +308,6 @@ pub type CommandRunner = fn(&[&str]) -> Result<std::process::Output>;
 /// submission; input validation failures, a rejected definition and spawn
 /// failures propagate as errors, and the temporary definition file is
 /// removed on every path.
-#[cfg(windows)]
 pub fn install(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
     let user = current_user()?;
@@ -305,10 +328,10 @@ pub fn install(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result
     status(&executable, &data_dir, run)
 }
 
+#[cfg(not(windows))]
 /// Non-Windows [`install`] stub: Task Scheduler autostart is Windows-only.
 ///
 /// Inputs: ignored. Output: always the unsupported-platform error.
-#[cfg(not(windows))]
 pub fn install(
     _executable: &Path,
     _data_dir: &Path,
@@ -319,13 +342,13 @@ pub fn install(
     ))
 }
 
+#[cfg(windows)]
 /// Remove the registered worker task.
 ///
 /// Inputs: `run` — Task Scheduler command runner (production passes
 /// [`schtasks`], tests inject a fake). Output: `Ok(())` when the scheduler
 /// confirms removal; a refused removal or spawn failure propagates as an
 /// error.
-#[cfg(windows)]
 pub fn remove(run: CommandRunner) -> Result<()> {
     let output = run(&["/Delete", "/TN", TASK_NAME, "/F"])?;
     ensure!(
@@ -336,16 +359,17 @@ pub fn remove(run: CommandRunner) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 /// Non-Windows [`remove`] stub: Task Scheduler autostart is Windows-only.
 ///
 /// Inputs: ignored. Output: always the unsupported-platform error.
-#[cfg(not(windows))]
 pub fn remove(_run: CommandRunner) -> Result<()> {
     Err(anyhow::anyhow!(
         "Windows Task Scheduler autostart is supported only on Windows"
     ))
 }
 
+#[cfg(windows)]
 /// Compare a registered Task Scheduler definition against the required one.
 ///
 /// Inputs: `actual_xml` — raw XML returned by `schtasks /Query /XML`;
@@ -353,7 +377,6 @@ pub fn remove(_run: CommandRunner) -> Result<()> {
 /// Output: `Ok(true)` only when the registered definition carries the exact
 /// `<Command>`, `<Arguments>` and least-privilege settings contract; a stale,
 /// rewritten or partially matching registration reports `Ok(false)`.
-#[cfg(windows)]
 fn task_definition_matches(actual_xml: &str, executable: &Path, data_dir: &Path) -> Result<bool> {
     let expected_command = format!(
         "<Command>{}</Command>",
@@ -379,6 +402,7 @@ fn task_definition_matches(actual_xml: &str, executable: &Path, data_dir: &Path)
     Ok(required.iter().all(|needle| actual_xml.contains(needle)))
 }
 
+#[cfg(windows)]
 /// Report the worker's Task Scheduler registration state.
 ///
 /// Inputs: `executable` — worker executable; `data_dir` — worker data
@@ -387,7 +411,6 @@ fn task_definition_matches(actual_xml: &str, executable: &Path, data_dir: &Path)
 /// `installed: false` when the task is not registered, otherwise the
 /// registered definition compared against the required worker contract;
 /// invalid query output or input failures propagate as errors.
-#[cfg(windows)]
 pub fn status(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result<AutostartStatus> {
     let (executable, data_dir) = canonical_inputs(executable, data_dir)?;
     let output = run(&["/Query", "/TN", TASK_NAME, "/XML"])?;
@@ -421,11 +444,11 @@ pub fn status(executable: &Path, data_dir: &Path, run: CommandRunner) -> Result<
     })
 }
 
+#[cfg(not(windows))]
 /// Non-Windows [`status`] stub: Task Scheduler autostart is Windows-only.
 ///
 /// Inputs: ignored except for echoing `executable` and `data_dir`. Output:
 /// an unsupported [`AutostartStatus`] describing the platform limitation.
-#[cfg(not(windows))]
 pub fn status(executable: &Path, data_dir: &Path, _run: CommandRunner) -> Result<AutostartStatus> {
     Ok(AutostartStatus {
         supported: false,
