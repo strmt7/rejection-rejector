@@ -32,6 +32,11 @@ enum CaseTag {
 }
 
 impl CaseTag {
+    /// Whether the tag marks a critical negative outcome that must fail closed.
+    ///
+    /// Inputs: `self` — case tag to classify. Output: `true` for the
+    /// critical-negative tags (interview, offer, recruiter correction, quoted
+    /// history, prompt injection); `false` for ordinary outcomes.
     fn critical_negative(self) -> bool {
         matches!(
             self,
@@ -119,15 +124,27 @@ struct DecisionAnswer {
 ///
 /// Returns a Result containing the vector of test cases, or an error if the JSON
 /// cannot be parsed or is missing required fields.
+///
+/// Inputs: none. Output: `Result<Vec<Case>>` with the parsed fixture cases, or
+/// an error when the bundled corpus is invalid.
 fn fixtures() -> Result<Vec<Case>> {
     serde_json::from_str(include_str!("../tests/fixtures/classification.json"))
         .context("Bundled decision-evaluation fixtures are invalid")
 }
 
+/// Divide two counts into a ratio, guarding the zero denominator.
+///
+/// Inputs: `numerator` — count above the line; `denominator` — count below it.
+/// Output: `Some(f64)` with the quotient, or `None` when `denominator` is zero.
 fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     (denominator != 0).then(|| numerator as f64 / denominator as f64)
 }
 
+/// Parse one model answer category from its wire string.
+///
+/// Inputs: `value` — category name from the model response. Output:
+/// `Result<Category>` — the typed category, or an error for an unknown name
+/// (fail closed).
 fn category(value: &str) -> Result<Category> {
     match value {
         "rejection" => Ok(Category::Rejection),
@@ -138,6 +155,10 @@ fn category(value: &str) -> Result<Category> {
     }
 }
 
+/// Render one category as its wire string.
+///
+/// Inputs: `category` — typed category. Output: `&'static str` — the stable
+/// response key.
 fn category_key(category: Category) -> &'static str {
     match category {
         Category::Rejection => "rejection",
@@ -147,6 +168,12 @@ fn category_key(category: Category) -> &'static str {
     }
 }
 
+/// Score one decision answer's probabilities against the expected category.
+///
+/// Inputs: `answer` — model answer carrying the four category probabilities;
+/// `expected` — the fixture's expected category. Output: `Result<(f64, f64)>` —
+/// the (multiclass, binary rejection) Brier scores; errors when the answer
+/// omits a category probability.
 fn probability_scores(answer: &DecisionAnswer, expected: Category) -> Result<(f64, f64)> {
     let expected_key = category_key(expected);
     let mut multiclass_brier = 0.0f64;
@@ -173,6 +200,11 @@ fn probability_scores(answer: &DecisionAnswer, expected: Category) -> Result<(f6
     Ok((multiclass_brier, rejection_brier))
 }
 
+/// Build the local decision-model request payload for one case.
+///
+/// Inputs: `model` — model name to query; `case` — synthetic case to decide.
+/// Output: `Value` — the request body carrying the case state and the
+/// single-choice category question.
 fn decision_request(model: &str, case: &Case) -> Value {
     json!({
         "model": model,
@@ -196,6 +228,12 @@ fn decision_request(model: &str, case: &Case) -> Value {
     })
 }
 
+/// Validate the probability set of one model answer.
+///
+/// Inputs: `answer` — model answer to check. Output: `Result<()>` — `Ok` when
+/// all four category probabilities are present, finite, in `0.0..=1.0`, and sum
+/// to one within `0.02` (and any confidence is valid); an error naming the
+/// violated invariant otherwise.
 fn validate_probabilities(answer: &DecisionAnswer) -> Result<()> {
     ensure!(
         answer.probabilities.len() == 4,
@@ -227,6 +265,12 @@ fn validate_probabilities(answer: &DecisionAnswer) -> Result<()> {
     Ok(())
 }
 
+/// Ask the local decision model to classify one case.
+///
+/// Inputs: `settings` — settings carrying the Ollama URL and request timeout;
+/// `model` — model name to query; `case` — synthetic case to decide. Output:
+/// `Result<(Category, DecisionAnswer)>` — the predicted category and the
+/// validated answer; errors on transport or validation failures.
 fn decide(settings: &Settings, model: &str, case: &Case) -> Result<(Category, DecisionAnswer)> {
     let client = net::client(settings.llm_timeout_seconds, true)?;
     let endpoint = format!("{}/v1/systemone", settings.ollama_url.trim_end_matches('/'));
@@ -417,6 +461,11 @@ pub fn evaluate(settings: &Settings, model: &str, out: &Path) -> Result<Value> {
     Ok(report)
 }
 
+/// Write one evaluation report to disk.
+///
+/// Inputs: `out` — destination path (missing parent directories are created);
+/// `report` — report document to serialize. Output: `Result<()>` — `Ok` once
+/// the pretty-printed JSON is written through `write_new_private`.
 fn write_report(out: &Path, report: &Value) -> Result<()> {
     if let Some(parent) = out.parent()
         && !parent.as_os_str().is_empty()
@@ -472,6 +521,11 @@ fn recommendation_eligible(
         && gpu_resident
 }
 
+/// Read one numeric metric from a report by JSON pointer.
+///
+/// Inputs: `report` — report document; `pointer` — JSON pointer locating the
+/// metric. Output: `Some(f64)` with the value, or `None` when the pointer
+/// misses or the value is not a number.
 fn report_metric(report: &Value, pointer: &str) -> Option<f64> {
     report.pointer(pointer).and_then(Value::as_f64)
 }
