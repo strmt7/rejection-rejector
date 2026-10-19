@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b3b0708b04749cdbeb2349463ba6231808d29f28 # v1.94.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
       # Same documented triage as tools/local_ci.py and osv-scanner.toml:
       # Linux-only a11y stack (accesskit_unix -> atspi -> zvariant 5), not
       # reachable in the shipped Windows binary, unmaintained notices with no
@@ -58,7 +58,15 @@ jobs:
           checksum: true
           fallback: none
       - name: RustSec audit
-        run: cargo audit --deny warnings
+        # Same documented triage as tools/local_ci.py and osv-scanner.toml:
+        # Linux-only a11y stack (accesskit_unix -> atspi -> zvariant 5), not
+        # reachable in the shipped Windows binary, unmaintained notices with
+        # no in-range patched version (verified against crates.io 2026-10-19).
+        run: >-
+          cargo audit --deny warnings
+          --ignore RUSTSEC-2026-0370
+          --ignore RUSTSEC-2026-0371
+          --ignore RUSTSEC-2026-0372
       - name: License, source and dependency policy
         run: cargo deny check advisories licenses bans sources
       - name: Unused direct dependency check

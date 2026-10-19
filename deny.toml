@@ -11,6 +11,16 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+# Documented triage (mirrors osv-scanner.toml): Linux-only accessibility
+# stack (accesskit_unix -> atspi -> zvariant 5 / zbus_names 4), unreachable
+# in the shipped Windows binary; unmaintained notices with no in-range
+# patched version (verified against crates.io 2026-10-19). Migration
+# required upstream; re-check when atspi/accesskit publish zvariant 6.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+]
 
 [licenses]
 version = 2
