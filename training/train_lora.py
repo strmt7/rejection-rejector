@@ -435,6 +435,13 @@ def main() -> int:
         seed=args.seed,
         use_cpu=device == "cpu",
         bf16=args.bf16,
+        # Resume robustness: skip HF's dataloader fast-forward on resume. That
+        # fast-forward can mis-advance the data stream; restarting it is the
+        # supported way to avoid skip-overshoot. NOTE: a separate observed
+        # issue is that resume-from-checkpoint can report 0 steps and exit at
+        # the resumed epoch (root cause not yet isolated); a fresh run (no
+        # --resume) trains to completion. See docs/LESSONS.md.
+        ignore_data_skip=True,
     )
     vram_state = {"reading": None, "at": 0.0}
 
