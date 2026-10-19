@@ -43,10 +43,10 @@ GATES = [
 ]
 
 
-def run(name: str, cmd: list[str]) -> bool:
-    """Run one gate. Input: display name + argv. Output: True when green."""
+def run(name: str, cmd: list[str], env: dict | None = None) -> bool:
+    """Run one gate. Input: display name + argv + optional env. Output: True when green."""
     print(f"== {name}: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, cwd=ROOT)
+    proc = subprocess.run(cmd, cwd=ROOT, env=env)
     ok = proc.returncode == 0
     print(f"== {name}: {'GREEN' if ok else f'RED (exit {proc.returncode})'}")
     return ok
@@ -59,6 +59,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     results = [run(name, cmd) for name, cmd in GATES]
+    # Rustdoc gate: deny warnings so doc-link regressions (e.g. public docs
+    # linking a private item) fail here, not only in the deep-verification
+    # workflow. Matches the CI command (RUSTDOCFLAGS=-D warnings cargo doc).
+    import os
+
+    results.append(
+        run(
+            "rustdoc (warnings are errors)",
+            ["cargo", "doc", "--locked", "--all-features", "--no-deps"],
+            env={**os.environ, "RUSTDOCFLAGS": "-D warnings"},
+        )
+    )
     if not args.fast:
         results.append(run("cargo test (full)", ["cargo", "test", "--locked"]))
     results.append(

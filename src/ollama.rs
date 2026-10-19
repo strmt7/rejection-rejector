@@ -1264,7 +1264,7 @@ impl Ollama {
 pub type CommandRunner = fn(&Path, &mut Command) -> Result<()>;
 
 /// Launch one local-runtime process exactly as configured by
-/// [`Ollama::start_with`].
+/// `Ollama::start_with` (private, so referenced as code rather than a link).
 ///
 /// Inputs: `executable` — runtime executable (already resolved; echoed for
 /// runner-level inspection); `command` — fully configured launch command.
