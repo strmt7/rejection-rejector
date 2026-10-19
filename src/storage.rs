@@ -21,6 +21,10 @@ pub struct StorageHealth {
     pub backup_safe: bool,
 }
 
+/// Measure one workspace file, refusing symlinks.
+///
+/// Inputs: `path` — file to measure. Output: `Result<u64>` — the file size in
+/// bytes (`0` when absent); error for symlinks or unreadable metadata.
 fn regular_file_bytes(path: &Path) -> Result<u64> {
     if !path.exists() {
         return Ok(0);
@@ -37,6 +41,11 @@ fn regular_file_bytes(path: &Path) -> Result<u64> {
     Ok(metadata.len())
 }
 
+/// Compute the runtime and backup disk headroom requirements.
+///
+/// Inputs: `database_bytes` — database size; `wal_bytes` — WAL size;
+/// `shm_bytes` — shared-memory size. Output: `(u64, u64)` — the (runtime,
+/// backup) required headroom in bytes.
 pub fn required_headroom(database_bytes: u64, wal_bytes: u64, shm_bytes: u64) -> (u64, u64) {
     let workspace = database_bytes
         .saturating_add(wal_bytes)
@@ -54,6 +63,10 @@ pub fn required_headroom(database_bytes: u64, wal_bytes: u64, shm_bytes: u64) ->
 }
 
 /// Privacy-safe filesystem headroom for the workspace volume.
+///
+/// Inputs: `data_dir` — workspace data directory. Output:
+/// `Result<StorageHealth>` — the measured sizes and runtime/backup headroom
+/// verdicts; error when the directory is missing or a symlink.
 ///
 /// These are conservative engineering guardrails, not availability SLOs.
 /// A positive check cannot guarantee a later write succeeds because other
@@ -90,6 +103,11 @@ pub fn inspect(data_dir: &Path) -> Result<StorageHealth> {
     })
 }
 
+/// Fail closed when runtime write headroom is insufficient.
+///
+/// Inputs: `data_dir` — workspace data directory. Output:
+/// `Result<StorageHealth>` — the health verdict; error when
+/// `runtime_write_safe` does not hold.
 pub fn ensure_runtime_write_headroom(data_dir: &Path) -> Result<StorageHealth> {
     let health = inspect(data_dir)?;
     ensure!(
@@ -101,6 +119,11 @@ pub fn ensure_runtime_write_headroom(data_dir: &Path) -> Result<StorageHealth> {
     Ok(health)
 }
 
+/// Fail closed when the backup destination lacks space.
+///
+/// Inputs: `destination_parent` — directory the backup will be written into;
+/// `required_bytes` — bytes the backup needs. Output: `Result<()>` — `Ok` when
+/// the destination volume has room; error otherwise.
 pub fn ensure_backup_destination_headroom(
     destination_parent: &Path,
     required_bytes: u64,
