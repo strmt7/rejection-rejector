@@ -5,21 +5,29 @@
 # zbus_names 4. These crates are unreachable in the shipped Windows binary
 # (the Windows build compiles accesskit_windows, not accesskit_unix), and
 # the advisories are "unmaintained" notices with no patched version inside
-# our semver-compatible range - the migration to zvariant 6 belongs to the
-# upstream accesskit/atspi crates. Disabling the Linux accessibility
-# feature to silence them would be a functional regression for Linux users.
+# our semver-compatible range - verified on 2026-10-19 against crates.io:
+# the whole upstream accesskit/atspi ecosystem (incl. the newest
+# accesskit_atspi_common 0.21.0 and accesskit_unix 0.23.0) still requires
+# zvariant ^5.15 / zbus ^5.5, so no upgrade exists yet. Disabling the
+# Linux accessibility feature to silence them would remove screen-reader
+# support (a functional regression).
 #
-# Re-check: when accesskit_unix/atspi publish a release on zvariant 6,
-# remove these ignores and `cargo update` the stack.
+# `ignoreUntil` is deliberate: when it passes, osv-scanner re-surfaces
+# these findings so the migration is re-checked instead of forgotten.
+# Re-check: when accesskit_unix/atspi publish a release on zvariant 6 /
+# zbus 6, remove these ignores and `cargo update` the stack.
 
-[[Ignored]]
+[[IgnoredVulns]]
 id = "RUSTSEC-2026-0370"
-reason = "zvariant 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; upstream migration required (no patched version in range)"
+ignoreUntil = "2027-04-01T00:00:00Z"
+reason = "zvariant 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zvariant 6 exists (verified against crates.io 2026-10-19); migration required upstream"
 
-[[Ignored]]
+[[IgnoredVulns]]
 id = "RUSTSEC-2026-0371"
-reason = "zbus_names 4 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; upstream migration required (no patched version in range)"
+ignoreUntil = "2027-04-01T00:00:00Z"
+reason = "zbus_names 4 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zbus 6 exists (verified against crates.io 2026-10-19); migration required upstream"
 
-[[Ignored]]
+[[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
-reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; upstream migration required (no patched version in range)"
+ignoreUntil = "2027-04-01T00:00:00Z"
+reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zvariant 6 exists (verified against crates.io 2026-10-19); migration required upstream"
