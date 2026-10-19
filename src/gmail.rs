@@ -106,6 +106,10 @@ impl GmailApiError {
     }
 }
 impl std::fmt::Display for GmailApiError {
+    /// Render the API error as its HTTP status line.
+    ///
+    /// Inputs: `f` — formatter to write into. Output: [`std::fmt::Result`] — writes
+    /// `Gmail API returned HTTP <status>`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Gmail API returned HTTP {}", self.status)
     }
@@ -123,6 +127,11 @@ pub fn retry_after_hint(error: &anyhow::Error) -> Option<Duration> {
         .and_then(GmailApiError::retry_after)
 }
 
+/// Read one response's `Retry-After` hint.
+///
+/// Inputs: `response` — Gmail API response. Output: `Option<Duration>` — the
+/// parsed delay (seconds or RFC 2822 date, capped at one hour); `None` when the
+/// header is missing or unparseable.
 fn retry_after_header(response: &reqwest::blocking::Response) -> Option<Duration> {
     let value = response.headers().get(reqwest::header::RETRY_AFTER)?;
     let raw = value.to_str().ok()?.trim();
@@ -138,6 +147,12 @@ fn retry_after_header(response: &reqwest::blocking::Response) -> Option<Duration
     Some(Duration::from_secs(seconds.min(60 * 60)))
 }
 
+/// Decode one Gmail API response body, mapping failures to the typed API error.
+///
+/// Inputs: `response` — API response to decode; `limit` — maximum accepted body
+/// size. Output: `Result<T>` — the deserialized body; a [`GmailApiError`]
+/// (carrying retry-after when present) for non-success statuses or oversized
+/// bodies.
 fn gmail_json<T: serde::de::DeserializeOwned>(
     response: reqwest::blocking::Response,
     limit: usize,
@@ -163,6 +178,10 @@ pub struct FetchFailure {
     pub message: String,
 }
 impl std::fmt::Display for FetchFailure {
+    /// Render the fetch failure as its operator-facing message.
+    ///
+    /// Inputs: `f` — formatter to write into. Output: [`std::fmt::Result`] — writes
+    /// `self.message` only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
@@ -180,6 +199,10 @@ pub struct SendFailure {
     pub message: String,
 }
 impl std::fmt::Display for SendFailure {
+    /// Render the send failure as its operator-facing message.
+    ///
+    /// Inputs: `f` — formatter to write into. Output: [`std::fmt::Result`] — writes
+    /// `self.message` only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
@@ -242,6 +265,11 @@ impl Gmail {
     pub fn can_send(&self) -> bool {
         self.creds.can_send
     }
+    /// Return a valid OAuth access token, refreshing it when stale.
+    ///
+    /// Inputs: none (`&mut self` — the cached token is reused while fresh). Output:
+    /// `Result<Zeroizing<String>>` — the cached or freshly refreshed token; error
+    /// when the refresh fails.
     fn access(&mut self) -> Result<Zeroizing<String>> {
         if let Some((token, until)) = &self.token
             && Instant::now() < *until
@@ -268,6 +296,11 @@ impl Gmail {
         }
         Ok(access_token)
     }
+    /// Issue one authenticated GET to the Gmail API.
+    ///
+    /// Inputs: `path` — API path; `params` — query parameters. Output:
+    /// `Result<reqwest::blocking::Response>` — the raw response for the caller to
+    /// decode; error on transport or endpoint failure.
     fn get(
         &mut self,
         path: &str,
@@ -479,6 +512,11 @@ impl Gmail {
 }
 /// Parse a raw Gmail message payload into bounded inert email data.
 ///
+/// Inputs: `raw` — raw Gmail message payload; `stub` — the stored message
+/// identity the payload must match. Output: `Result<Email>` — bounded inert
+/// email data; every untrusted-input failure surfaces as a typed
+/// malformed-message error.
+///
 /// Split out of `Gmail::email` so the identity binding, MIME handling, header
 /// limits and timestamp validation can be exercised deterministically without
 /// network access. All inputs are untrusted; every error surfaces as a
@@ -581,6 +619,12 @@ pub fn parse_mime_text(bytes: &[u8]) -> Result<(String, bool)> {
     Ok((bounded.to_owned(), complete && within))
 }
 
+/// Extract the text body from one MIME part.
+///
+/// Inputs: `part` — MIME part to read; `depth` — current nesting depth (capped
+/// at 20). Output: `Result<(String, bool)>` — the extracted text and whether
+/// the part is an attachment (attachments yield empty text); error on unsafe
+/// nesting or malformed content.
 fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
     ensure!(depth <= 20, "MIME nesting exceeds safe limit");
     let disposition = part.get_content_disposition();
