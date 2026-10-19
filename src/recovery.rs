@@ -89,6 +89,10 @@ pub struct RecoveryDrillReport {
     pub note: String,
 }
 
+/// Hash one file with SHA-256.
+///
+/// Inputs: `path` — file to read. Output: `Result<String>` — the lowercase hex
+/// digest; error on read failure.
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut digest = Sha256::new();
@@ -103,6 +107,11 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(crate::hex_lower(digest.finalize()))
 }
 
+/// Read one small regular file under a size limit.
+///
+/// Inputs: `path` — file to read (must exist and not be a symlink); `limit` —
+/// maximum accepted size. Output: `Result<Vec<u8>>` — the file bytes; error for
+/// missing, symlinked, or oversized files.
 fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>> {
     ensure!(path.is_file(), "{} is missing", path.display());
     ensure!(
@@ -161,6 +170,10 @@ pub fn restore_rearm_required(directory: &Path) -> Result<bool> {
     }
 }
 
+/// Leave a marker that delivery must be re-armed after a restore.
+///
+/// Inputs: `directory` — workspace directory. Output: `Result<()>` — `Ok` once
+/// the marker exists (idempotent).
 fn mark_restore_rearm_required(directory: &Path) -> Result<()> {
     if restore_rearm_required(directory)? {
         return Ok(());
@@ -181,6 +194,11 @@ pub fn clear_restore_rearm_marker(directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Write one new private file atomically.
+///
+/// Inputs: `path` — destination (must not already exist); `data` — file
+/// content. Output: `Result<()>` — `Ok` once the file lands via a
+/// same-directory atomic rename.
 fn write_new_private_atomic(path: &Path, data: &[u8]) -> Result<()> {
     ensure!(!path.exists(), "{} already exists", path.display());
     let parent = path
@@ -209,6 +227,11 @@ fn write_new_private_atomic(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Copy one regular file to a new private destination.
+///
+/// Inputs: `source` — source file (must exist and not be a symlink);
+/// `destination` — destination (created new). Output: `Result<()>` — `Ok` once
+/// the copy completes.
 fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
     ensure!(source.is_file(), "{} is missing", source.display());
     ensure!(
@@ -222,6 +245,10 @@ fn copy_private_new(source: &Path, destination: &Path) -> Result<()> {
 
 /// A read/write error must not leave a partial encrypted SQLite staging file.
 /// Open with create_new before cleanup, so an existing destination is never removed.
+///
+/// Inputs: `input` — reader producing the content; `destination` — destination
+/// file (created new). Output: `Result<()>` — `Ok` once the stream is fully
+/// written; any error removes the partial file.
 fn copy_private_from_reader(input: &mut impl Read, destination: &Path) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -244,11 +271,20 @@ fn copy_private_from_reader(input: &mut impl Read, destination: &Path) -> Result
     result
 }
 
+/// Read one recovery-key envelope.
+///
+/// Inputs: `path` — envelope file path. Output: `Result<RecoveryKeyEnvelope>` —
+/// the parsed envelope; error when the file is missing or the JSON is invalid.
 fn read_recovery_envelope(path: &Path) -> Result<RecoveryKeyEnvelope> {
     let bytes = read_small(path, 64 * 1024)?;
     serde_json::from_slice(&bytes).context("Recovery-key envelope is invalid")
 }
 
+/// Authenticate a recovered database against a vault.
+///
+/// Inputs: `database` — recovered database file (regular file, not a symlink);
+/// `vault` — vault to authenticate with. Output: `Result<()>` — `Ok` when the
+/// stored vault marker authenticates.
 fn verify_vault_marker(database: &Path, vault: &Vault) -> Result<()> {
     ensure!(database.is_file(), "Recovery database is missing");
     ensure!(
@@ -275,6 +311,11 @@ fn verify_vault_marker(database: &Path, vault: &Vault) -> Result<()> {
     Ok(())
 }
 
+/// Validate one backup bundle's files and manifest.
+///
+/// Inputs: `directory` — backup directory (must not be a symlink). Output:
+/// `Result<(BackupManifest, PathBuf)>` — the parsed manifest and the backup
+/// database path; error when the bundle is incomplete or malformed.
 fn validate_bundle_files(directory: &Path) -> Result<(BackupManifest, PathBuf)> {
     ensure!(directory.is_dir(), "Backup directory is missing");
     ensure!(
@@ -400,6 +441,11 @@ pub fn create_backup(store: &Store, data_dir: &Path, destination: &Path) -> Resu
     }
 }
 
+/// Whether the workspace and backup paths share a filesystem.
+///
+/// Inputs: `workspace` — workspace path; `backup` — backup path. Output:
+/// `Result<Option<bool>>` — `Some(true/false)` where device ids are available;
+/// `None` on platforms without the check.
 fn backup_same_filesystem(workspace: &Path, backup: &Path) -> Result<Option<bool>> {
     #[cfg(unix)]
     {
@@ -860,6 +906,12 @@ pub fn recovery_drill(data_dir: &Path, backup_dir: &Path) -> Result<RecoveryDril
     recovery_drill_with_vault(data_dir, backup_dir, vault)
 }
 
+/// Run a recovery drill against a backup bundle with a supplied vault.
+///
+/// Inputs: `data_dir` — workspace data directory; `backup_dir` — backup bundle
+/// directory; `vault` — vault to exercise. Output:
+/// `Result<RecoveryDrillReport>` — the drill results; error when the bundle or
+/// vault fails validation.
 fn recovery_drill_with_vault(
     data_dir: &Path,
     backup_dir: &Path,
