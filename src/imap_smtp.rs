@@ -110,8 +110,10 @@ impl ImapSmtp {
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(",");
+        // BODY.PEEK[] (not RFC822): fetch the bytes WITHOUT setting the \Seen
+        // flag — a read-only sync must never mutate the user's mailbox state.
         let fetches = session
-            .uid_fetch(&set, "RFC822")
+            .uid_fetch(&set, "BODY.PEEK[]")
             .context("IMAP UID fetch failed")?;
         let mut out = Vec::new();
         for fetch in fetches.iter() {
