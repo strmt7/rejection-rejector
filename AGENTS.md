@@ -45,14 +45,23 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 ## Research-first mandate (all AI agents) — non-negotiable
 
 Before implementing ANY new feature, library, tool, protocol, or non-trivial
-logic — even when the operator did not ask — FIRST research online for existing
-crates, libraries, CLIs, or community tools that already do it. Prefer a mature,
-well-maintained dependency over hand-rolling; build from scratch ONLY as a last
-resort when nothing suitable exists (and record why). This is a hard rule:
-researching first saves tokens, reuses battle-tested code, and yields more
+logic — even when the operator did not ask — NEVER start by writing code.
+Search in this order and stop at the first hit that fits:
+
+1. **Harness capabilities first.** Enumerate the tools, skills, and plugins
+   already available to the coding agent (tool catalog, skills list, installed
+   CLIs, MCP servers) and use one if it fits — even if it must first be
+   installed or enabled. Reusing the harness beats adding a new dependency.
+2. **Community / online research next.** Search for existing crates, libraries,
+   CLIs, or community tools that already do it. Prefer a mature, well-maintained
+   dependency over hand-rolling.
+3. **Build from scratch only as a last resort** when nothing suitable exists —
+   and record why.
+
+This is a hard rule: it saves tokens, reuses battle-tested code, and yields more
 stable, professional results than reinventing it badly. Verify the chosen
-crate's real API and current version before use (Verification discipline §2),
-and name the alternatives you rejected when the choice is non-obvious.
+tool/crate's real API and current version before use (Verification discipline
+§2), and name the alternatives you rejected when the choice is non-obvious.
 
 ## Token-efficiency contract (all AI agents)
 
