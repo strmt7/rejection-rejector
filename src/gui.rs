@@ -1,4 +1,5 @@
 //! Native desktop UI. Network/database/model work stays on the bounded background worker.
+use crate::mail_transport::AppPasswordCredentials;
 use crate::{
     config::{
         AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H, LOOKBACK_DAYS, MODEL_CANDIDATES, Mode, POLL_HOURS,
@@ -161,6 +162,8 @@ pub struct App {
     install_confirmation: bool,
     recovery_dialog: Option<RecoveryDialog>,
     oauth_send: bool,
+    app_password_email: String,
+    app_password: String,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
     frames: u32,
@@ -200,6 +203,8 @@ impl App {
             install_confirmation: false,
             recovery_dialog: None,
             oauth_send: false,
+            app_password_email: String::new(),
+            app_password: String::new(),
             screenshot,
             screenshot_requested: false,
             frames: 0,
@@ -1161,6 +1166,41 @@ impl App {
                 }
             });
             ui.label(RichText::new("The JSON, refresh token and mailbox content are not uploaded to this repository or an AI service.").small().color(MUTED));
+        });
+        ui.add_space(12.0);
+        Self::card(ui, |ui| {
+            ui.heading("App password (IMAP/SMTP)");
+            ui.label("Sign in with just your Gmail address and a Google app password — no Cloud Console or OAuth client. Requires 2-Step-Verification and an app password created under your Google Account → Security → App passwords.");
+            ui.horizontal(|ui| {
+                ui.label("Gmail address");
+                ui.text_edit_singleline(&mut self.app_password_email);
+            });
+            ui.horizontal(|ui| {
+                ui.label("App password");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.app_password)
+                        .password(true)
+                        .desired_width(180.0),
+                );
+            });
+            if ui
+                .add_enabled(
+                    s.busy.is_empty()
+                        && !s.demo
+                        && !self.app_password_email.trim().is_empty()
+                        && !self.app_password.trim().is_empty(),
+                    egui::Button::new("Connect with app password"),
+                )
+                .clicked()
+            {
+                self.worker
+                    .command(Command::ConnectAppPassword(AppPasswordCredentials::new(
+                        self.app_password_email.trim(),
+                        self.app_password.trim(),
+                    )));
+                self.app_password.clear();
+            }
+            ui.label(RichText::new("The app password is held only in the encrypted local store (Windows Credential Manager-backed), zeroized after use, never logged or uploaded.").small().color(MUTED));
         });
         ui.add_space(12.0);
         Self::card(ui, |ui| {
