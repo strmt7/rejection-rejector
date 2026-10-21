@@ -427,10 +427,22 @@ impl MailTransport for ImapSmtp {
     /// Inputs: `id` — thread id (a `thread_key` root). Output:
     /// `Result<Thread>` — the thread resource.
     fn thread(&mut self, id: &str) -> anyhow::Result<crate::gmail::Thread> {
-        let _ = id;
-        Ok(crate::gmail::Thread {
-            messages: Vec::new(),
-        })
+        // The thread id is the conversation's root RFC 2822 Message-ID. Find the
+        // messages carrying it (as their own Message-ID or in References), then
+        // keep the ones whose computed thread key matches — mirroring Gmail's
+        // conversation grouping without the Gmail API.
+        let filter = format!("OR HEADER References \"{id}\" HEADER Message-ID \"{id}\"");
+        let refs = self.fetch_refs(&filter)?;
+        let messages = refs
+            .into_iter()
+            .filter(|r| r.thread_id == id)
+            .map(|r| crate::gmail::ThreadMessage {
+                id: r.id,
+                internal_date: String::new(),
+                label_ids: Vec::new(),
+            })
+            .collect();
+        Ok(crate::gmail::Thread { messages })
     }
     /// Locate a sent message by Message-ID via IMAP. Inputs: `message_id` —
     /// outgoing RFC 2822 Message-ID. Output: `Result<Option<String>>` — the UID
