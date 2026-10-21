@@ -45,7 +45,17 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use
 .\rr.exe compare-models --out .\model-bakeoff.json
 ```
 
+> **Root-cause detail (2026-10-21, `rr evaluate`):** `qwen3.5:9b-q8_0` fails
+> `professional` + `injection_free`. The model's own stated reason: the draft used
+> "aggressive language ('unacceptable')", "demands specific rights not guaranteed by
+> law", and "explicitly instructs the recipient to redirect actions ('ensure this
+> review is conducted by a human')". The self-audit is honest and correct — the
+> **drafting quality** is the gap, not the verification. The draft prompt has since
+> been hardened to forbid action-instructions (which tripped `injection_free`); a
+> model that drafts cleanly within the legal floor will pass.
+
 ## The bake-off
+
 
 > **Result (2026-10-19, re-run 2026-10-21): no installed candidate qualified.**
 > `recommended_model` came back empty. Root cause: **every installed candidate
