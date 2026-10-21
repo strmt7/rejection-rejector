@@ -514,6 +514,7 @@ impl Engine {
             logged?;
         }
         let creds: Option<Credentials> = db.meta("google_credentials")?;
+        let app_creds: Option<AppPasswordCredentials> = db.meta("app_password_credentials")?;
         let account = db.meta::<String>("account")?.unwrap_or_default();
         if !account.is_empty() {
             let now = Utc::now();
@@ -529,7 +530,11 @@ impl Engine {
             paused,
             stop,
             enterprise_policy,
-            mail: creds.map(Self::provider_client),
+            mail: creds.map(Self::provider_client).or_else(|| {
+                app_creds.map(|ac| {
+                    Box::new(ImapSmtp::new(ac, ImapSmtpConfig::default())) as Box<dyn MailTransport>
+                })
+            }),
             _lock: lock,
             _session: session,
             _temporary: temporary,
@@ -783,7 +788,7 @@ impl Engine {
         settings.disarm_delivery();
         let disconnected = self.db.change_meta(
             &[("settings", serde_json::to_value(&settings)?)],
-            &["google_credentials", "account"],
+            &["google_credentials", "app_password_credentials", "account"],
             "account.disconnected",
             "Local credentials removed; revoke Google consent separately if desired",
         );
