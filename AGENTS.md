@@ -42,6 +42,18 @@ After any edit under `src/`, always run `cargo fmt --all` before committing.
 - No new web stack, hosted inference, or Python in the product; keep it local-first.
 - Commit style: conventional commits (`fix:`, `ci:`, `docs:`, `refactor:`, `test:`).
 
+## Research-first mandate (all AI agents) — non-negotiable
+
+Before implementing ANY new feature, library, tool, protocol, or non-trivial
+logic — even when the operator did not ask — FIRST research online for existing
+crates, libraries, CLIs, or community tools that already do it. Prefer a mature,
+well-maintained dependency over hand-rolling; build from scratch ONLY as a last
+resort when nothing suitable exists (and record why). This is a hard rule:
+researching first saves tokens, reuses battle-tested code, and yields more
+stable, professional results than reinventing it badly. Verify the chosen
+crate's real API and current version before use (Verification discipline §2),
+and name the alternatives you rejected when the choice is non-obvious.
+
 ## Token-efficiency contract (all AI agents)
 
 1. Read `AGENTS.md` and `.agents/skills/rr-engineering/SKILL.md` first; never
