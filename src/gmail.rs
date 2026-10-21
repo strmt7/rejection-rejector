@@ -726,6 +726,19 @@ impl crate::mail_transport::MailTransport for Gmail {
     fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure> {
         Gmail::send(self, raw, thread_id)
     }
+    /// Fetch one full message by stub. Inputs: `stub`. Output:
+    /// `Result<Option<Email>, FetchFailure>` — delegates to [`Gmail::email`].
+    fn email(
+        &mut self,
+        stub: &crate::types::Stub,
+    ) -> std::result::Result<Option<crate::types::Email>, crate::gmail::FetchFailure> {
+        Gmail::email(self, stub)
+    }
+    /// Fetch one conversation. Inputs: `id`. Output: `Result<Thread>` —
+    /// delegates to [`Gmail::thread`].
+    fn thread(&mut self, id: &str) -> anyhow::Result<crate::gmail::Thread> {
+        Gmail::thread(self, id)
+    }
 }
 
 #[cfg(test)]

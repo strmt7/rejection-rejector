@@ -13,7 +13,8 @@
 
 use zeroize::Zeroize;
 
-use crate::gmail::{HistoryResult, MessagePage, Profile, SendFailure};
+use crate::gmail::{FetchFailure, HistoryResult, MessagePage, Profile, SendFailure, Thread};
+use crate::types::{Email, Stub};
 
 /// Credentials for app-password (IMAP/SMTP basic-auth) mail access.
 ///
@@ -96,6 +97,15 @@ pub trait MailTransport {
     /// `thread_id` — the conversation to reply within. Output:
     /// `Result<String, SendFailure>` — the provider id, or a typed failure.
     fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure>;
+
+    /// Fetch one full message by its stub. Inputs: `stub` — the queued message
+    /// identity. Output: `Result<Option<Email>, FetchFailure>` — the parsed
+    /// message (`None` when it no longer exists), or a typed fetch failure.
+    fn email(&mut self, stub: &Stub) -> Result<Option<Email>, FetchFailure>;
+
+    /// Fetch one conversation. Inputs: `id` — the thread id. Output:
+    /// `anyhow::Result<Thread>` — the thread resource.
+    fn thread(&mut self, id: &str) -> anyhow::Result<Thread>;
 }
 
 #[cfg(test)]

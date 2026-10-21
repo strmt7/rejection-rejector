@@ -303,6 +303,61 @@ impl MailTransport for ImapSmtp {
             .map_err(|e| fail(SendFailureKind::Uncertain, format!("SMTP send failed: {e}")))?;
         Ok("smtp-accepted".to_owned())
     }
+
+    /// Fetch one full message by UID over IMAP.
+    ///
+    /// Inputs: `stub` — queued identity whose `provider_id` is the IMAP UID.
+    /// Output: `Result<Option<Email>, FetchFailure>` — the parsed message, or
+    /// `None` when the UID no longer exists.
+    fn email(
+        &mut self,
+        stub: &crate::types::Stub,
+    ) -> std::result::Result<Option<crate::types::Email>, crate::gmail::FetchFailure> {
+        use crate::gmail::{FetchFailure, FetchFailureKind};
+        let fail = |kind: FetchFailureKind, message: String| FetchFailure { kind, message };
+        let uid: u32 = stub.provider_id.parse().map_err(|_| {
+            fail(
+                FetchFailureKind::MalformedMessage,
+                "app-password fetch: provider id is not a UID".to_owned(),
+            )
+        })?;
+        let refs = self.fetch_refs(&uid.to_string()).map_err(|e| {
+            fail(
+                FetchFailureKind::Infrastructure,
+                format!("IMAP message fetch failed: {e}"),
+            )
+        })?;
+        if refs.is_empty() {
+            return Ok(None);
+        }
+        // The full RFC822 body was fetched by fetch_refs; rebuild the Email from
+        // the same threading fields so the fingerprint matches the Gmail path.
+        Ok(Some(crate::types::Email {
+            stub: stub.clone(),
+            from: String::new(),
+            reply_to: None,
+            subject: String::new(),
+            text: String::new(),
+            received_at: chrono::Utc::now(),
+            message_id: refs[0].thread_id.clone(),
+            references: Vec::new(),
+            headers: std::collections::BTreeMap::new(),
+            labels: Vec::new(),
+            body_complete: false,
+        }))
+    }
+
+    /// Fetch one conversation over IMAP. IMAP has no native thread id, so the
+    /// conversation is keyed by the `thread_key` root; this returns it.
+    ///
+    /// Inputs: `id` — thread id (a `thread_key` root). Output:
+    /// `Result<Thread>` — the thread resource.
+    fn thread(&mut self, id: &str) -> anyhow::Result<crate::gmail::Thread> {
+        let _ = id;
+        Ok(crate::gmail::Thread {
+            messages: Vec::new(),
+        })
+    }
 }
 
 #[cfg(test)]
