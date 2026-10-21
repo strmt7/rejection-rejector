@@ -18,12 +18,14 @@ use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
 use lettre::{SmtpTransport, Transport};
+use mailparse::MailHeaderMap;
 
 use crate::gmail::{
     Added, HistoryPage, HistoryRecord, HistoryResult, MessagePage, MessageRef, Profile,
     SendFailure, SendFailureKind,
 };
 use crate::mail_transport::{AppPasswordCredentials, MailTransport};
+use crate::types::{Email, Stub};
 
 /// Endpoints for the app-password IMAP/SMTP transport.
 ///
@@ -80,13 +82,12 @@ impl ImapSmtp {
         &self.creds.email
     }
 
-    /// Fetch message refs from the mailbox over IMAP.
+    /// Fetch raw RFC822 bodies from the mailbox over IMAP.
     ///
     /// Inputs: `uid_filter` — an IMAP `UID` search term (e.g. `"124:*"`).
-    /// Output: `Result<Vec<MessageRef>>` — one ref per message, `id` = UID and
-    /// `thread_id` = the [`thread_key`] conversation root. Connects, selects
-    /// INBOX, searches, and fetches `RFC822` per message.
-    fn fetch_refs(&self, uid_filter: &str) -> Result<Vec<MessageRef>> {
+    /// Output: `Result<Vec<(u32, Vec<u8>)>>` — `(UID, raw RFC822 bytes)` per
+    /// message. Connects, selects INBOX, searches, and fetches `RFC822`.
+    fn fetch_bodies(&self, uid_filter: &str) -> Result<Vec<(u32, Vec<u8>)>> {
         let tls = native_tls::TlsConnector::new().context("TLS init failed")?;
         let client = imap::connect(
             (self.config.imap_host.as_str(), self.config.imap_port),
@@ -112,19 +113,32 @@ impl ImapSmtp {
         let fetches = session
             .uid_fetch(&set, "RFC822")
             .context("IMAP UID fetch failed")?;
-        let mut refs = Vec::new();
+        let mut out = Vec::new();
         for fetch in fetches.iter() {
             let uid = fetch.uid.context("fetched message has no UID")?;
-            let body = fetch.body().unwrap_or_default();
-            let mime = String::from_utf8_lossy(body);
-            let thread_id = thread_key(&mime).unwrap_or_default();
-            refs.push(MessageRef {
-                id: uid.to_string(),
-                thread_id,
-            });
+            out.push((uid, fetch.body().unwrap_or_default().to_vec()));
         }
         let _ = session.logout();
-        Ok(refs)
+        Ok(out)
+    }
+
+    /// Fetch message refs from the mailbox over IMAP.
+    ///
+    /// Inputs: `uid_filter` — an IMAP `UID` search term. Output:
+    /// `Result<Vec<MessageRef>>` — one ref per message, `id` = UID and
+    /// `thread_id` = the `thread_key` conversation root.
+    fn fetch_refs(&self, uid_filter: &str) -> Result<Vec<MessageRef>> {
+        Ok(self
+            .fetch_bodies(uid_filter)?
+            .into_iter()
+            .map(|(uid, bytes)| {
+                let mime = String::from_utf8_lossy(&bytes);
+                MessageRef {
+                    id: uid.to_string(),
+                    thread_id: thread_key(&mime).unwrap_or_default(),
+                }
+            })
+            .collect())
     }
 }
 
@@ -210,6 +224,76 @@ fn thread_key(mime: &str) -> Option<String> {
     let in_reply_to = header("in-reply-to").and_then(|r| first_id(&r));
     let message_id = header("message-id").and_then(|r| first_id(&r));
     references.or(in_reply_to).or(message_id)
+}
+
+/// Build an [`Email`] from raw RFC-5322 bytes (the IMAP analogue of
+/// `gmail::parse_raw_message`).
+///
+/// Inputs: `bytes` — the raw RFC-5322 message; `stub` — the queued identity.
+/// Output: `Result<Email>` — the parsed message with the same fingerprint
+/// inputs as the Gmail path (from/reply-to/subject/text/received_at/message-id).
+fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
+    use std::collections::BTreeMap;
+    let parsed = mailparse::parse_mail(bytes).context("IMAP MIME could not be parsed")?;
+    let mut headers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for h in &parsed.headers {
+        let key = h.get_key().to_lowercase();
+        if [
+            "from",
+            "reply-to",
+            "message-id",
+            "subject",
+            "references",
+            "auto-submitted",
+            "precedence",
+            "list-id",
+            "list-unsubscribe",
+            "x-auto-response-suppress",
+            "x-rejection-rejector",
+        ]
+        .contains(&key.as_str())
+        {
+            let value = h.get_value();
+            if value.len() <= 8192 {
+                headers.entry(key).or_default().push(value);
+            }
+        }
+    }
+    let text = parsed.get_body().unwrap_or_default();
+    let (bounded, within) = crate::mail::bounded_text(&text, 65536);
+    let received_at = parsed
+        .headers
+        .get_first_value("Date")
+        .and_then(|d| chrono::DateTime::parse_from_rfc2822(d.trim()).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH);
+    Ok(Email {
+        stub: stub.clone(),
+        from: parsed.headers.get_first_value("From").unwrap_or_default(),
+        reply_to: parsed.headers.get_first_value("Reply-To"),
+        subject: parsed
+            .headers
+            .get_first_value("Subject")
+            .unwrap_or_default(),
+        text: bounded.into(),
+        received_at,
+        message_id: parsed
+            .headers
+            .get_first_value("Message-ID")
+            .unwrap_or_default()
+            .trim()
+            .into(),
+        references: parsed
+            .headers
+            .get_first_value("References")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
+        headers,
+        labels: Vec::new(),
+        body_complete: within,
+    })
 }
 
 impl MailTransport for ImapSmtp {
@@ -321,30 +405,18 @@ impl MailTransport for ImapSmtp {
                 "app-password fetch: provider id is not a UID".to_owned(),
             )
         })?;
-        let refs = self.fetch_refs(&uid.to_string()).map_err(|e| {
+        let bodies = self.fetch_bodies(&uid.to_string()).map_err(|e| {
             fail(
                 FetchFailureKind::Infrastructure,
                 format!("IMAP message fetch failed: {e}"),
             )
         })?;
-        if refs.is_empty() {
+        let Some((_uid, bytes)) = bodies.into_iter().next() else {
             return Ok(None);
-        }
-        // The full RFC822 body was fetched by fetch_refs; rebuild the Email from
-        // the same threading fields so the fingerprint matches the Gmail path.
-        Ok(Some(crate::types::Email {
-            stub: stub.clone(),
-            from: String::new(),
-            reply_to: None,
-            subject: String::new(),
-            text: String::new(),
-            received_at: chrono::Utc::now(),
-            message_id: refs[0].thread_id.clone(),
-            references: Vec::new(),
-            headers: std::collections::BTreeMap::new(),
-            labels: Vec::new(),
-            body_complete: false,
-        }))
+        };
+        email_from_rfc822(&bytes, stub)
+            .map(Some)
+            .map_err(|e| fail(FetchFailureKind::MalformedMessage, e.to_string()))
     }
 
     /// Fetch one conversation over IMAP. IMAP has no native thread id, so the
@@ -423,6 +495,37 @@ mod tests {
         // why: a reply missing From or To must not reach a null SMTP envelope.
         assert!(build_message("To: b@y.com\r\n\r\nx").is_err());
         assert!(build_message("From: a@x.com\r\n\r\nx").is_err());
+    }
+
+    #[test]
+    fn email_from_rfc822_parses_fingerprint_fields() {
+        // why: the IMAP path must populate the same fields the Gmail path feeds
+        // into Email::fingerprint (from/reply-to/subject/text/received_at/
+        // message-id) or change-detection silently mis-compares messages.
+        let stub = Stub {
+            account: "me@example.com".to_owned(),
+            provider_id: "42".to_owned(),
+            thread_id: "t1".to_owned(),
+            source: crate::types::Source::Gmail,
+        };
+        let mime = concat!(
+            "From: Recruiter <r@co.com>\r\nReply-To: apps@co.com\r\n",
+            "Subject: Re: Backend role\r\nMessage-ID: <m@co.com>\r\n",
+            "References: <root@co.com>\r\nDate: Sun, 11 Oct 2026 10:00:00 +0000\r\n",
+            "\r\nThank you for your application.\r\n"
+        );
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert_eq!(email.from, "Recruiter <r@co.com>");
+        assert_eq!(email.reply_to.as_deref(), Some("apps@co.com"));
+        assert_eq!(email.subject, "Re: Backend role");
+        assert_eq!(email.message_id, "<m@co.com>");
+        assert_eq!(email.references, vec!["<root@co.com>".to_owned()]);
+        assert!(email.text.contains("Thank you for your application"));
+        assert_eq!(email.received_at.timestamp(), 1791712800);
+        assert!(email.body_complete);
+        // fingerprint is stable across two parses of the same bytes.
+        let again = email_from_rfc822(mime.as_bytes(), &stub).expect("parse2");
+        assert_eq!(email.fingerprint(), again.fingerprint());
     }
 
     #[test]
