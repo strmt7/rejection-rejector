@@ -144,6 +144,57 @@ impl Verification {
             && self.injection_free
             && self.purpose_aligned
     }
+
+    /// Names of the verification checks that did not pass.
+    ///
+    /// Inputs: none beyond the verification. Output: `Vec<&'static str>` — the
+    /// failing check names in declaration order (empty when all pass). Surfaces
+    /// exactly which gate rejected a draft so failures are diagnosable rather
+    /// than a single opaque "verification failed".
+    pub fn failing_checks(&self) -> Vec<&'static str> {
+        [
+            ("genuine_rejection", self.genuine_rejection),
+            ("claims_supported", self.claims_supported),
+            ("professional", self.professional),
+            ("injection_free", self.injection_free),
+            ("purpose_aligned", self.purpose_aligned),
+        ]
+        .into_iter()
+        .filter(|(_, ok)| !*ok)
+        .map(|(name, _)| name)
+        .collect()
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::Verification;
+
+    fn v(g: bool, c: bool, p: bool, i: bool, pa: bool) -> Verification {
+        Verification {
+            genuine_rejection: g,
+            claims_supported: c,
+            professional: p,
+            injection_free: i,
+            purpose_aligned: pa,
+            reason: String::new(),
+        }
+    }
+
+    /// why: the smoke test must name exactly which gate rejected a draft, so a
+    /// model failure is diagnosable rather than one opaque "verification failed".
+    #[test]
+    fn failing_checks_names_each_failed_gate_in_order() {
+        assert!(v(true, true, true, true, true).failing_checks().is_empty());
+        assert_eq!(
+            v(false, true, true, true, false).failing_checks(),
+            vec!["genuine_rejection", "purpose_aligned"]
+        );
+        assert_eq!(
+            v(true, false, true, true, true).failing_checks(),
+            vec!["claims_supported"]
+        );
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Analysis {
