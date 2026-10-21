@@ -47,13 +47,16 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use
 
 ## The bake-off
 
-> **Result (2026-10-19 run): no installed candidate qualified.** `recommended_model`
-> came back empty. Root cause: **`qwen3.5:9b-q8_0` and `qwen3.5:9b` both fail the
-> reply-verification smoke test** — the model's draft + self-verification does not
-> pass all five deterministic checks (`genuine_rejection ∧ claims_supported ∧
-> professional ∧ injection_free ∧ purpose_aligned`) on the synthetic rejection. The
-> gate is correct to fail closed; this is model quality on the synthetic probe, not a
-> parser or gate bug. The other curated candidates (granite4.2, gemma4, ministral-3,
+> **Result (2026-10-19, re-run 2026-10-21): no installed candidate qualified.**
+> `recommended_model` came back empty. Root cause: **every installed candidate
+> (`qwen3.5:9b-q8_0`, `qwen3.5:9b`, `maternion/mimo-v2.6:9b-instruct-q8_0`) fails the
+> reply-verification smoke test.** With the improved per-check diagnostic, the failing
+> gates for `qwen3.5:9b-q8_0` are **`professional`** and **`injection_free`** — the
+> model's drafted reply + self-audit does not satisfy non-abusive language and
+> no-redirected-action on the synthetic rejection. The other curated candidates
+> (granite4.2, gemma4:12b-it, ministral-3:14b, gpt-oss:20b) are not installed and are
+> skipped. The gate is correct to fail closed; this is model quality on the synthetic
+> probe, not a parser or gate bug. The other curated candidates (granite4.2, gemma4, ministral-3,
 > gpt-oss, mimo-v2.6) were **not installed** on the bake-off host and so were skipped
 > (the app never downloads several large models merely to benchmark them).
 >
