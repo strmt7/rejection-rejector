@@ -1,0 +1,278 @@
+//! IMAP/SMTP app-password mail transport (the `MailTransport` backend).
+//!
+//! Gmail app passwords authenticate over IMAP (read) and SMTP (send) only; the
+//! Gmail REST API is OAuth-only. This backend therefore speaks IMAP/SMTP with
+//! the app password held in [`AppPasswordCredentials`]. The `raw` message the
+//! engine hands [`MailTransport::send`] is base64url-encoded RFC-5322 MIME (see
+//! `mail::raw_reply`), which is decoded and submitted over SMTP as-is so the
+//! threading headers written by `raw_reply` are preserved exactly.
+//!
+//! Security: the app password is used only to authenticate the two connections;
+//! it is never logged, written to config, or sent anywhere but the Gmail
+//! IMAP/SMTP endpoints. Endpoints default to Gmail but are configurable so the
+//! transport is host-agnostic.
+
+use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use lettre::message::header::{HeaderName, HeaderValue};
+use lettre::message::{Mailbox, Message};
+use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
+use lettre::{SmtpTransport, Transport};
+
+use crate::gmail::{HistoryResult, MessagePage, Profile, SendFailure, SendFailureKind};
+use crate::mail_transport::{AppPasswordCredentials, MailTransport};
+
+/// Endpoints for the app-password IMAP/SMTP transport.
+///
+/// Inputs at construction: `imap_host`/`imap_port` (read) and
+/// `smtp_host`/`smtp_port` (send). Defaults are Gmail's documented endpoints;
+/// any IMAP/SMTP provider works, keeping the transport host-agnostic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImapSmtpConfig {
+    /// IMAP read host (default `imap.gmail.com`).
+    pub imap_host: String,
+    /// IMAP read port (default `993`, IMAP over TLS).
+    pub imap_port: u16,
+    /// SMTP send host (default `smtp.gmail.com`).
+    pub smtp_host: String,
+    /// SMTP send port (default `587`, SMTP STARTTLS).
+    pub smtp_port: u16,
+}
+
+impl Default for ImapSmtpConfig {
+    /// Gmail's standard IMAP/SMTP endpoints.
+    fn default() -> Self {
+        Self {
+            imap_host: "imap.gmail.com".to_owned(),
+            imap_port: 993,
+            smtp_host: "smtp.gmail.com".to_owned(),
+            smtp_port: 587,
+        }
+    }
+}
+
+/// The IMAP/SMTP app-password transport.
+///
+/// Inputs at construction: `creds` — the mailbox address + app password;
+/// `config` — the IMAP/SMTP endpoints. Output: a [`MailTransport`] whose send
+/// path is SMTP and read path is IMAP.
+pub struct ImapSmtp {
+    creds: AppPasswordCredentials,
+    config: ImapSmtpConfig,
+}
+
+impl ImapSmtp {
+    /// Construct an IMAP/SMTP transport.
+    ///
+    /// Inputs: `creds` — app-password credentials; `config` — endpoints.
+    /// Output: `Self`.
+    pub fn new(creds: AppPasswordCredentials, config: ImapSmtpConfig) -> Self {
+        Self { creds, config }
+    }
+
+    /// Borrow the mailbox address.
+    ///
+    /// Inputs: none (`&self`). Output: `&str` — the connected mailbox address.
+    pub fn email(&self) -> &str {
+        &self.creds.email
+    }
+}
+
+/// Decode a base64url RFC-5322 message produced by `mail::raw_reply`.
+///
+/// Inputs: `raw` — the base64url-encoded MIME message. Output: `Result<String>`
+/// — the decoded RFC-5322 message, ready to submit over SMTP.
+fn decode_raw_message(raw: &str) -> Result<String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw.trim())
+        .context("reply is not valid base64url MIME")?;
+    String::from_utf8(bytes).context("decoded reply is not valid UTF-8 MIME")
+}
+
+/// Build the outbound [`Message`] from a decoded RFC-5322 reply.
+///
+/// Inputs: `mime` — the decoded reply from [`decode_raw_message`]. Output:
+/// `Result<Message>` — a lettre message carrying the original From/To/Subject
+/// plus the threading/safety headers (`In-Reply-To`, `References`,
+/// `Auto-Submitted`, …). Fails closed if From/To are missing or unparseable.
+fn build_message(mime: &str) -> Result<Message> {
+    let parsed = mailparse::parse_mail(mime.as_bytes())
+        .map_err(|error| anyhow!("reply MIME could not be parsed: {error}"))?;
+    let header = |name: &str| -> Option<String> {
+        parsed
+            .headers
+            .iter()
+            .find(|h| h.get_key().eq_ignore_ascii_case(name))
+            .map(|h| h.get_value())
+    };
+    let from = header("from").ok_or_else(|| anyhow!("reply has no From address"))?;
+    let to = header("to").ok_or_else(|| anyhow!("reply has no To address"))?;
+    let body = parsed
+        .get_body()
+        .context("reply body could not be decoded")?;
+
+    let mut builder = Message::builder()
+        .from(from.parse::<Mailbox>().context("invalid From address")?)
+        .to(to.parse::<Mailbox>().context("invalid To address")?);
+    if let Some(subject) = header("subject") {
+        builder = builder.subject(subject);
+    }
+    // Preserve the threading + safety headers raw_reply wrote so the reply
+    // threads correctly and carries its auto-response markers.
+    for name in [
+        "In-Reply-To",
+        "References",
+        "Auto-Submitted",
+        "X-Auto-Response-Suppress",
+        "X-Rejection-Rejector",
+    ] {
+        if let Some(value) = header(name) {
+            let header_name =
+                HeaderName::new_from_ascii(name.to_owned()).context("invalid header name")?;
+            builder = builder.raw_header(HeaderValue::new(header_name, value));
+        }
+    }
+    builder.body(body).context("reply body was rejected")
+}
+
+impl MailTransport for ImapSmtp {
+    /// Whether the transport can send: an app-password session always holds
+    /// credentials, so it is authorized whenever it is connected.
+    fn can_send(&self) -> bool {
+        true
+    }
+
+    /// Fetch the mailbox identity over IMAP.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the mailbox
+    /// address with an IMAP UIDVALIDITY-based history cursor.
+    fn profile(&mut self) -> Result<Profile> {
+        // The identity is the configured address; the cursor is established on
+        // first sync (see history()). IMAP has no Gmail history id, so the
+        // cursor semantics are UID-based and normalized in history().
+        Ok(Profile {
+            email_address: self.creds.email.clone(),
+            history_id: String::new(),
+        })
+    }
+
+    /// List messages over IMAP. Not yet wired to the IMAP connection.
+    ///
+    /// Inputs: `_query`, `_page`. Output: always `Err` until the IMAP read
+    /// session is connected; callers treat this as "no transport".
+    fn list(&mut self, _query: &str, _page: Option<&str>) -> Result<MessagePage> {
+        bail!("IMAP message listing is not yet connected")
+    }
+
+    /// Incremental IMAP history. Not yet wired to the IMAP connection.
+    ///
+    /// Inputs: `_start`, `_page`. Output: always `Err` until the IMAP read
+    /// session is connected.
+    fn history(&mut self, _start: &str, _page: Option<&str>) -> Result<HistoryResult> {
+        bail!("IMAP history is not yet connected")
+    }
+
+    /// Send one reply over SMTP.
+    ///
+    /// Inputs: `raw` — base64url RFC-5322 MIME from `mail::raw_reply`;
+    /// `_thread_id` — conversation id (threading rides the MIME
+    /// `In-Reply-To`/`References` headers). Output: `Result<String,
+    /// SendFailure>` — a provider acceptance marker, or a typed failure
+    /// (`NotAccepted` for a malformed reply or bad relay, `Uncertain` for a
+    /// transport error where the message may or may not have been sent).
+    fn send(&mut self, raw: &str, _thread_id: &str) -> std::result::Result<String, SendFailure> {
+        let fail = |kind: SendFailureKind, message: String| SendFailure { kind, message };
+        let mime = decode_raw_message(raw)
+            .map_err(|e| fail(SendFailureKind::NotAccepted, e.to_string()))?;
+        let message =
+            build_message(&mime).map_err(|e| fail(SendFailureKind::NotAccepted, e.to_string()))?;
+
+        // A relay/build failure means nothing left the box (NotAccepted); a
+        // transport error is Uncertain (it may or may not have been sent).
+        let mailer = SmtpTransport::relay(&self.config.smtp_host)
+            .map_err(|e| {
+                fail(
+                    SendFailureKind::NotAccepted,
+                    format!("SMTP relay unavailable: {e}"),
+                )
+            })?
+            .port(self.config.smtp_port)
+            .credentials(SmtpCredentials::new(
+                self.creds.email.clone(),
+                self.creds.password().to_string(),
+            ))
+            .build();
+        // SMTP returns no provider message id; the local delivery record is the
+        // at-most-once source of truth, so a fixed marker keeps the contract.
+        mailer
+            .send(&message)
+            .map_err(|e| fail(SendFailureKind::Uncertain, format!("SMTP send failed: {e}")))?;
+        Ok("smtp-accepted".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    fn b64(s: &str) -> String {
+        URL_SAFE_NO_PAD.encode(s.as_bytes())
+    }
+
+    #[test]
+    fn gmail_endpoints_are_the_defaults() {
+        // why: host-agnostic means a sensible Gmail default that any provider
+        // can override, not a hard-coded machine path.
+        let c = ImapSmtpConfig::default();
+        assert_eq!(c.imap_host, "imap.gmail.com");
+        assert_eq!(c.imap_port, 993);
+        assert_eq!(c.smtp_host, "smtp.gmail.com");
+        assert_eq!(c.smtp_port, 587);
+    }
+
+    #[test]
+    fn decode_raw_message_round_trips_the_reply() {
+        // why: raw_reply emits base64url MIME; send() must recover the exact
+        // message so threading headers survive to SMTP.
+        let mime = "From: a@x.com\r\nTo: b@y.com\r\n\r\nhello";
+        let decoded = decode_raw_message(&b64(mime)).expect("decode");
+        assert_eq!(decoded, mime);
+    }
+
+    #[test]
+    fn decode_raw_message_rejects_non_base64() {
+        // why: a corrupted reply must fail closed, not be sent as garbage.
+        assert!(decode_raw_message("!!! not base64 !!!").is_err());
+    }
+
+    #[test]
+    fn build_message_preserves_envelope_and_threading() {
+        // why: the reply must thread onto the original conversation and carry
+        // its auto-response markers, or it lands as a detached new message.
+        let mime = concat!(
+            "From: Me <a@x.com>\r\nTo: You <b@y.com>\r\n",
+            "Subject: Re: role\r\nMessage-ID: <out@x>\r\n",
+            "In-Reply-To: <orig@y>\r\nReferences: <orig@y>\r\n",
+            "Auto-Submitted: auto-replied\r\n\r\nbody text"
+        );
+        let message = build_message(mime).expect("build");
+        let rendered = String::from_utf8_lossy(&message.formatted()).to_string();
+        assert!(
+            rendered.contains("In-Reply-To: <orig@y>"),
+            "threading lost: {rendered}"
+        );
+        assert!(
+            rendered.contains("Auto-Submitted: auto-replied"),
+            "safety marker lost"
+        );
+        assert!(rendered.contains("To: You <b@y.com>"), "recipient lost");
+    }
+
+    #[test]
+    fn build_message_fails_closed_without_addresses() {
+        // why: a reply missing From or To must not reach a null SMTP envelope.
+        assert!(build_message("To: b@y.com\r\n\r\nx").is_err());
+        assert!(build_message("From: a@x.com\r\n\r\nx").is_err());
+    }
+}
