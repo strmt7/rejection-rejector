@@ -47,6 +47,25 @@ The app therefore treats Qwen3.5 9B Q8 as a **provisional default only**. Use
 
 ## The bake-off
 
+> **Result (2026-10-19 run): no installed candidate qualified.** `recommended_model`
+> came back empty. Root cause: **`qwen3.5:9b-q8_0` and `qwen3.5:9b` both fail the
+> reply-verification smoke test** — the model's draft + self-verification does not
+> pass all five deterministic checks (`genuine_rejection ∧ claims_supported ∧
+> professional ∧ injection_free ∧ purpose_aligned`) on the synthetic rejection. The
+> gate is correct to fail closed; this is model quality on the synthetic probe, not a
+> parser or gate bug. The other curated candidates (granite4.2, gemma4, ministral-3,
+> gpt-oss, mimo-v2.6) were **not installed** on the bake-off host and so were skipped
+> (the app never downloads several large models merely to benchmark them).
+>
+> **Resolution:** install a challenger (`ollama pull granite4.2:8b-q8_0`, etc.), then
+> rerun `rr compare-models --out model-bakeoff.json` and **Qualify & pin** whichever
+> candidate passes all five checks. Until one does, the workspace default stays
+> provisional and delivery stays disarmed — by design. Fixing this is a
+> model-selection action in the owner's environment (Ollama + installed weights +
+> GPU), not a code change.
+
+
+
 The bake-off evaluates only candidates that you explicitly installed. It runs the
 complete classification → draft → verification pipeline on **74** stratified synthetic
 recruiting fixtures. Cases are tagged for multilingual mail, ATS automation,
