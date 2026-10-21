@@ -27,7 +27,30 @@ whole interface risk-free. Real data goes to the OS local application-data direc
 override with `--data-dir <absolute-path>`. Never choose a public repository or
 shared/synchronized directory.
 
+## Gmail app password (simplest — recommended)
+
+The easiest way to connect needs **no Google Cloud project, no OAuth client, and no
+consent screen** — just your Gmail address and a Google **app password**:
+
+1. In your Google Account, turn on **2-Step-Verification** (required for app passwords).
+2. Under **Security → App passwords**, create one and copy the 16-character value
+   (shown as four groups of four).
+3. In the app's **Settings → App password (IMAP/SMTP)**, enter your Gmail address and
+   the app password, then **Connect with app password**.
+
+That is the whole setup. The app connects over IMAP/SMTP (`imap.gmail.com:993`,
+`smtp.gmail.com:587`) with the same safety gates as the OAuth path — at-most-once
+delivery, burst ceiling, cooldown, and the independent deterministic rejection gate.
+The app password is stored only in the encrypted local store (Windows Credential
+Manager-backed), zeroized after use, and never logged or uploaded.
+
+An app password is a full-account credential: it can read and send mail. Treat it
+like a password — revoke it from your Google Account if it is ever exposed, and
+prefer a dedicated app password you can delete without affecting anything else.
+
 ## Gmail OAuth
+
+
 
 The app uses **OAuth 2.0 for desktop apps**: you create your own Google Cloud OAuth
 client, sign in through your system browser, and the app receives tokens through a
