@@ -17,6 +17,7 @@ yanked = "deny"
 # patched version (verified against crates.io 2026-10-19). Migration
 # required upstream; re-check when atspi/accesskit publish zvariant 6.
 ignore = [
+    "RUSTSEC-2023-0086",
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },

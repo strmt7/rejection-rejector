@@ -12,14 +12,17 @@
 //! IMAP/SMTP endpoints. Endpoints default to Gmail but are configurable so the
 //! transport is host-agnostic.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
 use lettre::{SmtpTransport, Transport};
 
-use crate::gmail::{HistoryResult, MessagePage, Profile, SendFailure, SendFailureKind};
+use crate::gmail::{
+    Added, HistoryPage, HistoryRecord, HistoryResult, MessagePage, MessageRef, Profile,
+    SendFailure, SendFailureKind,
+};
 use crate::mail_transport::{AppPasswordCredentials, MailTransport};
 
 /// Endpoints for the app-password IMAP/SMTP transport.
@@ -75,6 +78,53 @@ impl ImapSmtp {
     /// Inputs: none (`&self`). Output: `&str` — the connected mailbox address.
     pub fn email(&self) -> &str {
         &self.creds.email
+    }
+
+    /// Fetch message refs from the mailbox over IMAP.
+    ///
+    /// Inputs: `uid_filter` — an IMAP `UID` search term (e.g. `"124:*"`).
+    /// Output: `Result<Vec<MessageRef>>` — one ref per message, `id` = UID and
+    /// `thread_id` = the [`thread_key`] conversation root. Connects, selects
+    /// INBOX, searches, and fetches `RFC822` per message.
+    fn fetch_refs(&self, uid_filter: &str) -> Result<Vec<MessageRef>> {
+        let tls = native_tls::TlsConnector::new().context("TLS init failed")?;
+        let client = imap::connect(
+            (self.config.imap_host.as_str(), self.config.imap_port),
+            &self.config.imap_host,
+            &tls,
+        )
+        .context("IMAP connection failed")?;
+        let mut session = client
+            .login(&self.creds.email, self.creds.password())
+            .map_err(|e| anyhow!("IMAP login failed: {}", e.0))?;
+        session.select("INBOX").context("select INBOX failed")?;
+        let uids = session
+            .uid_search(uid_filter)
+            .context("IMAP UID search failed")?;
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let set = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let fetches = session
+            .uid_fetch(&set, "RFC822")
+            .context("IMAP UID fetch failed")?;
+        let mut refs = Vec::new();
+        for fetch in fetches.iter() {
+            let uid = fetch.uid.context("fetched message has no UID")?;
+            let body = fetch.body().unwrap_or_default();
+            let mime = String::from_utf8_lossy(body);
+            let thread_id = thread_key(&mime).unwrap_or_default();
+            refs.push(MessageRef {
+                id: uid.to_string(),
+                thread_id,
+            });
+        }
+        let _ = session.logout();
+        Ok(refs)
     }
 }
 
@@ -135,6 +185,33 @@ fn build_message(mime: &str) -> Result<Message> {
     builder.body(body).context("reply body was rejected")
 }
 
+/// Derive a stable conversation key from a message's threading headers.
+///
+/// IMAP has no Gmail `threadId`; a reply threads onto its ancestor via
+/// `In-Reply-To`/`References`. The root is the first `References` id, else the
+/// `In-Reply-To` id, else the message's own `Message-ID`. Inputs: `mime` — the
+/// RFC-5322 message. Output: `Option<String>` — the thread root id (without
+/// angle brackets), or `None` when no threading header is present.
+fn thread_key(mime: &str) -> Option<String> {
+    let parsed = mailparse::parse_mail(mime.as_bytes()).ok()?;
+    let header = |name: &str| -> Option<String> {
+        parsed
+            .headers
+            .iter()
+            .find(|h| h.get_key().eq_ignore_ascii_case(name))
+            .map(|h| h.get_value())
+    };
+    let first_id = |s: &str| -> Option<String> {
+        s.split_whitespace()
+            .find(|t| t.starts_with('<') && t.ends_with('>'))
+            .map(|t| t.trim_matches(['<', '>']).to_owned())
+    };
+    let references = header("references").and_then(|r| first_id(&r));
+    let in_reply_to = header("in-reply-to").and_then(|r| first_id(&r));
+    let message_id = header("message-id").and_then(|r| first_id(&r));
+    references.or(in_reply_to).or(message_id)
+}
+
 impl MailTransport for ImapSmtp {
     /// Whether the transport can send: an app-password session always holds
     /// credentials, so it is authorized whenever it is connected.
@@ -160,16 +237,33 @@ impl MailTransport for ImapSmtp {
     ///
     /// Inputs: `_query`, `_page`. Output: always `Err` until the IMAP read
     /// session is connected; callers treat this as "no transport".
-    fn list(&mut self, _query: &str, _page: Option<&str>) -> Result<MessagePage> {
-        bail!("IMAP message listing is not yet connected")
+    fn list(&mut self, query: &str, _page: Option<&str>) -> Result<MessagePage> {
+        let filter = if query.trim().is_empty() {
+            "1:*".to_owned()
+        } else {
+            query.to_owned()
+        };
+        let refs = self.fetch_refs(&filter)?;
+        Ok(MessagePage {
+            messages: refs,
+            next_page_token: None,
+        })
     }
 
     /// Incremental IMAP history. Not yet wired to the IMAP connection.
     ///
     /// Inputs: `_start`, `_page`. Output: always `Err` until the IMAP read
     /// session is connected.
-    fn history(&mut self, _start: &str, _page: Option<&str>) -> Result<HistoryResult> {
-        bail!("IMAP history is not yet connected")
+    fn history(&mut self, start: &str, _page: Option<&str>) -> Result<HistoryResult> {
+        let cursor: u32 = start.parse().unwrap_or(0);
+        let filter = format!("{}:*", cursor.saturating_add(1));
+        let refs = self.fetch_refs(&filter)?;
+        let messages_added = refs.into_iter().map(|message| Added { message }).collect();
+        Ok(HistoryResult::Page(HistoryPage {
+            history: vec![HistoryRecord { messages_added }],
+            next_page_token: None,
+            history_id: String::new(),
+        }))
     }
 
     /// Send one reply over SMTP.
@@ -274,5 +368,24 @@ mod tests {
         // why: a reply missing From or To must not reach a null SMTP envelope.
         assert!(build_message("To: b@y.com\r\n\r\nx").is_err());
         assert!(build_message("From: a@x.com\r\n\r\nx").is_err());
+    }
+
+    #[test]
+    fn thread_key_prefers_reference_root_then_in_reply_to_then_self() {
+        // why: IMAP threading must resolve to one stable conversation key so a
+        // reply groups onto the original thread (Gmail's threadId equivalent).
+        let root = "From: a@x\r\nReferences: <root@y> <mid@y>\r\nIn-Reply-To: <mid@y>\r\nMessage-ID: <self@x>\r\n\r\n";
+        assert_eq!(thread_key(root).as_deref(), Some("root@y"));
+        let only_irt = "In-Reply-To: <mid@y>\r\nMessage-ID: <self@x>\r\n\r\n";
+        assert_eq!(thread_key(only_irt).as_deref(), Some("mid@y"));
+        let only_self = "Message-ID: <self@x>\r\n\r\n";
+        assert_eq!(thread_key(only_self).as_deref(), Some("self@x"));
+    }
+
+    #[test]
+    fn thread_key_is_none_without_threading_headers() {
+        // why: a message with no id cannot be threaded; the sync must skip it
+        // rather than group it under an empty key.
+        assert_eq!(thread_key("Subject: hi\r\n\r\nbody"), None);
     }
 }
