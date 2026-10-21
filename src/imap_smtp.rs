@@ -199,6 +199,22 @@ fn build_message(mime: &str) -> Result<Message> {
     builder.body(body).context("reply body was rejected")
 }
 
+/// Validate a Message-ID/thread token before interpolating it into an IMAP
+/// SEARCH string literal.
+///
+/// Inputs: `id` — the raw token (Message-ID or thread root). Output:
+/// `Option<&str>` — the token when it is safe to embed (no `"`, `\`, CR or LF),
+/// otherwise `None`. Fail-closed so a malformed id can never inject IMAP search
+/// syntax or break the literal.
+fn safe_search_token(id: &str) -> Option<&str> {
+    let unsafe_char = id.chars().any(|c| matches!(c, '"' | '\\' | '\r' | '\n'));
+    if id.is_empty() || unsafe_char {
+        None
+    } else {
+        Some(id)
+    }
+}
+
 /// Derive a stable conversation key from a message's threading headers.
 ///
 /// IMAP has no Gmail `threadId`; a reply threads onto its ancestor via
@@ -431,6 +447,11 @@ impl MailTransport for ImapSmtp {
         // messages carrying it (as their own Message-ID or in References), then
         // keep the ones whose computed thread key matches — mirroring Gmail's
         // conversation grouping without the Gmail API.
+        let Some(id) = safe_search_token(id) else {
+            return Ok(crate::gmail::Thread {
+                messages: Vec::new(),
+            });
+        };
         let filter = format!("OR HEADER References \"{id}\" HEADER Message-ID \"{id}\"");
         let refs = self.fetch_refs(&filter)?;
         let messages = refs
@@ -448,7 +469,10 @@ impl MailTransport for ImapSmtp {
     /// outgoing RFC 2822 Message-ID. Output: `Result<Option<String>>` — the UID
     /// when found.
     fn find_sent(&mut self, message_id: &str) -> Result<Option<String>> {
-        let refs = self.fetch_refs(&format!("HEADER Message-ID \"{message_id}\""))?;
+        let Some(mid) = safe_search_token(message_id) else {
+            return Ok(None);
+        };
+        let refs = self.fetch_refs(&format!("HEADER Message-ID \"{mid}\""))?;
         Ok(refs.into_iter().next().map(|r| r.id))
     }
 }
@@ -516,6 +540,19 @@ mod tests {
         // why: a reply missing From or To must not reach a null SMTP envelope.
         assert!(build_message("To: b@y.com\r\n\r\nx").is_err());
         assert!(build_message("From: a@x.com\r\n\r\nx").is_err());
+    }
+
+    #[test]
+    fn safe_search_token_rejects_imap_search_injection() {
+        // why: a malformed Message-ID with a quote/backslash/newline must be
+        // rejected fail-closed before it can inject IMAP SEARCH syntax or break
+        // the quoted literal.
+        assert_eq!(safe_search_token("<a@b.com>"), Some("<a@b.com>"));
+        assert_eq!(safe_search_token(""), None);
+        assert_eq!(safe_search_token("a\"b"), None);
+        assert_eq!(safe_search_token("a\\\\b"), None);
+        assert_eq!(safe_search_token("a\rb"), None);
+        assert_eq!(safe_search_token("a\nb"), None);
     }
 
     #[test]
