@@ -874,13 +874,16 @@ impl Ollama {
             draft.is_some(),
             "Model failed the reply-drafting smoke test"
         );
-        ensure!(
-            analysis
-                .verification
-                .as_ref()
-                .is_some_and(Verification::passed),
-            "Model failed the reply-verification smoke test"
-        );
+        match analysis.verification.as_ref() {
+            None => anyhow::bail!(
+                "Model failed the reply-verification smoke test: no verification was produced                  (the model's verification output was unavailable or unparseable)"
+            ),
+            Some(v) => ensure!(
+                v.passed(),
+                "Model failed the reply-verification smoke test: failing checks [{}]",
+                v.failing_checks().join(", ")
+            ),
+        }
         ensure!(
             analysis.gpu_resident && flags.is_empty(),
             "Full local pipeline qualification failed: {}",
