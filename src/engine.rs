@@ -748,14 +748,13 @@ impl Engine {
 
     /// Connect a mailbox via Gmail app-password (IMAP/SMTP basic auth).
     ///
-    /// Inputs: `email` — the mailbox address; `app_password` — the Google app
-    /// password. Output: `Ok(())` once connected; demo mode, enterprise policy
+    /// Inputs: `creds` — the mailbox address + Google app password (zeroized on
+    /// drop). Output: `Ok(())` once connected; demo mode, enterprise policy
     /// and the provider can each refuse. The app password is persisted only in
     /// the encrypted store (never logged) and sending stays disabled until
     /// separately armed.
-    pub fn connect_app_password(&mut self, email: &str, app_password: &str) -> Result<()> {
+    pub fn connect_app_password(&mut self, creds: AppPasswordCredentials) -> Result<()> {
         ensure!(!self.demo, "Demo mode never connects to a real mailbox");
-        let creds = AppPasswordCredentials::new(email, app_password);
         let stored = serde_json::to_value(&creds)?;
         let mut imap = ImapSmtp::new(creds, ImapSmtpConfig::default());
         let profile = imap.profile()?;

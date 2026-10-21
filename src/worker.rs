@@ -1,3 +1,4 @@
+use crate::mail_transport::AppPasswordCredentials;
 use crate::{
     api_auth,
     config::{AutomaticArmGate, Mode, Settings},
@@ -181,6 +182,7 @@ pub enum Command {
         path: PathBuf,
         send: bool,
     },
+    ConnectAppPassword(AppPasswordCredentials),
     Disconnect,
     Settings(Box<Settings>),
     InstallOllama,
@@ -269,7 +271,7 @@ impl Command {
         match self {
             Self::Refresh => OperationKind::Refresh,
             Self::CheckNow => OperationKind::SyncMailbox,
-            Self::Connect { .. } => OperationKind::ConnectGmail,
+            Self::Connect { .. } | Self::ConnectAppPassword(_) => OperationKind::ConnectGmail,
             Self::Disconnect => OperationKind::DisconnectGmail,
             Self::Settings(_) => OperationKind::UpdateSettings,
             Self::InstallOllama => OperationKind::InstallOllama,
@@ -1259,6 +1261,16 @@ fn run(
                             "Complete Google sign-in in your browser. This expires after five minutes.",
                         );
                         let r = e.connect(&path, send);
+                        settings_changed = r.is_ok();
+                        r
+                    }
+                    Command::ConnectAppPassword(creds) => {
+                        busy(
+                            &shared,
+                            &pulse,
+                            "Connecting over IMAP/SMTP with your app password…",
+                        );
+                        let r = e.connect_app_password(creds);
                         settings_changed = r.is_ok();
                         r
                     }
