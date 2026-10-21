@@ -550,6 +550,50 @@ mod tests {
     }
 
     #[test]
+    fn email_from_rfc822_falls_back_to_epoch_on_unparseable_date() {
+        // why: an invalid/absent Date must degrade deterministically to the epoch
+        // (treated as not-recent) rather than panicking or guessing — the
+        // fingerprint must stay stable and the age window must fail closed.
+        let stub = Stub {
+            account: "me@example.com".to_owned(),
+            provider_id: "7".to_owned(),
+            thread_id: "t".to_owned(),
+            source: crate::types::Source::Gmail,
+        };
+        let mime = concat!(
+            "From: r@co.com\r\nSubject: S\r\nMessage-ID: <x@co.com>\r\n",
+            "Date: not-a-date\r\n\r\nbody\r\n"
+        );
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert_eq!(
+            email.received_at.timestamp(),
+            0,
+            "invalid Date must be the epoch"
+        );
+    }
+
+    #[test]
+    fn email_from_rfc822_missing_optional_headers_are_none_or_empty() {
+        // why: reply_to/references are optional; a bare message must parse with
+        // them absent (None / empty) rather than fabricating values that would
+        // corrupt the fingerprint.
+        let stub = Stub {
+            account: "me@example.com".to_owned(),
+            provider_id: "8".to_owned(),
+            thread_id: "t".to_owned(),
+            source: crate::types::Source::Gmail,
+        };
+        let mime = concat!(
+            "From: r@co.com\r\nSubject: S\r\nMessage-ID: <y@co.com>\r\n",
+            "\r\nbody\r\n"
+        );
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert_eq!(email.reply_to, None);
+        assert!(email.references.is_empty());
+        assert_eq!(email.message_id, "<y@co.com>");
+    }
+
+    #[test]
     fn thread_key_prefers_reference_root_then_in_reply_to_then_self() {
         // why: IMAP threading must resolve to one stable conversation key so a
         // reply groups onto the original thread (Gmail's threadId equivalent).
