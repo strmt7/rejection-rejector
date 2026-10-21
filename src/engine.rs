@@ -1,3 +1,4 @@
+use crate::mail_transport::MailTransport;
 use crate::{
     audit_anchor,
     config::{
@@ -326,7 +327,7 @@ pub struct Engine {
     pub paused: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
     pub enterprise_policy: Option<LoadedPolicy>,
-    gmail: Option<Gmail>,
+    mail: Option<Box<dyn MailTransport>>,
     _lock: InstanceLock,
     _session: SessionLease,
     _temporary: Option<tempfile::TempDir>,
@@ -526,7 +527,7 @@ impl Engine {
             paused,
             stop,
             enterprise_policy,
-            gmail: creds.map(Self::provider_client),
+            mail: creds.map(Self::provider_client),
             _lock: lock,
             _session: session,
             _temporary: temporary,
@@ -557,14 +558,14 @@ impl Engine {
     /// Inputs: none beyond the engine. Output: `true` while provider credentials
     /// are attached.
     pub fn connected(&self) -> bool {
-        self.gmail.is_some()
+        self.mail.is_some()
     }
     /// Whether the connected provider may send.
     ///
     /// Inputs: none beyond the engine. Output: `true` only when a connected
     /// provider holds send scope.
     pub fn send_scope(&self) -> bool {
-        self.gmail.as_ref().is_some_and(Gmail::can_send)
+        self.mail.as_ref().is_some_and(|m| m.can_send())
     }
     /// Test-only: publish a provider client into the engine without OAuth so
     /// dispatch orchestration can run against `Gmail::with_endpoints` mocks.
@@ -572,7 +573,7 @@ impl Engine {
     /// Inputs: `gmail` — provider client to publish. Output: none.
     #[cfg(test)]
     pub(crate) fn attach_gmail_for_tests(&mut self, gmail: Gmail) {
-        self.gmail = Some(gmail);
+        self.mail = Some(Box::new(gmail));
     }
     /// The effective enterprise-policy status.
     ///
@@ -668,12 +669,12 @@ impl Engine {
     /// bound to the Gmail API. Test seam: threads under test adopt mock
     /// endpoints through `crate::test_support`, so worker-driven provider
     /// flows run deterministically without Google.
-    fn provider_client(credentials: Credentials) -> Gmail {
+    fn provider_client(credentials: Credentials) -> Box<dyn MailTransport> {
         #[cfg(test)]
         if let Some((root, token_url)) = crate::test_support::gmail_endpoints() {
-            return Gmail::with_endpoints(credentials, &root, &token_url);
+            return Box::new(Gmail::with_endpoints(credentials, &root, &token_url));
         }
-        Gmail::new(credentials)
+        Box::new(Gmail::new(credentials))
     }
     /// Obtain OAuth credentials and a provider client for [`Self::connect`].
     ///
@@ -683,16 +684,20 @@ impl Engine {
     /// seam: threads under test arm canned credentials and mock endpoints in
     /// `crate::test_support`, so the whole connection flow runs without a
     /// browser or Google.
-    fn login_client(path: &Path, send: bool, stop: &AtomicBool) -> Result<(Credentials, Gmail)> {
+    fn login_client(
+        path: &Path,
+        send: bool,
+        stop: &AtomicBool,
+    ) -> Result<(Credentials, Box<dyn MailTransport>)> {
         #[cfg(test)]
         if let Some((creds, root, token_url)) = crate::test_support::login_override() {
             return Ok((
                 creds.clone(),
-                Gmail::with_endpoints(creds, &root, &token_url),
+                Box::new(Gmail::with_endpoints(creds, &root, &token_url)),
             ));
         }
         let credentials = oauth::login(path, send, stop)?;
-        let gmail = Gmail::new(credentials.clone());
+        let gmail = Box::new(Gmail::new(credentials.clone()));
         Ok((credentials, gmail))
     }
     /// Connect a mailbox provider for this workspace.
@@ -730,7 +735,7 @@ impl Engine {
         connected?;
         self.settings = settings;
         self.account = account;
-        self.gmail = Some(gmail);
+        self.mail = Some(gmail);
         Ok(())
     }
     /// Disconnect the provider and disarm delivery.
@@ -748,7 +753,7 @@ impl Engine {
         );
         disconnected?;
         self.settings = settings;
-        self.gmail = None;
+        self.mail = None;
         self.account.clear();
         Ok(())
     }
@@ -1139,7 +1144,7 @@ impl Engine {
             "Demo messages are synthetic and have no provider"
         );
         let gmail = self
-            .gmail
+            .mail
             .as_mut()
             .context("Connect a Gmail account first")?;
         sync::synchronize(
@@ -1167,7 +1172,7 @@ impl Engine {
     /// message was processed; `false` in demo mode, without a provider, without a
     /// pinned model, or when the queue is empty.
     pub fn process_one(&mut self) -> Result<bool> {
-        if self.demo || self.gmail.is_none() || self.settings.model_digest.is_none() {
+        if self.demo || self.mail.is_none() || self.settings.model_digest.is_none() {
             return Ok(false);
         }
         // Global runtime/configuration failures must not consume retries on individual
@@ -1186,7 +1191,7 @@ impl Engine {
         };
         if job.email.is_none() {
             match self
-                .gmail
+                .mail
                 .as_mut()
                 .context("Connect Gmail")?
                 .email(&job.stub)
@@ -1563,7 +1568,7 @@ impl Engine {
             require_analysis_model_current(&status.digest, analyzed_digest)?;
         }
 
-        let gmail = self.gmail.as_mut().ok_or_else(|| {
+        let gmail = self.mail.as_mut().ok_or_else(|| {
             DispatchFailure::review_code(
                 "review_required_gmail_disconnected",
                 "Gmail is not connected",
@@ -1696,7 +1701,7 @@ impl Engine {
             )
             .map_err(|error| DispatchFailure::handled(error.to_string()))?;
         match self
-            .gmail
+            .mail
             .as_mut()
             .ok_or_else(|| DispatchFailure::handled("Gmail disconnected after reservation"))?
             .send(&raw, &job.stub.thread_id)
@@ -1809,7 +1814,7 @@ impl Engine {
             "Only uncertain deliveries can be reconciled"
         );
         let found = self
-            .gmail
+            .mail
             .as_mut()
             .context("Connect Gmail")?
             .find_sent(&mail::outgoing_id(&j))?;
@@ -3851,7 +3856,7 @@ mod dispatch_tests {
         gate!(
             "Gmail is not connected",
             |e: &mut Engine, _: &mut Job, _: &mut Vec<MockServer>| {
-                e.gmail = None;
+                e.mail = None;
             }
         );
         gate!("Google send permission is missing", |e: &mut Engine,

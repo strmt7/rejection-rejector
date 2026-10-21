@@ -13,7 +13,7 @@
 
 use zeroize::Zeroize;
 
-use crate::gmail::{FetchFailure, HistoryResult, MessagePage, Profile, SendFailure, Thread};
+use crate::gmail::{FetchFailure, SendFailure, Thread};
 use crate::types::{Email, Stub};
 
 /// Credentials for app-password (IMAP/SMTP basic-auth) mail access.
@@ -71,41 +71,57 @@ impl std::fmt::Debug for AppPasswordCredentials {
 
 /// A mail transport: read messages and send replies.
 ///
-/// Both the Gmail-API (OAuth) backend and the IMAP/SMTP (app-password)
-/// backend implement this so the engine's safety gates (at-most-once
-/// delivery, burst ceiling, deterministic rejection gate) apply identically
-/// regardless of transport. Inputs/outputs mirror the `Gmail` client surface.
-pub trait MailTransport {
-    /// Whether the transport is authorized to send (send scope/app password
-    /// present and delivery not disabled). Input: none (`&self`). Output: `bool`.
+/// Both the Gmail-API (OAuth) backend and the IMAP/SMTP (app-password) backend
+/// implement this so the engine's safety gates (at-most-once delivery, burst
+/// ceiling, deterministic rejection gate) apply identically regardless of
+/// transport. `Provider` supplies `profile`/`list`/`history` for sync; this
+/// trait adds the dispatch/lookup surface. Inputs/outputs mirror `Gmail`.
+pub trait MailTransport: crate::sync::Provider {
+    /// Whether the transport is authorized to send. Input: none (`&self`).
+    /// Output: `bool`.
     fn can_send(&self) -> bool;
-
-    /// Fetch the mailbox profile/identity. Input: none (`&mut self`). Output:
-    /// `Result<Profile>` — the connected mailbox identity.
-    fn profile(&mut self) -> anyhow::Result<Profile>;
-
-    /// List messages matching a query page. Inputs: `query` — search text;
-    /// `page` — opaque continuation token. Output: `Result<MessagePage>`.
-    fn list(&mut self, query: &str, page: Option<&str>) -> anyhow::Result<MessagePage>;
-
-    /// Incremental history since a cursor. Inputs: `start` — the cursor
-    /// (Gmail history id or IMAP UID); `page` — continuation token. Output:
-    /// `Result<HistoryResult>` — the page or an expiry signal.
-    fn history(&mut self, start: &str, page: Option<&str>) -> anyhow::Result<HistoryResult>;
 
     /// Send one raw MIME reply. Inputs: `raw` — the full RFC-5322 message;
     /// `thread_id` — the conversation to reply within. Output:
     /// `Result<String, SendFailure>` — the provider id, or a typed failure.
     fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure>;
 
-    /// Fetch one full message by its stub. Inputs: `stub` — the queued message
-    /// identity. Output: `Result<Option<Email>, FetchFailure>` — the parsed
-    /// message (`None` when it no longer exists), or a typed fetch failure.
+    /// Fetch one full message by its stub. Inputs: `stub` — queued identity.
+    /// Output: `Result<Option<Email>, FetchFailure>` — the parsed message
+    /// (`None` when gone), or a typed fetch failure.
     fn email(&mut self, stub: &Stub) -> Result<Option<Email>, FetchFailure>;
 
-    /// Fetch one conversation. Inputs: `id` — the thread id. Output:
+    /// Fetch one conversation. Inputs: `id` — thread id. Output:
     /// `anyhow::Result<Thread>` — the thread resource.
     fn thread(&mut self, id: &str) -> anyhow::Result<Thread>;
+
+    /// Locate an already-sent message by its RFC 2822 Message-ID. Inputs:
+    /// `message_id` — outgoing Message-ID. Output: `Result<Option<String>>` —
+    /// the provider message id when found.
+    fn find_sent(&mut self, message_id: &str) -> anyhow::Result<Option<String>>;
+}
+
+/// `Provider` for a boxed transport so generic sync (`synchronize<P: Provider>`)
+/// accepts the engine's `Box<dyn MailTransport>` unchanged. Inputs: as
+/// `Provider`; Output: delegates to the inner transport.
+impl crate::sync::Provider for Box<dyn MailTransport> {
+    fn profile(&mut self) -> anyhow::Result<crate::gmail::Profile> {
+        (**self).profile()
+    }
+    fn list(
+        &mut self,
+        query: &str,
+        page: Option<&str>,
+    ) -> anyhow::Result<crate::gmail::MessagePage> {
+        (**self).list(query, page)
+    }
+    fn history(
+        &mut self,
+        start: &str,
+        page: Option<&str>,
+    ) -> anyhow::Result<crate::gmail::HistoryResult> {
+        (**self).history(start, page)
+    }
 }
 
 #[cfg(test)]
