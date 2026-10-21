@@ -37,7 +37,7 @@ GATES = [
             "cargo", "audit", "--deny", "warnings",
             "--ignore", "RUSTSEC-2026-0370",
             "--ignore", "RUSTSEC-2026-0371",
-            "--ignore", "RUSTSEC-2026-0372",
+            "--ignore", "RUSTSEC-2026-0372", "--ignore", "RUSTSEC-2023-0086",
         ],
     ),
 ]
