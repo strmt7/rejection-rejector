@@ -2469,6 +2469,23 @@ mod dispatch_tests {
     use serde_json::{Value, json};
     use std::sync::Mutex;
 
+    /// App-password connect must refuse in demo mode, fail-closed before any
+    /// network or credential handling.
+    #[test]
+    fn connect_app_password_refuses_in_demo_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = demo(dir.path());
+        let creds = crate::mail_transport::AppPasswordCredentials::new(
+            "user@example.com",
+            "abcdefghijklmnop",
+        );
+        let err = e.connect_app_password(creds).unwrap_err();
+        assert!(
+            err.to_string().contains("Demo mode"),
+            "demo must refuse app-password connect: {err}"
+        );
+    }
+
     fn demo(dir: &std::path::Path) -> Engine {
         Engine::open(
             dir.to_path_buf(),
