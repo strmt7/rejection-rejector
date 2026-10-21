@@ -30,6 +30,7 @@ pub mod gmail;
 pub mod gui;
 pub mod language;
 pub mod mail;
+pub mod mail_transport;
 pub mod metrics;
 pub mod net;
 pub mod oauth;

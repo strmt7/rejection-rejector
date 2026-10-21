@@ -46,6 +46,13 @@ html2text = "0.17"
 lingua = { version = "1.8", default-features = false, features = ["english", "chinese", "hindi", "spanish", "french", "arabic", "bengali", "portuguese", "russian", "urdu", "german", "greek"] }
 mailparse = "0.18"
 rand = "0.10"
+# App-password (IMAP/SMTP basic-auth) transport. Gmail app passwords work only
+# over IMAP/SMTP (the Gmail REST API is OAuth-only), so accepting them needs a
+# second transport. The IMAP/SMTP client crates are added with the backend
+# implementation (see src/mail_transport.rs); they are deliberately not
+# imported until then so no unused or unsound dependency ships in the binary.
+# The app password itself is a static secret held only in the encrypted vault
+# (vault.rs) — never in the repository, config, or logs.
 ratatui = { version = "=0.30.2", default-features = false, features = ["std", "layout-cache", "crossterm_0_29"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "webpki-roots", "form", "query"] }
 ring = "0.17.14"
