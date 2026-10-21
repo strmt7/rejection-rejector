@@ -296,17 +296,7 @@ fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
     })
 }
 
-impl MailTransport for ImapSmtp {
-    /// Whether the transport can send: an app-password session always holds
-    /// credentials, so it is authorized whenever it is connected.
-    fn can_send(&self) -> bool {
-        true
-    }
-
-    /// Fetch the mailbox identity over IMAP.
-    ///
-    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the mailbox
-    /// address with an IMAP UIDVALIDITY-based history cursor.
+impl crate::sync::Provider for ImapSmtp {
     fn profile(&mut self) -> Result<Profile> {
         // The identity is the configured address; the cursor is established on
         // first sync (see history()). IMAP has no Gmail history id, so the
@@ -349,7 +339,19 @@ impl MailTransport for ImapSmtp {
             history_id: String::new(),
         }))
     }
+}
 
+impl MailTransport for ImapSmtp {
+    /// Whether the transport can send: an app-password session always holds
+    /// credentials, so it is authorized whenever it is connected.
+    fn can_send(&self) -> bool {
+        true
+    }
+
+    /// Fetch the mailbox identity over IMAP.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the mailbox
+    /// address with an IMAP UIDVALIDITY-based history cursor.
     /// Send one reply over SMTP.
     ///
     /// Inputs: `raw` — base64url RFC-5322 MIME from `mail::raw_reply`;
@@ -429,6 +431,13 @@ impl MailTransport for ImapSmtp {
         Ok(crate::gmail::Thread {
             messages: Vec::new(),
         })
+    }
+    /// Locate a sent message by Message-ID via IMAP. Inputs: `message_id` —
+    /// outgoing RFC 2822 Message-ID. Output: `Result<Option<String>>` — the UID
+    /// when found.
+    fn find_sent(&mut self, message_id: &str) -> Result<Option<String>> {
+        let refs = self.fetch_refs(&format!("HEADER Message-ID \"{message_id}\""))?;
+        Ok(refs.into_iter().next().map(|r| r.id))
     }
 }
 

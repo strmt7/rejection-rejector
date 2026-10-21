@@ -708,19 +708,10 @@ impl crate::mail_transport::MailTransport for Gmail {
     }
     /// Fetch the mailbox profile. Inputs: none (`&mut self`). Output:
     /// `Result<Profile>` — delegates to [`Gmail::profile`].
-    fn profile(&mut self) -> anyhow::Result<Profile> {
-        Gmail::profile(self)
-    }
     /// List messages matching a query. Inputs: `query`, `page`. Output:
     /// `Result<MessagePage>` — delegates to [`Gmail::list`].
-    fn list(&mut self, query: &str, page: Option<&str>) -> anyhow::Result<MessagePage> {
-        Gmail::list(self, query, page)
-    }
     /// Incremental history since a cursor. Inputs: `start`, `page`. Output:
     /// `Result<HistoryResult>` — delegates to [`Gmail::history`].
-    fn history(&mut self, start: &str, page: Option<&str>) -> anyhow::Result<HistoryResult> {
-        Gmail::history(self, start, page)
-    }
     /// Send one reply. Inputs: `raw`, `thread_id`. Output:
     /// `Result<String, SendFailure>` — delegates to [`Gmail::send`].
     fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure> {
@@ -738,6 +729,11 @@ impl crate::mail_transport::MailTransport for Gmail {
     /// delegates to [`Gmail::thread`].
     fn thread(&mut self, id: &str) -> anyhow::Result<crate::gmail::Thread> {
         Gmail::thread(self, id)
+    }
+    /// Locate a sent message by Message-ID. Inputs: `message_id`. Output:
+    /// `Result<Option<String>>` — delegates to [`Gmail::find_sent`].
+    fn find_sent(&mut self, message_id: &str) -> anyhow::Result<Option<String>> {
+        Gmail::find_sent(self, message_id)
     }
 }
 
