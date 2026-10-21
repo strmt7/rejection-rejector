@@ -32,7 +32,7 @@ use crate::types::{Email, Stub};
 /// Inputs at construction: `imap_host`/`imap_port` (read) and
 /// `smtp_host`/`smtp_port` (send). Defaults are Gmail's documented endpoints;
 /// any IMAP/SMTP provider works, keeping the transport host-agnostic.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ImapSmtpConfig {
     /// IMAP read host (default `imap.gmail.com`).
     pub imap_host: String,

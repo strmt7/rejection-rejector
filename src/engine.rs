@@ -1,4 +1,6 @@
-use crate::mail_transport::MailTransport;
+use crate::imap_smtp::{ImapSmtp, ImapSmtpConfig};
+use crate::mail_transport::{AppPasswordCredentials, MailTransport};
+use crate::sync::Provider;
 use crate::{
     audit_anchor,
     config::{
@@ -738,6 +740,40 @@ impl Engine {
         self.mail = Some(gmail);
         Ok(())
     }
+
+    /// Connect a mailbox via Gmail app-password (IMAP/SMTP basic auth).
+    ///
+    /// Inputs: `email` — the mailbox address; `app_password` — the Google app
+    /// password. Output: `Ok(())` once connected; demo mode, enterprise policy
+    /// and the provider can each refuse. The app password is persisted only in
+    /// the encrypted store (never logged) and sending stays disabled until
+    /// separately armed.
+    pub fn connect_app_password(&mut self, email: &str, app_password: &str) -> Result<()> {
+        ensure!(!self.demo, "Demo mode never connects to a real mailbox");
+        let creds = AppPasswordCredentials::new(email, app_password);
+        let stored = serde_json::to_value(&creds)?;
+        let mut imap = ImapSmtp::new(creds, ImapSmtpConfig::default());
+        let profile = imap.profile()?;
+        let account = mail::mailbox(&profile.email_address)?;
+        let mut settings = self.settings.clone();
+        settings.disarm_delivery();
+        let connected = self.db.change_meta(
+            &[
+                ("settings", serde_json::to_value(&settings)?),
+                ("app_password_credentials", stored),
+                ("account", serde_json::to_value(&account)?),
+            ],
+            &[],
+            "account.connected",
+            "App-password credentials encrypted locally; sending remains disabled",
+        );
+        connected?;
+        self.settings = settings;
+        self.account = account;
+        self.mail = Some(Box::new(imap));
+        Ok(())
+    }
+
     /// Disconnect the provider and disarm delivery.
     ///
     /// Inputs: none beyond the engine. Output: `Ok(())`; stored credentials and

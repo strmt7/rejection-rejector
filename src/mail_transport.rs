@@ -11,6 +11,7 @@
 //! through the encrypted vault (`vault.rs`) — never in the repository,
 //! settings file, or any log line.
 
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::gmail::{FetchFailure, SendFailure, Thread};
@@ -21,6 +22,7 @@ use crate::types::{Email, Stub};
 /// Inputs at construction: `email` — the full mailbox address; `app_password` —
 /// the Google app password. The password is zeroized on drop and redacted from
 /// `Debug` so it can never leak through a log or error message.
+#[derive(Serialize, Deserialize)]
 pub struct AppPasswordCredentials {
     /// Full mailbox address (e.g. `user@gmail.com`). Not secret.
     pub email: String,
