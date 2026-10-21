@@ -234,7 +234,35 @@ impl Gmail {
     /// `token_url` — OAuth token endpoint. Output: a [`Gmail`] whose network
     /// traffic goes to the given endpoints instead of Google's, so the
     /// request/refresh failure modes can be exercised deterministically.
-    #[cfg(test)]
+    impl crate::mail_transport::MailTransport for Gmail {
+    /// Whether the OAuth session is authorized to send. Inputs: none
+    /// (`&self`). Output: `bool` — delegates to [`Gmail::can_send`].
+    fn can_send(&self) -> bool {
+        Gmail::can_send(self)
+    }
+    /// Fetch the mailbox profile. Inputs: none (`&mut self`). Output:
+    /// `Result<Profile>` — delegates to [`Gmail::profile`].
+    fn profile(&mut self) -> anyhow::Result<Profile> {
+        Gmail::profile(self)
+    }
+    /// List messages matching a query. Inputs: `query`, `page`. Output:
+    /// `Result<MessagePage>` — delegates to [`Gmail::list`].
+    fn list(&mut self, query: &str, page: Option<&str>) -> anyhow::Result<MessagePage> {
+        Gmail::list(self, query, page)
+    }
+    /// Incremental history since a cursor. Inputs: `start`, `page`. Output:
+    /// `Result<HistoryResult>` — delegates to [`Gmail::history`].
+    fn history(&mut self, start: &str, page: Option<&str>) -> anyhow::Result<HistoryResult> {
+        Gmail::history(self, start, page)
+    }
+    /// Send one reply. Inputs: `raw`, `thread_id`. Output:
+    /// `Result<String, SendFailure>` — delegates to [`Gmail::send`].
+    fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure> {
+        Gmail::send(self, raw, thread_id)
+    }
+}
+
+#[cfg(test)]
     pub(crate) fn with_endpoints(creds: Credentials, root: &str, token_url: &str) -> Self {
         Self {
             creds,
@@ -1909,33 +1937,5 @@ mod tests {
         let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
         let mut client = Gmail::with_endpoints(test_creds(false), dead_url, &fake.token_url);
         assert!(client.find_sent("<msg@example.com>").is_err());
-    }
-}
-
-impl crate::mail_transport::MailTransport for Gmail {
-    /// Whether the OAuth session is authorized to send. Inputs: none
-    /// (`&self`). Output: `bool` — delegates to [`Gmail::can_send`].
-    fn can_send(&self) -> bool {
-        Gmail::can_send(self)
-    }
-    /// Fetch the mailbox profile. Inputs: none (`&mut self`). Output:
-    /// `Result<Profile>` — delegates to [`Gmail::profile`].
-    fn profile(&mut self) -> anyhow::Result<Profile> {
-        Gmail::profile(self)
-    }
-    /// List messages matching a query. Inputs: `query`, `page`. Output:
-    /// `Result<MessagePage>` — delegates to [`Gmail::list`].
-    fn list(&mut self, query: &str, page: Option<&str>) -> anyhow::Result<MessagePage> {
-        Gmail::list(self, query, page)
-    }
-    /// Incremental history since a cursor. Inputs: `start`, `page`. Output:
-    /// `Result<HistoryResult>` — delegates to [`Gmail::history`].
-    fn history(&mut self, start: &str, page: Option<&str>) -> anyhow::Result<HistoryResult> {
-        Gmail::history(self, start, page)
-    }
-    /// Send one reply. Inputs: `raw`, `thread_id`. Output:
-    /// `Result<String, SendFailure>` — delegates to [`Gmail::send`].
-    fn send(&mut self, raw: &str, thread_id: &str) -> Result<String, SendFailure> {
-        Gmail::send(self, raw, thread_id)
     }
 }
