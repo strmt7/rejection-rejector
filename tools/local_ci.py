@@ -80,7 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     if all(results):
-        print("ALL GATES GREEN")
+        if args.fast:
+            print(
+                "ALL GATES GREEN (FAST MODE: `cargo test` SKIPPED — "
+                "run `python tools/local_ci.py` without --fast before committing)"
+            )
+        else:
+            print("ALL GATES GREEN")
         return 0
     print(f"GATES RED: {results.count(False)} failing")
     return 1
