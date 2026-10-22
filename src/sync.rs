@@ -295,6 +295,50 @@ mod tests {
         assert!(charge_sync_budget(&mut pages, &mut identities, 0).is_err());
     }
 
+    /// Provider whose history is always expired, forcing the full-sync fallback.
+    struct ExpiredHistory {
+        list_calls: usize,
+    }
+    impl Provider for ExpiredHistory {
+        fn profile(&mut self) -> Result<Profile> {
+            Ok(Profile {
+                email_address: "me@example.com".into(),
+                history_id: "20".into(),
+            })
+        }
+        fn list(&mut self, _: &str, _: Option<&str>) -> Result<MessagePage> {
+            self.list_calls += 1;
+            Ok(MessagePage {
+                messages: vec![MessageRef {
+                    id: "a".into(),
+                    thread_id: "t".into(),
+                }],
+                next_page_token: None,
+            })
+        }
+        fn history(&mut self, _: &str, _: Option<&str>) -> Result<HistoryResult> {
+            Ok(HistoryResult::Expired)
+        }
+    }
+
+    #[test]
+    fn expired_history_falls_back_to_full_sync() {
+        // Covers the HistoryResult::Expired arm: the incremental sync must fall
+        // back to full_sync and still insert the recovered identities.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut f = ExpiredHistory { list_calls: 0 };
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        let n = synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap();
+        assert_eq!(
+            n, 1,
+            "the full-sync fallback must insert the recovered identity"
+        );
+        assert!(f.list_calls >= 1, "full_sync must have listed messages");
+        assert_eq!(db.counts("me@example.com").unwrap().stored, 1);
+    }
+
     #[test]
     fn failed_pagination_never_advances_cursor_and_replay_deduplicates() {
         let d = tempfile::tempdir().unwrap();
