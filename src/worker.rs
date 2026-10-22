@@ -1016,6 +1016,97 @@ fn handle_api_write(
                 outcome
             }
         },
+        WriteRequest::CheckNow => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Checking the mailbox for missing messages…",
+            );
+            let result = e.synchronize();
+            let inserted = result.as_ref().copied().unwrap_or(0);
+            let mut outcome = report_write(e, context, kind, result.map(|_| ()));
+            outcome.merge_payload(json!({ "new_identities": inserted }));
+            outcome
+        }
+        WriteRequest::Qualify { verifier } => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Running a local model smoke test and checking GPU residency…",
+            );
+            let result = e.qualify().and_then(|()| {
+                if *verifier {
+                    e.qualify_verifier()
+                } else {
+                    Ok(())
+                }
+            });
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::ConnectAppPassword { creds } => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Connecting the mailbox with the app password…",
+            );
+            let result = e.connect_app_password(creds.clone());
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Disconnect => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Disconnecting the mailbox…",
+            );
+            let result = e.disconnect();
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::IntegrityCheck => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Checking encrypted database integrity…",
+            );
+            let result = e.db.integrity_check();
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Compact => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Checkpointing, compacting and verifying encrypted SQLite state…",
+            );
+            let result = e.compact_database().map(|_| ());
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Backup { out } => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Creating and verifying encrypted same-vault backup…",
+            );
+            let result =
+                crate::recovery::create_backup(&e.db, &e.directory, std::path::Path::new(out))
+                    .map(|_| ());
+            report_write(e, context, kind, result)
+        }
+        WriteRequest::Purge => {
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Purging records past the retention window…",
+            );
+            let result = e.db.purge(e.settings.retention_days).map(|_| ());
+            report_write(e, context, kind, result)
+        }
     }
 }
 
@@ -2145,10 +2236,18 @@ mod tests {
             "/v1/commands/send",
             "/v1/commands/update-settings",
             "/v1/commands/automatic-arm",
+            "/v1/commands/check-now",
+            "/v1/commands/qualify",
+            "/v1/commands/connect-app-password",
+            "/v1/commands/disconnect",
+            "/v1/commands/integrity-check",
+            "/v1/commands/compact",
+            "/v1/commands/backup",
+            "/v1/commands/purge",
         ] {
             assert!(paths.contains_key(expected), "OpenAPI missing {expected}");
         }
-        assert_eq!(paths.len(), 22);
+        assert_eq!(paths.len(), 30);
         assert_eq!(spec["openapi"], "3.1.0");
     }
 

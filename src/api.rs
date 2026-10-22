@@ -622,6 +622,39 @@ pub fn start(
 }
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn openapi_documents_every_write_route() {
+        // The pinned contract must document exactly the state-changing surface
+        // the router accepts, including the operational commands.
+        let doc: serde_json::Value =
+            serde_json::from_str(OPENAPI_DOCUMENT).expect("openapi parses");
+        let paths = doc["paths"].as_object().expect("paths object");
+        for route in [
+            crate::web::EDIT_DRAFT_ROUTE,
+            crate::web::REGENERATE_ROUTE,
+            crate::web::DISMISS_ROW_ROUTE,
+            crate::web::SEND_ROUTE,
+            crate::web::UPDATE_SETTINGS_ROUTE,
+            crate::web::AUTOMATIC_ARM_ROUTE,
+            crate::web::CHECK_NOW_ROUTE,
+            crate::web::QUALIFY_ROUTE,
+            crate::web::CONNECT_APP_PASSWORD_ROUTE,
+            crate::web::DISCONNECT_ROUTE,
+            crate::web::INTEGRITY_CHECK_ROUTE,
+            crate::web::COMPACT_ROUTE,
+            crate::web::BACKUP_ROUTE,
+            crate::web::PURGE_ROUTE,
+        ] {
+            let entry = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from the OpenAPI document"));
+            assert!(
+                entry.get("post").is_some(),
+                "{route} must document its POST operation"
+            );
+        }
+    }
     // Uncovered-by-design lines here carry no product signal: the
     // `_ => panic!(...)` arms of the scripted worker dispatchers fire only
     // when the code under test sends a command the scenario does not

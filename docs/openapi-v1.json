@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Rejection Rejector Local Integration API",
-    "version": "1.16.0",
+    "version": "1.17.0",
     "description": "Authenticated, loopback-only local API and embedded web interface. Browser Origin requests are refused except same-origin writes from the embedded page, responses are no-store, every response carries X-Request-ID, X-RR-API-Contract-SHA256 and a strict Content-Security-Policy, direct liveness distinguishes API-thread availability from state-worker responsiveness, worker operations expose a local correlation UUID, errors use stable machine-readable codes, privacy-safe operational metrics are available as both JSON and standards-compliant OpenMetrics 1.0 text, and the local listener enforces a bounded pre-authentication token bucket. Read endpoints stay read-only; the operator web UI issues state-changing commands through the bearer-protected /v1/commands/* channel, which enforces the same server-side gates as the desktop and terminal interfaces (shared send gate, confirm-exact-reply payload matching, cooldown-gated Automatic arming) under a fixed request-body cap."
   },
   "servers": [
@@ -1093,6 +1093,58 @@
             ]
           }
         }
+      },
+      "EmptyCommandRequest": {
+        "type": "object",
+        "description": "No parameters; send an empty JSON object.",
+        "additionalProperties": false
+      },
+      "QualifyRequest": {
+        "type": "object",
+        "description": "Qualification options.",
+        "properties": {
+          "verifier": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also qualify the optional independent verifier model."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectAppPasswordRequest": {
+        "type": "object",
+        "description": "Mailbox credentials. The app password is never logged or echoed in any response.",
+        "required": [
+          "email",
+          "app_password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Full mailbox address."
+          },
+          "app_password": {
+            "type": "string",
+            "format": "password",
+            "writeOnly": true,
+            "description": "Google app password (16 characters; spaces are ignored)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupRequest": {
+        "type": "object",
+        "description": "Backup destination.",
+        "required": [
+          "out"
+        ],
+        "properties": {
+          "out": {
+            "type": "string",
+            "description": "Destination directory; must not already exist."
+          }
+        },
+        "additionalProperties": false
       }
     },
     "headers": {
@@ -2374,6 +2426,510 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AutomaticArmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/check-now": {
+      "post": {
+        "summary": "Synchronize the mailbox once",
+        "description": "Runs one mailbox synchronization tick exactly like the scheduled worker check: fetches messages inside the configured age window and queues them for analysis. Returns the number of new identities inserted. Sending is never performed by this command.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/qualify": {
+      "post": {
+        "summary": "Run the task-qualification pipeline and pin the model",
+        "description": "Runs the full classify/draft/verify smoke test against the configured local model and, when it passes, pins its digest. With verifier=true the optional independent verifier model is qualified as well. Analysis and unattended dispatch stay blocked until a qualification passes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QualifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/connect-app-password": {
+      "post": {
+        "summary": "Connect a mailbox with a Gmail app password",
+        "description": "Connects the mailbox over IMAP/SMTP with the submitted address and Google app password. The secret is held only in memory and the encrypted vault (never logged, never echoed). Sending remains disabled until separately enabled in settings.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectAppPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/disconnect": {
+      "post": {
+        "summary": "Disconnect the mailbox and drop its credentials",
+        "description": "Removes the stored mailbox credentials from the encrypted vault and clears the in-memory transport. Delivery settings are disarmed as part of the switch.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/integrity-check": {
+      "post": {
+        "summary": "Verify encrypted-database integrity",
+        "description": "Runs the SQLite integrity check and authenticated vault verification without modifying state.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/compact": {
+      "post": {
+        "summary": "Checkpoint, compact and re-verify the workspace",
+        "description": "Checkpoints the WAL, VACUUMs the encrypted database and re-verifies the vault marker, returning the compaction report in the response payload.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyCommandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/backup": {
+      "post": {
+        "summary": "Create a checksum-bound same-vault backup",
+        "description": "Creates and verifies an encrypted same-vault backup at the requested directory. Existing destinations are never overwritten.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command accepted and executed; the typed operation status is included",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "X-RR-API-Contract-SHA256": {
+                "$ref": "#/components/headers/ContractFingerprint"
+              },
+              "X-RR-Build-Identity-SHA256": {
+                "$ref": "#/components/headers/BuildIdentityFingerprint"
+              },
+              "Content-Security-Policy": {
+                "$ref": "#/components/headers/ContentSecurityPolicy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/components/responses/WriteConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/commands/purge": {
+      "post": {
+        "summary": "Purge records past the retention window",
+        "description": "Deletes retained records older than the configured retention window. Never touches delivery records needed for at-most-once guarantees.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyCommandRequest"
               }
             }
           }

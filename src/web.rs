@@ -59,6 +59,22 @@ pub const SEND_ROUTE: &str = "/v1/commands/send";
 pub const UPDATE_SETTINGS_ROUTE: &str = "/v1/commands/update-settings";
 /// Write route: drive the cooldown-gated Automatic-mode arming flow.
 pub const AUTOMATIC_ARM_ROUTE: &str = "/v1/commands/automatic-arm";
+/// State-changing route: synchronize the mailbox once (`Command::CheckNow`).
+pub const CHECK_NOW_ROUTE: &str = "/v1/commands/check-now";
+/// State-changing route: run the qualification pipeline and pin the model.
+pub const QUALIFY_ROUTE: &str = "/v1/commands/qualify";
+/// State-changing route: connect a mailbox via Gmail app password.
+pub const CONNECT_APP_PASSWORD_ROUTE: &str = "/v1/commands/connect-app-password";
+/// State-changing route: disconnect the mailbox and drop its credentials.
+pub const DISCONNECT_ROUTE: &str = "/v1/commands/disconnect";
+/// State-changing route: verify encrypted-database integrity.
+pub const INTEGRITY_CHECK_ROUTE: &str = "/v1/commands/integrity-check";
+/// State-changing route: checkpoint, compact and re-verify the workspace database.
+pub const COMPACT_ROUTE: &str = "/v1/commands/compact";
+/// State-changing route: create a checksum-bound same-vault backup.
+pub const BACKUP_ROUTE: &str = "/v1/commands/backup";
+/// State-changing route: purge retained records past the policy window.
+pub const PURGE_ROUTE: &str = "/v1/commands/purge";
 
 /// Stable machine-readable error code: the request body or JSON shape was rejected.
 pub const CODE_INVALID_REQUEST: &str = "invalid_request";
@@ -193,6 +209,35 @@ pub enum WriteRequest {
         /// Which arm step to perform.
         action: AutomaticArmAction,
     },
+    /// Synchronize the mailbox once (`Command::CheckNow`).
+    CheckNow,
+    /// Run the task-qualification pipeline and pin the model.
+    Qualify {
+        /// Also qualify the optional independent verifier model.
+        verifier: bool,
+    },
+    /// Connect a mailbox via Gmail app password (`Command::ConnectAppPassword`).
+    ///
+    /// Carries [`crate::mail_transport::AppPasswordCredentials`], whose `Debug`
+    /// is hand-redacted and which zeroizes on drop — so a derived `Debug` on
+    /// this enum can never print the app password.
+    ConnectAppPassword {
+        /// Mailbox address and app password (redacting carrier).
+        creds: crate::mail_transport::AppPasswordCredentials,
+    },
+    /// Disconnect the mailbox and drop its credentials (`Command::Disconnect`).
+    Disconnect,
+    /// Verify encrypted-database integrity (`Command::IntegrityCheck`).
+    IntegrityCheck,
+    /// Checkpoint, compact and re-verify the workspace (`Command::CompactDatabase`).
+    Compact,
+    /// Create a checksum-bound same-vault backup (`Command::Backup`).
+    Backup {
+        /// Destination directory; must not already exist.
+        out: String,
+    },
+    /// Purge retained records past the policy window (`Command::Purge`).
+    Purge,
 }
 
 impl WriteRequest {
@@ -209,6 +254,14 @@ impl WriteRequest {
             Self::UpdateSettings { .. } | Self::AutomaticArm { .. } => {
                 OperationKind::UpdateSettings
             }
+            Self::CheckNow => OperationKind::SyncMailbox,
+            Self::Qualify { .. } => OperationKind::QualifyModel,
+            Self::ConnectAppPassword { .. } => OperationKind::ConnectGmail,
+            Self::Disconnect => OperationKind::DisconnectGmail,
+            Self::IntegrityCheck => OperationKind::IntegrityCheck,
+            Self::Compact => OperationKind::CompactDatabase,
+            Self::Backup { .. } => OperationKind::Backup,
+            Self::Purge => OperationKind::PurgeRetention,
         }
     }
 }
@@ -380,6 +433,14 @@ enum WriteRoute {
     Send,
     UpdateSettings,
     AutomaticArm,
+    CheckNow,
+    Qualify,
+    ConnectAppPassword,
+    Disconnect,
+    IntegrityCheck,
+    Compact,
+    Backup,
+    Purge,
 }
 
 /// Classify a request path as one of the state-changing write routes.
@@ -395,6 +456,14 @@ fn classify_write_route(route: &str) -> Option<WriteRoute> {
         SEND_ROUTE => Some(WriteRoute::Send),
         UPDATE_SETTINGS_ROUTE => Some(WriteRoute::UpdateSettings),
         AUTOMATIC_ARM_ROUTE => Some(WriteRoute::AutomaticArm),
+        CHECK_NOW_ROUTE => Some(WriteRoute::CheckNow),
+        QUALIFY_ROUTE => Some(WriteRoute::Qualify),
+        CONNECT_APP_PASSWORD_ROUTE => Some(WriteRoute::ConnectAppPassword),
+        DISCONNECT_ROUTE => Some(WriteRoute::Disconnect),
+        INTEGRITY_CHECK_ROUTE => Some(WriteRoute::IntegrityCheck),
+        COMPACT_ROUTE => Some(WriteRoute::Compact),
+        BACKUP_ROUTE => Some(WriteRoute::Backup),
+        PURGE_ROUTE => Some(WriteRoute::Purge),
         _ => None,
     }
 }
@@ -444,6 +513,27 @@ struct UpdateSettingsPayload {
 #[serde(deny_unknown_fields)]
 struct AutomaticArmPayload {
     action: AutomaticArmAction,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualifyPayload {
+    /// Also qualify the optional independent verifier model.
+    verifier: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectAppPasswordPayload {
+    email: String,
+    app_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BackupPayload {
+    /// Destination directory; must not already exist.
+    out: String,
 }
 
 /// Parse one state-changing request body into a typed [`WriteRequest`].
@@ -519,6 +609,39 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
                 serde_json::from_slice(body).map_err(|_| invalid())?;
             Ok(WriteRequest::AutomaticArm {
                 action: payload.action,
+            })
+        }
+        WriteRoute::CheckNow => Ok(WriteRequest::CheckNow),
+        WriteRoute::Disconnect => Ok(WriteRequest::Disconnect),
+        WriteRoute::IntegrityCheck => Ok(WriteRequest::IntegrityCheck),
+        WriteRoute::Compact => Ok(WriteRequest::Compact),
+        WriteRoute::Purge => Ok(WriteRequest::Purge),
+        WriteRoute::Qualify => {
+            let payload: QualifyPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            Ok(WriteRequest::Qualify {
+                verifier: payload.verifier.unwrap_or(false),
+            })
+        }
+        WriteRoute::ConnectAppPassword => {
+            let payload: ConnectAppPasswordPayload =
+                serde_json::from_slice(body).map_err(|_| invalid())?;
+            if payload.email.trim().is_empty() || payload.app_password.trim().is_empty() {
+                return Err(invalid());
+            }
+            Ok(WriteRequest::ConnectAppPassword {
+                creds: crate::mail_transport::AppPasswordCredentials::new(
+                    payload.email.trim(),
+                    payload.app_password,
+                ),
+            })
+        }
+        WriteRoute::Backup => {
+            let payload: BackupPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            if payload.out.trim().is_empty() {
+                return Err(invalid());
+            }
+            Ok(WriteRequest::Backup {
+                out: payload.out.trim().to_owned(),
             })
         }
     }
@@ -790,6 +913,134 @@ pub fn merge_settings(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn operational_write_routes_are_registered_and_parse() {
+        // Every operational route must classify as a write route and parse its
+        // payload; malformed or empty-required fields must fail closed.
+        for route in [
+            CHECK_NOW_ROUTE,
+            QUALIFY_ROUTE,
+            CONNECT_APP_PASSWORD_ROUTE,
+            DISCONNECT_ROUTE,
+            INTEGRITY_CHECK_ROUTE,
+            COMPACT_ROUTE,
+            BACKUP_ROUTE,
+            PURGE_ROUTE,
+        ] {
+            assert!(is_write_route(route), "{route} must be a write route");
+        }
+        assert_eq!(
+            parse_write_request(CHECK_NOW_ROUTE, b"{}").unwrap(),
+            WriteRequest::CheckNow
+        );
+        assert_eq!(
+            parse_write_request(DISCONNECT_ROUTE, b"{}").unwrap(),
+            WriteRequest::Disconnect
+        );
+        assert_eq!(
+            parse_write_request(INTEGRITY_CHECK_ROUTE, b"{}").unwrap(),
+            WriteRequest::IntegrityCheck
+        );
+        assert_eq!(
+            parse_write_request(COMPACT_ROUTE, b"{}").unwrap(),
+            WriteRequest::Compact
+        );
+        assert_eq!(
+            parse_write_request(PURGE_ROUTE, b"{}").unwrap(),
+            WriteRequest::Purge
+        );
+        assert_eq!(
+            parse_write_request(QUALIFY_ROUTE, b"{}").unwrap(),
+            WriteRequest::Qualify { verifier: false }
+        );
+        assert_eq!(
+            parse_write_request(QUALIFY_ROUTE, b"{\"verifier\": true}").unwrap(),
+            WriteRequest::Qualify { verifier: true }
+        );
+        assert_eq!(
+            parse_write_request(BACKUP_ROUTE, b"{\"out\": \"C:/tmp/bk\"}").unwrap(),
+            WriteRequest::Backup {
+                out: "C:/tmp/bk".to_owned()
+            }
+        );
+        // Empty required fields and malformed bodies are refused.
+        assert!(parse_write_request(QUALIFY_ROUTE, b"not json").is_err());
+        assert!(parse_write_request(BACKUP_ROUTE, b"{\"out\": \"\"}").is_err());
+        assert!(parse_write_request(BACKUP_ROUTE, b"{}").is_err());
+        assert!(
+            parse_write_request(
+                CONNECT_APP_PASSWORD_ROUTE,
+                b"{\"email\": \"a@b.com\", \"app_password\": \"\"}"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_write_request(
+                CONNECT_APP_PASSWORD_ROUTE,
+                b"{\"email\": \"a@b.com\", \"app_password\": \"abcdefghijklmnop\", \"extra\": 1}"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn connect_app_password_parses_and_redacts_the_secret() {
+        let request = parse_write_request(
+            CONNECT_APP_PASSWORD_ROUTE,
+            b"{\"email\": \"user@example.com\", \"app_password\": \"abcdefghijklmnop\"}",
+        )
+        .expect("valid credentials parse");
+        // The redacting carrier keeps the secret out of every Debug render of
+        // the request enum (WriteRequest derives Debug).
+        let rendered = format!("{request:?}");
+        assert!(
+            !rendered.contains("abcdefghijklmnop"),
+            "Debug must never reveal the app password: {rendered}"
+        );
+        assert!(rendered.contains("user@example.com"));
+        match request {
+            WriteRequest::ConnectAppPassword { creds } => {
+                assert_eq!(creds.email, "user@example.com");
+                assert_eq!(creds.password(), "abcdefghijklmnop");
+            }
+            other => panic!("expected ConnectAppPassword, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operational_requests_map_to_stable_operation_kinds() {
+        // The journal must see the same operation kinds as the interactive
+        // commands these routes mirror.
+        assert_eq!(
+            WriteRequest::CheckNow.operation_kind(),
+            OperationKind::SyncMailbox
+        );
+        assert_eq!(
+            WriteRequest::Qualify { verifier: false }.operation_kind(),
+            OperationKind::QualifyModel
+        );
+        assert_eq!(
+            WriteRequest::Disconnect.operation_kind(),
+            OperationKind::DisconnectGmail
+        );
+        assert_eq!(
+            WriteRequest::IntegrityCheck.operation_kind(),
+            OperationKind::IntegrityCheck
+        );
+        assert_eq!(
+            WriteRequest::Compact.operation_kind(),
+            OperationKind::CompactDatabase
+        );
+        assert_eq!(
+            WriteRequest::Backup { out: "x".into() }.operation_kind(),
+            OperationKind::Backup
+        );
+        assert_eq!(
+            WriteRequest::Purge.operation_kind(),
+            OperationKind::PurgeRetention
+        );
+    }
     use super::*;
     use crate::types::{Draft, JobState};
 
