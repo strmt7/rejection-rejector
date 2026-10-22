@@ -630,6 +630,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn case_tag_critical_negative_fails_closed_on_the_right_tags() {
+        // Critical-negative tags must be flagged true (they fail closed).
+        for tag in [
+            CaseTag::Interview,
+            CaseTag::Offer,
+            CaseTag::RecruiterCorrection,
+            CaseTag::QuotedHistory,
+            CaseTag::PromptInjection,
+            CaseTag::Ambiguous,
+            CaseTag::Assessment,
+            CaseTag::TalentPool,
+            CaseTag::RoleClosure,
+            CaseTag::ApplicationActionRequired,
+        ] {
+            assert!(
+                tag.critical_negative(),
+                "{tag:?} should be critical-negative"
+            );
+        }
+        // Ordinary outcome tags must be flagged false.
+        for tag in [
+            CaseTag::Multilingual,
+            CaseTag::AtsAutomation,
+            CaseTag::PendingStatus,
+            CaseTag::Survey,
+        ] {
+            assert!(
+                !tag.critical_negative(),
+                "{tag:?} should NOT be critical-negative"
+            );
+        }
+    }
+
+    #[test]
     fn decision_categories_are_closed() {
         for (name, expected) in [
             ("rejection", Category::Rejection),

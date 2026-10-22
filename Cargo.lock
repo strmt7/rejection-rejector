@@ -4289,7 +4289,6 @@ dependencies = [
  "lettre",
  "lingua",
  "mailparse",
- "native-tls",
  "nom 7.1.3",
  "rand",
  "ratatui",
