@@ -52,12 +52,43 @@ def run(name: str, cmd: list[str], env: dict | None = None) -> bool:
     return ok
 
 
+
+def check_credential_store() -> None:
+    """Warn when leaked test credentials are filling the Windows credential store.
+
+    Why: integration tests mint one OS credential per temporary workspace, and
+    any test that panics before its cleanup guard runs leaks that entry. The
+    Windows store has a quota; once full, every later credential write fails
+    (error 8) and unrelated OS-anchor tests go red for an environmental reason.
+
+    Inputs: none. Output: none — prints a warning when the count is high; it
+    never deletes credentials (a real vault key is indistinguishable from a
+    leaked test key, so cleanup stays a deliberate operator action).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        out = subprocess.run(["cmdkey", "/list"], capture_output=True, text=True).stdout
+    except OSError:
+        return
+    n = sum(1 for line in out.splitlines() if "rejection-rejector" in line.lower())
+    if n >= 100:
+        print(
+            f"== credential store: WARNING — {n} 'rejection-rejector' entries. "
+            "Leaked test keys can fill the Windows quota and fail unrelated tests. "
+            "Purge stale ones with: cmdkey /delete:<target> (only rejection-rejector targets)."
+        )
+    else:
+        print(f"== credential store: {n} 'rejection-rejector' entries (ok)")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Input: optional argv. Output: 0 when all gates green."""
     parser = argparse.ArgumentParser(description="Run the exact CI gates locally")
     parser.add_argument("--fast", action="store_true", help="Skip the full Rust test suite")
     args = parser.parse_args(argv)
 
+    check_credential_store()
     results = [run(name, cmd) for name, cmd in GATES]
     # Rustdoc gate: deny warnings so doc-link regressions (e.g. public docs
     # linking a private item) fail here, not only in the deep-verification
