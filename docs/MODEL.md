@@ -1,6 +1,6 @@
 # Model selection and 16 GiB qualification
 
-Default candidate for new workspaces: **`qwen3.5:9b-q8_0`** in Ollama, 8,192 context
+Default candidate for new workspaces: **`qwen3.5:9b-q8_0`** in Ollama, 8,192 context. **Important (2026-10-22):** `qwen3.5:9b-q8_0` and `qwen3.5:9b` fail the self-verification qualification gate (`professional`, `injection_free`); `maternion/mimo-v2.6:9b-instruct-q8_0` passes verification but mis-classifies a clear rejection. **`granite4.2:8b-q8_0` is verified to pass the full gate** (correct `rejection` classification + all five verification checks) after the `genuine_rejection`/`claims_supported` disambiguation — recommend qualifying it. It is also the default verifier, so for independent verification pick a different verifier from the curated list.
 tokens, one request and one loaded model at a time.
 
 Terms used on this page: **context** is the maximum text (measured in tokens) a model
