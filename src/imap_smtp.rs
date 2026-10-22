@@ -558,6 +558,20 @@ mod tests {
     }
 
     #[test]
+    fn imap_smtp_constructs_and_exposes_its_identity_and_defaults() {
+        // why: the constructor, identity accessor and endpoint defaults are the
+        // seam the engine relies on; regressions here break the app-password path.
+        let creds = AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop");
+        let imap = ImapSmtp::new(creds, ImapSmtpConfig::default());
+        assert_eq!(imap.email(), "user@example.com");
+        let cfg = ImapSmtpConfig::default();
+        assert_eq!(cfg.imap_host, "imap.gmail.com");
+        assert_eq!(cfg.imap_port, 993);
+        assert_eq!(cfg.smtp_host, "smtp.gmail.com");
+        assert_eq!(cfg.smtp_port, 587);
+    }
+
+    #[test]
     fn email_from_rfc822_parses_fingerprint_fields() {
         // why: the IMAP path must populate the same fields the Gmail path feeds
         // into Email::fingerprint (from/reply-to/subject/text/received_at/
