@@ -120,16 +120,18 @@ fn serve_fake_ollama(mode: &'static str) -> String {
             let body = match (request.url(), mode) {
                 ("/api/version", _) => r#"{"version":"0.40.2"}"#.to_string(),
                 ("/api/tags", "no-model") => r#"{"models":[]}"#.to_string(),
-                ("/api/tags", _) => {
-                    r#"{"models":[{"name":"qwen3.5:9b-q8_0","digest":"sha256:0123456789abcdef","size":6000000000}]}"#.to_string()
-                }
+                ("/api/tags", _) => format!(
+                    r#"{{"models":[{{"name":"{model}","digest":"sha256:0123456789abcdef","size":6000000000}}]}}"#,
+                    model = rejection_rejector::config::DEFAULT_MODEL
+                ),
                 ("/api/show", _) => {
                     r#"{"details":{"format":"gguf"},"model_info":{"general.architecture":"qwen3"},"capabilities":["completion"]}"#.to_string()
                 }
                 ("/api/ps", "not-loaded") => r#"{"models":[]}"#.to_string(),
-                ("/api/ps", _) => {
-                    r#"{"models":[{"name":"qwen3.5:9b-q8_0","digest":"sha256:0123456789abcdef","size":6000000000,"size_vram":6000000000,"context_length":32768}]}"#.to_string()
-                }
+                ("/api/ps", _) => format!(
+                    r#"{{"models":[{{"name":"{model}","digest":"sha256:0123456789abcdef","size":6000000000,"size_vram":6000000000,"context_length":32768}}]}}"#,
+                    model = rejection_rejector::config::DEFAULT_MODEL
+                ),
                 _ => "{}".to_string(),
             };
             let _ = request.respond(tiny_http::Response::from_string(body));

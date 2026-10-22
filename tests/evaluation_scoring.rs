@@ -423,7 +423,7 @@ fn multilingual_rate(summary: &Value, which: &str) -> f64 {
 /// from-scratch recomputation picks from the same candidate records.
 #[test]
 fn compare_installed_skips_absent_models_and_recommends_only_the_eligible_maximum() {
-    let installed = [DEFAULT_MODEL, "granite4.2:8b-q8_0"];
+    let installed = ["qwen3.5:9b-q8_0", "granite4.2:8b-q8_0"];
     let fake = Fake::new(&installed);
     let settings = fake.settings();
     let dir = tempfile::tempdir().unwrap();
