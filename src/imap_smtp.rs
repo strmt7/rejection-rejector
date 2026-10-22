@@ -56,6 +56,10 @@ pub struct ImapSmtpConfig {
     pub smtp_host: String,
     /// SMTP send port (default `587`, SMTP STARTTLS).
     pub smtp_port: u16,
+    /// Whether the SMTP transport must negotiate TLS (`relay`). Default `true`
+    /// (Gmail). `false` selects a plaintext transport for protocol-level tests
+    /// against a local SMTP double; production never sets it.
+    pub smtp_secure: bool,
 }
 
 impl Default for ImapSmtpConfig {
@@ -67,6 +71,7 @@ impl Default for ImapSmtpConfig {
             imap_secure: true,
             smtp_host: "smtp.gmail.com".to_owned(),
             smtp_port: 587,
+            smtp_secure: true,
         }
     }
 }
@@ -486,13 +491,19 @@ impl MailTransport for ImapSmtp {
 
         // A relay/build failure means nothing left the box (NotAccepted); a
         // transport error is Uncertain (it may or may not have been sent).
-        let mailer = SmtpTransport::relay(&self.config.smtp_host)
-            .map_err(|e| {
+        // TLS-required relay in production; a plaintext transport only for
+        // protocol tests against a local SMTP double (`smtp_secure: false`).
+        let builder = if self.config.smtp_secure {
+            SmtpTransport::relay(&self.config.smtp_host).map_err(|e| {
                 fail(
                     SendFailureKind::NotAccepted,
                     format!("SMTP relay unavailable: {e}"),
                 )
             })?
+        } else {
+            SmtpTransport::builder_dangerous(&self.config.smtp_host)
+        };
+        let mailer = builder
             .port(self.config.smtp_port)
             .credentials(SmtpCredentials::new(
                 self.creds.email.clone(),
@@ -684,9 +695,193 @@ mod tests {
         assert_eq!(safe_search_token("a\nb"), None);
     }
 
+    // ---- Minimal plain-TCP SMTP double for send-path transport tests ----
+
+    /// Captured SMTP exchange: envelope + DATA payload.
+    #[derive(Default)]
+    struct SmtpCapture {
+        mail_from: String,
+        rcpt_to: Vec<String>,
+        data: String,
+        dialog: Vec<String>,
+    }
+
+    /// Speaks just enough SMTP (greet, EHLO, AUTH, MAIL, RCPT, DATA, QUIT) to
+    /// exercise the real lettre transport stack over plaintext. When `reject`
+    /// is set it refuses the envelope with 550 so failure mapping is testable.
+    struct FakeSmtp {
+        port: u16,
+        capture: Arc<Mutex<SmtpCapture>>,
+    }
+
+    impl FakeSmtp {
+        fn start(reject: bool) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake smtp");
+            let port = listener.local_addr().expect("addr").port();
+            let capture: Arc<Mutex<SmtpCapture>> = Arc::new(Mutex::new(SmtpCapture::default()));
+            let seen = capture.clone();
+            thread::spawn(move || {
+                for sock in listener.incoming() {
+                    let Ok(mut sock) = sock else { break };
+                    let mut out = seen.lock().expect("capture");
+                    *out = SmtpCapture::default();
+                    if sock.write_all(b"220 fake ESMTP ready\r\n").is_err() {
+                        continue;
+                    }
+                    let mut buf: Vec<u8> = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    let mut in_data = false;
+                    loop {
+                        let line = loop {
+                            if let Some(pos) = buf.windows(2).position(|w| w == b"\r\n") {
+                                let raw: Vec<u8> = buf.drain(..pos + 2).collect();
+                                break Some(
+                                    String::from_utf8_lossy(&raw[..raw.len() - 2]).to_string(),
+                                );
+                            }
+                            match sock.read(&mut tmp) {
+                                // EOF is distinct from an empty line: DATA
+                                // payloads legitimately contain blank lines.
+                                Ok(0) | Err(_) => break None,
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                            }
+                        };
+                        let Some(line) = line else { break };
+                        out.dialog.push(format!("C: {line}"));
+                        if in_data {
+                            if line == "." {
+                                in_data = false;
+                                if !sock.write_all(b"250 2.0.0 queued\r\n").is_ok() {
+                                    break;
+                                }
+                            } else {
+                                out.data.push_str(&line);
+                                out.data.push_str("\r\n");
+                            }
+                            continue;
+                        }
+                        let upper = line.to_uppercase();
+                        if upper.starts_with("EHLO") {
+                            let _ = sock.write_all(b"250-fake\r\n250 AUTH PLAIN LOGIN\r\n");
+                        } else if upper.starts_with("AUTH") {
+                            // Single-line AUTH PLAIN, or LOGIN's challenge steps.
+                            if upper.starts_with("AUTH LOGIN") && !line.contains(' ') {
+                                let _ = sock.write_all(b"334 VXNlcm5hbWU6\r\n");
+                            } else if line.starts_with("AUTH LOGIN") {
+                                let _ = sock.write_all(b"334 UGFzc3dvcmQ6\r\n");
+                            } else {
+                                let _ = sock.write_all(b"235 2.7.0 ok\r\n");
+                            }
+                        } else if upper.starts_with("MAIL FROM") {
+                            out.mail_from = line.clone();
+                            if reject {
+                                let _ = sock.write_all(b"550 5.1.0 refused\r\n");
+                            } else {
+                                let _ = sock.write_all(b"250 2.1.0 ok\r\n");
+                            }
+                        } else if upper.starts_with("RCPT TO") {
+                            out.rcpt_to.push(line.clone());
+                            let _ = sock.write_all(b"250 2.1.5 ok\r\n");
+                        } else if upper.starts_with("DATA") {
+                            in_data = true;
+                            let _ = sock.write_all(b"354 go\r\n");
+                        } else if upper.starts_with("QUIT") {
+                            let _ = sock.write_all(b"221 bye\r\n");
+                            break;
+                        } else {
+                            let _ = sock.write_all(b"250 ok\r\n");
+                        }
+                    }
+                }
+            });
+            Self { port, capture }
+        }
+
+        fn client(&self) -> ImapSmtp {
+            ImapSmtp::new(
+                AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+                ImapSmtpConfig {
+                    smtp_host: "127.0.0.1".to_owned(),
+                    smtp_port: self.port,
+                    smtp_secure: false,
+                    ..ImapSmtpConfig::default()
+                },
+            )
+        }
+
+        fn captured(&self) -> SmtpCapture {
+            let c = self.capture.lock().expect("capture");
+            SmtpCapture {
+                mail_from: c.mail_from.clone(),
+                rcpt_to: c.rcpt_to.clone(),
+                data: c.data.clone(),
+                dialog: c.dialog.clone(),
+            }
+        }
+    }
+
+    fn sample_reply_mime() -> String {
+        "From: user@example.com\r\nTo: recruiter@corp.com\r\nSubject: Re: Application\r\nIn-Reply-To: <orig@corp.com>\r\nReferences: <orig@corp.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nYour process was unfair."
+            .to_owned()
+    }
+
+    #[test]
+    fn smtp_send_delivers_the_exact_envelope_and_payload() {
+        // The send path is the only side-effecting transport: the double must
+        // observe the account as sender, the recruiter as the sole recipient,
+        // and the threading headers + body intact in DATA.
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        let raw = b64(&sample_reply_mime());
+        let id = match MailTransport::send(&mut client, &raw, "orig@corp.com") {
+            Ok(id) => id,
+            Err(e) => panic!("send failed: {e:?} dialog={:?}", fake.captured().dialog),
+        };
+        assert_eq!(id, "smtp-accepted");
+        let seen = fake.captured();
+        assert!(
+            seen.mail_from.to_lowercase().contains("user@example.com"),
+            "envelope sender must be the account: {}",
+            seen.mail_from
+        );
+        assert_eq!(seen.rcpt_to.len(), 1, "exactly one recipient");
+        assert!(
+            seen.rcpt_to[0]
+                .to_lowercase()
+                .contains("recruiter@corp.com")
+        );
+        assert!(
+            seen.data.contains("In-Reply-To: <orig@corp.com>"),
+            "threading lost"
+        );
+        assert!(
+            seen.data.contains("References: <orig@corp.com>"),
+            "threading lost"
+        );
+        assert!(seen.data.contains("Your process was unfair."), "body lost");
+    }
+
+    #[test]
+    fn smtp_send_maps_a_rejected_envelope_to_uncertain() {
+        // A server-side refusal is a transport error: the message may or may
+        // not have been processed, so the failure must be Uncertain (durable
+        // at-most-once records) rather than NotAccepted.
+        let fake = FakeSmtp::start(true);
+        let mut client = fake.client();
+        let raw = b64(&sample_reply_mime());
+        let error = MailTransport::send(&mut client, &raw, "orig@corp.com").unwrap_err();
+        assert_eq!(error.kind, SendFailureKind::Uncertain, "{error:?}");
+        assert!(
+            error.message.contains("SMTP send failed"),
+            "{}",
+            error.message
+        );
+    }
+
     // ---- Minimal plain-TCP IMAP double for protocol-level transport tests ----
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     /// Speaks just enough IMAP (greeting, LOGIN, SELECT, SEARCH, UID FETCH,
