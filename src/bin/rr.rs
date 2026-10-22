@@ -135,6 +135,35 @@ enum Action {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Run the task-qualification pipeline and pin the passing model.
+    ///
+    /// This is the scripted equivalent of the desktop Local AI "Qualify & pin"
+    /// action; analysis and unattended dispatch stay blocked until it passes.
+    Qualify {
+        /// Also qualify the optional independent verifier model.
+        #[arg(long)]
+        verifier: bool,
+    },
+    /// Update local settings and print the effective result as JSON.
+    ///
+    /// Inputs: only the flags provided change; omitted fields keep their current
+    /// values. Delivery state is never modified by this command.
+    Configure {
+        /// Email age window in days (1/3/7/14/28).
+        #[arg(long)]
+        lookback_days: Option<u8>,
+        /// Background check interval in hours (1/2/4/8/24).
+        #[arg(long)]
+        poll_hours: Option<u8>,
+        /// Local Ollama chat model tag.
+        #[arg(long)]
+        model: Option<String>,
+        /// Reply signature block.
+        #[arg(long)]
+        signature: Option<String>,
+    },
+    /// Synchronize the connected mailbox once and print the count of new identities.
+    Sync,
     /// Verify the active encrypted database structure and authenticated vault marker.
     Integrity,
     /// Checkpoint, VACUUM, optimize and re-verify the encrypted SQLite workspace.
@@ -705,6 +734,58 @@ fn main() -> Result<()> {
                 "Local model runtime profile written to",
                 &out,
             )?;
+        }
+        Action::Qualify { verifier } => {
+            let dir = resolve_dir(&args.data_dir)?;
+            let mut e = open_engine(dir, false, true)?;
+            e.qualify()?;
+            if verifier {
+                e.qualify_verifier()?;
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "qualified": true,
+                    "model": e.settings.model,
+                    "verifier_qualified": verifier,
+                }))?
+            );
+        }
+        Action::Configure {
+            lookback_days,
+            poll_hours,
+            model,
+            signature,
+        } => {
+            let dir = resolve_dir(&args.data_dir)?;
+            let mut e = open_engine(dir, false, true)?;
+            let mut settings = e.settings.clone();
+            if let Some(days) = lookback_days {
+                settings.lookback_days = days;
+            }
+            if let Some(hours) = poll_hours {
+                settings.poll_hours = hours;
+            }
+            if let Some(m) = model {
+                settings.model = m;
+            }
+            if let Some(sig) = signature {
+                settings.signature = sig;
+            }
+            e.update_settings(settings)?;
+            println!("{}", serde_json::to_string_pretty(&e.settings)?);
+        }
+        Action::Sync => {
+            let dir = resolve_dir(&args.data_dir)?;
+            let mut e = open_engine(dir, false, true)?;
+            let inserted = e.synchronize()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "synchronized": true,
+                    "new_identities": inserted,
+                }))?
+            );
         }
         Action::CompareModels { out } => {
             let dir = resolve_dir(&args.data_dir)?;
