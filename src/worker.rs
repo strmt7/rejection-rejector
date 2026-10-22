@@ -2679,8 +2679,10 @@ mod tests {
                 assert_eq!(s.items.len(), 3);
                 break s.items[0].id.clone();
             }
+            // Slow CI runners (2-vCPU Windows hosts under full-suite load)
+            // can need well over 10s to start; the budget only catches hangs.
             assert!(
-                start.elapsed() < Duration::from_secs(10),
+                start.elapsed() < Duration::from_secs(60),
                 "Worker did not initialize"
             );
             std::thread::sleep(Duration::from_millis(10));
@@ -2695,7 +2697,7 @@ mod tests {
                 break;
             }
             assert!(
-                start.elapsed() < Duration::from_secs(10),
+                start.elapsed() < Duration::from_secs(60),
                 "Worker did not publish selection"
             );
             std::thread::sleep(Duration::from_millis(10));

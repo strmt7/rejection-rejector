@@ -712,6 +712,18 @@ mod tests {
     struct FakeSmtp {
         port: u16,
         capture: Arc<Mutex<SmtpCapture>>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl Drop for FakeSmtp {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     impl FakeSmtp {
@@ -720,9 +732,19 @@ mod tests {
             let port = listener.local_addr().expect("addr").port();
             let capture: Arc<Mutex<SmtpCapture>> = Arc::new(Mutex::new(SmtpCapture::default()));
             let seen = capture.clone();
-            thread::spawn(move || {
-                for sock in listener.incoming() {
-                    let Ok(mut sock) = sock else { break };
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = stop.clone();
+            let handle = thread::spawn(move || {
+                loop {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        break;
+                    };
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
                     let mut out = seen.lock().expect("capture");
                     *out = SmtpCapture::default();
                     if sock.write_all(b"220 fake ESMTP ready\r\n").is_err() {
@@ -794,7 +816,12 @@ mod tests {
                     }
                 }
             });
-            Self { port, capture }
+            Self {
+                port,
+                capture,
+                stop,
+                handle: Some(handle),
+            }
         }
 
         fn client(&self) -> ImapSmtp {
@@ -891,6 +918,26 @@ mod tests {
     /// deliberately far from sequence numbers so a seq/uid mix-up is unmistakable.
     struct FakeImap {
         port: u16,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl FakeImap {
+        /// Unblock `accept`, end the serve loop and reap the thread so no test
+        /// leaves a listener or thread behind (long suites would leak both).
+        fn shutdown(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    impl Drop for FakeImap {
+        fn drop(&mut self) {
+            self.shutdown();
+        }
     }
 
     /// Whether a UID set spec (`a`, `a:b`, `a:*`, comma-separated) covers `uid`.
@@ -999,10 +1046,21 @@ mod tests {
         fn start(messages: Vec<(u32, String)>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake imap");
             let port = listener.local_addr().expect("addr").port();
-            thread::spawn(move || {
-                // Every transport call opens a fresh connection, so serve them all.
-                for sock in listener.incoming() {
-                    let Ok(mut sock) = sock else { break };
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = stop.clone();
+            let handle = thread::spawn(move || {
+                // Every transport call opens a fresh connection, so serve them
+                // all until shutdown() pokes the listener.
+                loop {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok((mut sock, _)) = listener.accept() else {
+                        break;
+                    };
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
                     let _ = sock.write_all(b"* OK [CAPABILITY IMAP4rev1] fake ready\r\n");
                     let mut buf: Vec<u8> = Vec::new();
                     while let Some(line) = read_command(&mut sock, &mut buf) {
@@ -1070,7 +1128,11 @@ mod tests {
                     }
                 }
             });
-            Self { port }
+            Self {
+                port,
+                stop,
+                handle: Some(handle),
+            }
         }
 
         fn client(&self) -> ImapSmtp {
