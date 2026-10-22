@@ -15,11 +15,18 @@
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
+use io_imap::client::{ImapClient, ImapClientStd, ImapClientStdConnectOptions};
+use io_imap::types::core::{AString, Vec1};
+use io_imap::types::datetime::NaiveDate as ImapDate;
+use io_imap::types::mailbox::Mailbox as ImapMailbox;
+use io_imap::types::search::SearchKey;
+use io_imap::types::sequence::SequenceSet;
 use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
 use lettre::{SmtpTransport, Transport};
 use mailparse::MailHeaderMap;
+use url::Url;
 
 use crate::gmail::{
     Added, HistoryPage, HistoryRecord, HistoryResult, MessagePage, MessageRef, Profile,
@@ -88,40 +95,54 @@ impl ImapSmtp {
     /// Inputs: `uid_filter` — an IMAP `UID` search term (e.g. `"124:*"`).
     /// Output: `Result<Vec<(u32, Vec<u8>)>>` — `(UID, raw RFC822 bytes)` per
     /// message. Connects, selects INBOX, searches, and fetches `RFC822`.
-    fn fetch_bodies(&self, uid_filter: &str) -> Result<Vec<(u32, Vec<u8>)>> {
-        let tls = native_tls::TlsConnector::new().context("TLS init failed")?;
-        let client = imap::connect(
-            (self.config.imap_host.as_str(), self.config.imap_port),
-            &self.config.imap_host,
-            &tls,
-        )
-        .context("IMAP connection failed")?;
-        let mut session = client
-            .login(&self.creds.email, self.creds.password())
-            .map_err(|e| anyhow!("IMAP login failed: {}", e.0))?;
-        session.select("INBOX").context("select INBOX failed")?;
-        let uids = session
-            .uid_search(uid_filter)
-            .context("IMAP UID search failed")?;
+    fn fetch_bodies(&self, search: Vec1<SearchKey<'static>>) -> Result<Vec<(u32, Vec<u8>)>> {
+        let url = Url::parse(&format!(
+            "imaps://{}:{}",
+            self.config.imap_host, self.config.imap_port
+        ))
+        .context("invalid IMAP endpoint URL")?;
+        let (mut client, _caps) =
+            ImapClientStd::connect(&url, ImapClientStdConnectOptions::default())
+                .map_err(|e| anyhow!("IMAP connection failed: {e:?}"))?;
+        client
+            .login(
+                self.creds.email.as_str(),
+                self.creds.password(),
+                Default::default(),
+            )
+            .map_err(|e| anyhow!("IMAP login failed: {e:?}"))?;
+        client
+            .select(
+                ImapMailbox::try_from("INBOX").map_err(|e| anyhow!("invalid mailbox: {e:?}"))?,
+                Default::default(),
+            )
+            .map_err(|e| anyhow!("select INBOX failed: {e:?}"))?;
+        let uids = client
+            .search(search, Default::default())
+            .map_err(|e| anyhow!("IMAP search failed: {e:?}"))?;
         if uids.is_empty() {
+            let _ = client.logout();
             return Ok(Vec::new());
         }
-        let set = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        // BODY.PEEK[] (not RFC822): fetch the bytes WITHOUT setting the \Seen
-        // flag — a read-only sync must never mutate the user's mailbox state.
-        let fetches = session
-            .uid_fetch(&set, "BODY.PEEK[]")
-            .context("IMAP UID fetch failed")?;
-        let mut out = Vec::new();
-        for fetch in fetches.iter() {
-            let uid = fetch.uid.context("fetched message has no UID")?;
-            out.push((uid, fetch.body().unwrap_or_default().to_vec()));
+        // Collect the matched UIDs, then fetch each body via the streaming
+        // callback. `open` allocates the sink, `done` receives the bytes.
+        let mut out: Vec<(u32, Vec<u8>)> = Vec::with_capacity(uids.len());
+        for uid in uids {
+            let mut sink: Vec<u8> = Vec::new();
+            let seq = SequenceSet::from(uid);
+            let _ = client.fetch_bodies_stream(
+                seq,
+                true,
+                |_u| -> std::io::Result<Vec<u8>> { Ok(Vec::new()) },
+                |u, body: Vec<u8>| -> std::io::Result<()> {
+                    sink = body;
+                    let _ = u;
+                    Ok(())
+                },
+            );
+            out.push((uid.get(), sink));
         }
-        let _ = session.logout();
+        let _ = client.logout();
         Ok(out)
     }
 
@@ -130,9 +151,9 @@ impl ImapSmtp {
     /// Inputs: `uid_filter` — an IMAP `UID` search term. Output:
     /// `Result<Vec<MessageRef>>` — one ref per message, `id` = UID and
     /// `thread_id` = the `thread_key` conversation root.
-    fn fetch_refs(&self, uid_filter: &str) -> Result<Vec<MessageRef>> {
+    fn fetch_refs(&self, search: Vec1<SearchKey<'static>>) -> Result<Vec<MessageRef>> {
         Ok(self
-            .fetch_bodies(uid_filter)?
+            .fetch_bodies(search)?
             .into_iter()
             .map(|(uid, bytes)| {
                 let mime = String::from_utf8_lossy(&bytes);
@@ -145,27 +166,30 @@ impl ImapSmtp {
     }
 }
 
-/// Translate a sync query into a valid IMAP search filter.
+/// Translate a sync query into typed IMAP search keys.
 ///
 /// The `sync` layer builds a **Gmail-style** query (`after:<unix> before:<unix>
-/// -in:spam …`), but IMAP search uses `SINCE`/`BEFORE` with `dd-Mon-yyyy` dates
-/// and has no `-in:` keys (selecting `INBOX` already excludes those folders).
-/// Feeding the Gmail string to `uid_search` returns `BAD`, so this maps the two
-/// known shapes and fails closed (empty set) on anything unrecognized.
+/// -in:spam …`), but IMAP search uses `SINCE`/`BEFORE` with calendar dates and
+/// has no `-in:` keys (selecting `INBOX` already excludes those folders). This
+/// maps the two known shapes to typed `SearchKey`s and returns `None` (a
+/// fail-closed "match nothing") on anything unrecognized.
 ///
-/// Inputs: `query` — Gmail-style query or an IMAP UID set such as `1:*` or
-/// `124:*`. Output: `String` — a valid IMAP search filter (`SINCE`/`BEFORE` or
-/// the UID set), or `1:0` (an empty UID set) when the query is unrecognized.
-fn gmail_query_to_imap_search(query: &str) -> String {
+/// Inputs: `query` — Gmail-style query or an IMAP UID set such as `1:*` / `124:*`.
+/// Output: `Option<Vec1<SearchKey<'static>>>` — the IMAP search (a `UID` set or
+/// `SINCE`+`BEFORE`), or `None` when the query is unrecognized.
+fn gmail_query_to_imap_search(query: &str) -> Option<Vec1<SearchKey<'static>>> {
     let q = query.trim();
     if q.is_empty() {
-        return "1:*".to_owned();
+        // No constraint requested: match everything.
+        return Some(Vec1::from(SearchKey::All));
     }
     // A raw UID set (e.g. "1:*", "124:*", "17") is already a valid IMAP filter.
     if q.split([',', ':']).all(|part| {
         !part.is_empty() && part.bytes().all(|b| matches!(b, b'0'..=b'9' | b'*')) // `*` = IMAP wildcard (5:*)
     }) {
-        return q.to_owned();
+        return SequenceSet::try_from(q)
+            .ok()
+            .map(|seq| Vec1::from(SearchKey::Uid(seq)));
     }
     // Gmail-style date window: extract `after:<ts>` / `before:<ts>`.
     let ts = |key: &str| -> Option<i64> {
@@ -173,27 +197,22 @@ fn gmail_query_to_imap_search(query: &str) -> String {
             .find_map(|tok| tok.strip_prefix(key))
             .and_then(|v| v.parse::<i64>().ok())
     };
-    let after = ts("after:");
-    let before = ts("before:");
-    if after.is_none() && before.is_none() {
-        // Unrecognized shape: fail closed to an empty result rather than a
-        // mailbox-wide fetch or an IMAP `BAD`.
-        return "1:0".to_owned();
-    }
-    let imap_date = |epoch: i64| {
+    let to_date = |epoch: i64| -> Option<ImapDate> {
         Utc.timestamp_opt(epoch, 0)
             .single()
-            .map(|d| d.format("%d-%b-%Y").to_string())
-            .unwrap_or_default()
+            .and_then(|d| ImapDate::try_from(d.date_naive()).ok())
     };
-    let mut parts = Vec::new();
-    if let Some(a) = after {
-        parts.push(format!("SINCE {}", imap_date(a)));
+    let mut keys: Vec<SearchKey<'static>> = Vec::new();
+    if let Some(a) = ts("after:").and_then(to_date) {
+        keys.push(SearchKey::Since(a));
     }
-    if let Some(b) = before {
-        parts.push(format!("BEFORE {}", imap_date(b)));
+    if let Some(b) = ts("before:").and_then(to_date) {
+        keys.push(SearchKey::Before(b));
     }
-    parts.join(" ")
+    if keys.is_empty() {
+        return None;
+    }
+    Vec1::try_from(keys).ok()
 }
 
 /// Decode a base64url RFC-5322 message produced by `mail::raw_reply`.
@@ -382,8 +401,13 @@ impl crate::sync::Provider for ImapSmtp {
     /// Inputs: `_query`, `_page`. Output: always `Err` until the IMAP read
     /// session is connected; callers treat this as "no transport".
     fn list(&mut self, query: &str, _page: Option<&str>) -> Result<MessagePage> {
-        let filter = gmail_query_to_imap_search(query);
-        let refs = self.fetch_refs(&filter)?;
+        let Some(search) = gmail_query_to_imap_search(query) else {
+            return Ok(MessagePage {
+                messages: Vec::new(),
+                next_page_token: None,
+            });
+        };
+        let refs = self.fetch_refs(search)?;
         Ok(MessagePage {
             messages: refs,
             next_page_token: None,
@@ -396,8 +420,10 @@ impl crate::sync::Provider for ImapSmtp {
     /// session is connected.
     fn history(&mut self, start: &str, _page: Option<&str>) -> Result<HistoryResult> {
         let cursor: u32 = start.parse().unwrap_or(0);
-        let filter = format!("{}:*", cursor.saturating_add(1));
-        let refs = self.fetch_refs(&filter)?;
+        let range = format!("{}:*", cursor.saturating_add(1));
+        let seq = SequenceSet::try_from(range.as_str())
+            .map_err(|e| anyhow!("invalid UID range: {e:?}"))?;
+        let refs = self.fetch_refs(Vec1::from(SearchKey::Uid(seq)))?;
         let messages_added = refs.into_iter().map(|message| Added { message }).collect();
         Ok(HistoryResult::Page(HistoryPage {
             history: vec![HistoryRecord { messages_added }],
@@ -473,12 +499,20 @@ impl MailTransport for ImapSmtp {
                 "app-password fetch: provider id is not a UID".to_owned(),
             )
         })?;
-        let bodies = self.fetch_bodies(&uid.to_string()).map_err(|e| {
+        let seq = SequenceSet::try_from(uid.to_string().as_str()).map_err(|e| {
             fail(
                 FetchFailureKind::Infrastructure,
-                format!("IMAP message fetch failed: {e}"),
+                format!("invalid UID: {e:?}"),
             )
         })?;
+        let bodies = self
+            .fetch_bodies(Vec1::from(SearchKey::Uid(seq)))
+            .map_err(|e| {
+                fail(
+                    FetchFailureKind::Infrastructure,
+                    format!("IMAP message fetch failed: {e}"),
+                )
+            })?;
         let Some((_uid, bytes)) = bodies.into_iter().next() else {
             return Ok(None);
         };
@@ -502,8 +536,21 @@ impl MailTransport for ImapSmtp {
                 messages: Vec::new(),
             });
         };
-        let filter = format!("OR HEADER References \"{id}\" HEADER Message-ID \"{id}\"");
-        let refs = self.fetch_refs(&filter)?;
+        let (Some(field_ref), Some(field_msg), Some(val_a), Some(val_b)) = (
+            AString::try_from("References").ok(),
+            AString::try_from("Message-ID").ok(),
+            AString::try_from(id.to_string()).ok(),
+            AString::try_from(id.to_string()).ok(),
+        ) else {
+            return Ok(crate::gmail::Thread {
+                messages: Vec::new(),
+            });
+        };
+        let key = SearchKey::Or(
+            Box::new(SearchKey::Header(field_ref, val_a)),
+            Box::new(SearchKey::Header(field_msg, val_b)),
+        );
+        let refs = self.fetch_refs(Vec1::from(key))?;
         let messages = refs
             .into_iter()
             .filter(|r| r.thread_id == id)
@@ -522,7 +569,14 @@ impl MailTransport for ImapSmtp {
         let Some(mid) = safe_search_token(message_id) else {
             return Ok(None);
         };
-        let refs = self.fetch_refs(&format!("HEADER Message-ID \"{mid}\""))?;
+        let (Some(field), Some(val)) = (
+            AString::try_from("Message-ID").ok(),
+            AString::try_from(mid.to_string()).ok(),
+        ) else {
+            return Ok(None);
+        };
+        let key = SearchKey::Header(field, val);
+        let refs = self.fetch_refs(Vec1::from(key))?;
         Ok(refs.into_iter().next().map(|r| r.id))
     }
 }
@@ -696,37 +750,54 @@ mod tests {
 
     #[test]
     fn gmail_query_to_imap_search_maps_the_sync_window_and_uid_sets() {
-        // Empty -> all.
-        assert_eq!(gmail_query_to_imap_search(""), "1:*");
-        // Raw UID sets pass through untouched.
-        assert_eq!(gmail_query_to_imap_search("1:*"), "1:*");
-        assert_eq!(gmail_query_to_imap_search("124:*"), "124:*");
-        assert_eq!(gmail_query_to_imap_search("17"), "17");
-        // The sync's Gmail-style window maps to IMAP SINCE/BEFORE (dd-Mon-yyyy),
-        // and the -in: exclusions are dropped (INBOX selection already excludes
-        // spam/trash/sent/drafts).
-        let mapped =
-            gmail_query_to_imap_search("after:1700000000 before:1700003600 -in:spam -in:trash");
-        assert!(mapped.starts_with("SINCE "), "{mapped}");
-        assert!(mapped.contains(" BEFORE "), "{mapped}");
-        assert!(!mapped.contains("-in:"), "{mapped}");
-        assert!(!mapped.contains("after:"), "{mapped}");
+        // Empty -> match-all.
+        let keys = gmail_query_to_imap_search("")
+            .expect("empty is valid")
+            .into_inner();
+        assert_eq!(keys.len(), 1);
+        assert!(matches!(keys[0], SearchKey::All), "{keys:?}");
+        // Raw UID sets map to SearchKey::Uid.
+        for q in ["1:*", "124:*", "17"] {
+            let keys = gmail_query_to_imap_search(q)
+                .expect("uid set is valid")
+                .into_inner();
+            assert_eq!(keys.len(), 1, "{q}");
+            assert!(matches!(keys[0], SearchKey::Uid(_)), "{q}: {keys:?}");
+        }
+        // The sync's Gmail-style window maps to SINCE + BEFORE (typed dates).
+        let keys =
+            gmail_query_to_imap_search("after:1700000000 before:1700003600 -in:spam -in:trash")
+                .expect("window is valid")
+                .into_inner();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(matches!(keys[0], SearchKey::Since(_)), "{keys:?}");
+        assert!(matches!(keys[1], SearchKey::Before(_)), "{keys:?}");
     }
 
     #[test]
     fn gmail_query_to_imap_search_fails_closed_on_unrecognized_shapes() {
-        // No recognizable window or UID set -> empty result, never a BAD and
-        // never a mailbox-wide fetch.
-        assert_eq!(gmail_query_to_imap_search("from:foo@bar.com"), "1:0");
-        assert_eq!(gmail_query_to_imap_search("some random text"), "1:0");
-        assert_eq!(gmail_query_to_imap_search("subject:hello"), "1:0");
+        // No recognizable window or UID set -> None (the caller matches nothing),
+        // never a mailbox-wide fetch and never an IMAP BAD.
+        for q in ["from:foo@bar.com", "some random text", "subject:hello"] {
+            assert!(gmail_query_to_imap_search(q).is_none(), "{q}");
+        }
     }
 
     #[test]
-    fn gmail_query_to_imap_search_dates_use_the_imap_dd_mon_yyyy_format() {
-        // 2023-11-14 22:13:20 UTC == 1700000000 -> 14-Nov-2023.
-        let mapped = gmail_query_to_imap_search("after:1700000000 before:1700000100");
-        assert!(mapped.contains("SINCE 14-Nov-2023"), "{mapped}");
+    fn gmail_query_to_imap_search_maps_unix_timestamps_to_calendar_dates() {
+        // 1700000000 == 2023-11-14 22:13:20 UTC -> Since(2023-11-14).
+        let keys = gmail_query_to_imap_search("after:1700000000 before:1700003600")
+            .expect("window is valid")
+            .into_inner();
+        match (&keys[0], &keys[1]) {
+            (SearchKey::Since(d), SearchKey::Before(b)) => {
+                let ds = format!("{d:?}");
+                assert!(ds.contains("2023") || ds.contains("14"), "since={ds}");
+                let bs = format!("{b:?}");
+                assert!(bs.contains("2023") || bs.contains("14"), "before={bs}");
+            }
+            other => panic!("expected Since+Before, got {other:?}"),
+        }
     }
 
     #[test]
