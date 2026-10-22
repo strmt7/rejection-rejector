@@ -392,7 +392,11 @@ impl crate::sync::Provider for ImapSmtp {
         // cursor semantics are UID-based and normalized in history().
         Ok(Profile {
             email_address: self.creds.email.clone(),
-            history_id: String::new(),
+            // IMAP has no Gmail history id; the sync cursor is the highest UID
+            // consumed. "0" is the sentinel baseline meaning "start from the
+            // beginning", and it is non-empty so full_sync's baseline check
+            // passes (an empty baseline is rejected as "Missing Gmail baseline").
+            history_id: "0".to_owned(),
         })
     }
 
@@ -424,11 +428,18 @@ impl crate::sync::Provider for ImapSmtp {
         let seq = SequenceSet::try_from(range.as_str())
             .map_err(|e| anyhow!("invalid UID range: {e:?}"))?;
         let refs = self.fetch_refs(Vec1::from(SearchKey::Uid(seq)))?;
+        // Advance the cursor to the highest UID consumed so the next poll only
+        // fetches newer messages; an empty page keeps the previous cursor.
+        let max_uid = refs
+            .iter()
+            .filter_map(|m| m.id.parse::<u32>().ok())
+            .max()
+            .unwrap_or(cursor);
         let messages_added = refs.into_iter().map(|message| Added { message }).collect();
         Ok(HistoryResult::Page(HistoryPage {
             history: vec![HistoryRecord { messages_added }],
             next_page_token: None,
-            history_id: String::new(),
+            history_id: max_uid.to_string(),
         }))
     }
 }
@@ -657,6 +668,21 @@ mod tests {
         assert_eq!(safe_search_token("a\\\\b"), None);
         assert_eq!(safe_search_token("a\rb"), None);
         assert_eq!(safe_search_token("a\nb"), None);
+    }
+
+    #[test]
+    fn imap_profile_exposes_a_non_empty_uid_baseline() {
+        // Regression: full_sync rejects an empty baseline ("Missing Gmail
+        // baseline"), so the app-password provider must expose a non-empty sync
+        // cursor or the incremental sync can never start.
+        let creds = AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop");
+        let mut imap = ImapSmtp::new(creds, ImapSmtpConfig::default());
+        let profile = crate::sync::Provider::profile(&mut imap).unwrap();
+        assert_eq!(profile.email_address, "user@example.com");
+        assert!(
+            !profile.history_id.is_empty(),
+            "the IMAP sync baseline must be non-empty"
+        );
     }
 
     #[test]
