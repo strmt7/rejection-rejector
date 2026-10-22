@@ -630,6 +630,89 @@ mod tests {
     use super::*;
 
     #[test]
+    fn validate_probabilities_accepts_a_well_formed_answer() {
+        let mut probabilities = BTreeMap::new();
+        probabilities.insert("rejection".to_owned(), 0.70);
+        probabilities.insert("opportunity".to_owned(), 0.10);
+        probabilities.insert("other".to_owned(), 0.10);
+        probabilities.insert("uncertain".to_owned(), 0.10);
+        let answer = DecisionAnswer {
+            choice: "rejection".to_owned(),
+            probabilities,
+            confidence: Some(0.7),
+        };
+        assert!(validate_probabilities(&answer).is_ok());
+        // Confidence may be omitted entirely.
+        let answer = DecisionAnswer {
+            choice: "rejection".to_owned(),
+            probabilities: answer.probabilities.clone(),
+            confidence: None,
+        };
+        assert!(validate_probabilities(&answer).is_ok());
+    }
+
+    #[test]
+    fn validate_probabilities_rejects_malformed_answers() {
+        let base = |pairs: &[(&str, f64)], confidence: Option<f64>| DecisionAnswer {
+            choice: "rejection".to_owned(),
+            probabilities: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), *v))
+                .collect::<BTreeMap<_, _>>(),
+            confidence,
+        };
+        let good = [
+            ("rejection", 0.70),
+            ("opportunity", 0.10),
+            ("other", 0.10),
+            ("uncertain", 0.10),
+        ];
+        // Missing a category -> Err (and wrong cardinality).
+        assert!(validate_probabilities(&base(&good[..3], None)).is_err());
+        // Out-of-range probability -> Err.
+        let mut oor = good;
+        oor[0].1 = 1.5;
+        assert!(validate_probabilities(&base(&oor, None)).is_err());
+        // NaN probability -> Err.
+        let mut nan = good;
+        nan[0].1 = f64::NAN;
+        assert!(validate_probabilities(&base(&nan, None)).is_err());
+        // Probabilities that do not sum to ~1 -> Err.
+        let mut skewed = good;
+        skewed[0].1 = 0.20;
+        assert!(validate_probabilities(&base(&skewed, None)).is_err());
+        // Invalid confidence -> Err.
+        assert!(validate_probabilities(&base(&good, Some(1.5))).is_err());
+        assert!(validate_probabilities(&base(&good, Some(f64::NAN))).is_err());
+    }
+
+    #[test]
+    fn ratio_guards_the_zero_denominator() {
+        assert_eq!(ratio(3, 4), Some(0.75));
+        assert_eq!(ratio(0, 4), Some(0.0));
+        assert_eq!(ratio(5, 0), None, "zero denominator must be None");
+    }
+
+    #[test]
+    fn category_key_round_trips_with_category() {
+        for cat in [
+            Category::Rejection,
+            Category::Opportunity,
+            Category::Other,
+            Category::Uncertain,
+        ] {
+            let key = category_key(cat);
+            assert_eq!(category(key).expect("key is a valid category"), cat);
+        }
+    }
+
+    #[test]
+    fn bundled_decision_fixtures_parse() {
+        let cases = fixtures().expect("bundled classification.json must parse");
+        assert!(!cases.is_empty(), "the decision corpus must not be empty");
+    }
+
+    #[test]
     fn case_tag_critical_negative_fails_closed_on_the_right_tags() {
         // Critical-negative tags must be flagged true (they fail closed).
         for tag in [
