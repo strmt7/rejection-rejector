@@ -7,8 +7,8 @@ use std::path::PathBuf;
 pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
 pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
 pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
-pub const DEFAULT_MODEL: &str = "qwen3.5:9b-q8_0";
-pub const DEFAULT_VERIFIER_MODEL: &str = "granite4.2:8b-q8_0";
+pub const DEFAULT_MODEL: &str = "granite4.2:8b-q8_0";
+pub const DEFAULT_VERIFIER_MODEL: &str = "qwen3.5:4b";
 pub const DECISION_MODEL_CANDIDATES: [(&str, &str); 3] = [
     (
         "Nimble 9B Q8 · typed classification R&D default",
@@ -34,13 +34,13 @@ pub const MIN_OLLAMA_VERSION: (u32, u32, u32) = (0, 35, 1);
 /// Curated challengers for this application's text-classification/drafting task.
 /// They are not ranked until evaluated locally on the task-specific suite.
 pub const MODEL_CANDIDATES: [(&str, &str); 8] = [
-    ("Qwen3.5 9B Q8 · provisional default", "qwen3.5:9b-q8_0"),
+    ("Qwen3.5 9B Q8 · fails self-verification", "qwen3.5:9b-q8_0"),
     (
         "MiMo V2.6 Distill 9B Q8 · agentic-distill challenger",
         "maternion/mimo-v2.6:9b-instruct-q8_0",
     ),
     (
-        "Granite 4.2 8B Q8 · classification/JSON challenger",
+        "Granite 4.2 8B Q8 · default (verified)",
         "granite4.2:8b-q8_0",
     ),
     (

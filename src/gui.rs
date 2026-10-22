@@ -724,7 +724,7 @@ impl App {
         );
         Self::card(ui, |ui| {
             ui.heading("16 GiB GPU profile");
-            ui.label("Provisional default: qwen3.5:9b-q8_0 · validate against the task suite before Automatic mode");
+            ui.label("Default: granite4.2:8b-q8_0 (verified) · validate against the task suite before Automatic mode");
             ui.label(RichText::new("A model's download size does not prove it fits in VRAM. Qualification checks Ollama's loaded-model counters and pins the digest.").color(MUTED));
             egui::Grid::new("ai_status")
                 .num_columns(2)
@@ -3649,7 +3649,7 @@ mod render_tests {
 
         // Quick choices set the model tag directly.
         h.draw(&s);
-        h.click(&s, "Qwen3.5 9B Q8 · provisional default");
+        h.click(&s, "Qwen3.5 9B Q8 · fails self-verification");
         assert_eq!(h.app.settings.model, "qwen3.5:9b-q8_0");
     }
 
@@ -3698,7 +3698,7 @@ mod render_tests {
         );
         h.app.settings.model = "other:tag".into();
         h.draw(&s);
-        h.click(&s, "Qwen3.5 9B Q8 · provisional default");
+        h.click(&s, "Qwen3.5 9B Q8 · fails self-verification");
         assert_eq!(
             h.app.settings.model, "other:tag",
             "disallowed quick choice is inert"
