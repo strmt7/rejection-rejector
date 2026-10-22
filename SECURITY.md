@@ -67,6 +67,32 @@ signed-in OS user account, administrator/root malware, a malicious kernel or dri
 physical access to the machine, and memory extraction from a running process. See
 "Residual risks and explicit non-goals" in the threat model.
 
+## Known supply-chain advisories (triaged)
+
+The dependency tree carries the following RustSec advisories. None is a
+remotely-triggerable code-execution bug in this application's own logic; each is
+triaged here with its reachability and remediation so operators can judge the
+residual risk.
+
+- **RUSTSEC-2023-0086 — `lexical-core` 0.7.6 (Unsound)** — reached transitively
+  via `nom` 5 ← `imap` 2 (the IMAP client). The soundness flaws (`assume_init`
+  on uninitialized data, out-of-bounds `BytesIter`) sit in number parsing, so a
+  *malicious IMAP server* could in principle trigger undefined behaviour in the
+  response parser. The app connects only to a trusted provider (Gmail) or the
+  operator's own IMAP host, so practical exposure is low, but the dependency is
+  unsound. **Remediation (planned, verified to build):** replace `imap` 2 with
+  `io-imap` (Pimalaya), which parses via `nom` 7 + `minimal-lexical` and carries
+  no `lexical-core`. `io-imap` compiles with a `nom`-`alloc` feature unification
+  (see the migration note); the swap is an in-progress refactor of
+  `src/imap_smtp.rs`.
+- **RUSTSEC-2026-0370 / -0371 / -0372 — `zvariant` / `zbus_names` /
+  `zvariant_derive` (Unmaintained)** — pulled only by the Linux accessibility
+  stack (`accesskit`→`zbus`); not compiled into the Windows/MSVC target this
+  app ships. No active vulnerability, and the crates are Linux-a11y-only.
+
+These are accepted-by-triage in `deny.toml` and `tools/local_ci.py` with the
+reasons above; re-review whenever the dependency graph changes.
+
 ## Sources (checked 2026-10-12)
 
 - GitHub Docs, "Privately reporting a security vulnerability":
