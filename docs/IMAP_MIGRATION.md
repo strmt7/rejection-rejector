@@ -52,8 +52,12 @@ provider-agnostic in one of two clean ways:
   `after:`/`before:` timestamps) into an IMAP search, failing closed on any
   unrecognized shape.
 
-Until then, do not describe the app-password path as having working incremental
-sync. The parse/send/email()/thread()/find_sent() paths are unaffected (they use
+**Fixed:** `gmail_query_to_imap_search` in `src/imap_smtp.rs` now translates the
+sync's Gmail-style query into a valid IMAP search (`SINCE`/`BEFORE` `dd-Mon-yyyy`),
+passes UID sets through untouched, and fails closed (`1:0`) on unrecognized shapes
+instead of issuing an IMAP `BAD`. `ImapSmtp::list` uses it. Covered by the
+`gmail_query_to_imap_search_*` tests. The structured-bounds refactor of
+`Provider::list` remains the cleaner long-term form if the query shapes grow. The parse/send/email()/thread()/find_sent() paths are unaffected (they use
 UID sets and `HEADER Message-ID`, which map cleanly to `SearchKey::Uid` /
 `SearchKey::Header`).
 

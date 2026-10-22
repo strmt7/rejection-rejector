@@ -13,6 +13,7 @@
 //! transport is host-agnostic.
 
 use anyhow::{Context, Result, anyhow};
+use chrono::{TimeZone, Utc};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, Message};
@@ -142,6 +143,64 @@ impl ImapSmtp {
             })
             .collect())
     }
+}
+
+
+/// Translate a sync query into a valid IMAP search filter.
+///
+/// The `sync` layer builds a **Gmail-style** query (`after:<unix> before:<unix>
+/// -in:spam …`), but IMAP search uses `SINCE`/`BEFORE` with `dd-Mon-yyyy` dates
+/// and has no `-in:` keys (selecting `INBOX` already excludes those folders).
+/// Feeding the Gmail string to `uid_search` returns `BAD`, so this maps the two
+/// known shapes and fails closed (empty set) on anything unrecognized.
+///
+/// Inputs: `query` — Gmail-style query or an IMAP UID set such as `1:*` or
+/// `124:*`. Output: `String` — a valid IMAP search filter (`SINCE`/`BEFORE` or
+/// the UID set), or `1:0` (an empty UID set) when the query is unrecognized.
+fn gmail_query_to_imap_search(query: &str) -> String {
+    let q = query.trim();
+    if q.is_empty() {
+        return "1:*".to_owned();
+    }
+    // A raw UID set (e.g. "1:*", "124:*", "17") is already a valid IMAP filter.
+    if q
+        .split(|c: char| c == ',' || c == ':')
+        .all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b == b'*') // `*` = IMAP wildcard (5:*)
+        })
+    {
+        return q.to_owned();
+    }
+    // Gmail-style date window: extract `after:<ts>` / `before:<ts>`.
+    let ts = |key: &str| -> Option<i64> {
+        q.split_whitespace()
+            .find_map(|tok| tok.strip_prefix(key))
+            .and_then(|v| v.parse::<i64>().ok())
+    };
+    let after = ts("after:");
+    let before = ts("before:");
+    if after.is_none() && before.is_none() {
+        // Unrecognized shape: fail closed to an empty result rather than a
+        // mailbox-wide fetch or an IMAP `BAD`.
+        return "1:0".to_owned();
+    }
+    let imap_date = |epoch: i64| {
+        Utc.timestamp_opt(epoch, 0)
+            .single()
+            .map(|d| d.format("%d-%b-%Y").to_string())
+            .unwrap_or_default()
+    };
+    let mut parts = Vec::new();
+    if let Some(a) = after {
+        parts.push(format!("SINCE {}", imap_date(a)));
+    }
+    if let Some(b) = before {
+        parts.push(format!("BEFORE {}", imap_date(b)));
+    }
+    parts.join(" ")
 }
 
 /// Decode a base64url RFC-5322 message produced by `mail::raw_reply`.
@@ -330,11 +389,7 @@ impl crate::sync::Provider for ImapSmtp {
     /// Inputs: `_query`, `_page`. Output: always `Err` until the IMAP read
     /// session is connected; callers treat this as "no transport".
     fn list(&mut self, query: &str, _page: Option<&str>) -> Result<MessagePage> {
-        let filter = if query.trim().is_empty() {
-            "1:*".to_owned()
-        } else {
-            query.to_owned()
-        };
+        let filter = gmail_query_to_imap_search(query);
         let refs = self.fetch_refs(&filter)?;
         Ok(MessagePage {
             messages: refs,
@@ -644,6 +699,41 @@ mod tests {
         assert_eq!(email.reply_to, None);
         assert!(email.references.is_empty());
         assert_eq!(email.message_id, "<y@co.com>");
+    }
+
+
+    #[test]
+    fn gmail_query_to_imap_search_maps_the_sync_window_and_uid_sets() {
+        // Empty -> all.
+        assert_eq!(gmail_query_to_imap_search(""), "1:*");
+        // Raw UID sets pass through untouched.
+        assert_eq!(gmail_query_to_imap_search("1:*"), "1:*");
+        assert_eq!(gmail_query_to_imap_search("124:*"), "124:*");
+        assert_eq!(gmail_query_to_imap_search("17"), "17");
+        // The sync's Gmail-style window maps to IMAP SINCE/BEFORE (dd-Mon-yyyy),
+        // and the -in: exclusions are dropped (INBOX selection already excludes
+        // spam/trash/sent/drafts).
+        let mapped = gmail_query_to_imap_search("after:1700000000 before:1700003600 -in:spam -in:trash");
+        assert!(mapped.starts_with("SINCE "), "{mapped}");
+        assert!(mapped.contains(" BEFORE "), "{mapped}");
+        assert!(!mapped.contains("-in:"), "{mapped}");
+        assert!(!mapped.contains("after:"), "{mapped}");
+    }
+
+    #[test]
+    fn gmail_query_to_imap_search_fails_closed_on_unrecognized_shapes() {
+        // No recognizable window or UID set -> empty result, never a BAD and
+        // never a mailbox-wide fetch.
+        assert_eq!(gmail_query_to_imap_search("from:foo@bar.com"), "1:0");
+        assert_eq!(gmail_query_to_imap_search("some random text"), "1:0");
+        assert_eq!(gmail_query_to_imap_search("subject:hello"), "1:0");
+    }
+
+    #[test]
+    fn gmail_query_to_imap_search_dates_use_the_imap_dd_mon_yyyy_format() {
+        // 2023-11-14 22:13:20 UTC == 1700000000 -> 14-Nov-2023.
+        let mapped = gmail_query_to_imap_search("after:1700000000 before:1700000100");
+        assert!(mapped.contains("SINCE 14-Nov-2023"), "{mapped}");
     }
 
     #[test]
