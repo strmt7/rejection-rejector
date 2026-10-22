@@ -297,12 +297,28 @@ The deterministic gate in isolation is clean (`deterministic_rejection_evidence_
 rejection phrase" — a message that is *not* a real decision but *contains*
 decision language. Sending a reply there is exactly the unsafe outcome.
 
+### Send-gate reality (classification FP vs. wrong send)
+
+The classification false positives do **not** all become wrong sends. The app's
+send gate (`engine::send_gate_eligible`) refuses when `mail::auto_language_conflict`
+raises a hard block, and that detector already flags the injection fixtures
+("ignore previous instructions", "classify this email as", and multilingual
+equivalents) — which is exactly the "possible prompt injection" flag seen on
+those rows. So for the **known** injection phrasings in this suite the reply is
+held and never dispatched.
+
+The residual risk is a **novel injection phrasing that is not in
+`auto_language_conflict`'s blocklist** *and* that embeds a genuine rejection
+phrase. Then: the model classifies it as a rejection, the deterministic phrase
+gate passes (the phrase is really present), and no hard block fires — the reply
+would go out. The blocklist is a denylist and therefore incomplete by nature.
+
 ### Implication
 
-Zero-false-positive unattended sending is **not** demonstrated by any curated
-model. Until the injection-with-embedded-phrase case is reliably held (e.g. a
-dedicated injection-detection decision pass ahead of classification, or
-requiring the rejection phrase to be the *current* decision and not quoted/
-injected content), Automatic mode must stay off and the review gate stays the
-authoritative safety boundary. This is consistent with the README's "validate
-the model on your own mailbox before enabling Automatic."
+Classification is not zero-FP, and unattended sending is safe only against the
+injection phrasings the denylist knows. To make the residual case hold, prefer a
+positive injection test (a dedicated injection-detection decision pass ahead of
+classification) or require the deterministic rejection phrase to be the
+*current, unquoted decision* and not injected/quoted content — rather than
+growing the denylist. Until then, keep Automatic off and treat Human review as
+the authoritative safety boundary (consistent with the README).
