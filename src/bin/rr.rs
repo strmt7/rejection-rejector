@@ -161,6 +161,12 @@ enum Action {
         /// Reply signature block.
         #[arg(long)]
         signature: Option<String>,
+        /// Enable the authenticated loopback integration API.
+        #[arg(long)]
+        api_enabled: Option<bool>,
+        /// Loopback port for the integration API.
+        #[arg(long)]
+        api_port: Option<u16>,
     },
     /// Synchronize the connected mailbox once and print the count of new identities.
     Sync,
@@ -756,6 +762,8 @@ fn main() -> Result<()> {
             poll_hours,
             model,
             signature,
+            api_enabled,
+            api_port,
         } => {
             let dir = resolve_dir(&args.data_dir)?;
             let mut e = open_engine(dir, false, true)?;
@@ -771,6 +779,12 @@ fn main() -> Result<()> {
             }
             if let Some(sig) = signature {
                 settings.signature = sig;
+            }
+            if let Some(enabled) = api_enabled {
+                settings.api_enabled = enabled;
+            }
+            if let Some(port) = api_port {
+                settings.api_port = port;
             }
             e.update_settings(settings)?;
             println!("{}", serde_json::to_string_pretty(&e.settings)?);
