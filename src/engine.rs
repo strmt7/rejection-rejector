@@ -1187,14 +1187,18 @@ impl Engine {
             .mail
             .as_mut()
             .context("Connect a Gmail account first")?;
-        sync::synchronize(
+        let r = sync::synchronize(
             gmail,
             &mut self.db,
             &self.settings,
             &self.account,
             Utc::now(),
             &self.stop,
-        )
+        );
+        if let Err(e) = &r {
+            eprintln!("[diag] sync error: {e:#}");
+        }
+        r
     }
     /// The most recent successful mailbox poll time.
     ///

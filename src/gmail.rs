@@ -594,12 +594,17 @@ fn parse_raw_message(raw: &RawMessage, stub: &Stub) -> Result<Email> {
 /// Inputs: `id` — candidate identifier. Output: `Ok(())` for well-formed
 /// identifiers; anything else is refused.
 pub fn validate_id(id: &str) -> Result<()> {
+    // Accepts Gmail-style opaque ids AND RFC 5322 Message-IDs (the IMAP thread
+    // key is a Message-ID like `abc@mail.gmail.com`). The charset excludes every
+    // path/query/quote/control character, so provider-path injection and IMAP
+    // search injection remain impossible; `thread()` additionally guards its
+    // search with `safe_search_token`.
     ensure!(
         !id.is_empty()
             && id.len() <= 256
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)),
+            && id.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'@' | b'.' | b'+')
+            }),
         "Invalid provider ID"
     );
     Ok(())
@@ -855,9 +860,20 @@ mod tests {
     }
     #[test]
     fn provider_paths_are_not_injectable() {
-        for s in ["", "../../profile", "a?x=y", "a/b"] {
-            assert!(validate_id(s).is_err());
+        for s in [
+            "",
+            "../../profile",
+            "a?x=y",
+            "a/b",
+            "a\\b",
+            "a\"b",
+            "a\nb",
+            "a b",
+        ] {
+            assert!(validate_id(s).is_err(), "{s:?} must be rejected");
         }
+        // A Message-ID (the IMAP thread key) must be accepted.
+        assert!(validate_id("abc@mail.gmail.com").is_ok());
     }
 
     fn raw_message(id: &str, thread: &str, date: &str, mime: &str) -> RawMessage {
@@ -1248,13 +1264,29 @@ mod tests {
     }
 
     /// Guards provider-id validation at its exact length boundary and charset:
-    /// 256 chars pass, 257 fail, only [A-Za-z0-9_-] are accepted.
+    /// 256 chars pass, 257 fail. Accepted: [A-Za-z0-9_-@.+] (opaque Gmail ids
+    /// and RFC 5322 Message-IDs, the IMAP thread key). Rejected: every
+    /// path/query/quote/control char and all non-ASCII.
     #[test]
     fn provider_id_length_and_charset_boundaries() {
         assert!(validate_id(&"a".repeat(256)).is_ok());
         assert!(validate_id(&"a".repeat(257)).is_err());
         assert!(validate_id("AZaz09-_").is_ok());
-        for bad in ["a.b", "a b", "a/b", "a?b", "ä", "\u{1F600}"] {
+        assert!(
+            validate_id("abc@mail.gmail.com").is_ok(),
+            "Message-IDs are valid thread keys"
+        );
+        assert!(validate_id("a.b+c").is_ok());
+        for bad in [
+            "a b",
+            "a/b",
+            "a?b",
+            "a\\b",
+            "a\"b",
+            "a\nb",
+            "ä",
+            "\u{1F600}",
+        ] {
             assert!(validate_id(bad).is_err(), "{bad:?} must be rejected");
         }
     }
