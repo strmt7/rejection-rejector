@@ -13,8 +13,8 @@
 //! transport is host-agnostic.
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{TimeZone, Utc};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{TimeZone, Utc};
 use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials as SmtpCredentials;
@@ -145,7 +145,6 @@ impl ImapSmtp {
     }
 }
 
-
 /// Translate a sync query into a valid IMAP search filter.
 ///
 /// The `sync` layer builds a **Gmail-style** query (`after:<unix> before:<unix>
@@ -163,15 +162,9 @@ fn gmail_query_to_imap_search(query: &str) -> String {
         return "1:*".to_owned();
     }
     // A raw UID set (e.g. "1:*", "124:*", "17") is already a valid IMAP filter.
-    if q
-        .split(|c: char| c == ',' || c == ':')
-        .all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || b == b'*') // `*` = IMAP wildcard (5:*)
-        })
-    {
+    if q.split([',', ':']).all(|part| {
+        !part.is_empty() && part.bytes().all(|b| matches!(b, b'0'..=b'9' | b'*')) // `*` = IMAP wildcard (5:*)
+    }) {
         return q.to_owned();
     }
     // Gmail-style date window: extract `after:<ts>` / `before:<ts>`.
@@ -701,7 +694,6 @@ mod tests {
         assert_eq!(email.message_id, "<y@co.com>");
     }
 
-
     #[test]
     fn gmail_query_to_imap_search_maps_the_sync_window_and_uid_sets() {
         // Empty -> all.
@@ -713,7 +705,8 @@ mod tests {
         // The sync's Gmail-style window maps to IMAP SINCE/BEFORE (dd-Mon-yyyy),
         // and the -in: exclusions are dropped (INBOX selection already excludes
         // spam/trash/sent/drafts).
-        let mapped = gmail_query_to_imap_search("after:1700000000 before:1700003600 -in:spam -in:trash");
+        let mapped =
+            gmail_query_to_imap_search("after:1700000000 before:1700003600 -in:spam -in:trash");
         assert!(mapped.starts_with("SINCE "), "{mapped}");
         assert!(mapped.contains(" BEFORE "), "{mapped}");
         assert!(!mapped.contains("-in:"), "{mapped}");
