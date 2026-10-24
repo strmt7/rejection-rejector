@@ -56,7 +56,7 @@ lettre = { version = "0.11", default-features = false, features = ["smtp-transpo
 io-imap = { version = "0.7.1", default-features = false, features = ["client", "native-tls"] }
 # imap-codec (via io-imap) needs nom's `alloc`; this also drops imap 2's nom 5 ->
 # unsound lexical-core 0.7.6 (RUSTSEC-2023-0086) for nom 7 + minimal-lexical.
-nom = { version = "7", features = ["alloc", "std"] }
+nom = { version = "8", features = ["alloc", "std"] }
 ratatui = { version = "=0.30.2", default-features = false, features = ["std", "layout-cache", "crossterm_0_29"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "webpki-roots", "form", "query"] }
 ring = "0.17.14"
