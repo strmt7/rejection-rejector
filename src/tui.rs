@@ -1,7 +1,8 @@
 //! Interactive terminal interface (`rr tui`) — a thin presentation shell.
 //!
-//! This module renders [`Snapshot`]s and issues [`Command`]s through the
-//! shared [`Worker`] exactly like the desktop GUI: it never touches the
+//! This module renders [`crate::worker::Snapshot`]s and issues
+//! [`crate::worker::Command`]s through the
+//! shared [`crate::worker::Worker`] exactly like the desktop GUI: it never touches the
 //! database or Gmail, and it never re-implements a safety decision. Sending
 //! goes through the shared `send_gate_eligible` gate plus the mandatory
 //! confirm-exact-reply dialog; Automatic arming goes through the library
@@ -497,7 +498,14 @@ fn editor_lines(text: &str, cursor: Option<usize>) -> Vec<Line<'static>> {
         }
         None => (None, 0),
     };
-    text.split('\n')
+    // A trailing newline (or empty text) opens a final empty editor line the
+    // caret can sit on; `lines()` drops it, so restore it explicitly.
+    let mut visible: Vec<&str> = text.lines().collect();
+    if text.is_empty() || text.ends_with('\n') {
+        visible.push("");
+    }
+    visible
+        .into_iter()
         .enumerate()
         .map(|(index, line_text)| {
             if cursor_line == Some(index) {
@@ -614,7 +622,7 @@ impl Tui {
             settings: Settings::default(),
             settings_loaded: false,
             settings_revision: 0,
-            editor_account: String::new(),
+            editor_account: String::default(),
             help_open: false,
             pending_select: None,
             send_confirmation: None,
@@ -622,7 +630,7 @@ impl Tui {
             emergency: crate::emergency::status_fail_closed,
             close_confirmation: false,
             quit: false,
-            local_error: String::new(),
+            local_error: String::default(),
         }
     }
 
@@ -648,7 +656,7 @@ impl Tui {
     fn sync_view(&mut self, s: &Snapshot) {
         self.queue_selection = move_selection(self.queue_selection, s.items.len(), 0);
         if s.initialized && self.editor_account != s.account {
-            self.editor_account = s.account.clone();
+            self.editor_account.clone_from(&s.account);
             self.editor = EditorState::default();
             self.editing = false;
             self.pending_select = None;
@@ -656,7 +664,7 @@ impl Tui {
         }
         if s.initialized && (!self.settings_loaded || s.settings_revision != self.settings_revision)
         {
-            self.settings = s.settings.clone();
+            self.settings.clone_from(&s.settings);
             self.settings_revision = s.settings_revision;
             self.settings_loaded = true;
         }
@@ -893,6 +901,23 @@ impl Tui {
             KeyCode::PageUp => self.editor_scroll = self.editor_scroll.saturating_sub(10),
             KeyCode::PageDown => self.editor_scroll = self.editor_scroll.saturating_add(10),
             KeyCode::Char('a') => self.analysis_open = !self.analysis_open,
+            _ => self.handle_review_action(key, s, job, &enablement),
+        }
+    }
+
+    /// Handle the review editing keys: enter the editor, save and regenerate.
+    ///
+    /// Inputs: `key` — pressed key; `s` — latest snapshot; `job` — the
+    /// selected job; `enablement` — computed review action enablement.
+    /// Output: none; mutates the editor and issues worker commands.
+    fn handle_review_action(
+        &mut self,
+        key: KeyCode,
+        s: &Snapshot,
+        job: Option<&Job>,
+        enablement: &ActionEnablement,
+    ) {
+        match key {
             KeyCode::Char('e') | KeyCode::Char('i') => {
                 if job.is_some_and(|job| {
                     self.editor.bound_to(job)
@@ -931,6 +956,22 @@ impl Tui {
                     });
                 }
             }
+            _ => self.handle_review_dispatch_keys(key, job, enablement),
+        }
+    }
+
+    /// Handle the review dismissal, send and discard keys.
+    ///
+    /// Inputs: `key` — pressed key; `job` — the selected job; `enablement` —
+    /// computed review action enablement. Output: none; mutates the editor
+    /// and issues worker commands.
+    fn handle_review_dispatch_keys(
+        &mut self,
+        key: KeyCode,
+        job: Option<&Job>,
+        enablement: &ActionEnablement,
+    ) {
+        match key {
             KeyCode::Char('d') => {
                 if enablement.dismiss
                     && let Some(job) = job
@@ -1225,7 +1266,7 @@ fn draw_queue(frame: &mut Frame, area: Rect, tui: &Tui, s: &Snapshot) {
                 .map(|email| email.subject.as_str())
                 .unwrap_or("(original not fetched)");
             let flags = if job.flags.is_empty() {
-                String::new()
+                String::default()
             } else {
                 format!("  ! {}", job.flags.join(" · "))
             };
@@ -1317,7 +1358,7 @@ fn draw_review(frame: &mut Frame, area: Rect, tui: &Tui, s: &Snapshot) {
             .map(|email| {
                 email
                     .text
-                    .split('\n')
+                    .lines()
                     .map(|line| Line::raw(line.to_string()))
                     .collect::<Vec<Line>>()
             })
@@ -1662,7 +1703,7 @@ fn draw_confirm_send(frame: &mut Frame, confirmation: &SendConfirmation, send_re
         .as_ref()
         .map(|draft| draft.body.as_str())
         .unwrap_or("");
-    lines.extend(body.split('\n').map(|line| Line::raw(line.to_string())));
+    lines.extend(body.lines().map(|line| Line::raw(line.to_string())));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         "Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.",
@@ -2309,7 +2350,7 @@ mod tests {
             .draw(|frame| draw(frame, tui, s))
             .expect("draw frame");
         let buffer = terminal.backend().buffer();
-        let mut out = String::new();
+        let mut out = String::default();
         for y in 0..buffer.area.height {
             for x in 0..buffer.area.width {
                 out.push_str(buffer.cell((x, y)).expect("cell").symbol());
@@ -2344,7 +2385,7 @@ mod tests {
             })
             .expect("draw status");
         let buffer = terminal.backend().buffer();
-        let mut out = String::new();
+        let mut out = String::default();
         for y in 0..buffer.area.height {
             for x in 0..buffer.area.width {
                 out.push_str(buffer.cell((x, y)).expect("cell").symbol());
@@ -3043,8 +3084,8 @@ mod tests {
             }),
             model: "m".into(),
             model_digest: "d".into(),
-            verification_model: String::new(),
-            verification_model_digest: String::new(),
+            verification_model: String::default(),
+            verification_model_digest: String::default(),
             prompt_version: "v".into(),
             email_fingerprint: "f".into(),
             verified_draft_hash: None,

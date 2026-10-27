@@ -259,7 +259,7 @@ mod tests {
         assert!(complete_restore_transaction(directory.path()).is_err());
         assert!(marker.exists());
         fs::remove_file(&marker).unwrap();
-        fs::create_dir(&marker).unwrap();
+        fs::create_dir_all(&marker).unwrap();
         assert!(ensure_restore_complete(directory.path()).is_err());
         assert!(begin_restore_transaction(directory.path()).is_err());
     }
@@ -354,7 +354,7 @@ mod tests {
     fn directories_and_oversize_markers_are_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join(MARKER_NAME);
-        fs::create_dir(&marker).unwrap();
+        fs::create_dir_all(&marker).unwrap();
         assert!(SessionLease::begin(directory.path()).is_err());
         fs::remove_dir(&marker).unwrap();
         fs::write(&marker, vec![b'x'; MAX_MARKER_BYTES as usize + 1]).unwrap();

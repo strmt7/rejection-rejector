@@ -47,7 +47,7 @@ def validate_target_pct(value: object) -> float:
         pct = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as exc:
         raise ValueError(f"utilization target must be numeric, got {value!r}") from exc
-    if not (MIN_TARGET_PCT <= pct <= MAX_TARGET_PCT):
+    if not MIN_TARGET_PCT <= pct <= MAX_TARGET_PCT:
         raise ValueError(
             f"utilization target must be within "
             f"[{MIN_TARGET_PCT}, {MAX_TARGET_PCT}], got {pct}"

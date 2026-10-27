@@ -279,8 +279,16 @@ mod tests {
 
         assert_eq!(before, after);
         assert_eq!(value["queue"]["reviewable_items"], 3);
-        assert_eq!(value["assumptions"]["provider_preflight_performed"], false);
-        assert_eq!(value["assumptions"]["external_write_performed"], false);
+        assert!(
+            !value["assumptions"]["provider_preflight_performed"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !value["assumptions"]["external_write_performed"]
+                .as_bool()
+                .unwrap()
+        );
         assert_eq!(
             value["global"]["automatic_recipient_attempt_limit_24h"],
             AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
@@ -367,12 +375,24 @@ mod tests {
         let shared = "thread-shared".to_string();
         let mut blocked =
             crate::test_support::eligible_job(&engine.settings, &engine.account, 2, now);
-        blocked.stub.thread_id = shared.clone();
-        blocked.email.as_mut().unwrap().stub.thread_id = shared.clone();
+        blocked.stub.thread_id.clone_from(&shared);
+        blocked
+            .email
+            .as_mut()
+            .unwrap()
+            .stub
+            .thread_id
+            .clone_from(&shared);
         persist(&mut engine, blocked, now);
         let mut sibling = reviewable(&engine, 21, "hr21@example.invalid", now);
-        sibling.stub.thread_id = shared.clone();
-        sibling.email.as_mut().unwrap().stub.thread_id = shared.clone();
+        sibling.stub.thread_id.clone_from(&shared);
+        sibling
+            .email
+            .as_mut()
+            .unwrap()
+            .stub
+            .thread_id
+            .clone_from(&shared);
         let sibling = persist(&mut engine, sibling, now);
         engine
             .db
@@ -402,11 +422,15 @@ mod tests {
             value["queue"]["dispatchable_now_by_local_gates_and_daily_capacity"],
             1
         );
-        assert_eq!(value["global"]["gmail_connected"], true);
-        assert_eq!(value["global"]["gmail_send_scope"], true);
-        assert_eq!(value["global"]["task_qualification_current"], true);
-        assert_eq!(value["global"]["configuration_ready"], true);
-        assert_eq!(value["global"]["worker_paused"], false);
+        assert!(value["global"]["gmail_connected"].as_bool().unwrap());
+        assert!(value["global"]["gmail_send_scope"].as_bool().unwrap());
+        assert!(
+            value["global"]["task_qualification_current"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(value["global"]["configuration_ready"].as_bool().unwrap());
+        assert!(!value["global"]["worker_paused"].as_bool().unwrap());
         assert_eq!(value["global"]["daily_capacity_remaining"], 7);
     }
 
@@ -431,7 +455,7 @@ mod tests {
             value["queue"]["dispatchable_now_by_local_gates_and_daily_capacity"],
             0
         );
-        assert_eq!(value["global"]["worker_paused"], true);
+        assert!(value["global"]["worker_paused"].as_bool().unwrap());
     }
 
     /// Writing the report must create private parent directories and produce

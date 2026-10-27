@@ -8,4 +8,9 @@ frequency = "always"
 rustflags = [
   "-C", "link-arg=/Brepro",
   "-C", "link-arg=/PDBALTPATH:%_PDB%",
+  # MSVC emits LNK4099 ("PDB ... was not found") for redistributable import
+  # libraries; that debug-info note is environmental toolchain noise, not a
+  # code defect. Surface real link problems as errors, keep the noise out of
+  # `warnings = "deny"`. Scoped to msvc only so other targets keep the lint.
+  "-A", "linker_messages",
 ]

@@ -10,17 +10,31 @@ pub fn hash(value: impl AsRef<[u8]>) -> String {
     crate::hex_lower(Sha256::digest(value.as_ref()))
 }
 
+/// Where one message originated.
+///
+/// Inputs: none (plain enum). Output: `Gmail` (live mailbox) or `Demo`
+/// (synthetic demonstration data).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    /// Item synced from the connected Google mailbox.
     Gmail,
+    /// Synthetic demo item.
     Demo,
 }
+/// Lightweight message identity that survives without the full email.
+///
+/// Inputs: none (plain struct). Output: the account, provider message id,
+/// thread id and [`Source`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stub {
+    /// Account key the stub belongs to.
     pub account: String,
+    /// Provider message id.
     pub provider_id: String,
+    /// Provider thread id.
     pub thread_id: String,
+    /// Where the item came from.
     pub source: Source,
 }
 impl Stub {
@@ -49,18 +63,33 @@ impl Stub {
         ))
     }
 }
+/// One received message preserved for review.
+///
+/// Inputs: none (plain struct). Output: the [`Stub`], sender, subject, body,
+/// routing headers and receipt metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Email {
+    /// Provider identity stub for the message.
     pub stub: Stub,
+    /// Sender address.
     pub from: String,
+    /// Reply-to address, when the sender sets one.
     pub reply_to: Option<String>,
+    /// Message subject line.
     pub subject: String,
+    /// Normalized message body text.
     pub text: String,
+    /// Provider timestamp of receipt.
     pub received_at: DateTime<Utc>,
+    /// RFC `Message-ID` header value.
     pub message_id: String,
+    /// `References` header values in provider order.
     pub references: Vec<String>,
+    /// Full header map as received.
     pub headers: BTreeMap<String, Vec<String>>,
+    /// Provider labels on the message.
     pub labels: Vec<String>,
+    /// Whether the stored body is the complete body.
     pub body_complete: bool,
 }
 impl Email {
@@ -99,37 +128,66 @@ impl Email {
         ))
     }
 }
+/// Model classification of one message.
+///
+/// Inputs: none (plain enum). Output: `Rejection`, `Opportunity`, `Other` or
+/// `Uncertain`.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
+    /// The message is a rejection.
     Rejection,
+    /// The message advances the application (interview or offer).
     Opportunity,
+    /// The message is neither a rejection nor an opportunity.
     Other,
+    /// The message cannot be classified confidently.
     Uncertain,
 }
+/// Model verdict for one message.
+///
+/// Inputs: none (plain struct). Output: the [`Category`], self-reported
+/// confidence, evidence, explanation and the derived company, position and
+/// language.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {
+    /// Message category the model assigned.
     pub category: Category,
     /// A model's self-reported score, not a calibrated probability.
     pub confidence: u8,
+    /// Quoted evidence supporting the classification.
     pub evidence: String,
+    /// Model explanation of the classification.
     pub explanation: String,
+    /// Company named in the message.
     pub company: String,
+    /// Position named in the message.
     pub position: String,
+    /// Detected message language.
     pub language: String,
 }
+/// Independent verifier's checks on one generated draft.
+///
+/// Inputs: none (plain struct). Output: the pass/fail checks — genuine
+/// rejection, supported claims, professionalism, injection freedom and
+/// purpose alignment — plus the verifier's reason.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verification {
+    /// Whether the draft verifies as a genuine rejection reply.
     pub genuine_rejection: bool,
+    /// Whether the draft claims are supported by the message.
     pub claims_supported: bool,
+    /// Whether the draft meets the professional-tone standard.
     pub professional: bool,
+    /// Whether the draft is free of injected instructions.
     pub injection_free: bool,
     /// Whether the reply directly addresses the rejection and asks for individualized,
     /// specific assessment feedback rather than merely acknowledging the outcome.
     #[serde(default)]
     pub purpose_aligned: bool,
+    /// Verifier reason when verification fails.
     pub reason: String,
 }
 impl Verification {
@@ -177,7 +235,7 @@ mod verification_tests {
             professional: p,
             injection_free: i,
             purpose_aligned: pa,
-            reason: String::new(),
+            reason: String::default(),
         }
     }
 
@@ -196,37 +254,70 @@ mod verification_tests {
         );
     }
 }
+/// Full model analysis recorded for one message.
+///
+/// Inputs: none (plain struct). Output: the [`Verdict`], optional
+/// [`Verification`], the model and prompt identities and the email
+/// fingerprint binding.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Analysis {
+    /// Classification verdict for the message.
     pub verdict: Verdict,
+    /// Draft verification outcome, when verified.
     pub verification: Option<Verification>,
+    /// Model name used for the analysis.
     pub model: String,
+    /// Digest of the model used for the analysis.
     pub model_digest: String,
+    /// Verifier model name.
     #[serde(default)]
     pub verification_model: String,
+    /// Digest of the verifier model.
     #[serde(default)]
     pub verification_model_digest: String,
+    /// Prompt version used for the analysis.
     pub prompt_version: String,
+    /// Fingerprint of the analyzed message.
     pub email_fingerprint: String,
+    /// Hash of the draft that verification approved.
     pub verified_draft_hash: Option<String>,
+    /// Hash of the analysis context.
     pub context_hash: String,
+    /// Whether the model saw the complete input.
     pub input_complete: bool,
+    /// Whether the model was GPU-resident during analysis.
     pub gpu_resident: bool,
 }
+/// One generated reply draft.
+///
+/// Inputs: none (plain struct). Output: the draft body and the origin tag
+/// naming the producing path.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Draft {
+    /// Draft reply body text.
     pub body: String,
+    /// Where the draft came from (model, operator, or demo).
     pub origin: String,
 }
 
+/// Stage that produced one processing failure.
+///
+/// Inputs: none (plain enum). Output: the failing stage code, serialized in
+/// snake_case for storage and reporting.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessingFailureCode {
+    /// The stored message payload is malformed.
     MessageMalformed,
+    /// Model preflight failed.
     ModelPreflight,
+    /// Classification failed.
     Classification,
+    /// Draft generation failed.
     DraftGeneration,
+    /// The verification runtime failed.
     VerificationRuntime,
+    /// Analysis failed for an unknown reason.
     AnalysisUnknown,
 }
 impl ProcessingFailureCode {
@@ -261,17 +352,30 @@ impl ProcessingFailureCode {
     }
 }
 
+/// Lifecycle state of one reviewable item.
+///
+/// Inputs: none (plain enum). Output: the state driving queue placement and
+/// send eligibility.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
+    /// New item waiting for analysis.
     Queued,
+    /// Analyzed and ready for review or sending.
     Ready,
+    /// Needs operator attention before it can proceed.
     Attention,
+    /// Classified as a non-rejection, non-opportunity message.
     Other,
+    /// Parked for later reconsideration.
     Deferred,
+    /// Closed without a reply.
     Dismissed,
+    /// A reply send is reserved or in flight.
     Sending,
+    /// The reply was accepted by the provider.
     Sent,
+    /// Provider outcome is unknown; delivery needs reconciliation.
     Uncertain,
 }
 impl JobState {
@@ -359,21 +463,40 @@ impl JobState {
         }
     }
 }
+/// One reviewable item: identity, analysis, draft and delivery posture.
+///
+/// Inputs: none (plain struct). Output: the [`Stub`], [`JobState`], the
+/// stored [`Email`], [`Analysis`] and [`Draft`], flags, revision and retry
+/// counters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
+    /// Stable item id.
     pub id: String,
+    /// Provider identity stub for the item.
     pub stub: Stub,
+    /// Current item state.
     pub state: JobState,
+    /// Stored original message.
     pub email: Option<Email>,
+    /// Stored analysis, when analyzed.
     pub analysis: Option<Analysis>,
+    /// Stored draft, when drafted.
     pub draft: Option<Draft>,
+    /// Timestamp of draft creation.
     pub drafted_at: Option<DateTime<Utc>>,
+    /// Operator and system flags on the item.
     pub flags: Vec<String>,
+    /// Optimistic-lock revision of the item.
     pub revision: u64,
+    /// Send attempts made for the item.
     pub attempts: u32,
+    /// Earliest timestamp of the next send attempt.
     pub retry_at: i64,
+    /// Timestamp of item creation.
     pub created_at: DateTime<Utc>,
+    /// Timestamp of the last item update.
     pub updated_at: DateTime<Utc>,
+    /// Provider id of the sent reply, when sent.
     pub provider_sent_id: Option<String>,
 }
 impl Job {
@@ -400,75 +523,146 @@ impl Job {
         }
     }
 }
+/// Per-account mailbox synchronization position.
+///
+/// Inputs: none (plain struct). Output: the account, Gmail history id and
+/// the last poll and full-sync instants with the lookback window.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SyncState {
+    /// Account key the sync state belongs to.
     pub account: String,
+    /// Provider history id the mailbox is synced to.
     pub history_id: Option<String>,
+    /// Timestamp of the last provider poll.
     pub last_poll: Option<DateTime<Utc>>,
+    /// Timestamp of the last full resync.
     pub last_full: Option<DateTime<Utc>>,
+    /// Lookback window applied to sync, in days.
     pub lookback_days: u8,
 }
+/// Keyset cursor into the stored item list.
+///
+/// Inputs: none (plain struct). Output: the snapshot rowid and the last
+/// delivered rowid.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ItemCursor {
+    /// Rowid the snapshot enumeration is anchored at.
     pub snapshot_rowid: i64,
+    /// Last rowid returned to the client.
     pub last_rowid: i64,
 }
 
+/// One page of items with its continuation cursor.
+///
+/// Inputs: none (plain struct). Output: the page's [`Job`]s and the
+/// [`ItemCursor`] for the next page.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemCursorPage {
+    /// Items in this cursor page.
     pub items: Vec<Job>,
+    /// Cursor for the next page, when more remain.
     pub next_cursor: Option<ItemCursor>,
 }
 
+/// Queue counters shown on every operator surface.
+///
+/// Inputs: none (plain struct). Output: stored, queued, review, sent and
+/// uncertain totals plus the 24-hour attempt count.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Counts {
+    /// Number of stored items.
     pub stored: u64,
+    /// Number of queued items.
     pub queued: u64,
+    /// Number of items awaiting review.
     pub review: u64,
+    /// Number of sent items.
     pub sent: u64,
+    /// Number of deliveries awaiting reconciliation.
     pub uncertain: u64,
+    /// Send attempts in the last 24 hours.
     pub attempts_24h: u64,
 }
+/// Kind of one background operation.
+///
+/// Inputs: none (plain enum). Output: the operation label driving status
+/// reporting.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
+    /// No operation is running.
     #[default]
     Idle,
+    /// Recompute and publish the worker snapshot.
     Refresh,
+    /// Synchronize the mailbox with the provider.
     SyncMailbox,
+    /// Connect the Google account.
     ConnectGmail,
+    /// Disconnect the Google account.
     DisconnectGmail,
+    /// Apply settings changes.
     UpdateSettings,
+    /// Install the local Ollama runtime.
     InstallOllama,
+    /// Start the local Ollama runtime.
     StartOllama,
+    /// Pull the primary local model.
     PullModel,
+    /// Inspect the primary local model.
     InspectModel,
+    /// Run the task-qualification suite for the primary model.
     QualifyModel,
+    /// Run the evaluation suite for the model.
     EvaluateModel,
+    /// Profile model performance and residency.
     ProfileModel,
+    /// Compare two model profiles.
     CompareModels,
+    /// Recheck stored evidence integrity.
     IntegrityCheck,
+    /// Compact the SQLite database.
     CompactDatabase,
+    /// Create a backup.
     Backup,
+    /// Verify that a backup restores successfully.
     RecoveryDrill,
+    /// Export the recovery key envelope.
     RecoveryKeyExport,
+    /// Verify a recovery key envelope.
     RecoveryKeyVerify,
+    /// Collect privacy-safe diagnostics evidence.
     Diagnostics,
+    /// List stored review items.
     ListItems,
+    /// Select the active review item.
     SelectItem,
+    /// Edit the draft body.
     EditDraft,
+    /// Regenerate the draft from the model.
     RegenerateDraft,
+    /// Dismiss the selected item.
     DismissItem,
+    /// Send the approved reply.
     SendReply,
+    /// Reconcile an uncertain delivery.
     ReconcileDelivery,
+    /// Purge items past the retention window.
     PurgeRetention,
+    /// Reveal the local API token.
     RevealApiToken,
+    /// Hide the local API token.
     HideApiToken,
+    /// Rotate the local API token.
     RotateApiToken,
+    /// Serve a local API request.
     ApiRequest,
+    /// Reload the enterprise policy.
     EnterprisePolicyReload,
+    /// Analyze a queued message locally.
     AnalyzeQueuedMail,
+    /// Run one automatic-dispatch pass.
     AutomaticDispatch,
 }
 impl OperationKind {
@@ -489,6 +683,15 @@ impl OperationKind {
             Self::InspectModel => "model_inspection_failed",
             Self::QualifyModel => "model_smoke_qualification_failed",
             Self::EvaluateModel => "model_task_evaluation_failed",
+            remaining => remaining.data_failure_code(),
+        }
+    }
+
+    /// Failure codes for the model-data and recovery operations.
+    ///
+    /// Inputs: none beyond the kind. Output: `&'static str` code.
+    fn data_failure_code(self) -> &'static str {
+        match self {
             Self::ProfileModel => "model_runtime_profile_failed",
             Self::CompareModels => "model_comparison_failed",
             Self::IntegrityCheck => "database_integrity_failed",
@@ -501,6 +704,15 @@ impl OperationKind {
             Self::ListItems => "item_listing_failed",
             Self::SelectItem => "item_selection_failed",
             Self::EditDraft => "draft_edit_failed",
+            remaining => remaining.dispatch_failure_code(),
+        }
+    }
+
+    /// Failure codes for the dispatch and policy operations.
+    ///
+    /// Inputs: none beyond the kind. Output: `&'static str` code.
+    fn dispatch_failure_code(self) -> &'static str {
+        match self {
             Self::RegenerateDraft => "draft_regeneration_failed",
             Self::DismissItem => "item_dismissal_failed",
             Self::SendReply => "reply_send_failed",
@@ -513,6 +725,9 @@ impl OperationKind {
             Self::EnterprisePolicyReload => "enterprise_policy_reload_failed",
             Self::AnalyzeQueuedMail => "mail_analysis_failed",
             Self::AutomaticDispatch => "automatic_dispatch_failed",
+            // Unreachable for the kinds matched above; kept so a new kind
+            // added without a code fails closed instead of panicking.
+            _ => "operation_failed",
         }
     }
 
@@ -672,37 +887,66 @@ mod operation_kind_tests {
     }
 }
 
+/// Lifecycle state of one operation.
+///
+/// Inputs: none (plain enum). Output: `Idle`, `Running`, `Succeeded` or
+/// `Failed`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationState {
+    /// No operation in progress.
     #[default]
     Idle,
+    /// The operation is in progress.
     Running,
+    /// The operation finished successfully.
     Succeeded,
+    /// The operation failed.
     Failed,
 }
 
+/// How a failed operation should be recovered.
+///
+/// Inputs: none (plain enum). Output: the disposition from `None` through
+/// `Retryable` to `NonRetryable`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureDisposition {
+    /// No failure disposition is recorded.
     #[default]
     None,
+    /// The operation may be retried automatically.
     Retryable,
+    /// The operator must review before retrying.
     ReviewRequired,
+    /// Delivery state must be reconciled with the provider.
     ReconcileRequired,
+    /// The operation must not be retried.
     NonRetryable,
 }
 
+/// Status of the current or last worker operation.
+///
+/// Inputs: none (plain struct). Output: the correlation id,
+/// [`OperationKind`] and [`OperationState`], failure code, retryability and
+/// timing.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationStatus {
     /// Locally generated correlation UUID for one worker operation lifecycle.
     pub operation_id: Option<String>,
+    /// Kind of the operation being reported.
     pub kind: OperationKind,
+    /// Current state of the operation.
     pub state: OperationState,
+    /// Stable result code, when the operation finished.
     pub code: Option<String>,
+    /// Whether the failed operation may be retried.
     pub retryable: bool,
+    /// Operator-facing status message.
     pub message: String,
+    /// Timestamp of operation start.
     pub started_at: Option<DateTime<Utc>>,
+    /// Timestamp of operation completion.
     pub finished_at: Option<DateTime<Utc>>,
 }
 
@@ -729,32 +973,59 @@ impl OperationStatus {
     }
 }
 
+/// Worker heartbeat summary for stall detection.
+///
+/// Inputs: none (plain struct). Output: responsiveness, last-progress age,
+/// current-operation age and the stall budget.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerLiveness {
+    /// Schema version of the liveness record.
     pub schema_version: u32,
+    /// Whether the worker is responsive.
     pub worker_responsive: bool,
+    /// Timestamp of the last worker progress.
     pub last_progress_at: DateTime<Utc>,
+    /// Age of the last worker progress in seconds.
     pub progress_age_seconds: i64,
+    /// Operation currently in flight.
     pub current_operation: OperationKind,
+    /// Timestamp of current operation start.
     pub operation_started_at: Option<DateTime<Utc>>,
+    /// Age of the current operation in seconds.
     pub operation_age_seconds: Option<i64>,
+    /// Seconds after which the operation is considered stalled.
     pub stall_budget_seconds: u64,
 }
 
+/// Subsystem one audit event belongs to.
+///
+/// Inputs: none (plain enum). Output: the domain keying audit filtering.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditDomain {
+    /// Mailbox synchronization and message handling.
     Mail,
+    /// Reply delivery and reconciliation.
     Delivery,
+    /// Local model and verification activity.
     Model,
+    /// Settings changes.
     Settings,
+    /// Enterprise policy activity.
     Policy,
+    /// Authentication, token and vault activity.
     Security,
+    /// Backup and recovery operations.
     Recovery,
+    /// External integration API activity.
     Integration,
+    /// Retention purge activity.
     Retention,
+    /// Database storage maintenance.
     Storage,
+    /// Background worker lifecycle.
     Worker,
+    /// Activity that does not fit another domain.
     #[default]
     Other,
 }
@@ -780,13 +1051,21 @@ impl AuditDomain {
     }
 }
 
+/// Severity of one audit event.
+///
+/// Inputs: none (plain enum). Output: `Info`, `Warning`, `Error` or
+/// `Security`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
+    /// Informational record with no operator action implied.
     #[default]
     Info,
+    /// Notable condition the operator should review.
     Warning,
+    /// A failed operation.
     Error,
+    /// Security-relevant activity or failure.
     Security,
 }
 impl AuditSeverity {
@@ -808,7 +1087,15 @@ impl AuditSeverity {
 /// Inputs: `kind` — audit event kind. Output: `(AuditDomain, AuditSeverity)`
 /// derived from the kind's prefix.
 pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
-    let domain = if kind.starts_with("email.")
+    (audit_domain(kind), audit_severity(kind))
+}
+
+/// Map an audit event kind to its subsystem domain.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditDomain`] derived from
+/// the kind's prefix.
+fn audit_domain(kind: &str) -> AuditDomain {
+    if kind.starts_with("email.")
         || kind.starts_with("gmail.")
         || kind.starts_with("account.")
         || kind.starts_with("sync.")
@@ -826,7 +1113,16 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditDomain::Security
     } else if kind.starts_with("backup.") || kind.starts_with("restore.") {
         AuditDomain::Recovery
-    } else if kind.starts_with("api.") || kind.starts_with("integration.") {
+    } else {
+        audit_domain_tail(kind)
+    }
+}
+
+/// Domain classification for the integration, retention and worker prefixes.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditDomain`].
+fn audit_domain_tail(kind: &str) -> AuditDomain {
+    if kind.starts_with("api.") || kind.starts_with("integration.") {
         AuditDomain::Integration
     } else if kind.starts_with("content.") || kind.starts_with("retention.") {
         AuditDomain::Retention
@@ -836,12 +1132,15 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditDomain::Worker
     } else {
         AuditDomain::Other
-    };
+    }
+}
 
-    let severity = if kind.contains("security")
-        || kind.contains("tamper")
-        || kind.contains("integrity_failed")
-    {
+/// Map an audit event kind to its severity.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditSeverity`] derived from
+/// the kind's keywords.
+fn audit_severity(kind: &str) -> AuditSeverity {
+    if kind.contains("security") || kind.contains("tamper") || kind.contains("integrity_failed") {
         AuditSeverity::Security
     } else if kind.contains("failed") || kind.contains("error") || kind.contains("fatal") {
         AuditSeverity::Error
@@ -854,20 +1153,30 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditSeverity::Warning
     } else {
         AuditSeverity::Info
-    };
-    (domain, severity)
+    }
 }
 
+/// One appended audit-trail entry.
+///
+/// Inputs: none (plain struct). Output: the sequence number, timestamp,
+/// kind, [`AuditDomain`], [`AuditSeverity`], optional item id and detail.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
+    /// Monotonic audit sequence of the event.
     pub seq: i64,
+    /// Timestamp of the event.
     pub at: DateTime<Utc>,
+    /// Stable event kind name.
     pub kind: String,
+    /// Audit domain the event belongs to.
     #[serde(default)]
     pub domain: AuditDomain,
+    /// Severity of the event.
     #[serde(default)]
     pub severity: AuditSeverity,
+    /// Item the event refers to, when item-scoped.
     pub item_id: Option<String>,
+    /// Operator-facing event detail.
     pub detail: String,
 }
 

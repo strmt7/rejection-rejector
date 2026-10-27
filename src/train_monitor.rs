@@ -179,8 +179,7 @@ pub fn pacing_sleep_seconds(step_seconds: f64, target_pct: f64) -> f64 {
 pub fn now_unix() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 #[cfg(test)]
@@ -217,7 +216,7 @@ mod tests {
             step: 1,
             total_steps: 2,
             loss: None,
-            status: String::new(),
+            status: String::default(),
             elapsed_seconds: 0.0,
             updated_at_unix: 1000.0,
         };
@@ -239,7 +238,7 @@ mod tests {
             step,
             total_steps: total,
             loss: None,
-            status: String::new(),
+            status: String::default(),
             elapsed_seconds: elapsed,
             updated_at_unix: 0.0,
         };
@@ -309,10 +308,9 @@ mod tests {
     // --progress flag locates both without extra configuration.
     #[test]
     fn duty_path_is_sibling_of_progress() {
-        assert_eq!(
-            duty_path_for(Path::new("/tmp/run/progress.json")),
-            PathBuf::from("/tmp/run/duty.json")
-        );
+        let dir = tempfile::tempdir().unwrap();
+        let progress = dir.path().join("progress.json");
+        assert_eq!(duty_path_for(&progress), dir.path().join("duty.json"));
     }
 
     // Why: the progress bar must show an empty track before the trainer
@@ -325,7 +323,7 @@ mod tests {
             step,
             total_steps: total,
             loss: None,
-            status: String::new(),
+            status: String::default(),
             elapsed_seconds: 0.0,
             updated_at_unix: 0.0,
         };

@@ -71,7 +71,7 @@ impl Fixture {
                         })).collect::<Vec<_>>()
                     }),
                     "/v1/systemone" => {
-                        let mut body = String::new();
+                        let mut body = String::default();
                         request.as_reader().read_to_string(&mut body).unwrap();
                         let payload: Value = serde_json::from_str(&body).unwrap();
                         let model = payload["model"].as_str().unwrap_or_default().to_owned();
@@ -123,7 +123,7 @@ impl Fixture {
                         })
                     }
                     "/api/show" => {
-                        let mut body = String::new();
+                        let mut body = String::default();
                         request.as_reader().read_to_string(&mut body).unwrap();
                         let payload: Value = serde_json::from_str(&body).unwrap();
                         if let Some(model) = payload["model"].as_str() {
@@ -278,12 +278,16 @@ fn probability_contract_violations_fail_closed_per_case() {
     assert_eq!(report["summary"]["fixture_count"], 74);
     assert_eq!(report["summary"]["completed"], 0);
     assert_eq!(report["summary"]["probability_contract_failures"], 74);
-    assert_eq!(report["summary"]["recommendation_eligible"], false);
+    assert!(
+        !report["summary"]["recommendation_eligible"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(report["summary"]["mean_multiclass_brier"].is_null());
     let rows = report["results"].as_array().unwrap();
     assert_eq!(rows.len(), 74);
     for row in rows {
-        assert_eq!(row["matched"], false);
+        assert!(!row["matched"].as_bool().unwrap());
         assert_eq!(row.get("rejection_probability"), None);
         assert!(
             row["error"]
@@ -319,7 +323,7 @@ fn compare_installed_skips_uninstalled_models_and_ranks_only_eligible() {
         .iter()
         .find(|candidate| candidate["model"] == "tev1:4b")
         .expect("uninstalled candidate must be listed as skipped");
-    assert_eq!(tev["skipped"], true);
+    assert!(tev["skipped"].as_bool().unwrap());
     assert!(
         tev["reason"]
             .as_str()
@@ -332,13 +336,21 @@ fn compare_installed_skips_uninstalled_models_and_ranks_only_eligible() {
         .find(|candidate| candidate["model"] == "clef-flash:9b-q8_0")
         .unwrap();
     assert_eq!(clef.get("skipped"), None);
-    assert_eq!(clef["report"]["summary"]["recommendation_eligible"], false);
+    assert!(
+        !clef["report"]["summary"]["recommendation_eligible"]
+            .as_bool()
+            .unwrap()
+    );
 
     let nimble = candidates
         .iter()
         .find(|candidate| candidate["model"] == "nimble:9b-q8_0")
         .unwrap();
-    assert_eq!(nimble["report"]["summary"]["recommendation_eligible"], true);
+    assert!(
+        nimble["report"]["summary"]["recommendation_eligible"]
+            .as_bool()
+            .unwrap()
+    );
     assert!(
         (nimble["report"]["summary"]["rejection_recall"]
             .as_f64()

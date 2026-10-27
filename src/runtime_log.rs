@@ -12,18 +12,34 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// Default rotation size of the current runtime log.
+///
+/// Inputs: none (constant). Output: `u64` — the byte cap before rotation.
 pub const DEFAULT_MAX_CURRENT_BYTES: u64 = 2 * 1024 * 1024;
+/// Default number of rotated runtime-log archives kept.
+///
+/// Inputs: none (constant). Output: `usize` — the retained archive count.
 pub const DEFAULT_MAX_ARCHIVES: usize = 3;
 const LOG_SCHEMA_VERSION: u32 = 3;
 const CURRENT_FILE: &str = "runtime.jsonl";
 
+/// Notable process-level event recorded in the runtime log.
+///
+/// Inputs: none (plain enum). Output: the event kind from process start
+/// through worker and API listener failures.
 #[derive(Clone, Copy, Debug)]
 pub enum RuntimeEvent {
+    /// The application process started.
     ProcessStarted,
+    /// The application process stopped.
     ProcessStopped,
+    /// The background worker failed to start.
     WorkerStartupFailed,
+    /// The background worker panicked.
     WorkerPanicked,
+    /// The local API listener started.
     ApiListenerStarted,
+    /// The local API listener failed to start or serve.
     ApiListenerFailed,
 }
 
@@ -87,27 +103,51 @@ impl RuntimeSignal {
     }
 }
 
+/// Operation-duration summary parsed from the runtime log.
+///
+/// Inputs: none (plain struct). Output: retained, succeeded, failed and
+/// timed operation counts with mean and max durations and parse errors.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimePerformanceSummary {
+    /// Schema version of the summary record.
     pub schema_version: u32,
+    /// Operation records retained in the log.
     pub retained_operation_records: u64,
+    /// Operations recorded as succeeded.
     pub succeeded_operations: u64,
+    /// Operations recorded as failed.
     pub failed_operations: u64,
+    /// Operations recorded with duration data.
     pub timed_operations: u64,
+    /// Mean operation duration in milliseconds.
     pub mean_duration_ms: Option<u64>,
+    /// Maximum operation duration in milliseconds.
     pub max_duration_ms: Option<u64>,
+    /// Log lines that could not be parsed.
     pub parse_errors: u64,
 }
 
+/// Rotation status of the runtime log files.
+///
+/// Inputs: none (plain struct). Output: availability, per-file byte sizes,
+/// archive count and the configured caps.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeLogStatus {
+    /// Schema version of the status record.
     pub schema_version: u32,
+    /// Whether runtime logging is available.
     pub available: bool,
+    /// Size of the current log file in bytes.
     pub current_bytes: u64,
+    /// Total size of archived logs in bytes.
     pub archive_bytes: u64,
+    /// Combined size of current and archived logs in bytes.
     pub total_bytes: u64,
+    /// Number of archived log files.
     pub archive_count: usize,
+    /// Rotation threshold for the current log in bytes.
     pub max_current_bytes: u64,
+    /// Maximum number of archived logs retained.
     pub max_archives: usize,
 }
 
@@ -139,6 +179,9 @@ struct Inner {
     max_archives: usize,
 }
 
+/// Cloneable handle appending events to the runtime journal.
+///
+/// Inputs: none (plain struct). Output: the shared journal writer.
 #[derive(Clone)]
 pub struct RuntimeJournal {
     inner: Arc<Mutex<Inner>>,
@@ -226,7 +269,7 @@ impl RuntimeJournal {
             state,
             code: (state == OperationState::Failed).then(|| kind.failure_code().into()),
             retryable: state == OperationState::Failed && kind.retryable(),
-            message: String::new(),
+            message: String::default(),
             started_at: None,
             finished_at: None,
         };
@@ -272,7 +315,7 @@ impl RuntimeJournal {
             .map_err(|_| anyhow::anyhow!("Runtime log lock is poisoned"))?;
         let current = inner.directory.join(CURRENT_FILE);
         reject_symlink_if_present(&current)?;
-        let current_bytes = fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+        let current_bytes = fs::metadata(&current).map_or(0, |m| m.len());
         if current_bytes > 0 && current_bytes.saturating_add(line.len() as u64) > inner.max_bytes {
             rotate(&inner.directory, inner.max_archives)?;
         }
@@ -418,7 +461,7 @@ fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<R
     );
     let current = directory.join(CURRENT_FILE);
     reject_symlink_if_present(&current)?;
-    let current_bytes = fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+    let current_bytes = fs::metadata(&current).map_or(0, |m| m.len());
     let mut archive_count = 0usize;
     let mut archive_bytes = 0u64;
     for index in 1..=max_archives {
@@ -924,6 +967,151 @@ mod rotation_and_status_tests {
         assert_eq!(
             std::fs::read(dir.path().join("runtime.3.jsonl")).unwrap(),
             b"aaa"
+        );
+    }
+
+    /// Why: the operation id is a correlation UUID consumed by incident
+    /// tooling; a malformed id must be refused before any line reaches the
+    /// journal, otherwise unjoinable identifiers pollute every later report.
+    #[test]
+    fn malformed_operation_ids_are_refused_before_any_journal_write() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let status = OperationStatus {
+            operation_id: Some("not-a-uuid".into()),
+            kind: OperationKind::Backup,
+            state: OperationState::Failed,
+            code: None,
+            retryable: true,
+            message: String::default(),
+            started_at: None,
+            finished_at: None,
+        };
+        let error = journal.record_operation_status(&status).unwrap_err();
+        assert_eq!(error.to_string(), "Runtime operation ID must be a UUID");
+        assert!(
+            !root.path().join("logs").join(CURRENT_FILE).exists(),
+            "a refused record must never reach the journal"
+        );
+    }
+
+    /// Why: a duration is only meaningful with both timestamps present and
+    /// ordered; a backwards clock must yield no duration instead of a wrapped
+    /// enormous one that would poison every summary statistic.
+    #[test]
+    fn operation_durations_require_ordered_complete_timestamps() {
+        let base = Utc::now();
+        let mut status = OperationStatus::default();
+        assert_eq!(operation_duration_ms(&status), None);
+        status.started_at = Some(base);
+        assert_eq!(operation_duration_ms(&status), None);
+        status.finished_at = Some(base + chrono::Duration::milliseconds(7));
+        assert_eq!(operation_duration_ms(&status), Some(7));
+        status.finished_at = Some(base - chrono::Duration::milliseconds(1));
+        assert_eq!(operation_duration_ms(&status), None);
+
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        journal.record_operation_status(&status).unwrap();
+        let line = fs::read_to_string(root.path().join("logs").join(CURRENT_FILE)).unwrap();
+        assert!(
+            line.contains("\"duration_ms\":null"),
+            "an unmeasurable duration must be recorded as null: {line}"
+        );
+        assert_eq!(
+            performance_summary(root.path()).unwrap().timed_operations,
+            0
+        );
+    }
+
+    /// Why: a poisoned journal lock must fail closed on every surface instead
+    /// of silently dropping events; the error is the operator's signal that the
+    /// journal cannot be trusted, and no partial line may be written.
+    #[test]
+    fn a_poisoned_journal_lock_fails_closed_instead_of_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = journal.inner.lock().unwrap();
+            panic!("poison the runtime log lock");
+        }));
+        let error = journal
+            .record_event(RuntimeEvent::ProcessStarted)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Runtime log lock is poisoned");
+        assert_eq!(
+            journal.status().unwrap_err().to_string(),
+            "Runtime log lock is poisoned"
+        );
+        assert!(
+            !root.path().join("logs").join(CURRENT_FILE).exists(),
+            "a poisoned lock must not write"
+        );
+    }
+
+    /// Why: the performance summary must aggregate across the current file and
+    /// every retained archive, or post-rotation windows silently under-report
+    /// failure rates and durations.
+    #[test]
+    fn performance_summary_aggregates_current_and_archived_records() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let logs = root.path().join("logs");
+        std::fs::write(
+            logs.join("runtime.1.jsonl"),
+            concat!(
+                "{\"event\":\"operation\",\"state\":\"succeeded\",\"duration_ms\":10}\n",
+                "{\"event\":\"operation\",\"state\":\"failed\",\"duration_ms\":30}\n",
+                "{\"event\":\"operation\",\"state\":\"running\"}\n",
+                "not json\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            logs.join("runtime.2.jsonl"),
+            "{\"event\":\"operation\",\"state\":\"succeeded\",\"duration_ms\":20}\n",
+        )
+        .unwrap();
+        journal
+            .record_operation(OperationKind::Backup, OperationState::Succeeded)
+            .unwrap();
+
+        let summary = performance_summary(root.path()).unwrap();
+        assert_eq!(summary.retained_operation_records, 5);
+        assert_eq!(summary.succeeded_operations, 3);
+        assert_eq!(summary.failed_operations, 1);
+        assert_eq!(summary.timed_operations, 3);
+        assert_eq!(summary.mean_duration_ms, Some(20));
+        assert_eq!(summary.max_duration_ms, Some(30));
+        assert_eq!(summary.parse_errors, 1);
+    }
+
+    /// Why: the journal refuses symlinked log files because a link could
+    /// redirect the audit trail to attacker-controlled storage; the refusal
+    /// must trip before any write.
+    #[cfg(windows)]
+    #[test]
+    fn symlinked_runtime_log_files_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = RuntimeJournal::open(root.path()).unwrap();
+        let logs = root.path().join("logs");
+        let target = root.path().join("target.jsonl");
+        std::fs::write(&target, b"trusted").unwrap();
+        if std::os::windows::fs::symlink_file(&target, logs.join(CURRENT_FILE)).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix symlink tests cover the same guard there.
+            return;
+        }
+        assert_eq!(
+            journal
+                .record_event(RuntimeEvent::ProcessStarted)
+                .unwrap_err()
+                .to_string(),
+            "Runtime log files must not be symlinks"
+        );
+        assert_eq!(
+            journal.status().unwrap_err().to_string(),
+            "Runtime log files must not be symlinks"
         );
     }
 }

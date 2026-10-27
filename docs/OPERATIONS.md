@@ -345,6 +345,29 @@ Microsoft's newer WinApp CLI is intentionally not a production dependency here w
 remains public preview; stable Windows SDK/Artifact Signing primitives remain the
 release foundation.
 
+## DeepSource findings review
+
+DeepSource analyzes every `main` commit through the GitHub integration. Change
+acceptance and backlog disposition are separate obligations: a green check on
+the pushed commit does not close older findings.
+
+Before repository-wide triage or release review, retrieve the complete active
+default-branch occurrence inventory with `tools/deepsource_inventory.py`
+(Python 3.13+, standard library only). It authenticates through the official
+DeepSource CLI's stored session (`deepsource auth login` once) or a
+`DEEPSOURCE_TOKEN` environment variable; no token is embedded in the tool or
+the repository:
+
+```powershell
+python tools/deepsource_inventory.py --repository strmt7/rejection-rejector   --commit <full-default-branch-sha> --output out/deepsource-review
+```
+
+The tool reconciles every API page into one manifest and refuses to report a
+partial traversal as complete. Remediate findings at the source; record
+exact-source false-positive dispositions in
+[deepsource-dispositions.md](deepsource-dispositions.md). A dashboard ignore
+alone is never an acceptance basis.
+
 ## Escalation principles
 
 - Preserve evidence before repair.

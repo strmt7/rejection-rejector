@@ -52,7 +52,7 @@ fn eligible() -> (Job, Settings, DateTime<Utc>) {
             confidence: 99,
             evidence: email.text.clone(),
             explanation: "Explicit current hiring rejection".into(),
-            company: String::new(),
+            company: String::default(),
             position: "Engineer".into(),
             language: "en".into(),
         },

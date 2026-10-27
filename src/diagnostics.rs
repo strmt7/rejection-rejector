@@ -283,10 +283,18 @@ mod tests {
         ] {
             assert!(!text.contains(forbidden), "diagnostics leaked {forbidden}");
         }
-        assert_eq!(report["privacy"]["contains_api_token"], false);
-        assert_eq!(report["privacy"]["contains_oauth_credentials"], false);
-        assert_eq!(report["privacy"]["contains_candidate_facts"], false);
-        assert_eq!(report["privacy"]["automatic_upload"], false);
+        assert!(!report["privacy"]["contains_api_token"].as_bool().unwrap());
+        assert!(
+            !report["privacy"]["contains_oauth_credentials"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(
+            !report["privacy"]["contains_candidate_facts"]
+                .as_bool()
+                .unwrap()
+        );
+        assert!(!report["privacy"]["automatic_upload"].as_bool().unwrap());
         assert_eq!(report["report_version"], 5);
         assert_eq!(report["processing_failures"]["active_records"], 0);
         assert_eq!(report["processing_failures"]["retry_exhausted"], 0);
@@ -294,7 +302,7 @@ mod tests {
         assert_eq!(report["storage"]["schema_version"], 1);
         assert_eq!(report["scheduled_backup"]["schema_version"], 1);
         assert_eq!(report["backup_isolation"]["schema_version"], 1);
-        assert_eq!(report["enterprise_policy"]["active"], false);
+        assert!(!report["enterprise_policy"]["active"].as_bool().unwrap());
         assert_eq!(
             report["audit_protection"]["policy_requires_independent_anchor"],
             false
@@ -303,9 +311,9 @@ mod tests {
             report["audit_protection"]["independent_anchor_configured"],
             false
         );
-        assert_eq!(report["emergency_stop"]["active"], false);
-        assert_eq!(report["emergency_stop"]["configured"], false);
-        assert_eq!(report["database"]["integrity_ok"], true);
+        assert!(!report["emergency_stop"]["active"].as_bool().unwrap());
+        assert!(!report["emergency_stop"]["configured"].as_bool().unwrap());
+        assert!(report["database"]["integrity_ok"].as_bool().unwrap());
         assert!(report["runtime_log"].is_object() || report["runtime_log"].is_null());
         if report["runtime_log"].is_object() {
             assert!(report["runtime_log"]["total_bytes"].is_u64());
@@ -338,7 +346,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        engine.settings.ollama_url = server.url.clone();
+        engine.settings.ollama_url.clone_from(&server.url);
         engine.settings.task_qualification = Some(crate::config::TaskQualification {
             model: engine.settings.model.clone(),
             digest: "a".repeat(64),
@@ -388,7 +396,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        engine.settings.ollama_url = server.url.clone();
+        engine.settings.ollama_url.clone_from(&server.url);
 
         let report = report(&engine).unwrap();
         assert_eq!(report["local_ai"]["runtime_version"], "0.35.1");

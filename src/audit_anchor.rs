@@ -12,20 +12,39 @@ use std::{
 };
 
 const MAX_ANCHOR_BYTES: u64 = 64 * 1024;
+/// Environment variable naming the external audit-anchor file.
+///
+/// Inputs: none (constant). Output: `&str` — the variable name read by the
+/// anchor checks.
 pub const AUDIT_ANCHOR_ENV: &str = "RR_AUDIT_ANCHOR_FILE";
+/// Environment variable selecting the OS-level audit anchor.
+///
+/// Inputs: none (constant). Output: `&str` — the variable name for the
+/// platform anchor.
 pub const OS_AUDIT_ANCHOR_ENV: &str = "RR_OS_AUDIT_ANCHOR";
 const OS_AUDIT_ANCHOR_REQUIRED: &str = "required";
 #[cfg(any(windows, target_os = "macos"))]
-const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
+pub(crate) const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
 
+/// External anchor document bound to the workspace audit chain.
+///
+/// Inputs: none (plain struct). Output: the anchor format version,
+/// application version, creation time, workspace fingerprint and the
+/// anchored audit sequence and head.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditAnchor {
+    /// Schema version of the anchor record.
     pub format_version: u32,
+    /// Application version that wrote the anchor.
     pub application_version: String,
+    /// Timestamp of anchor creation.
     pub created_at: DateTime<Utc>,
+    /// Fingerprint of the workspace the anchor protects.
     pub workspace_fingerprint: String,
+    /// Audit sequence the anchor pins.
     pub audit_sequence: i64,
+    /// Audit head hash the anchor pins.
     pub audit_head: String,
 }
 
@@ -656,6 +675,154 @@ mod tests {
             );
         }
     }
+
+    /// Why: every invalid anchor field must be rejected with its own error so
+    /// a corrupted or forged anchor can be told apart from an unsupported
+    /// format; parsing is the first gate on the rollback trust root.
+    #[test]
+    fn anchor_parser_rejects_each_invalid_field_with_its_own_reason() {
+        let anchor = AuditAnchor {
+            format_version: 1,
+            application_version: "1.2.3".into(),
+            created_at: Utc::now(),
+            workspace_fingerprint: "a".repeat(64),
+            audit_sequence: 0,
+            audit_head: "b".repeat(64),
+        };
+        parse_anchor(&serde_json::to_vec(&anchor).unwrap()).unwrap();
+
+        let cases = [
+            (
+                AuditAnchor {
+                    format_version: 2,
+                    ..anchor.clone()
+                },
+                "Unsupported audit-anchor format",
+            ),
+            (
+                AuditAnchor {
+                    audit_sequence: -1,
+                    ..anchor.clone()
+                },
+                "Audit-anchor sequence must be non-negative",
+            ),
+            (
+                AuditAnchor {
+                    workspace_fingerprint: "zz".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor workspace fingerprint is invalid",
+            ),
+            (
+                AuditAnchor {
+                    audit_head: "nothex".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor journal hash is invalid",
+            ),
+            (
+                AuditAnchor {
+                    application_version: "  ".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor application version is invalid",
+            ),
+            (
+                AuditAnchor {
+                    application_version: "x".repeat(129),
+                    ..anchor.clone()
+                },
+                "Audit-anchor application version is invalid",
+            ),
+        ];
+        for (invalid, reason) in cases {
+            let error = parse_anchor(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+            assert_eq!(error.to_string(), reason, "anchor: {invalid:?}");
+        }
+        assert_eq!(
+            parse_anchor(b"not json").unwrap_err().to_string(),
+            "Audit-anchor JSON is invalid"
+        );
+    }
+
+    /// Why: the workspace fingerprint is the binding between an anchor and its
+    /// workspace; it must hash the trimmed vault identifier exactly (whitespace
+    /// in the file is incidental) and refuse missing, non-UTF-8 or non-UUID
+    /// identifiers instead of fingerprinting garbage.
+    #[test]
+    fn workspace_fingerprint_binds_the_vault_identifier_and_rejects_bad_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = workspace_fingerprint(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("vault-id is missing"),
+            "unexpected error: {error}"
+        );
+
+        std::fs::write(dir.path().join("vault-id"), b"\xff\xfe").unwrap();
+        let error = workspace_fingerprint(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("utf-8"),
+            "non-UTF-8 identifiers must be refused: {error}"
+        );
+
+        std::fs::write(dir.path().join("vault-id"), b"not-a-uuid").unwrap();
+        assert_eq!(
+            workspace_fingerprint(dir.path()).unwrap_err().to_string(),
+            "Workspace vault identifier is invalid"
+        );
+
+        let id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(dir.path().join("vault-id"), format!("  {id}\n")).unwrap();
+        assert_eq!(
+            workspace_fingerprint(dir.path()).unwrap(),
+            sha256_domain(b"rejection-rejector-workspace-v1\0", id.as_bytes())
+        );
+    }
+
+    /// Why: `anchor write` must be create-only — silently replacing an
+    /// existing anchor would destroy the trust root an operator pinned.
+    #[test]
+    fn write_anchor_never_overwrites_an_existing_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let path = root.path().join("anchor.json");
+        write_anchor(&store, &dir, &path).unwrap();
+        let pinned = std::fs::read(&path).unwrap();
+        let error = write_anchor(&store, &dir, &path).unwrap_err();
+        assert_eq!(error.to_string(), "Audit-anchor destination already exists");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            pinned,
+            "a refused write must leave the pinned anchor untouched"
+        );
+    }
+
+    /// Why: protected checkpoint failures must propagate through the wrapper
+    /// (a swallowed error would let the anchor silently go stale, defeating
+    /// rollback detection), and a passing gate short-circuits without touching
+    /// the OS store.
+    #[test]
+    fn checkpoint_gate_failures_propagate_through_the_wrapper() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let failing: crate::test_support::Gate =
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("protected checkpoint unavailable")));
+        let error = crate::test_support::with_audit_gate(failing, || {
+            checkpoint_os_anchor_if_required(&store, &dir)
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "protected checkpoint unavailable");
+
+        let passing: crate::test_support::Gate = std::sync::Arc::new(|| Ok(()));
+        assert!(
+            crate::test_support::with_audit_gate(passing, || {
+                checkpoint_os_anchor_if_required(&store, &dir)
+            })
+            .unwrap()
+            .is_none(),
+            "a passing gate must short-circuit without checkpointing"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -685,7 +852,7 @@ mod anchor_boundary_tests {
         assert!(read_small_regular_file(&missing).is_err());
 
         let as_dir = dir.path().join("dir");
-        std::fs::create_dir(&as_dir).unwrap();
+        std::fs::create_dir_all(&as_dir).unwrap();
         assert!(read_small_regular_file(&as_dir).is_err());
 
         let oversized = dir.path().join("big");
@@ -723,24 +890,19 @@ mod os_anchor_tests {
         Vault, private_dir, test_support::lock_credential_store, vault_id, write_new_private,
     };
 
-    /// Removes this test's audit-anchor credential even when an assertion
-    /// panics, so repeated runs never collide with stale anchors.
-    struct CredentialCleanup(String);
-    impl Drop for CredentialCleanup {
-        fn drop(&mut self) {
-            let _ = keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &self.0)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
-    fn workspace() -> (tempfile::TempDir, Store, PathBuf, CredentialCleanup) {
+    fn workspace() -> (
+        tempfile::TempDir,
+        Store,
+        PathBuf,
+        crate::vault::test_support::OsCredentialCleanup,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("workspace");
         private_dir(&dir).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         write_new_private(&dir.join("vault-id"), id.as_bytes()).unwrap();
         let store = Store::open(&dir.join("state.sqlite3"), Vault::random()).unwrap();
-        let cleanup = CredentialCleanup(id);
+        let cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id);
         (root, store, dir, cleanup)
     }
 
