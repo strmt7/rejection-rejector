@@ -117,85 +117,15 @@ pub(super) fn restore_backup_with_vault(
     manifest: &BackupManifest,
     vault: Vault,
 ) -> Result<RestoreReport> {
-    private_dir(data_dir)?;
-    let (current_manifest, backup_database) = validate_bundle_files(backup_dir)?;
-    ensure!(
-        current_manifest == *manifest,
-        "Backup manifest changed since the restore was authorized"
-    );
-    let current_vault_id = std::str::from_utf8(&read_small(&data_dir.join(VAULT_ID_NAME), 256)?)?
-        .trim()
-        .to_owned();
-    ensure!(
-        current_vault_id == manifest.vault_id,
-        "Backup vault identifier does not match this workspace"
-    );
-
-    // Validate the entire live file set before moving any member of that set.
-    // symlink_metadata also detects dangling symlinks, unlike Path::exists.
+    let (staging, input_stage, candidate) = stage_backup_input(data_dir, backup_dir, manifest)?;
     let live = data_dir.join(DATABASE_NAME);
     let live_wal = data_dir.join(format!("{DATABASE_NAME}-wal"));
     let live_shm = data_dir.join(format!("{DATABASE_NAME}-shm"));
     for path in [&live, &live_wal, &live_shm] {
         regular_or_absent(path)?;
     }
-
-    // RAII cleanup includes SQLite sidecars and pre-migration images on every
-    // failure. Neither the original bundle nor the live database is migrated.
-    let staging = tempfile::Builder::new()
-        .prefix(".restore-")
-        .tempdir_in(data_dir)?;
-    private_dir(staging.path())?;
-    let input_stage = staging.path().join("input.sqlite3");
-    let candidate = staging.path().join("candidate.sqlite3");
-    copy_private_new(&backup_database, &input_stage)?;
-    ensure!(
-        sha256_file(&input_stage)? == manifest.database_sha256,
-        "Staged backup checksum changed after manifest verification"
-    );
-
-    let (restored_schema_version, restored_audit_head) = {
-        // A separate same-key probe verifies the ORIGINAL, read-only image.
-        // Opening input_stage first would migrate it and invalidate its manifest.
-        let probe = Store::open(&staging.path().join("probe.sqlite3"), vault.clone())?;
-        let original = probe.verify_backup_file(&input_stage)?;
-        ensure!(
-            original.schema_version == manifest.schema_version,
-            "Original backup schema does not match the authorized manifest"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                original.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-                "Original backup audit head does not match the authorized manifest"
-            );
-        }
-        drop(probe);
-
-        let staged = Store::open(&input_stage, vault.clone())?;
-        staged.integrity_check()?;
-        ensure!(
-            staged.schema_version()? == DATABASE_SCHEMA_VERSION,
-            "Staged database was not migrated to the supported schema"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                staged.contains_audit_anchor(&manifest.audit_head)?,
-                "Migration did not preserve the authorized audit history"
-            );
-        }
-        let expected_head = staged.audit_head()?;
-        staged.backup_to(&candidate)?;
-        let verified = staged.verify_backup_file(&candidate)?;
-        ensure!(
-            verified.schema_version == DATABASE_SCHEMA_VERSION,
-            "Restored candidate schema does not match the migrated source"
-        );
-        ensure!(
-            verified.audit_head.as_deref() == Some(expected_head.as_str()),
-            "Restored candidate audit head does not match the migrated source"
-        );
-        (verified.schema_version, expected_head)
-    };
+    let (restored_schema_version, restored_audit_head) =
+        verify_staged_candidate(staging.path(), &input_stage, &candidate, manifest, &vault)?;
 
     let recovery_root = data_dir.join("recovery");
     private_dir(&recovery_root)?;
@@ -214,55 +144,20 @@ pub(super) fn restore_backup_with_vault(
         (&live_shm, rollback_dir.join(format!("{DATABASE_NAME}-shm"))),
     ];
     let mut moved = Vec::<(PathBuf, PathBuf)>::new();
-    let install = (|| -> Result<()> {
-        for (source, destination) in &files {
-            // Recheck at use as well, but route every failure through rollback.
-            regular_or_absent(source)?;
-            if source.exists() {
-                fs::rename(source, destination)?;
-                moved.push(((*source).clone(), destination.clone()));
-            }
-        }
-        #[cfg(test)]
-        ensure!(
-            !failpoints::install_rename_failing(),
-            "Injected install failure"
-        );
-        fs::rename(&candidate, &live)?;
-        Ok(())
-    })();
+    let install = install_restored_image(&files, &mut moved, &candidate, &live);
     if let Err(error) = install {
         rollback_files(&moved).context("Restore installation and rollback both failed")?;
         crate::session::complete_restore_transaction(data_dir)?;
         return Err(error.context("Restore installation failed; previous files restored"));
     }
 
-    let final_validation = (|| -> Result<()> {
-        #[cfg(test)]
-        ensure!(
-            !failpoints::post_install_validation_failing(),
-            "Injected post-install validation failure"
-        );
-        let restored = Store::open(&live, vault.clone())?;
-        restored.integrity_check()?;
-        let verification = restored.verify_backup_file(&live)?;
-        ensure!(
-            verification.schema_version == restored_schema_version,
-            "Restored schema changed unexpectedly"
-        );
-        ensure!(
-            verification.audit_head.as_deref() == Some(restored_audit_head.as_str()),
-            "Restored database audit head differs from the verified candidate"
-        );
-        if manifest.format_version >= 2 {
-            ensure!(
-                restored.contains_audit_anchor(&manifest.audit_head)?,
-                "Restored database lost the original backup audit history"
-            );
-        }
-        Ok(())
-    })();
-
+    let final_validation = validate_restored_image(
+        &live,
+        &vault,
+        manifest,
+        restored_schema_version,
+        &restored_audit_head,
+    );
     if let Err(error) = final_validation {
         // Never overwrite originals with leftover WAL/SHM from a failed image.
         let quarantine = rollback_dir.join("failed-restored-image");
@@ -299,6 +194,172 @@ pub(super) fn restore_backup_with_vault(
     };
     write_optional_restore_report(&rollback_dir, &mut report);
     Ok(report)
+}
+
+/// Stage the backup database into the workspace and authenticate it.
+///
+/// Inputs: `data_dir` — workspace directory; `backup_dir` — backup bundle;
+/// `manifest` — authorized manifest. Output: `Result<(tempfile::TempDir,
+/// PathBuf, PathBuf)>` — the staging directory, the staged original image
+/// and the candidate image path.
+fn stage_backup_input(
+    data_dir: &Path,
+    backup_dir: &Path,
+    manifest: &BackupManifest,
+) -> Result<(tempfile::TempDir, PathBuf, PathBuf)> {
+    private_dir(data_dir)?;
+    let (current_manifest, backup_database) = validate_bundle_files(backup_dir)?;
+    ensure!(
+        current_manifest == *manifest,
+        "Backup manifest changed since the restore was authorized"
+    );
+    let current_vault_id = std::str::from_utf8(&read_small(&data_dir.join(VAULT_ID_NAME), 256)?)?
+        .trim()
+        .to_owned();
+    ensure!(
+        current_vault_id == manifest.vault_id,
+        "Backup vault identifier does not match this workspace"
+    );
+
+    // Validate the entire live file set before moving any member of that set.
+    // symlink_metadata also detects dangling symlinks, unlike Path::exists.
+
+    // RAII cleanup includes SQLite sidecars and pre-migration images on every
+    // failure. Neither the original bundle nor the live database is migrated.
+    let staging = tempfile::Builder::new()
+        .prefix(".restore-")
+        .tempdir_in(data_dir)?;
+    private_dir(staging.path())?;
+    let input_stage = staging.path().join("input.sqlite3");
+    let candidate = staging.path().join("candidate.sqlite3");
+    copy_private_new(&backup_database, &input_stage)?;
+    ensure!(
+        sha256_file(&input_stage)? == manifest.database_sha256,
+        "Staged backup checksum changed after manifest verification"
+    );
+    Ok((staging, input_stage, candidate))
+}
+
+/// Authenticate, migrate and verify the staged backup in isolation.
+///
+/// Inputs: `staging` — staging directory; `input_stage` — staged original
+/// image; `candidate` — candidate image path; `manifest` — authorized
+/// manifest; `vault` — workspace vault. Output: `Result<(i64, String)>` —
+/// the restored schema version and the verified audit head.
+fn verify_staged_candidate(
+    staging: &Path,
+    input_stage: &Path,
+    candidate: &Path,
+    manifest: &BackupManifest,
+    vault: &Vault,
+) -> Result<(i64, String)> {
+    // A separate same-key probe verifies the ORIGINAL, read-only image.
+    // Opening input_stage first would migrate it and invalidate its manifest.
+    let probe = Store::open(&staging.join("probe.sqlite3"), vault.clone())?;
+    let original = probe.verify_backup_file(input_stage)?;
+    ensure!(
+        original.schema_version == manifest.schema_version,
+        "Original backup schema does not match the authorized manifest"
+    );
+    if manifest.format_version >= 2 {
+        ensure!(
+            original.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+            "Original backup audit head does not match the authorized manifest"
+        );
+    }
+    drop(probe);
+
+    let staged = Store::open(input_stage, vault.clone())?;
+    staged.integrity_check()?;
+    ensure!(
+        staged.schema_version()? == DATABASE_SCHEMA_VERSION,
+        "Staged database was not migrated to the supported schema"
+    );
+    if manifest.format_version >= 2 {
+        ensure!(
+            staged.contains_audit_anchor(&manifest.audit_head)?,
+            "Migration did not preserve the authorized audit history"
+        );
+    }
+    let expected_head = staged.audit_head()?;
+    staged.backup_to(candidate)?;
+    let verified = staged.verify_backup_file(candidate)?;
+    ensure!(
+        verified.schema_version == DATABASE_SCHEMA_VERSION,
+        "Restored candidate schema does not match the migrated source"
+    );
+    ensure!(
+        verified.audit_head.as_deref() == Some(expected_head.as_str()),
+        "Restored candidate audit head does not match the migrated source"
+    );
+    Ok((verified.schema_version, expected_head))
+}
+
+/// Move the live database aside and install the verified candidate.
+///
+/// Inputs: `files` — live members to park in the rollback directory;
+/// `moved` — completed moves, extended in place for rollback; `candidate` —
+/// verified candidate image; `live` — live database path. Output:
+/// `Result<()>` — `Ok` once the candidate is installed.
+fn install_restored_image(
+    files: &[(&PathBuf, PathBuf)],
+    moved: &mut Vec<(PathBuf, PathBuf)>,
+    candidate: &Path,
+    live: &Path,
+) -> Result<()> {
+    for (source, destination) in files {
+        // Recheck at use as well, but route every failure through rollback.
+        regular_or_absent(source)?;
+        if source.exists() {
+            fs::rename(source, destination)?;
+            moved.push(((*source).clone(), destination.clone()));
+        }
+    }
+    #[cfg(test)]
+    ensure!(
+        !failpoints::install_rename_failing(),
+        "Injected install failure"
+    );
+    fs::rename(candidate, live)?;
+    Ok(())
+}
+
+/// Validate the installed image against the verified candidate.
+///
+/// Inputs: `live` — installed database path; `vault` — workspace vault;
+/// `manifest` — authorized manifest; `restored_schema_version` — expected
+/// schema version; `restored_audit_head` — expected audit head. Output:
+/// `Result<()>` — `Ok` when the installed image matches exactly.
+fn validate_restored_image(
+    live: &Path,
+    vault: &Vault,
+    manifest: &BackupManifest,
+    restored_schema_version: i64,
+    restored_audit_head: &str,
+) -> Result<()> {
+    #[cfg(test)]
+    ensure!(
+        !failpoints::post_install_validation_failing(),
+        "Injected post-install validation failure"
+    );
+    let restored = Store::open(live, vault.clone())?;
+    restored.integrity_check()?;
+    let verification = restored.verify_backup_file(live)?;
+    ensure!(
+        verification.schema_version == restored_schema_version,
+        "Restored schema changed unexpectedly"
+    );
+    ensure!(
+        verification.audit_head.as_deref() == Some(restored_audit_head),
+        "Restored database audit head differs from the verified candidate"
+    );
+    if manifest.format_version >= 2 {
+        ensure!(
+            restored.contains_audit_anchor(&manifest.audit_head)?,
+            "Restored database lost the original backup audit history"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

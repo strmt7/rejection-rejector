@@ -14,10 +14,14 @@ selection belongs to `calibrate_zero_fp.py`, not to this script.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import random
 import sys
 from pathlib import Path
+
+import duty_cycle
+import progress
 
 TARGET_MODULES = (
     "q_proj",
@@ -58,7 +62,9 @@ def discover_target_modules(model) -> list[str]:
     names = {name.rsplit(".", 1)[-1] for name, _ in model.named_modules()}
     found = [m for m in TARGET_MODULES if m in names]
     if not found:
-        raise SystemExit(f"no known projection modules found; architecture exposes: {sorted(names)[:20]}")
+        raise SystemExit(
+            f"no known projection modules found; architecture exposes: {sorted(names)[:20]}"
+        )
     return found
 
 
@@ -72,6 +78,11 @@ def make_causal_collator(tokenizer):
     """
 
     def collate(features: list[dict]) -> dict:
+        """Pad one batch of tokenized rows.
+
+        Inputs: feature dicts with `input_ids`, `attention_mask`, `labels`.
+        Output: the padded batch; labels padded with -100.
+        """
         import torch
 
         labels = [feature["labels"] for feature in features]
@@ -105,68 +116,79 @@ def load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-model", required=True, help="Hugging Face model id or local path")
-    parser.add_argument("--dataset", type=Path, default=Path(__file__).resolve().parent / "data" / "sft_train.jsonl")
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "hip"), default="auto")
-    parser.add_argument("--max-seq-len", type=int, default=2048)
-    parser.add_argument(
-        "--pad-to-length", type=int, default=0,
-        help="Fixed token length per row (0 = off): over-long rows keep "
-             "head+tail, short rows pad with label -100. Uniform lengths "
-             "give uniform GPU bursts, required by the utilization ceiling",
-    )
-    parser.add_argument(
-        "--pace-load", action=argparse.BooleanOptionalAction, default=True,
-        help="Place the model onto the GPU leaf-module by leaf-module with "
-             "duty sleeps between moves (a direct device_map load produces "
-             "minutes of un-throttled bursts that breach the utilization "
-             "ceiling; verified live). Disable only for non-metered hosts",
-    )
-    parser.add_argument("--epochs", type=float, default=2.0)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=2e-4)
-    parser.add_argument("--lora-rank", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--model-billions", type=float, default=9.0,
-        help="Base model size in billions of parameters; used only by the "
-             "fail-closed resource guard to estimate peak VRAM before start",
-    )
-    parser.add_argument(
-        "--resume", type=Path, default=None,
-        help="Checkpoint directory to resume from (Trainer resume_from_checkpoint)",
-    )
-    parser.add_argument(
-        "--max-gpu-utilization", type=float, default=100.0,
-        help="GPU utilization ceiling in percent (20-100): enforced purely "
-             "by pacing this loop's own steps (duty-cycle sleeps), never via "
-             "driver/fan/clock/power controls. Seeded into duty.json when "
-             "absent; the monitor GUI tunes it live mid-run",
-    )
-    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
-    parser.add_argument("--progress-file", type=Path, help="Heartbeat JSON for live probing (default: output-dir/progress.json)")
-    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
-    args = parser.parse_args()
+def tokenize_row(row: dict, tokenizer, pad_to_length: int, max_seq_len: int) -> dict:
+    """Tokenize one chat row for causal-LM training.
 
-    import duty_cycle
+    Inputs: `row` — a `messages` row; `tokenizer` — the model tokenizer;
+    `pad_to_length` — fixed token length per row (0 = off); `max_seq_len`
+    — truncation bound. Output: dict with `input_ids`, `attention_mask`
+    and `labels` (labels mirror `input_ids` so the loss trains on the full
+    transcript including the assistant answer). Without `pad_to_length`,
+    rows are truncated to `max_seq_len`. With `pad_to_length N`, every row
+    becomes EXACTLY N tokens: over-long rows keep the head (subject +
+    opening) and the tail (the hiring decision is usually in the closing)
+    and drop the middle; short rows are pad-filled with label -100 so
+    pads never contribute to the loss. Fixed lengths make GPU bursts
+    uniform — the phase-proof guarantee behind the GPU utilization
+    ceiling (bursts must stay below half a meter window).
+    """
+    text = tokenizer.apply_chat_template(row["messages"], tokenize=False)
+    if pad_to_length:
+        n = pad_to_length
+        ids = tokenizer(text)["input_ids"][:max_seq_len]
+        if len(ids) > n:
+            tail = n // 4
+            ids = ids[: n - tail] + ids[-tail:]
+        pad_id = tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = tokenizer.eos_token_id
+        attn = [1] * len(ids) + [0] * (n - len(ids))
+        ids = ids + [pad_id] * (n - len(ids))
+        labels = [tok if keep else -100 for tok, keep in zip(ids, attn)]
+        return {"input_ids": ids, "attention_mask": attn, "labels": labels}
+    encoded = tokenizer(text, truncation=True, max_length=max_seq_len)
+    encoded["labels"] = list(encoded["input_ids"])
+    return encoded
+
+
+def sample_vram(vram_state: dict) -> None:
+    """Record one fresh main-thread VRAM reading.
+
+    Inputs: `vram_state` — shared `{"reading", "at"}` dict. Output: none;
+    the dict is updated in place.
+    """
+    import time as _t
+
     import torch
-    from datasets import Dataset
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from transformers import (
-        AutoModelForCausalLM,
-        AutoTokenizer,
-        BitsAndBytesConfig,
-        Trainer,
-        TrainingArguments,
-        TrainerCallback,
-    )
 
-    class ProgressCallback(TrainerCallback):
+    free, total = torch.cuda.mem_get_info()
+    vram_state["reading"] = (int(free), int(total))
+    vram_state["at"] = _t.time()
+
+
+def vram_reading_or_raise(vram_state: dict) -> tuple[int, int]:
+    """Return the last fresh VRAM reading or fail closed.
+
+    Inputs: `vram_state` — shared `{"reading", "at"}` dict. Output: the
+    `(free, total)` reading; raises RuntimeError when no reading fresher
+    than 30 seconds exists.
+    """
+    import time as _t
+
+    reading, at = vram_state["reading"], vram_state["at"]
+    if reading is None or _t.time() - at > 30.0:
+        raise RuntimeError("no fresh main-thread VRAM reading")
+    return reading
+
+
+def _make_progress_callback(callback_base):
+    """Build the heartbeat TrainerCallback class.
+
+    Inputs: `callback_base` — `transformers.TrainerCallback` (kept lazy so
+    heavy imports stay inside `main`). Output: the ProgressCallback class.
+    """
+
+    class ProgressCallback(callback_base):
         """Training heartbeat for live probing.
 
         Inputs: `path` — heartbeat file; trainer callbacks receive the run
@@ -187,9 +209,15 @@ def main() -> int:
             self.duty_path = duty_cycle.control_path_for(path)
 
         def on_train_begin(self, args, state, control, **kwargs):
+            """Write the initial heartbeat. Inputs: trainer callback args.
+            Output: none.
+            """
             self._write(state, "running")
 
         def on_step_end(self, args, state, control, **kwargs):
+            """Probe VRAM, drain CUDA, heartbeat and honour stops. Inputs:
+            trainer callback args. Output: none.
+            """
             # GPU memory queries happen here, on the main thread that owns
             # the GPU work: calling GPU APIs from the watchdog thread races
             # the bridge and intermittently fails or wedges it.
@@ -239,9 +267,15 @@ def main() -> int:
                 print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
 
         def on_train_end(self, args, state, control, **kwargs):
+            """Write the terminal heartbeat. Inputs: trainer callback args.
+            Output: none.
+            """
             self._write(state, "complete")
 
         def _write(self, state, status: str) -> None:
+            """Atomically persist one heartbeat record. Inputs: trainer run
+            `state` and the status string. Output: none.
+            """
             now = self._time.time()
             step = int(state.global_step)
             record = {
@@ -255,214 +289,17 @@ def main() -> int:
             }
             progress.write_progress(self.path, record)
 
-    import progress
-    from transformers import TrainerCallback  # noqa: F401  (documents the callback contract)
+    return ProgressCallback
 
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    device = resolve_device(args.device)
 
-    # Fail-closed resource gate: never start a run that could push VRAM, RAM
-    # or storage toward a limit. tools/resource_guard.py is exhaustively
-    # tested and its peak estimator is deliberately pessimistic, so an
-    # under-sized host refuses to start instead of crashing mid-run.
-    args.output_dir.parent.mkdir(parents=True, exist_ok=True)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-    import resource_guard as rg
+def _make_paced_trainer(trainer_base):
+    """Build the duty-paced Trainer subclass.
 
-    need = rg.estimate_training_vram(
-        param_billions=args.model_billions, seq_len=args.max_seq_len
-    )
-    gate = rg.preflight(
-        limits=rg.Thresholds(min_free_vram=need, require_vram=(device == "cuda")),
-        disk_path=str(args.output_dir.parent),
-    )
-    if not gate.ok:
-        for violation in gate.violations:
-            print(
-                f"resource-guard: {violation.resource}: "
-                f"{violation.reason}: {violation.detail}",
-                file=sys.stderr,
-            )
-        print("resource-guard: refusing to start (fail-closed)", file=sys.stderr)
-        return 2
+    Inputs: `trainer_base` — `transformers.Trainer` (kept lazy so heavy
+    imports stay inside `main`). Output: the PacedTrainer class.
+    """
 
-    rows = load_jsonl(args.dataset)
-    if not rows:
-        print("empty dataset", file=sys.stderr)
-        return 2
-
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    quant = None
-    if args.load_in_4bit:
-        compute = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        quant = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=compute,
-        )
-    pace_load = device == "cuda" and args.pace_load
-    model = AutoModelForCausalLM.from_pretrained(
-        args.base_model,
-        quantization_config=quant,
-        device_map={"": "cpu"} if pace_load else ({"": 0} if device == "cuda" else None),
-        dtype=torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float32,
-    )
-    if pace_load:
-        # Paced GPU placement: a direct device_map={"": 0} load produces
-        # minutes of un-throttled GPU bursts that breach the utilization
-        # ceiling (verified live: the meter watchdog stopped every attempt
-        # inside its load phase). Load to CPU first, then move leaf modules
-        # one at a time with duty sleeps between — each burst is a single
-        # module move (~20-100ms), each gap follows the same duty formula
-        # as training steps.
-        import time as _tl
-
-        load_target = duty_cycle.validate_target_pct(args.max_gpu_utilization)
-
-        def _place(module: torch.nn.Module) -> None:
-            children = list(module.children())
-            if children:
-                for child in children:
-                    _place(child)
-                return
-            started = _tl.perf_counter()
-            module.to("cuda")
-            torch.cuda.synchronize()
-            on_time = _tl.perf_counter() - started
-            duty_cycle.paced_sleep(duty_cycle.sleep_seconds(on_time, load_target))
-
-        _place(model)
-        # Completeness catch-all: leaf placement above is paced per leaf module,
-        # but a non-leaf module can carry its own direct parameters or buffers
-        # (rotary tables, causal-conv state, attention masks) that leaf-only
-        # recursion never touches. `model.to` moves any remaining CPU tensors
-        # with proper PyTorch semantics (preserves weight tying, moves
-        # bitsandbytes quant_state); already-placed tensors are cheap no-ops.
-        # This closes the placement gap the device assert below verifies.
-        model.to("cuda")
-        torch.cuda.synchronize()
-        leftovers = sorted(
-            {str(p.device) for p in model.parameters()}
-            | {str(b.device) for b in model.buffers()}
-        )
-        if leftovers != ["cuda:0"]:
-            raise RuntimeError(
-                f"paced load must land every parameter/buffer on cuda:0; "
-                f"devices seen: {leftovers}"
-            )
-    if args.load_in_4bit:
-        if args.bf16:
-            # Memory-lean path: peft's prepare casts embeddings/lm-head to
-            # fp32 (~3.8 GiB peak), which OOMs a 16 GiB GPU immediately after
-            # load. In bf16 mode skip that cast and enable checkpointing
-            # directly; inputs require grads for LoRA and activations stay
-            # checkpointed, so training is stable without the fp32 peak.
-            model.gradient_checkpointing_enable()
-            model.enable_input_require_grads()
-        else:
-            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-        # peft's prepare casts every non-quantized parameter to fp32; on a
-        # 16 GiB GPU the embeddings/lm-head cast alone peaks ~3.8 GiB and
-        # OOMs right after load. Norms stay fp32 (stability), but the large
-        # tensors are held in the compute dtype, halving that peak. Inputs:
-        # `model` (in place). Output: none.
-        for _name, param in model.named_parameters():
-            if param.dtype == torch.float32 and param.numel() > 10_000_000:
-                target = torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float16
-                param.data = param.data.to(target)
-
-    lora = LoraConfig(
-        r=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=discover_target_modules(model),
-    )
-    model = get_peft_model(model, lora)
-
-    def tokenize_row(row: dict) -> dict:
-        """Tokenize one chat row for causal-LM training.
-
-        Inputs: `row` — a `messages` row. Output: dict with `input_ids`,
-        `attention_mask` and `labels` (labels mirror `input_ids` so the
-        loss trains on the full transcript including the assistant
-        answer). Without `--pad-to-length`, rows are truncated to
-        `--max-seq-len`. With `--pad-to-length N`, every row becomes
-        EXACTLY N tokens: over-long rows keep the head (subject + opening)
-        and the tail (the hiring decision is usually in the closing) and
-        drop the middle; short rows are pad-filled with label -100 so
-        pads never contribute to the loss. Fixed lengths make GPU bursts
-        uniform — the phase-proof guarantee behind the GPU utilization
-        ceiling (bursts must stay below half a meter window).
-        """
-        text = tokenizer.apply_chat_template(row["messages"], tokenize=False)
-        if args.pad_to_length:
-            n = args.pad_to_length
-            ids = tokenizer(text)["input_ids"][: args.max_seq_len]
-            if len(ids) > n:
-                tail = n // 4
-                ids = ids[: n - tail] + ids[-tail:]
-            pad_id = tokenizer.pad_token_id
-            if pad_id is None:
-                pad_id = tokenizer.eos_token_id
-            attn = [1] * len(ids) + [0] * (n - len(ids))
-            ids = ids + [pad_id] * (n - len(ids))
-            labels = [tok if keep else -100 for tok, keep in zip(ids, attn)]
-            return {"input_ids": ids, "attention_mask": attn, "labels": labels}
-        encoded = tokenizer(text, truncation=True, max_length=args.max_seq_len)
-        encoded["labels"] = list(encoded["input_ids"])
-        return encoded
-
-    args_out = args.output_dir
-    args_out.mkdir(parents=True, exist_ok=True)
-    train_args = TrainingArguments(
-        output_dir=str(args_out / "checkpoints"),
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.learning_rate,
-        logging_steps=10,
-        save_strategy="steps",
-        save_steps=25,
-        save_total_limit=2,
-        report_to=[],
-        seed=args.seed,
-        use_cpu=device == "cpu",
-        bf16=args.bf16,
-        # Resume robustness: skip HF's dataloader fast-forward on resume. That
-        # fast-forward can mis-advance the data stream; restarting it is the
-        # supported way to avoid skip-overshoot. NOTE: a separate observed
-        # issue is that resume-from-checkpoint can report 0 steps and exit at
-        # the resumed epoch (root cause not yet isolated); a fresh run (no
-        # --resume) trains to completion. See docs/LESSONS.md.
-        ignore_data_skip=True,
-    )
-    vram_state = {"reading": None, "at": 0.0}
-
-    def sample_vram():
-        import time as _t
-
-        import torch
-
-        free, total = torch.cuda.mem_get_info()
-        vram_state["reading"] = (int(free), int(total))
-        vram_state["at"] = _t.time()
-
-    def vram_reading_or_raise():
-        import time as _t
-
-        reading, at = vram_state["reading"], vram_state["at"]
-        if reading is None or _t.time() - at > 30.0:
-            raise RuntimeError("no fresh main-thread VRAM reading")
-        return reading
-
-    class PacedTrainer(Trainer):
+    class PacedTrainer(trainer_base):
         """Trainer with GPU-burst pacing between micro-batches.
 
         The GPU utilization ceiling is enforced at MICRO-BATCH granularity:
@@ -497,7 +334,6 @@ def main() -> int:
             Output: the micro-batch loss (unchanged semantics; pacing is
             pure host-side sleeping before the call).
             """
-            import json
             import os
             import time as _t
 
@@ -559,75 +395,180 @@ def main() -> int:
                 pass
             return loss
 
-    progress_path = args.progress_file or (args_out / "progress.json")
-    # Seed the duty control file only when absent: a monitor-chosen ceiling
-    # must SURVIVE a resume (the live value wins over the CLI default).
-    duty_path = duty_cycle.control_path_for(progress_path)
-    if duty_cycle.read_target(duty_path) is None:
-        duty_cycle.write_target(duty_path, duty_cycle.validate_target_pct(args.max_gpu_utilization))
-    trainer = PacedTrainer(
-        model=model,
-        args=train_args,
-        train_dataset=Dataset.from_list([tokenize_row(row) for row in rows]),
-        data_collator=make_causal_collator(tokenizer),
-        duty_path=duty_path,
-        seed_target=args.max_gpu_utilization,
-        progress_path=progress_path,
-        callbacks=[ProgressCallback(
-            progress_path,
-            vram_probe=sample_vram,
-        )],
-    )
-    def stop_on_resource_breach(v):
-        """Stop training before any resource limit is reached. Inputs:
-        `v` — the first guard violation. Output: none; sets the trainer's
-        cooperative stop flag so the run ends cleanly and the adapter
-        checkpoint from the last completed step survives."""
-        print(
-            f"resource-guard: stopping training: {v.resource}: "
-            f"{v.reason}: {v.detail}",
-            file=sys.stderr,
+    return PacedTrainer
+
+
+def _place(module, load_target: float) -> None:
+    """Move one leaf module to cuda with duty sleeps between moves.
+
+    Inputs: `module` — model or submodule (recursed to its leaves);
+    `load_target` — validated utilization target for the move pacing.
+    Output: none; each leaf is moved to cuda with a duty sleep after it.
+    """
+    import time as _tl
+
+    import torch
+
+    children = list(module.children())
+    if children:
+        for child in children:
+            _place(child, load_target)
+        return
+    started = _tl.perf_counter()
+    module.to("cuda")
+    torch.cuda.synchronize()
+    on_time = _tl.perf_counter() - started
+    duty_cycle.paced_sleep(duty_cycle.sleep_seconds(on_time, load_target))
+
+
+def _load_model(args, device: str, pace_load: bool):
+    """Quantize, load and optionally pace-place the causal LM.
+
+    Inputs: parsed CLI args, resolved device string, and whether paced GPU
+    placement applies. Output: the loaded model on its target device.
+    """
+    import time as _tl
+
+    import torch
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+    quant = None
+    if args.load_in_4bit:
+        compute = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        quant = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=compute,
         )
-        trainer.control.should_training_stop = True
+    model = AutoModelForCausalLM.from_pretrained(
+        args.base_model,
+        quantization_config=quant,
+        device_map={"": "cpu"} if pace_load else ({"": 0} if device == "cuda" else None),
+        dtype=torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float32,
+    )
+    if pace_load:
+        # Paced GPU placement: a direct device_map={"": 0} load produces
+        # minutes of un-throttled GPU bursts that breach the utilization
+        # ceiling (verified live: the meter watchdog stopped every attempt
+        # inside its load phase). Load to CPU first, then move leaf modules
+        # one at a time with duty sleeps between — each burst is a single
+        # module move (~20-100ms), each gap follows the same duty formula
+        # as training steps.
+        load_target = duty_cycle.validate_target_pct(args.max_gpu_utilization)
+        _place(model, load_target)
+        # Completeness catch-all: leaf placement above is paced per leaf module,
+        # but a non-leaf module can carry its own direct parameters or buffers
+        # (rotary tables, causal-conv state, attention masks) that leaf-only
+        # recursion never touches. `model.to` moves any remaining CPU tensors
+        # with proper PyTorch semantics (preserves weight tying, moves
+        # bitsandbytes quant_state); already-placed tensors are cheap no-ops.
+        # This closes the placement gap the device assert below verifies.
+        model.to("cuda")
+        torch.cuda.synchronize()
+        leftovers = sorted(
+            {str(p.device) for p in model.parameters()}
+            | {str(b.device) for b in model.buffers()}
+        )
+        if leftovers != ["cuda:0"]:
+            raise RuntimeError(
+                f"paced load must land every parameter/buffer on cuda:0; "
+                f"devices seen: {leftovers}"
+            )
+    return model
 
-    # Mid-step stall instrument: the trainer callback only runs between
-    # steps, so a wedge INSIDE a step is invisible to it. This daemon watch
-    # the heartbeat file's mtime instead and dumps every thread's stack when
-    # it goes stale, then exits with code 97 so a wrapper loop can resume
-    # from the latest checkpoint (a wedge costs one checkpoint interval).
-    def stall_watchdog() -> None:
-        import faulthandler
-        import os as _os
-        import time as _t
 
-        dumped = False
-        while True:
-            _t.sleep(30)
-            try:
-                age = _t.time() - progress_path.stat().st_mtime
-            except OSError:
-                continue
-            if age > 120.0 and not dumped:
-                dumped = True
-                print(
-                    f"resource-guard: STALLED {age:.0f}s (heartbeat stale "
-                    f"mid-run); dumping all thread stacks",
-                    file=sys.stderr,
-                )
-                faulthandler.dump_traceback(file=sys.stderr)
-                _t.sleep(10)  # let the dump flush through tee
-                _os._exit(97)
+def _prepare_kbit(model, args) -> None:
+    """Prepare a 4-bit model for LoRA training with a lean fp32 peak.
 
-    threading_mod = __import__("threading")
-    threading_mod.Thread(target=stall_watchdog, daemon=True).start()
+    Inputs: `model` (modified in place), parsed CLI args. Output: none.
+    """
+    import torch
+    from peft import prepare_model_for_kbit_training
+
+    if args.bf16:
+        # Memory-lean path: peft's prepare casts embeddings/lm-head to
+        # fp32 (~3.8 GiB peak), which OOMs a 16 GiB GPU immediately after
+        # load. In bf16 mode skip that cast and enable checkpointing
+        # directly; inputs require grads for LoRA and activations stay
+        # checkpointed, so training is stable without the fp32 peak.
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+    else:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    # peft's prepare casts every non-quantized parameter to fp32; on a
+    # 16 GiB GPU the embeddings/lm-head cast alone peaks ~3.8 GiB and
+    # OOMs right after load. Norms stay fp32 (stability), but the large
+    # tensors are held in the compute dtype, halving that peak. Inputs:
+    # `model` (in place). Output: none.
+    for _name, param in model.named_parameters():
+        if param.dtype == torch.float32 and param.numel() > 10_000_000:
+            target = (
+                torch.bfloat16
+                if (args.bf16 or torch.cuda.is_bf16_supported())
+                else torch.float16
+            )
+            param.data = param.data.to(target)
+
+
+def stop_on_resource_breach(trainer, v) -> None:
+    """Stop training before any resource limit is reached. Inputs:
+    `trainer` — the live trainer; `v` — the first guard violation. Output:
+    none; sets the trainer's cooperative stop flag so the run ends cleanly
+    and the adapter checkpoint from the last completed step survives.
+    """
+    print(
+        f"resource-guard: stopping training: {v.resource}: "
+        f"{v.reason}: {v.detail}",
+        file=sys.stderr,
+    )
+    trainer.control.should_training_stop = True
+
+
+def stall_watchdog(progress_path: Path) -> None:
+    """Dump all thread stacks and exit 97 when the heartbeat goes stale.
+
+    Input: `progress_path` — the heartbeat file whose mtime is watched.
+    Output: none (daemon thread body; never returns).
+    """
+    import faulthandler
+    import os as _os
+    import time as _t
+
+    dumped = False
+    while True:
+        _t.sleep(30)
+        try:
+            age = _t.time() - progress_path.stat().st_mtime
+        except OSError:
+            continue
+        if age > 120.0 and not dumped:
+            dumped = True
+            print(
+                f"resource-guard: STALLED {age:.0f}s (heartbeat stale "
+                f"mid-run); dumping all thread stacks",
+                file=sys.stderr,
+            )
+            faulthandler.dump_traceback(file=sys.stderr)
+            _t.sleep(10)  # let the dump flush through tee
+            _os._exit(97)
+
+
+def _warmup(model) -> None:
+    """Warm the CUDA allocator and common kernels with tiny bursts.
+
+    Input: `model` — the loaded model. Output: none; failures are reported
+    and skipped, never fatal.
+    """
+    import time as _tw
+
+    import torch
 
     # Warmup passes: warm the CUDA allocator and the common kernels with
     # TINY bursts (<50ms each) so the first paced micro-batches are not
     # inflated — a resume previously produced 0.6-0.7s warmup bursts that
     # breached the utilization ceiling (verified in pace-log evidence).
     try:
-        import time as _tw
-
         warm_ids = torch.zeros((1, 16), dtype=torch.long, device=model.device)
         for _ in range(3):
             out = model(input_ids=warm_ids, labels=warm_ids)
@@ -638,13 +579,209 @@ def main() -> int:
     except Exception as exc:
         print(f"resource-guard: warmup skipped: {exc!r}", file=sys.stderr)
 
+
+def main() -> int:
+    """Fine-tune a LoRA/QLoRA adapter on the FP-weighted SFT dataset.
+
+    Inputs: argv (base model, dataset, output directory, device, pacing
+    and training knobs). Output: exit status 0 on success, 2 when the
+    resource gate refuses to start or the dataset is empty; writes the
+    adapter, tokenizer, checkpoints and train_report.json.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-model", required=True, help="Hugging Face model id or local path")
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path(__file__).resolve().parent / "data" / "sft_train.jsonl",
+    )
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "hip"), default="auto")
+    parser.add_argument("--max-seq-len", type=int, default=2048)
+    parser.add_argument(
+        "--pad-to-length", type=int, default=0,
+        help="Fixed token length per row (0 = off): over-long rows keep "
+             "head+tail, short rows pad with label -100. Uniform lengths "
+             "give uniform GPU bursts, required by the utilization ceiling",
+    )
+    parser.add_argument(
+        "--pace-load", action=argparse.BooleanOptionalAction, default=True,
+        help="Place the model onto the GPU leaf-module by leaf-module with "
+             "duty sleeps between moves (a direct device_map load produces "
+             "minutes of un-throttled bursts that breach the utilization "
+             "ceiling; verified live). Disable only for non-metered hosts",
+    )
+    parser.add_argument("--epochs", type=float, default=2.0)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--grad-accum", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--lora-rank", type=int, default=16)
+    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--model-billions", type=float, default=9.0,
+        help="Base model size in billions of parameters; used only by the "
+             "fail-closed resource guard to estimate peak VRAM before start",
+    )
+    parser.add_argument(
+        "--resume", type=Path, default=None,
+        help="Checkpoint directory to resume from (Trainer resume_from_checkpoint)",
+    )
+    parser.add_argument(
+        "--max-gpu-utilization", type=float, default=100.0,
+        help="GPU utilization ceiling in percent (20-100): enforced purely "
+             "by pacing this loop's own steps (duty-cycle sleeps), never via "
+             "driver/fan/clock/power controls. Seeded into duty.json when "
+             "absent; the monitor GUI tunes it live mid-run",
+    )
+    parser.add_argument(
+        "--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it"
+    )
+    parser.add_argument(
+        "--progress-file",
+        type=Path,
+        help="Heartbeat JSON for live probing (default: output-dir/progress.json)",
+    )
+    parser.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
+    args = parser.parse_args()
+
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig, get_peft_model
+    from transformers import (
+        AutoTokenizer,
+        Trainer,
+        TrainingArguments,
+        TrainerCallback,
+    )
+
+    # The callback contract: ProgressCallback subclasses TrainerCallback.
+    ProgressCallback = _make_progress_callback(TrainerCallback)
+
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    device = resolve_device(args.device)
+
+    # Fail-closed resource gate: never start a run that could push VRAM, RAM
+    # or storage toward a limit. tools/resource_guard.py is exhaustively
+    # tested and its peak estimator is deliberately pessimistic, so an
+    # under-sized host refuses to start instead of crashing mid-run.
+    args.output_dir.parent.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import resource_guard as rg
+
+    need = rg.estimate_training_vram(
+        param_billions=args.model_billions, seq_len=args.max_seq_len
+    )
+    gate = rg.preflight(
+        limits=rg.Thresholds(min_free_vram=need, require_vram=device == "cuda"),
+        disk_path=str(args.output_dir.parent),
+    )
+    if not gate.ok:
+        for violation in gate.violations:
+            print(
+                f"resource-guard: {violation.resource}: "
+                f"{violation.reason}: {violation.detail}",
+                file=sys.stderr,
+            )
+        print("resource-guard: refusing to start (fail-closed)", file=sys.stderr)
+        return 2
+
+    rows = load_jsonl(args.dataset)
+    if not rows:
+        print("empty dataset", file=sys.stderr)
+        return 2
+
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    pace_load = device == "cuda" and args.pace_load
+    model = _load_model(args, device, pace_load)
+    if args.load_in_4bit:
+        _prepare_kbit(model, args)
+
+    lora = LoraConfig(
+        r=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=discover_target_modules(model),
+    )
+    model = get_peft_model(model, lora)
+
+    args_out = args.output_dir
+    args_out.mkdir(parents=True, exist_ok=True)
+    train_args = TrainingArguments(
+        output_dir=str(args_out / "checkpoints"),
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        learning_rate=args.learning_rate,
+        logging_steps=10,
+        save_strategy="steps",
+        save_steps=25,
+        save_total_limit=2,
+        report_to=[],
+        seed=args.seed,
+        use_cpu=device == "cpu",
+        bf16=args.bf16,
+        # Resume robustness: skip HF's dataloader fast-forward on resume. That
+        # fast-forward can mis-advance the data stream; restarting it is the
+        # supported way to avoid skip-overshoot. NOTE: a separate observed
+        # issue is that resume-from-checkpoint can report 0 steps and exit at
+        # the resumed epoch (root cause not yet isolated); a fresh run (no
+        # --resume) trains to completion. See docs/LESSONS.md.
+        ignore_data_skip=True,
+    )
+    vram_state = {"reading": None, "at": 0.0}
+
+    PacedTrainer = _make_paced_trainer(Trainer)
+
+    progress_path = args.progress_file or (args_out / "progress.json")
+    # Seed the duty control file only when absent: a monitor-chosen ceiling
+    # must SURVIVE a resume (the live value wins over the CLI default).
+    duty_path = duty_cycle.control_path_for(progress_path)
+    if duty_cycle.read_target(duty_path) is None:
+        duty_cycle.write_target(
+            duty_path, duty_cycle.validate_target_pct(args.max_gpu_utilization)
+        )
+    trainer = PacedTrainer(
+        model=model,
+        args=train_args,
+        train_dataset=Dataset.from_list([
+            tokenize_row(row, tokenizer, args.pad_to_length, args.max_seq_len) for row in rows
+        ]),
+        data_collator=make_causal_collator(tokenizer),
+        duty_path=duty_path,
+        seed_target=args.max_gpu_utilization,
+        progress_path=progress_path,
+        callbacks=[ProgressCallback(
+            progress_path,
+            vram_probe=functools.partial(sample_vram, vram_state),
+        )],
+    )
+
+    # Mid-step stall instrument: the trainer callback only runs between
+    # steps, so a wedge INSIDE a step is invisible to it. This daemon watch
+    # the heartbeat file's mtime instead and dumps every thread's stack when
+    # it goes stale, then exits with code 97 so a wrapper loop can resume
+    # from the latest checkpoint (a wedge costs one checkpoint interval).
+    threading_mod = __import__("threading")
+    threading_mod.Thread(
+        target=functools.partial(stall_watchdog, progress_path), daemon=True
+    ).start()
+
+    _warmup(model)
+
     # Continuous observation: a second process eating VRAM/RAM, or runaway
     # output growth, ends the run BEFORE anything approaches a limit.
     with rg.ResourceWatchdog(
-        limits=rg.Thresholds(require_vram=(device == "cuda")),
+        limits=rg.Thresholds(require_vram=device == "cuda"),
         soft_resources=frozenset({"vram"}),
-        vram_probe=vram_reading_or_raise,
-        on_violation=stop_on_resource_breach,
+        vram_probe=functools.partial(vram_reading_or_raise, vram_state),
+        on_violation=functools.partial(stop_on_resource_breach, trainer),
         disk_path=str(args.output_dir.parent),
     ):
         result = trainer.train(resume_from_checkpoint=str(args.resume) if args.resume else None)
@@ -665,7 +802,9 @@ def main() -> int:
         "torch": torch.__version__,
         "seed": args.seed,
     }
-    (args_out / "train_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (args_out / "train_report.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(report, indent=2))
     return 0
 

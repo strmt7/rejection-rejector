@@ -2,8 +2,9 @@
 //!
 //! Gmail app passwords authenticate over IMAP (read) and SMTP (send) only; the
 //! Gmail REST API is OAuth-only. This backend therefore speaks IMAP/SMTP with
-//! the app password held in [`AppPasswordCredentials`]. The `raw` message the
-//! engine hands [`MailTransport::send`] is base64url-encoded RFC-5322 MIME (see
+//! the app password held in [`crate::mail_transport::AppPasswordCredentials`]. The `raw` message the
+//! engine hands [`crate::mail_transport::MailTransport::send`] is base64url-encoded
+//! RFC-5322 MIME (see
 //! `mail::raw_reply`), which is decoded and submitted over SMTP as-is so the
 //! threading headers written by `raw_reply` are preserved exactly.
 //!
@@ -16,7 +17,9 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use io_imap::client::{ImapClient, ImapClientStd, ImapClientStdConnectOptions};
+use io_imap::rfc3501::login::ImapLoginOptions;
 use io_imap::rfc3501::search::ImapMessageSearchOptions;
+use io_imap::rfc3501::select::ImapMailboxSelectOptions;
 use io_imap::types::core::{AString, Vec1};
 use io_imap::types::datetime::NaiveDate as ImapDate;
 use io_imap::types::mailbox::Mailbox as ImapMailbox;
@@ -125,13 +128,13 @@ impl ImapSmtp {
             .login(
                 self.creds.email.as_str(),
                 self.creds.password(),
-                Default::default(),
+                ImapLoginOptions::default(),
             )
             .map_err(|e| anyhow!("IMAP login failed: {e:?}"))?;
         client
             .select(
                 ImapMailbox::try_from("INBOX").map_err(|e| anyhow!("invalid mailbox: {e:?}"))?,
-                Default::default(),
+                ImapMailboxSelectOptions::default(),
             )
             .map_err(|e| anyhow!("select INBOX failed: {e:?}"))?;
         // `uid: true` makes this a UID SEARCH: the returned ids are UIDs, which
@@ -168,18 +171,20 @@ impl ImapSmtp {
     /// Fetch message refs from the mailbox over IMAP.
     ///
     /// Inputs: `uid_filter` — an IMAP `UID` search term. Output:
-    /// `Result<Vec<MessageRef>>` — one ref per message, `id` = UID and
-    /// `thread_id` = the `thread_key` conversation root.
+    /// `Result<Vec<MessageRef>>` — one ref per threadable message, `id` = UID
+    /// and `thread_id` = the `thread_key` conversation root. Messages without
+    /// any threading header are skipped: they cannot be threaded, and an empty
+    /// thread key would fail provider-id validation and abort the sync.
     fn fetch_refs(&self, search: Vec1<SearchKey<'static>>) -> Result<Vec<MessageRef>> {
         Ok(self
             .fetch_bodies(search)?
             .into_iter()
-            .map(|(uid, bytes)| {
+            .filter_map(|(uid, bytes)| {
                 let mime = String::from_utf8_lossy(&bytes);
-                MessageRef {
+                thread_key(&mime).map(|thread_id| MessageRef {
                     id: uid.to_string(),
-                    thread_id: thread_key(&mime).unwrap_or_default(),
-                }
+                    thread_id,
+                })
             })
             .collect())
     }
@@ -592,7 +597,7 @@ impl MailTransport for ImapSmtp {
             .filter(|r| r.thread_id == id)
             .map(|r| crate::gmail::ThreadMessage {
                 id: r.id,
-                internal_date: String::new(),
+                internal_date: String::default(),
                 label_ids: Vec::new(),
             })
             .collect();
@@ -728,6 +733,13 @@ mod tests {
 
     impl FakeSmtp {
         fn start(reject: bool) -> Self {
+            Self::start_with(reject, false)
+        }
+
+        /// Like [`FakeSmtp::start`], but with `login_only` the EHLO greeting
+        /// advertises just `AUTH LOGIN`, forcing the client through the
+        /// three-step challenge instead of single-line `AUTH PLAIN`.
+        fn start_with(reject: bool, login_only: bool) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake smtp");
             let port = listener.local_addr().expect("addr").port();
             let capture: Arc<Mutex<SmtpCapture>> = Arc::new(Mutex::new(SmtpCapture::default()));
@@ -753,6 +765,9 @@ mod tests {
                     let mut buf: Vec<u8> = Vec::new();
                     let mut tmp = [0u8; 4096];
                     let mut in_data = false;
+                    // AUTH LOGIN challenge state: 1 = username expected next,
+                    // 2 = password expected next.
+                    let mut auth_step = 0u8;
                     loop {
                         let line = loop {
                             if let Some(pos) = buf.windows(2).position(|w| w == b"\r\n") {
@@ -783,19 +798,33 @@ mod tests {
                             continue;
                         }
                         let upper = line.to_uppercase();
-                        if upper.starts_with("EHLO") {
-                            let _ = sock.write_all(b"250-fake\r\n250 AUTH PLAIN LOGIN\r\n");
-                        } else if upper.starts_with("AUTH") {
-                            // Single-line AUTH PLAIN, or LOGIN's challenge steps.
-                            if upper.starts_with("AUTH LOGIN") && !line.contains(' ') {
-                                let _ = sock.write_all(b"334 VXNlcm5hbWU6\r\n");
-                            } else if line.starts_with("AUTH LOGIN") {
+                        if auth_step > 0 {
+                            // LOGIN challenge continuation: a bare base64 line
+                            // answers the pending username/password prompt.
+                            if auth_step == 1 {
+                                auth_step = 2;
                                 let _ = sock.write_all(b"334 UGFzc3dvcmQ6\r\n");
+                            } else {
+                                auth_step = 0;
+                                let _ = sock.write_all(b"235 2.7.0 ok\r\n");
+                            }
+                        } else if upper.starts_with("EHLO") {
+                            let mechanisms = if login_only {
+                                "250-fake\r\n250 AUTH LOGIN\r\n"
+                            } else {
+                                "250-fake\r\n250 AUTH PLAIN LOGIN\r\n"
+                            };
+                            let _ = sock.write_all(mechanisms.as_bytes());
+                        } else if upper.starts_with("AUTH") {
+                            // Single-line AUTH PLAIN, or LOGIN's first step.
+                            if upper.starts_with("AUTH LOGIN") && !line.contains(' ') {
+                                auth_step = 1;
+                                let _ = sock.write_all(b"334 VXNlcm5hbWU6\r\n");
                             } else {
                                 let _ = sock.write_all(b"235 2.7.0 ok\r\n");
                             }
                         } else if upper.starts_with("MAIL FROM") {
-                            out.mail_from = line.clone();
+                            out.mail_from.clone_from(&line);
                             if reject {
                                 let _ = sock.write_all(b"550 5.1.0 refused\r\n");
                             } else {
@@ -916,9 +945,24 @@ mod tests {
     /// filtering is faithful for the shapes the transport uses: `ALL`, `UID
     /// <spec>` and quoted-header literals. UIDs are supplied by the test and are
     /// deliberately far from sequence numbers so a seq/uid mix-up is unmistakable.
+    /// Protocol failure the double serves in place of the happy path, so the
+    /// transport's error mapping can be asserted against tagged rejections.
+    #[derive(Clone, Copy, Debug)]
+    enum ImapFault {
+        /// Tagged `NO` to LOGIN (rejected credentials).
+        RefuseLogin,
+        /// Tagged `NO` to SELECT.
+        DenySelect,
+        /// Tagged `BAD` to SEARCH.
+        BadSearch,
+        /// Tagged `NO` to UID FETCH.
+        FailFetch,
+    }
+
     struct FakeImap {
         port: u16,
         stop: Arc<std::sync::atomic::AtomicBool>,
+        hits: Arc<std::sync::atomic::AtomicUsize>,
         handle: Option<thread::JoinHandle<()>>,
     }
 
@@ -931,6 +975,12 @@ mod tests {
             if let Some(handle) = self.handle.take() {
                 let _ = handle.join();
             }
+        }
+
+        /// Connections accepted so far (the shutdown poke is excluded), so
+        /// fail-closed paths can prove they never touched the network.
+        fn hits(&self) -> usize {
+            self.hits.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -954,6 +1004,32 @@ mod tests {
         })
     }
 
+    /// Split command arguments into tokens, keeping double-quoted spans (the
+    /// double's inlined literals) together so values carrying spaces survive.
+    fn split_command_tokens(args: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::default();
+        let mut quoted = false;
+        for ch in args.chars() {
+            match ch {
+                '"' => {
+                    quoted = !quoted;
+                    current.push(ch);
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                c => current.push(c),
+            }
+        }
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
+    }
+
     /// Faithful-enough SEARCH evaluator for the criteria shapes the transport
     /// emits (`ALL`, `UID <spec>`, `HEADER <field> <value>`, `OR a b`): a
     /// message matches when any quoted/bare literal occurs in its body or any
@@ -964,11 +1040,11 @@ mod tests {
             .strip_prefix("UID SEARCH")
             .or_else(|| command.strip_prefix("SEARCH"))
             .unwrap_or(command);
-        let tokens: Vec<&str> = args.split_whitespace().collect();
+        let tokens = split_command_tokens(args);
         let mut constrained = false;
         let mut i = 0;
         while i < tokens.len() {
-            let tok = tokens[i];
+            let tok = tokens[i].as_str();
             if tok.eq_ignore_ascii_case("OR") || tok.eq_ignore_ascii_case("NOT") {
                 i += 1;
                 continue;
@@ -987,7 +1063,7 @@ mod tests {
             }
             if tok.eq_ignore_ascii_case("UID") && i + 1 < tokens.len() {
                 constrained = true;
-                if uid_spec_matches(tokens[i + 1], uid) {
+                if uid_spec_matches(&tokens[i + 1], uid) {
                     return true;
                 }
                 i += 2;
@@ -998,18 +1074,22 @@ mod tests {
         !constrained && args.trim().is_empty()
     }
 
-    /// Length of a trailing command literal (`... {11}`) in a line segment.
-    fn trailing_literal_len(seg: &str) -> Option<usize> {
+    /// Size and mode of a trailing command literal (`... {11}` synchronizing,
+    /// `... {11+}` non-synchronizing) in a line segment.
+    fn trailing_literal_len(seg: &str) -> Option<(usize, bool)> {
         let trimmed = seg.trim_end();
         let inner = trimmed.strip_suffix('}')?;
         let open = inner.rfind('{')?;
-        inner[open + 1..].parse::<usize>().ok()
+        let (digits, non_sync) = inner[open + 1..]
+            .strip_suffix('+')
+            .map_or((&inner[open + 1..], false), |d| (d, true));
+        Some((digits.parse::<usize>().ok()?, non_sync))
     }
 
     /// Read one logical command line, inlining any `{n}` literals as quoted
     /// strings so callers can treat the command as plain text.
     fn read_command(sock: &mut std::net::TcpStream, buf: &mut Vec<u8>) -> Option<String> {
-        let mut out = String::new();
+        let mut out = String::default();
         let mut tmp = [0u8; 4096];
         loop {
             let segment = loop {
@@ -1022,10 +1102,21 @@ mod tests {
                     Ok(n) => buf.extend_from_slice(&tmp[..n]),
                 }
             };
-            if let Some(n) = trailing_literal_len(&segment) {
-                let marker = format!("{{{n}}}");
+            if let Some((n, non_sync)) = trailing_literal_len(&segment) {
+                let marker = if non_sync {
+                    format!("{{{n}+}}")
+                } else {
+                    format!("{{{n}}}")
+                };
                 out.push_str(segment.trim_end().trim_end_matches(&marker));
                 out.push('"');
+                if !non_sync {
+                    // A synchronizing literal pauses the client until the
+                    // server grants a continuation request.
+                    if sock.write_all(b"+ Continue\r\n").is_err() {
+                        return None;
+                    }
+                }
                 while buf.len() < n {
                     match sock.read(&mut tmp) {
                         Ok(0) | Err(_) => return None,
@@ -1044,10 +1135,121 @@ mod tests {
 
     impl FakeImap {
         fn start(messages: Vec<(u32, String)>) -> Self {
+            Self::start_with_fault(messages, None)
+        }
+
+        /// The injected protocol fault's canned reply for one tagged command.
+        ///
+        /// Inputs: `fault` - the scripted fault; `tag` - the command tag;
+        /// `upper` - the uppercased command text. Output: `Some(reply)` when
+        /// the fault applies to this command, `None` otherwise.
+        fn canned_fault_reply(fault: &Option<ImapFault>, tag: &str, upper: &str) -> Option<String> {
+            match fault {
+                Some(ImapFault::RefuseLogin) if upper.starts_with("LOGIN") => {
+                    Some(format!("{tag} NO [AUTHENTICATIONFAILED] login refused\r\n"))
+                }
+                Some(ImapFault::DenySelect) if upper.starts_with("SELECT") => {
+                    Some(format!("{tag} NO select refused\r\n"))
+                }
+                Some(ImapFault::BadSearch)
+                    if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") =>
+                {
+                    Some(format!("{tag} BAD search refused\r\n"))
+                }
+                Some(ImapFault::FailFetch)
+                    if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") =>
+                {
+                    Some(format!("{tag} NO fetch refused\r\n"))
+                }
+                _ => None,
+            }
+        }
+
+        /// Render one FETCH response for the scripted mailbox.
+        ///
+        /// Inputs: `messages` - the scripted (uid, body) mailbox; `tag` - the
+        /// command tag; `rest` - the command text after the tag. Output: the
+        /// exact response bytes (literal-framed bodies plus the tagged OK).
+        fn fetch_reply(messages: &[(u32, String)], tag: &str, rest: &str) -> Vec<u8> {
+            let args = rest
+                .strip_prefix("UID FETCH")
+                .or_else(|| rest.strip_prefix("FETCH"))
+                .unwrap_or(rest);
+            let spec = args.split_whitespace().next().unwrap_or("*");
+            let selected: Vec<_> = messages
+                .iter()
+                .filter(|(u, _)| uid_spec_matches(spec, *u))
+                .collect();
+            let mut out: Vec<u8> = Vec::new();
+            for (i, (uid, body)) in selected.into_iter().enumerate() {
+                out.extend_from_slice(
+                    format!(
+                        "* {} FETCH (UID {} BODY[] {{{}}}\r\n",
+                        i + 1,
+                        uid,
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(body.as_bytes());
+                out.extend_from_slice(b")\r\n");
+            }
+            out.extend_from_slice(format!("{tag} OK FETCH done\r\n").as_bytes());
+            out
+        }
+
+        /// Write the tagged reply for one non-faulted IMAP command.
+        ///
+        /// Inputs: `sock` - the connection; `messages` - the scripted mailbox;
+        /// `tag`/`rest`/`upper` - the parsed command. Output: `true` to keep
+        /// reading commands, `false` when the session must end (LOGOUT, or a
+        /// FETCH write failure - the other arms ignore write errors exactly as
+        /// before).
+        fn write_reply(
+            sock: &mut std::net::TcpStream,
+            messages: &[(u32, String)],
+            tag: &str,
+            rest: &str,
+            upper: &str,
+        ) -> bool {
+            if upper.starts_with("LOGOUT") {
+                let _ = sock.write_all(format!("* BYE\r\n{tag} OK LOGOUT done\r\n").as_bytes());
+                return false;
+            }
+            if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") {
+                let out = Self::fetch_reply(messages, tag, rest);
+                return sock.write_all(&out).is_ok();
+            }
+            let reply = if upper.starts_with("LOGIN") {
+                format!("{tag} OK LOGIN done\r\n")
+            } else if upper.starts_with("SELECT") {
+                let next = messages.last().map(|m| m.0 + 1).unwrap_or(1);
+                format!(
+                    "* {count} EXISTS\r\n* OK [UIDVALIDITY 1]\r\n* OK [UIDNEXT {next}]\r\n* FLAGS (\\Seen)\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK [READ-WRITE] SELECT done\r\n",
+                    count = messages.len(),
+                )
+            } else if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") {
+                let ids = messages
+                    .iter()
+                    .filter(|(u, b)| search_matches(rest, *u, b))
+                    .map(|(u, _)| u.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("* SEARCH {ids}\r\n{tag} OK SEARCH done\r\n")
+            } else {
+                format!("{tag} OK done\r\n")
+            };
+            let _ = sock.write_all(reply.as_bytes());
+            true
+        }
+
+        fn start_with_fault(messages: Vec<(u32, String)>, fault: Option<ImapFault>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake imap");
             let port = listener.local_addr().expect("addr").port();
             let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let flag = stop.clone();
+            let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = hits.clone();
             let handle = thread::spawn(move || {
                 // Every transport call opens a fresh connection, so serve them
                 // all until shutdown() pokes the listener.
@@ -1061,69 +1263,22 @@ mod tests {
                     if flag.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
                     }
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let _ = sock.write_all(b"* OK [CAPABILITY IMAP4rev1] fake ready\r\n");
                     let mut buf: Vec<u8> = Vec::new();
                     while let Some(line) = read_command(&mut sock, &mut buf) {
-                        let mut parts = line.splitn(2, ' ');
-                        let tag = parts.next().unwrap_or("").to_string();
-                        let rest = parts.next().unwrap_or("").to_string();
+                        let (tag, rest) = match line.split_once(' ') {
+                            Some((tag, rest)) => (tag.to_string(), rest.to_string()),
+                            None => (line.clone(), String::default()),
+                        };
                         let upper = rest.to_uppercase();
-                        if upper.starts_with("LOGOUT") {
-                            let _ = sock
-                                .write_all(format!("* BYE\r\n{tag} OK LOGOUT done\r\n").as_bytes());
-                            break;
+                        let fault_reply = Self::canned_fault_reply(&fault, &tag, &upper);
+                        if let Some(reply) = fault_reply {
+                            let _ = sock.write_all(reply.as_bytes());
+                            continue;
                         }
-                        if upper.starts_with("LOGIN") {
-                            let _ = sock.write_all(format!("{tag} OK LOGIN done\r\n").as_bytes());
-                        } else if upper.starts_with("SELECT") {
-                            let next = messages.last().map(|m| m.0 + 1).unwrap_or(1);
-                            let _ = sock.write_all(
-                                format!(
-                                    "* {count} EXISTS\r\n* OK [UIDVALIDITY 1]\r\n* OK [UIDNEXT {next}]\r\n* FLAGS (\\Seen)\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK [READ-WRITE] SELECT done\r\n",
-                                    count = messages.len(),
-                                )
-                                .as_bytes(),
-                            );
-                        } else if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") {
-                            let ids = messages
-                                .iter()
-                                .filter(|(u, b)| search_matches(&rest, *u, b))
-                                .map(|(u, _)| u.to_string())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let _ = sock.write_all(
-                                format!("* SEARCH {ids}\r\n{tag} OK SEARCH done\r\n").as_bytes(),
-                            );
-                        } else if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") {
-                            let args = rest
-                                .strip_prefix("UID FETCH")
-                                .or_else(|| rest.strip_prefix("FETCH"))
-                                .unwrap_or(&rest);
-                            let spec = args.split_whitespace().next().unwrap_or("*");
-                            let selected: Vec<_> = messages
-                                .iter()
-                                .filter(|(u, _)| uid_spec_matches(spec, *u))
-                                .collect();
-                            let mut out: Vec<u8> = Vec::new();
-                            for (i, (uid, body)) in selected.into_iter().enumerate() {
-                                out.extend_from_slice(
-                                    format!(
-                                        "* {} FETCH (UID {} BODY[] {{{}}}\r\n",
-                                        i + 1,
-                                        uid,
-                                        body.len()
-                                    )
-                                    .as_bytes(),
-                                );
-                                out.extend_from_slice(body.as_bytes());
-                                out.extend_from_slice(b")\r\n");
-                            }
-                            out.extend_from_slice(format!("{tag} OK FETCH done\r\n").as_bytes());
-                            if sock.write_all(&out).is_err() {
-                                break;
-                            }
-                        } else {
-                            let _ = sock.write_all(format!("{tag} OK done\r\n").as_bytes());
+                        if !Self::write_reply(&mut sock, &messages, &tag, &rest, &upper) {
+                            break;
                         }
                     }
                 }
@@ -1131,6 +1286,7 @@ mod tests {
             Self {
                 port,
                 stop,
+                hits,
                 handle: Some(handle),
             }
         }
@@ -1437,5 +1593,428 @@ mod tests {
         // why: a message with no id cannot be threaded; the sync must skip it
         // rather than group it under an empty key.
         assert_eq!(thread_key("Subject: hi\r\n\r\nbody"), None);
+    }
+
+    /// Stub bound to the test account with the given provider identity.
+    fn stub_with(provider_id: &str, thread_id: &str) -> Stub {
+        Stub {
+            account: "user@example.com".to_owned(),
+            provider_id: provider_id.to_owned(),
+            thread_id: thread_id.to_owned(),
+            source: crate::types::Source::Gmail,
+        }
+    }
+
+    /// `depth` nested `multipart/mixed` wrappers: past mailparse's own
+    /// recursion limit the parser fails, which is the deterministic way to
+    /// make `parse_mail` return `Err` for a malformed-message test.
+    fn deeply_nested_mime(depth: usize) -> String {
+        let mut body = String::from("Content-Type: text/plain\r\n\r\nleaf");
+        for level in (0..depth).rev() {
+            let boundary = format!("deep{level}end");
+            body = format!(
+                "Content-Type: multipart/mixed; boundary={boundary}\r\n\r\n--{boundary}\r\n{body}\r\n--{boundary}--\r\n"
+            );
+        }
+        body
+    }
+
+    /// Why: the exact error context is the operator's diagnosis — "bad
+    /// password" must never blur into "network down". Each tagged protocol
+    /// rejection from the double must surface its own distinct context, and a
+    /// refused connection must map to the connection context.
+    #[test]
+    fn imap_protocol_failures_map_to_exact_error_contexts() {
+        use crate::sync::Provider;
+        let messages = || {
+            vec![(
+                12001u32,
+                "From: a@x.com\r\nMessage-ID: <m1@x.com>\r\n\r\nhello".to_owned(),
+            )]
+        };
+        // No listener behind the endpoint (secure scheme): connection failure.
+        let mut dead = ImapSmtp::new(
+            AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+            ImapSmtpConfig {
+                imap_host: "127.0.0.1".to_owned(),
+                imap_port: 0,
+                imap_secure: true,
+                ..ImapSmtpConfig::default()
+            },
+        );
+        let error = match Provider::list(&mut dead, "1:*", None) {
+            Err(error) => error,
+            Ok(_) => panic!("a refused connection must surface an error"),
+        };
+        assert!(
+            error.to_string().starts_with("IMAP connection failed: "),
+            "unexpected error: {error:#}"
+        );
+        for (fault, expected) in [
+            (ImapFault::RefuseLogin, "IMAP login failed: "),
+            (ImapFault::DenySelect, "select INBOX failed: "),
+            (ImapFault::BadSearch, "IMAP search failed: "),
+            (ImapFault::FailFetch, "IMAP UID fetch failed: "),
+        ] {
+            let fake = FakeImap::start_with_fault(messages(), Some(fault));
+            let mut client = fake.client();
+            let error = match Provider::list(&mut client, "1:*", None) {
+                Err(error) => error,
+                Ok(_) => panic!("fault {fault:?} must surface an error"),
+            };
+            assert!(
+                error.to_string().starts_with(expected),
+                "fault {fault:?}: unexpected error: {error:#}"
+            );
+        }
+    }
+
+    /// Why: the queue classifies fetch failures by kind — a bad provider id or
+    /// a parser-fatal payload is `MalformedMessage`, while transport and
+    /// protocol failures are `Infrastructure` and must leave the queued item
+    /// untouched; a vanished UID is not a failure at all. The error texts are
+    /// what the operator sees, so they are pinned exactly.
+    #[test]
+    fn imap_email_failures_classify_ids_transport_and_parser_errors() {
+        use crate::gmail::FetchFailureKind;
+        let (fake, _messages) = two_message_mailbox();
+        let mut client = fake.client();
+        // provider_id that is not a UID: refused before any search.
+        let failure = MailTransport::email(&mut client, &stub_with("msg-1", "t")).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        assert_eq!(
+            failure.message,
+            "app-password fetch: provider id is not a UID"
+        );
+        // A UID that no longer exists is Ok(None), never an error.
+        assert!(
+            MailTransport::email(&mut client, &stub_with("99999", "t"))
+                .expect("vanished uid")
+                .is_none()
+        );
+        // Transport failure: Infrastructure with the wrapped fetch context.
+        let mut dead = ImapSmtp::new(
+            AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+            ImapSmtpConfig {
+                imap_host: "127.0.0.1".to_owned(),
+                imap_port: 0,
+                imap_secure: true,
+                ..ImapSmtpConfig::default()
+            },
+        );
+        let failure = MailTransport::email(&mut dead, &stub_with("7", "t")).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::Infrastructure);
+        assert!(
+            failure
+                .message
+                .starts_with("IMAP message fetch failed: IMAP connection failed: "),
+            "{}",
+            failure.message
+        );
+        // A payload the MIME parser cannot survive is malformed, not phantom.
+        let fake = FakeImap::start(vec![(12003, deeply_nested_mime(120))]);
+        let mut client = fake.client();
+        let failure = MailTransport::email(&mut client, &stub_with("12003", "t")).unwrap_err();
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        assert_eq!(failure.message, "IMAP MIME could not be parsed");
+    }
+
+    /// Why: `send` maps every pre-dispatch defect to `NotAccepted` with the
+    /// exact operator-facing reason; anything that lets garbage reach the SMTP
+    /// double would produce a wrong-but-plausible delivery record downstream.
+    #[test]
+    fn smtp_send_maps_malformed_replies_to_not_accepted() {
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        for (raw, expected) in [
+            (
+                "!!! not base64 !!!".to_owned(),
+                "reply is not valid base64url MIME",
+            ),
+            (
+                URL_SAFE_NO_PAD.encode([0xff, 0xfe]),
+                "decoded reply is not valid UTF-8 MIME",
+            ),
+            (b64("To: b@y.com\r\n\r\nx"), "reply has no From address"),
+            (b64("From: a@x.com\r\n\r\nx"), "reply has no To address"),
+            (
+                b64("From: not-an-address\r\nTo: b@y.com\r\n\r\nx"),
+                "invalid From address",
+            ),
+            (
+                b64("From: a@x.com\r\nTo: not-an-address\r\n\r\nx"),
+                "invalid To address",
+            ),
+        ] {
+            let error = MailTransport::send(&mut client, &raw, "t").unwrap_err();
+            assert_eq!(error.kind, SendFailureKind::NotAccepted, "{expected}");
+            assert_eq!(error.message, expected);
+        }
+        assert!(
+            fake.captured().dialog.is_empty(),
+            "malformed replies must never reach the wire: {:?}",
+            fake.captured().dialog
+        );
+    }
+
+    /// Why: the production send path uses the TLS-required relay builder; a
+    /// transport failure there is `Uncertain` (the message may or may not have
+    /// left) so the at-most-once delivery record holds instead of replaying.
+    #[test]
+    fn smtp_send_over_secure_relay_classifies_transport_failure_as_uncertain() {
+        let mut client = ImapSmtp::new(
+            AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+            ImapSmtpConfig {
+                smtp_host: "127.0.0.1".to_owned(),
+                smtp_port: 0,
+                smtp_secure: true,
+                ..ImapSmtpConfig::default()
+            },
+        );
+        let error = MailTransport::send(&mut client, &b64(&sample_reply_mime()), "orig@corp.com")
+            .unwrap_err();
+        assert!(
+            error.message.starts_with("SMTP send failed: "),
+            "unexpected error: {}",
+            error.message
+        );
+        assert_eq!(error.kind, SendFailureKind::Uncertain, "{error:?}");
+    }
+
+    /// Why: AUTH LOGIN is the fallback mechanism when a server does not offer
+    /// AUTH PLAIN; the three-step challenge must complete or sends against such
+    /// servers would fail after the envelope was accepted.
+    #[test]
+    fn smtp_send_completes_the_three_step_login_challenge() {
+        let fake = FakeSmtp::start_with(false, true);
+        let mut client = fake.client();
+        let id = MailTransport::send(&mut client, &b64(&sample_reply_mime()), "orig@corp.com")
+            .unwrap_or_else(|e| panic!("send failed: {e:?} dialog={:?}", fake.captured().dialog));
+        assert_eq!(id, "smtp-accepted");
+        let seen = fake.captured();
+        assert!(
+            seen.dialog
+                .iter()
+                .any(|line| line.starts_with("C: AUTH LOGIN")),
+            "the LOGIN challenge must have been negotiated: {:?}",
+            seen.dialog
+        );
+        assert!(seen.data.contains("Your process was unfair."), "body lost");
+    }
+
+    /// Why: an unrecognized query is a fail-closed "match nothing", never a
+    /// mailbox-wide fetch — the empty page must be produced without a single
+    /// connection to the mailbox.
+    #[test]
+    fn imap_list_matches_nothing_on_unrecognized_queries() {
+        use crate::sync::Provider;
+        let (fake, _messages) = two_message_mailbox();
+        let mut client = fake.client();
+        let page = Provider::list(&mut client, "from:foo@bar.com", None)
+            .expect("unrecognized queries match nothing");
+        assert!(page.messages.is_empty());
+        assert!(page.next_page_token.is_none());
+        assert_eq!(
+            fake.hits(),
+            0,
+            "an unrecognized query must never touch the mailbox"
+        );
+    }
+
+    /// Why: unsafe search tokens (quote/backslash/CR/LF) must be refused
+    /// before any IMAP command is issued, or a crafted Message-ID could inject
+    /// SEARCH syntax; both entry points return "nothing" and stay offline.
+    #[test]
+    fn imap_thread_and_find_sent_fail_closed_on_unsafe_tokens() {
+        let (fake, _messages) = two_message_mailbox();
+        let mut client = fake.client();
+        let thread = MailTransport::thread(&mut client, "a\"b").expect("unsafe id matches nothing");
+        assert!(thread.messages.is_empty());
+        assert_eq!(
+            MailTransport::find_sent(&mut client, "a\r\nb").expect("unsafe id matches nothing"),
+            None
+        );
+        assert_eq!(
+            fake.hits(),
+            0,
+            "unsafe tokens must be refused before any IMAP command"
+        );
+    }
+
+    /// Why: an app-password session holds its credentials by construction, so
+    /// the engine's send gate must read `true` — a regression here silently
+    /// disables the whole send pipeline for the app-password backend.
+    #[test]
+    fn imap_transport_is_always_authorized_to_send() {
+        let imap = ImapSmtp::new(
+            AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+            ImapSmtpConfig::default(),
+        );
+        assert!(
+            MailTransport::can_send(&imap),
+            "the app-password session holds credentials"
+        );
+    }
+
+    /// Why: a search value carrying non-ASCII cannot ride an IMAP quoted
+    /// string, so the codec emits a (synchronizing) literal; the value must
+    /// round-trip byte-exact through the wire or `find_sent` would silently
+    /// miss its own sent message on such Message-IDs.
+    #[test]
+    fn imap_search_literals_round_trip_message_ids_byte_exact() {
+        let messages = vec![(
+            12001u32,
+            "From: a@x.com\r\nMessage-ID: <odd-é@x.com>\r\n\r\nbody".to_owned(),
+        )];
+        let fake = FakeImap::start(messages);
+        let mut client = fake.client();
+        assert_eq!(
+            MailTransport::find_sent(&mut client, "<odd-é@x.com>")
+                .expect("find_sent")
+                .as_deref(),
+            Some("12001")
+        );
+        assert_eq!(
+            MailTransport::find_sent(&mut client, "<other-é@x.com>")
+                .expect("find_sent")
+                .as_deref(),
+            None
+        );
+    }
+
+    /// Why: a message with no threading header cannot be threaded. Surfacing
+    /// it with an empty thread key made `gmail::stub` fail provider-id
+    /// validation and abort the entire sync ("Invalid provider ID"); it must
+    /// be skipped on both the list and history paths instead, so one odd
+    /// message can never stall mailbox ingestion.
+    #[test]
+    fn imap_refs_skip_messages_without_threading_headers() {
+        use crate::sync::Provider;
+        let messages = vec![
+            (
+                12001u32,
+                "From: a@x.com\r\nMessage-ID: <m1@x.com>\r\n\r\nhello".to_owned(),
+            ),
+            (12002, "From: b@x.com\r\n\r\nno id here".to_owned()),
+        ];
+        let fake = FakeImap::start(messages);
+        let mut client = fake.client();
+        let page = Provider::list(&mut client, "", None).expect("list");
+        let ids: Vec<_> = page.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["12001"], "the threadable message survives");
+        for m in &page.messages {
+            crate::gmail::stub("user@example.com", m.clone())
+                .expect("every surfaced ref must pass provider-id validation");
+        }
+        // The history path applies the same skip.
+        let HistoryResult::Page(hp) = Provider::history(&mut client, "0", None).expect("history")
+        else {
+            panic!("expected a history page");
+        };
+        let added: Vec<_> = hp
+            .history
+            .iter()
+            .flat_map(|r| &r.messages_added)
+            .map(|a| a.message.id.as_str())
+            .collect();
+        assert_eq!(added, vec!["12001"]);
+    }
+
+    /// Why: a malformed endpoint host must fail with the endpoint context
+    /// before any connection attempt, so a config typo reads as a config typo
+    /// and not as a network failure.
+    #[test]
+    fn imap_rejects_unparseable_endpoints_with_the_endpoint_context() {
+        use crate::sync::Provider;
+        let mut bad = ImapSmtp::new(
+            AppPasswordCredentials::new("user@example.com", "abcdefghijklmnop"),
+            ImapSmtpConfig {
+                imap_host: "not a valid host".to_owned(),
+                ..ImapSmtpConfig::default()
+            },
+        );
+        let error = match Provider::list(&mut bad, "1:*", None) {
+            Err(error) => error,
+            Ok(_) => panic!("an unparseable endpoint must surface an error"),
+        };
+        assert!(
+            error.to_string().starts_with("invalid IMAP endpoint URL"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: a reply whose MIME the parser cannot survive, or whose body
+    /// transfer encoding is corrupt, must be `NotAccepted` with the exact
+    /// reason before anything reaches the wire — sending it would produce a
+    /// wrong-but-plausible delivery record.
+    #[test]
+    fn smtp_send_fails_closed_on_unparseable_mime_and_bodies() {
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        for (raw, expected) in [
+            (
+                b64(&deeply_nested_mime(120)),
+                "reply MIME could not be parsed",
+            ),
+            (
+                b64(concat!(
+                    "From: a@x.com\r\nTo: b@y.com\r\n",
+                    "Content-Transfer-Encoding: base64\r\n\r\n!!!not base64!!!"
+                )),
+                "reply body could not be decoded",
+            ),
+        ] {
+            let error = MailTransport::send(&mut client, &raw, "t").unwrap_err();
+            assert_eq!(error.kind, SendFailureKind::NotAccepted, "{expected}");
+            assert!(
+                error.message.starts_with(expected),
+                "expected {expected:?}, got {}",
+                error.message
+            );
+        }
+        assert!(
+            fake.captured().dialog.is_empty(),
+            "unparseable replies must never reach the wire"
+        );
+    }
+
+    /// Why: Subject is optional in a reply; a subject-less reply must still
+    /// deliver instead of failing the message build.
+    #[test]
+    fn smtp_send_accepts_replies_without_a_subject() {
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        let raw = b64("From: user@example.com\r\nTo: recruiter@corp.com\r\n\r\nbody only");
+        let id = MailTransport::send(&mut client, &raw, "orig@corp.com")
+            .unwrap_or_else(|e| panic!("send failed: {e:?}"));
+        assert_eq!(id, "smtp-accepted");
+        assert!(fake.captured().data.contains("body only"), "body lost");
+    }
+
+    /// Why: unparseable MIME has no thread key and must be skipped by the ref
+    /// builder rather than grouped under an empty key.
+    #[test]
+    fn thread_key_is_none_for_unparseable_mime() {
+        assert_eq!(thread_key(&deeply_nested_mime(120)), None);
+    }
+
+    /// Why: the classification context map is bounded — an oversized tracked
+    /// header is dropped instead of ballooning memory through the queue.
+    #[test]
+    fn email_from_rfc822_drops_oversized_tracked_headers() {
+        let stub = stub_with("9", "t");
+        let mime = format!(
+            "From: r@co.com\r\nList-Id: {}\r\nSubject: S\r\n\r\nbody",
+            "x".repeat(9000)
+        );
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert!(
+            !email.headers.contains_key("list-id"),
+            "an oversized tracked header must be dropped"
+        );
+        assert!(
+            email.headers.contains_key("from"),
+            "bounded headers must still land"
+        );
     }
 }

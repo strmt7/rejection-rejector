@@ -82,7 +82,8 @@ class Thresholds:
 @dataclasses.dataclass(frozen=True)
 class Violation:
     """One threshold breach. ``resource`` is vram|ram|disk; ``reason`` is a
-    stable machine-readable code; ``detail`` is human text."""
+    stable machine-readable code; ``detail`` is human text.
+    """
 
     resource: str
     reason: str
@@ -92,7 +93,8 @@ class Violation:
 @dataclasses.dataclass(frozen=True)
 class Verdict:
     """Preflight outcome. ``ok`` is False whenever any required probe fails
-    or any threshold is breached (fail-closed)."""
+    or any threshold is breached (fail-closed).
+    """
 
     ok: bool
     snapshot: ResourceSnapshot
@@ -123,6 +125,7 @@ def snapshot(
         disk_probe = lambda: _default_disk_probe(disk_path)  # noqa: E731
 
     def safe(probe):
+        """Run one probe; return (free, total) ints or (None, None) on doubt."""
         try:
             free, total = probe()
             if free < 0 or total < 0 or free > total:
@@ -159,6 +162,7 @@ def check(snap: ResourceSnapshot, limits: Thresholds) -> list[Violation]:
         name: str, free: Optional[int], total: Optional[int],
         min_free: int, max_fraction: float, required: bool,
     ) -> None:
+        """Record floor and usage-fraction breaches for one resource."""
         if free is None or total is None:
             if required:
                 out.append(Violation(name, "unmeasurable",
@@ -277,6 +281,7 @@ class ResourceWatchdog:
             self._thread = None
 
     def _run(self) -> None:
+        """Poll, classify and act until stopped. Inputs/Output: none."""
         while not self._stop.is_set():
             snap = snapshot(
                 vram_probe=self._vram_probe,
@@ -374,6 +379,8 @@ def _default_ram_probe() -> tuple[int, int]:
     import ctypes
 
     class MEMORYSTATUSEX(ctypes.Structure):
+        """Win32 MEMORYSTATUSEX layout for GlobalMemoryStatusEx (ctypes)."""
+
         _fields_ = [
             ("dwLength", ctypes.c_ulong),
             ("dwMemoryLoad", ctypes.c_ulong),
@@ -386,8 +393,7 @@ def _default_ram_probe() -> tuple[int, int]:
             ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
         ]
 
-    stat = MEMORYSTATUSEX()
-    stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+    stat = MEMORYSTATUSEX(dwLength=ctypes.sizeof(MEMORYSTATUSEX))
     if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
         raise RuntimeError("GlobalMemoryStatusEx failed")
     return int(stat.ullAvailPhys), int(stat.ullTotalPhys)

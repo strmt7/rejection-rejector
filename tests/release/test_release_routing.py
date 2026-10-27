@@ -6,7 +6,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReleaseRoutingTests(unittest.TestCase):
+    """Verification workflows must never become a release path."""
+
     def test_rust_ci_does_not_publish_a_deployable_package(self):
+        """Rust CI never packages or publishes a deployable artifact."""
         text = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
         for forbidden in ('package_windows', 'Collect Windows package', 'Compress-Archive',
                           'Copy-Item target/release', 'Build Windows release binaries'):
@@ -17,6 +20,7 @@ class ReleaseRoutingTests(unittest.TestCase):
         self.assertIn('rejection-rejector-source.zip', text)
 
     def test_user_facing_release_remains_explicit_and_fully_gated(self):
+        """The release workflow stays explicit, confirmed and fully gated."""
         text = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
         self.assertIn("if: inputs.confirmation == 'PACKAGE'", text)
         self.assertEqual(text.count('python scripts/release_guard.py evidence'), 2)
@@ -26,6 +30,7 @@ class ReleaseRoutingTests(unittest.TestCase):
         self.assertNotIn('continue-on-error:', text)
 
     def test_local_and_reproducibility_builds_are_preserved(self):
+        """Local and reproducibility build paths remain intact."""
         local = (ROOT / 'scripts/build-windows.ps1').read_text(encoding='utf-8')
         repro = (ROOT / '.github/workflows/reproducibility.yml').read_text(encoding='utf-8')
         self.assertIn('cargo build --locked --release --bins', local)

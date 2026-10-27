@@ -56,6 +56,7 @@ class FixtureMarkerOutputTests(unittest.TestCase):
         # Why: write_duty formats `{"target_pct":<pct>}` (f64 Display, so
         # 35.0 -> "35") via tmp + rename; the hook must parse that exact
         # shape or the GUI slider silently stops steering training.
+        """The Rust slider payload shape is exactly what the hook parses."""
         self.assertIn(
             '{{\\"target_pct\\":{pct}}}',
             rust_runtime_source(),
@@ -87,6 +88,7 @@ class LoadSampleHookingTests(unittest.TestCase):
         # the hook wiring (control_path_for/read_target/read_stop_flag/
         # sleep_seconds/paced_sleep) is dropped, the slider becomes a
         # placebo and the run sits at whatever ceiling was last applied.
+        """The trainer wires every duty_cycle hook and sees slider moves."""
         for call in (
             "duty_cycle.control_path_for",
             "duty_cycle.read_target",
@@ -113,6 +115,7 @@ class NoCwdProbingTests(unittest.TestCase):
         # Why: the monitor is launched from scripts and schedulers with
         # arbitrary working directories; resolving files against the CWD
         # would silently watch or write the wrong run.
+        """Monitor sources resolve files from --progress, never the CWD."""
         runtime = rust_runtime_source() + MONITOR_RUNTIME
         for probe in ("current_dir", "set_current_dir", 'env::var("PWD")', "env::temp_dir"):
             self.assertNotIn(probe, runtime, f"monitor probes its CWD via {probe}")
@@ -127,6 +130,7 @@ class PersistedConfigPathIsolationTests(unittest.TestCase):
         # an atomic write of the trainer's duty.json; any persisted config
         # path, keyring or app-storage write would spread monitor state
         # across machines and profiles.
+        """The duty.json sibling is the monitor's only side effect."""
         for forbidden in (
             "data_dir",
             "keyring",
@@ -150,6 +154,7 @@ class SliderCapValidationTests(unittest.TestCase):
         # Why: the operator's standing requirement is a hard 50% GPU
         # utilization maximum; the slider range is what enforces it in the
         # GUI, so a widened range is a product-level regression.
+        """The slider maximum is the operator's 50% ceiling, enforced on write."""
         self.assertEqual(rust_const("SLIDER_MAX_PCT"), 50.0)
         self.assertIn("MIN_TARGET_PCT..=SLIDER_MAX_PCT", MONITOR_SRC)
         # The write path validates as well (fail closed, never trust the
@@ -164,6 +169,7 @@ class SliderParsingTests(unittest.TestCase):
         # Why: the Rust file contract and the Python hook must accept the
         # identical [20, 100] target range; a one-sided change would make
         # either the GUI or the trainer reject the other's valid writes.
+        """Rust and Python accept the identical [20, 100] target range."""
         self.assertEqual(rust_const("MIN_TARGET_PCT"), dc.MIN_TARGET_PCT)
         self.assertEqual(rust_const("MAX_TARGET_PCT"), dc.MAX_TARGET_PCT)
         # Parsing fail-closed on both sides of the boundary.
@@ -183,6 +189,7 @@ class PacingMathTests(unittest.TestCase):
         # pinned in train_monitor.rs (10 s at 50% -> 10 s sleep, at 25% ->
         # 30 s, at 100% -> none, negative -> none), so a formula change on
         # either side trips one suite while the other documents the drift.
+        """The pacing formula is byte-identical in both implementations."""
         self.assertIn("* (MAX_TARGET_PCT - t) / t", rust_runtime_source())
         self.assertEqual(dc.sleep_seconds(10.0, 100.0), 0.0)
         self.assertAlmostEqual(dc.sleep_seconds(10.0, 50.0), 10.0)
@@ -199,6 +206,7 @@ class HeartbeatSchemaTests(unittest.TestCase):
         # ProgressSnapshot field-for-field; a renamed or dropped key shows
         # the operator placeholders ("—") or "waiting for trainer
         # heartbeat…" while the run is live.
+        """ProgressSnapshot fields match the trainer heartbeat keys exactly."""
         struct = re.search(
             r"pub struct ProgressSnapshot \{(.*?)\n\}", TRAIN_MONITOR_SRC, re.S
         )
@@ -218,6 +226,7 @@ class HeartbeatSchemaTests(unittest.TestCase):
         # both implementations — the Rust bounds pinned in train_monitor.rs
         # (fraction 0.0 on zero total, ETA 50/60 min for 5/10 steps at
         # 50 s elapsed, staleness at > 120 s) are these exact values.
+        """The same fixture derives identical numbers in both implementations."""
         record = {
             "step": 5,
             "total_steps": 10,

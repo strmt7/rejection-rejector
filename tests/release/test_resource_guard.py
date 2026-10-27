@@ -46,8 +46,10 @@ class SnapshotTests(unittest.TestCase):
 
     def test_probe_exception_becomes_none_not_a_crash(self):
         """Why: a failing probe must degrade to unmeasurable (fail-closed at
-        the decision layer), never raise through a running workload."""
+        the decision layer), never raise through a running workload.
+        """
         def boom():
+            """Model a probe that fails at call time."""
             raise OSError("probe broken")
 
         snap = rg.snapshot(vram_probe=boom, ram_probe=boom, disk_probe=boom)
@@ -57,7 +59,8 @@ class SnapshotTests(unittest.TestCase):
 
     def test_invalid_probe_values_become_none(self):
         """Why: nonsense readings (free > total, negatives) must not be
-        trusted; they are as good as unmeasurable."""
+        trusted; they are as good as unmeasurable.
+        """
         snap = rg.snapshot(
             vram_probe=lambda: (10, 5),   # free > total
             ram_probe=lambda: (-1, 4),    # negative
@@ -70,14 +73,16 @@ class SnapshotTests(unittest.TestCase):
     def test_real_ram_and_disk_probes_work_on_any_host(self):
         """Why: the default probes are the host-agnostic fallback; they must
         return sane values on any supported platform (RAM here is the stdlib
-        or psutil path, disk is stdlib everywhere)."""
+        or psutil path, disk is stdlib everywhere).
+        """
         snap = rg.snapshot(vram_probe=lambda: (_ for _ in ()).throw(RuntimeError()))
         self.assertGreater(snap.ram_available or 0, 0)
         self.assertGreater(snap.disk_free or 0, 0)
 
     def test_vram_probe_without_gpu_raises_for_fail_closed_handling(self):
         """Why: when no GPU stack exists the probe raises and the decision
-        layer must then fail closed if VRAM is required."""
+        layer must then fail closed if VRAM is required.
+        """
         with self.assertRaises(Exception):
             rg._default_vram_probe()
 
@@ -91,7 +96,8 @@ class CheckTests(unittest.TestCase):
 
     def test_vram_floor_boundary_is_strict(self):
         """Why: exactly-at-floor is safe; one byte below must stop. Total is
-        chosen so the usage-fraction budget is not the binding constraint."""
+        chosen so the usage-fraction budget is not the binding constraint.
+        """
         limits = rg.Thresholds(require_vram=True)
         total = 8 * rg.GIB  # keep-bytes for 80% is below the floor here
         at_floor = snap_of(vram=(limits.min_free_vram, total))
@@ -121,7 +127,8 @@ class CheckTests(unittest.TestCase):
 
     def test_vram_usage_fraction_boundary_is_strict(self):
         """Why: exactly at the keep-bytes boundary is allowed; one byte
-        below must stop. Integer semantics — no float rounding."""
+        below must stop. Integer semantics — no float rounding.
+        """
         limits = rg.Thresholds(min_free_vram=0)
         total = 16 * rg.GIB
         keep = total - int(total * limits.max_vram_use_fraction)
@@ -172,7 +179,8 @@ class CheckTests(unittest.TestCase):
         """Why: the safety margins are the guarantee; pin them so they can
         never silently shrink. VRAM budget is deliberately permissive (the
         crash class is codegen faults, not capacity); the 2 GiB floor is the
-        binding exhaustion line."""
+        binding exhaustion line.
+        """
         t = rg.Thresholds()
         self.assertEqual(t.min_free_vram, 256 * 1024 * 1024)
         self.assertEqual(t.min_free_ram, 4 * rg.GIB)
@@ -207,6 +215,7 @@ class PreflightTests(unittest.TestCase):
     def test_preflight_refuses_when_required_probe_fails(self):
         """Why: fail-closed means 'unknown required state' == 'do not run'."""
         def boom():
+            """Model a probe that raises before measuring."""
             raise RuntimeError("no probe")
 
         v = rg.preflight(ram_probe=boom, disk_probe=boom,
@@ -220,12 +229,14 @@ class WatchdogTests(unittest.TestCase):
 
     def test_watchdog_fires_once_on_violation(self):
         """Why: the stop callback must fire exactly once — repeated callbacks
-        into a tearing-down workload are themselves dangerous."""
+        into a tearing-down workload are themselves dangerous.
+        """
         fired = []
         flip = {"violated": False}
         lock = threading.Lock()
 
         def ram_probe():
+            """Return healthy RAM until the test flips the violation flag."""
             with lock:
                 if flip["violated"]:
                     return (1 * rg.GIB, 64 * rg.GIB)
@@ -233,7 +244,7 @@ class WatchdogTests(unittest.TestCase):
 
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=False),
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.02,
             ram_probe=ram_probe,
             disk_probe=lambda: (100 * rg.GIB, 500 * rg.GIB),
@@ -255,7 +266,7 @@ class WatchdogTests(unittest.TestCase):
         """Why: the guard must be impossible to leak (thread left running)."""
         fired = []
         with rg.ResourceWatchdog(
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.02,
             vram_probe=lambda: (8 * rg.GIB, 16 * rg.GIB),
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
@@ -270,7 +281,7 @@ class WatchdogTests(unittest.TestCase):
         """Why: false positives would stall legitimate work."""
         fired = []
         wd = rg.ResourceWatchdog(
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.01,
             vram_probe=lambda: (8 * rg.GIB, 16 * rg.GIB),
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
@@ -283,12 +294,14 @@ class WatchdogTests(unittest.TestCase):
 
     def test_watchdog_tolerates_transient_probe_failures(self):
         """Why: one flaky GPU probe reading must not kill a healthy run -
-        the stop is for real breaches or probes that stay blind."""
+        the stop is for real breaches or probes that stay blind.
+        """
         fired = []
         misses = {"n": 0}
         lock = threading.Lock()
 
         def flaky_vram():
+            """Fail the first three probes, then report a healthy reading."""
             with lock:
                 misses["n"] += 1
                 if misses["n"] <= 3:  # fewer misses than the tolerated window
@@ -297,7 +310,7 @@ class WatchdogTests(unittest.TestCase):
 
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=True),
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.02,
             vram_probe=flaky_vram,
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
@@ -310,16 +323,18 @@ class WatchdogTests(unittest.TestCase):
 
     def test_watchdog_stops_when_probe_stays_blind(self):
         """Why: a probe that never recovers must fail closed after the
-        tolerance window - persistent blindness is a breach."""
+        tolerance window - persistent blindness is a breach.
+        """
         fired = []
 
         def blind():
+            """Model a probe that never recovers."""
             raise RuntimeError("probe permanently broken")
 
         interval = 0.01
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=True),
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=interval,
             vram_probe=blind,
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
@@ -338,12 +353,13 @@ class WatchdogTests(unittest.TestCase):
         """Why: VRAM exhaustion is an accepted, checkpoint-bounded outcome
         (clean OOM abort, last checkpoint kept); blindness or breaches on
         vram must never kill a run. RAM/disk stay hard: host slowdown and
-        data loss are the unacceptable classes."""
+        data loss are the unacceptable classes.
+        """
         fired = []
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=True),
             soft_resources=frozenset({"vram"}),
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.02,
             vram_probe=lambda: (0, 16 * rg.GIB),
             ram_probe=lambda: (32 * rg.GIB, 64 * rg.GIB),
@@ -357,12 +373,13 @@ class WatchdogTests(unittest.TestCase):
     def test_soft_resources_do_not_mask_hard_breaches(self):
         """Why: naming vram soft must never weaken the RAM/disk hard line -
         heavy RAM pressure must stop the workload so the configuration can
-        be rethought (model size, quantization, sequence length)."""
+        be rethought (model size, quantization, sequence length).
+        """
         fired = []
         wd = rg.ResourceWatchdog(
             limits=rg.Thresholds(require_vram=True),
             soft_resources=frozenset({"vram"}),
-            on_violation=lambda v: fired.append(v),
+            on_violation=fired.append,
             interval_s=0.02,
             vram_probe=lambda: (0, 16 * rg.GIB),
             ram_probe=lambda: (1 * rg.GIB, 64 * rg.GIB),
@@ -396,7 +413,8 @@ class EstimatorTests(unittest.TestCase):
 
     def test_estimate_grows_with_model_size_and_seq_len(self):
         """Why: a bigger model or longer sequences must never estimate lower
-        — a non-monotonic estimator could under-size a run and crash it."""
+        — a non-monotonic estimator could under-size a run and crash it.
+        """
         base = rg.estimate_training_vram(param_billions=9.0, seq_len=1024)
         bigger_model = rg.estimate_training_vram(param_billions=12.0, seq_len=1024)
         longer_seq = rg.estimate_training_vram(param_billions=9.0, seq_len=2048)
@@ -405,7 +423,8 @@ class EstimatorTests(unittest.TestCase):
 
     def test_estimate_includes_margin_and_logits_workspace(self):
         """Why: the margin is the crash-prevention budget and the logits
-        workspace is the observed OOM peak; both must be included."""
+        workspace is the observed OOM peak; both must be included.
+        """
         margin = 2 * rg.GIB
         est = rg.estimate_training_vram(param_billions=9.0, seq_len=1024,
                                         vocab_size=150_000, margin=margin)
@@ -415,7 +434,8 @@ class EstimatorTests(unittest.TestCase):
     def test_estimate_is_pessimistic_for_a_9b_run(self):
         """Why: for our verified 9B/1024 configuration the estimate must
         exceed the observed ~12 GiB peak that OOMed, so preflight refuses to
-        start in states that would crash."""
+        start in states that would crash.
+        """
         est = rg.estimate_training_vram(param_billions=9.0, seq_len=1024)
         self.assertGreater(est, 12 * rg.GIB)
 

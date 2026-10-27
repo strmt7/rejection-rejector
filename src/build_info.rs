@@ -5,16 +5,30 @@ use std::sync::OnceLock;
 const UNVERIFIED_COMMIT: &str = "unverified-local-build";
 const BUILD_IDENTITY_DOMAIN: &[u8] = b"rejection-rejector-build-identity-v1\0";
 
+/// Build provenance recorded for one binary.
+///
+/// Inputs: none (plain struct). Output: schema and application versions,
+/// source commit and its verification state, compiler, target, profile and
+/// the Cargo.lock and build-identity digests.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct BuildInfo {
+    /// Schema version of the build identity record.
     pub schema_version: u32,
+    /// Application version of this build.
     pub application_version: String,
+    /// Source commit of this build.
     pub source_commit: String,
+    /// Whether the source commit was verified at build time.
     pub source_commit_verified: bool,
+    /// Rust compiler version that produced this build.
     pub rustc_version: String,
+    /// Compilation target triple.
     pub target: String,
+    /// Cargo build profile name.
     pub profile: String,
+    /// SHA-256 of `Cargo.lock` at build time.
     pub cargo_lock_sha256: String,
+    /// SHA-256 digest of the assembled build identity.
     pub identity_sha256: String,
 }
 

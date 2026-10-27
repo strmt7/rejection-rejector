@@ -19,49 +19,96 @@ use std::{
     time::Duration,
 };
 
+/// One model's installed and residency state.
+///
+/// Inputs: none (plain struct). Output: installation flag, digest, size and
+/// VRAM size, context window, GPU residency and an operator message.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelStatus {
+    /// Whether the model is installed locally.
     pub installed: bool,
+    /// Model digest reported by the runtime.
     pub digest: String,
+    /// Model size in bytes.
     pub size: u64,
+    /// Model bytes resident in VRAM.
     pub size_vram: u64,
+    /// Context window size reported for the model.
     pub context: u32,
+    /// Whether the model is GPU-resident.
     pub gpu_resident: bool,
+    /// Runtime-reported status message.
     pub message: String,
 }
+/// Timing and outcome profile of one inference pipeline run.
+///
+/// Inputs: none (plain struct). Output: elapsed time, request count, token
+/// counts, category, draft and verification outcomes and input completeness.
 #[derive(Clone, Debug, Serialize)]
 pub struct PipelineProfile {
+    /// Wall-clock duration of the profiled pipeline in milliseconds.
     pub elapsed_millis: u64,
+    /// Number of inference requests issued.
     pub request_count: u64,
+    /// Prompt tokens processed.
     pub prompt_tokens: u64,
+    /// Completion tokens generated.
     pub completion_tokens: u64,
+    /// Category assigned by the profiled pipeline.
     pub category: Category,
+    /// Whether the pipeline produced a draft.
     pub draft_generated: bool,
+    /// Whether verification passed.
     pub verification_passed: bool,
+    /// Whether the model saw the complete input.
     pub input_complete: bool,
+    /// Whether the model was GPU-resident during the run.
     pub gpu_resident: bool,
+    /// Model bytes resident in VRAM during the run.
     pub size_vram: u64,
+    /// Context size reported by the runtime during the run.
     pub reported_context: u32,
+    /// Pipeline flag strings collected during the run.
     pub flags: Vec<String>,
 }
 
+/// Runtime capability record for the local model toolchain.
+///
+/// Inputs: none (plain struct). Output: build identity, Ollama runtime
+/// version, model and digest, prompt version and the residency budget.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelRuntimeProfile {
+    /// Schema version of the runtime profile.
     pub schema_version: u32,
+    /// Timestamp of profile generation.
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Application version that produced the profile.
     pub application_version: &'static str,
+    /// SHA-256 of the build identity that produced the profile.
     pub build_identity_sha256: String,
+    /// Ollama runtime version used for profiling.
     pub ollama_runtime_version: String,
+    /// Primary model status at profile time.
     pub model: String,
+    /// Digest of the profiled model.
     pub digest: String,
+    /// Prompt version used during profiling.
     pub prompt_version: &'static str,
+    /// Hash of the evaluation suite in use.
     pub evaluation_suite_hash: String,
+    /// Context size requested for the profiled runs.
     pub requested_context: u32,
+    /// Model size in bytes.
     pub model_size_bytes: u64,
+    /// First-run (cold) pipeline measurements.
     pub cold_pipeline: PipelineProfile,
+    /// Warm repeated-run pipeline measurements.
     pub warm_repeat_pipeline: PipelineProfile,
+    /// Pipeline measurements near the context limit.
     pub near_context_pipeline: PipelineProfile,
+    /// Whether the task qualification is current.
     pub task_qualification_current: bool,
+    /// Known limitations recorded with the profile.
     pub limitations: Vec<&'static str>,
 }
 #[derive(Deserialize)]
@@ -238,6 +285,10 @@ struct Progress {
     error: Option<String>,
 }
 
+/// Local Ollama client bound to one settings copy.
+///
+/// Inputs: none (plain struct). Output: the inference and preflight surface
+/// with per-model request counters.
 pub struct Ollama {
     settings: Settings,
     counters: Arc<Mutex<InferenceCounters>>,
@@ -326,7 +377,7 @@ impl Ollama {
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
         settings.task_qualification = None;
-        settings.model = settings.verifier_model.clone();
+        settings.model.clone_from(&settings.verifier_model);
         settings.model_digest = if pinned {
             settings.verifier_model_digest.clone()
         } else {
@@ -996,102 +1047,12 @@ impl Ollama {
         let mut verification_model = self.settings.model.clone();
         let mut verification_model_digest = preflight.digest.clone();
         if verdict.category == Category::Rejection {
-            let current = mail::current_text(&email.text);
-            let extra = self.settings.candidate_context.len() + self.settings.signature.len();
-            let max = self.settings.num_ctx as usize
-                - self.draft_predict() as usize
-                - TEMPLATE_MARGIN_BYTES
-                - SYSTEM_PROMPT_BOUND_BYTES
-                - extra.min(3000);
-            let (text, within) = mail::bounded_text(&current, max.min(9500));
-            complete &= within;
-            let reply_language = match self.settings.reply_language {
-                crate::config::ReplyLanguage::English => "en".to_string(),
-                crate::config::ReplyLanguage::Auto => {
-                    crate::language::first_language(&current, "en")
-                }
-            };
-            let output = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
-                self.chat(
-                        DRAFT_SYSTEM_PROMPT,
-                        json!({"tone":self.settings.tone.instruction(),"reply_language":reply_language,"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
-                        json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}),
-                    self.draft_predict())
-            });
-            let output: ReplyOutput = output?;
-            analysis_stage(AnalysisFailureStage::DraftGeneration, || {
-                crate::language::ensure_reply_language(&output.body, &reply_language)?;
-                mail::validate_draft(&output.body)?;
-                let generated_words = output.body.split_whitespace().count();
-                ensure!(
-                    (40..=180).contains(&generated_words),
-                    "Model draft length is outside the supported 40-180 word envelope"
-                );
-                ensure!(
-                    output
-                        .body
-                        .trim_end()
-                        .ends_with(self.settings.signature.trim()),
-                    "Model draft did not preserve the configured signature exactly"
-                );
-                Ok(())
-            })?;
-            let d = Draft {
-                body: output.body,
-                origin: "ollama-v1".into(),
-            };
-            if self.settings.independent_verifier_enabled {
-                let primary_resident =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        self.residency(&preflight.digest)
-                    })?;
-                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                    ensure!(
-                        primary_resident.gpu_resident,
-                        "Primary model lost full GPU residency before independent verification"
-                    );
-                    self.unload_and_wait()
-                })?;
-                let verifier = analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                    self.verifier_client(true)
-                })?;
-                let verifier_preflight =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        verifier.preflight_private_inference()
-                    })?;
-                verification_model = verifier.settings.model.clone();
-                verification_model_digest = verifier_preflight.digest.clone();
-                match verifier.verify(email, &d.body) {
-                    Ok((v, full)) => {
-                        complete &= full;
-                        if !v.passed() {
-                            flags.push("Independent verifier did not pass".into());
-                        }
-                        verification = Some(v);
-                    }
-                    Err(_) => {
-                        flags.push("Independent verification failed; human review required".into())
-                    }
-                }
-                let verifier_resident =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        verifier.residency(&verifier_preflight.digest)
-                    })?;
-                if !verifier_resident.gpu_resident {
-                    flags.push("Independent verifier lost full GPU residency".into());
-                }
-            } else {
-                match self.verify(email, &d.body) {
-                    Ok((v, full)) => {
-                        complete &= full;
-                        if !v.passed() {
-                            flags.push("Local model verification did not pass".into());
-                        }
-                        verification = Some(v);
-                    }
-                    Err(_) => flags.push("Verification failed; human review required".into()),
-                }
-            }
+            let d = self.draft_rejection_reply(email, &mut complete)?;
+            let (v, model, digest) =
+                self.verify_draft(email, &d, &preflight.digest, &mut complete, &mut flags)?;
+            verification = v;
+            verification_model = model;
+            verification_model_digest = digest;
             draft = Some(d);
         }
         let gpu = if self.settings.independent_verifier_enabled
@@ -1102,8 +1063,7 @@ impl Ollama {
                 .is_ok_and(|status| status.gpu_resident)
         } else {
             self.residency(&preflight.digest)
-                .map(|s| s.gpu_resident)
-                .unwrap_or(false)
+                .is_ok_and(|s| s.gpu_resident)
         };
         if !gpu {
             flags.push("Full GPU residency was lost during analysis".into());
@@ -1145,6 +1105,131 @@ impl Ollama {
             draft,
             flags,
         ))
+    }
+
+    /// Generate the model reply for one rejection message.
+    ///
+    /// Inputs: `email` — original message; `complete` — input completeness
+    /// flag, updated when the bounded body had to be cut. Output:
+    /// `Result<Draft>` — the validated draft reply.
+    fn draft_rejection_reply(&self, email: &Email, complete: &mut bool) -> Result<Draft> {
+        let current = mail::current_text(&email.text);
+        let extra = self.settings.candidate_context.len() + self.settings.signature.len();
+        let max = self.settings.num_ctx as usize
+            - self.draft_predict() as usize
+            - TEMPLATE_MARGIN_BYTES
+            - SYSTEM_PROMPT_BOUND_BYTES
+            - extra.min(3000);
+        let (text, within) = mail::bounded_text(&current, max.min(9500));
+        *complete &= within;
+        let reply_language = match self.settings.reply_language {
+            crate::config::ReplyLanguage::English => "en".to_string(),
+            crate::config::ReplyLanguage::Auto => crate::language::first_language(&current, "en"),
+        };
+        let output = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+            self.chat(
+                        DRAFT_SYSTEM_PROMPT,
+                        json!({"tone":self.settings.tone.instruction(),"reply_language":reply_language,"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
+                        json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}),
+                    self.draft_predict())
+        });
+        let output: ReplyOutput = output?;
+        analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+            crate::language::ensure_reply_language(&output.body, &reply_language)?;
+            mail::validate_draft(&output.body)?;
+            let generated_words = output.body.split_whitespace().count();
+            ensure!(
+                (40..=180).contains(&generated_words),
+                "Model draft length is outside the supported 40-180 word envelope"
+            );
+            ensure!(
+                output
+                    .body
+                    .trim_end()
+                    .ends_with(self.settings.signature.trim()),
+                "Model draft did not preserve the configured signature exactly"
+            );
+            Ok(())
+        })?;
+        let d = Draft {
+            body: output.body,
+            origin: "ollama-v1".into(),
+        };
+        Ok(d)
+    }
+
+    /// Run the verification stage for one drafted reply.
+    ///
+    /// Inputs: `email` — original message; `d` — drafted reply;
+    /// `preflight_digest` — pinned primary model digest; `complete` — input
+    /// completeness flag, updated by verification; `flags` — operator flags,
+    /// extended with verification findings. Output:
+    /// `Result<(Option<Verification>, String, String)>` — the verification
+    /// verdict plus the verification model and digest actually used.
+    fn verify_draft(
+        &self,
+        email: &Email,
+        d: &Draft,
+        preflight_digest: &str,
+        complete: &mut bool,
+        flags: &mut Vec<String>,
+    ) -> Result<(Option<Verification>, String, String)> {
+        let mut verification = None;
+        let mut verification_model = self.settings.model.clone();
+        let mut verification_model_digest = preflight_digest.to_string();
+        if self.settings.independent_verifier_enabled {
+            let primary_resident =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    self.residency(preflight_digest)
+                })?;
+            analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                ensure!(
+                    primary_resident.gpu_resident,
+                    "Primary model lost full GPU residency before independent verification"
+                );
+                self.unload_and_wait()
+            })?;
+            let verifier = analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                self.verifier_client(true)
+            })?;
+            let verifier_preflight =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    verifier.preflight_private_inference()
+                })?;
+            verification_model.clone_from(&verifier.settings.model);
+            verification_model_digest.clone_from(&verifier_preflight.digest);
+            match verifier.verify(email, &d.body) {
+                Ok((v, full)) => {
+                    *complete &= full;
+                    if !v.passed() {
+                        flags.push("Independent verifier did not pass".into());
+                    }
+                    verification = Some(v);
+                }
+                Err(_) => {
+                    flags.push("Independent verification failed; human review required".into())
+                }
+            }
+            let verifier_resident =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    verifier.residency(&verifier_preflight.digest)
+                })?;
+            if !verifier_resident.gpu_resident {
+                flags.push("Independent verifier lost full GPU residency".into());
+            }
+        } else {
+            match self.verify(email, &d.body) {
+                Ok((v, full)) => {
+                    *complete &= full;
+                    if !v.passed() {
+                        flags.push("Local model verification did not pass".into());
+                    }
+                    verification = Some(v);
+                }
+                Err(_) => flags.push("Verification failed; human review required".into()),
+            }
+        }
+        Ok((verification, verification_model, verification_model_digest))
     }
     /// Verify one drafted reply against its message.
     ///
@@ -1458,7 +1543,7 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
         received_at: chrono::Utc::now(),
         message_id: "<synthetic@example.invalid>".into(),
         references: vec![],
-        headers: Default::default(),
+        headers: std::collections::BTreeMap::default(),
         labels: vec![],
         body_complete: true,
     }
@@ -1554,7 +1639,7 @@ mod tests {
                 )
             },
         );
-        settings.ollama_url = runtime.url.clone();
+        settings.ollama_url.clone_from(&runtime.url);
         let llm = Ollama::new(&settings).unwrap();
         let email = sample_email(
             "Your application",
@@ -1592,7 +1677,7 @@ mod tests {
         let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let probe = probes.clone();
         crate::test_support::MockServer::new(move |route, body| {
-            let body = body.unwrap_or(json!({}));
+            let body = body.unwrap_or_else(|| json!({}));
             let model = body["model"].as_str().unwrap_or("").to_owned();
             match route {
                 "/api/version" => Some(crate::test_support::version_ok()),
@@ -1638,7 +1723,7 @@ mod tests {
                     let payload: serde_json::Value = serde_json::from_str(
                         body["messages"][1]["content"].as_str().unwrap_or("{}"),
                     )
-                    .unwrap_or(json!({}));
+                    .unwrap_or_else(|_| json!({}));
                     let content = if payload.get("proposed_reply").is_some() {
                         match verify {
                             "error" => return None,
@@ -1841,9 +1926,9 @@ mod tests {
             category: Category::Rejection,
             confidence: 99,
             evidence: "not selected".into(),
-            explanation: String::new(),
-            company: String::new(),
-            position: String::new(),
+            explanation: String::default(),
+            company: String::default(),
+            position: String::default(),
             language: "en".into(),
         };
         assert!(validate_verdict(&v, "Please book an interview").is_err());
@@ -2278,6 +2363,237 @@ mod tests {
         assert_eq!(
             ollama_executable_from(Some(root.path().as_os_str().to_owned())).ok(),
             ollama_executable_from(None).ok()
+        );
+    }
+
+    /// Why: qualification arms a model for unattended work, so every smoke-test
+    /// failure must name the exact gate that failed (with the model's own
+    /// stated reason) and a model whose verification is unavailable must never
+    /// be pinned — only a fully passing pipeline may be qualified.
+    #[test]
+    fn qualification_failures_name_the_exact_smoke_test_gate() {
+        // A verification verdict that fails exactly one check, with every
+        // other probe green, isolates the reply-verification smoke test.
+        let failing = scripted_verifier_runtime("failed", &[]);
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ollama_url: failing.url.clone(),
+            ..Default::default()
+        };
+        let error = Ollama::new(&settings)
+            .unwrap()
+            .qualify()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "Model failed the reply-verification smoke test: failing checks [professional]; \
+             model's stated reason: Synthetic verification failure"
+        );
+
+        // A verification outage records no verdict at all; the refusal must
+        // say so instead of pretending the checks failed cleanly.
+        let outage = scripted_verifier_runtime("error", &[]);
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            signature: "Test Applicant".into(),
+            ollama_url: outage.url.clone(),
+            ..Default::default()
+        };
+        let error = Ollama::new(&settings)
+            .unwrap()
+            .qualify()
+            .unwrap_err()
+            .to_string();
+        // Whitespace-insensitive so the assertion pins the wording, not the
+        // source's incidental padding.
+        assert_eq!(
+            error.replace(' ', ""),
+            "Modelfailedthereply-verificationsmoketest:noverificationwasproduced\
+             (themodel'sverificationoutputwasunavailableorunparseable)"
+                .replace(' ', "")
+        );
+    }
+
+    /// Why: the verified draft hash is what later authorizes sending that exact
+    /// text, so it may exist only when a verification passed. Each local
+    /// verification outcome (pass, non-pass, outage) must hold its own
+    /// documented flag and leave state consistent with it.
+    #[test]
+    fn local_verification_outcomes_gate_the_flags_and_the_verified_hash() {
+        for (mode, expected_flags, expects_verification) in [
+            ("ok", Vec::<&str>::new(), true),
+            (
+                "failed",
+                vec!["Local model verification did not pass"],
+                true,
+            ),
+            (
+                "error",
+                vec!["Verification failed; human review required"],
+                false,
+            ),
+        ] {
+            let runtime = scripted_verifier_runtime(mode, &[]);
+            let settings = Settings {
+                model: crate::config::DEFAULT_MODEL.into(),
+                model_digest: Some("a".repeat(64)),
+                signature: "Test Applicant".into(),
+                ollama_url: runtime.url.clone(),
+                ..Default::default()
+            };
+            let llm = Ollama::new(&settings).unwrap();
+            let email = sample_email(
+                "Your application",
+                "We have decided not to move forward with your application.",
+            );
+            let (analysis, draft, flags) = llm.analyze(&email).unwrap();
+            assert_eq!(flags, expected_flags, "mode {mode}");
+            let draft = draft.expect("the draft is produced before verification");
+            assert_eq!(
+                analysis.verification.is_some(),
+                expects_verification,
+                "mode {mode}: a verification record must match the flag outcome"
+            );
+            if mode == "ok" {
+                assert!(
+                    analysis
+                        .verification
+                        .as_ref()
+                        .is_some_and(Verification::passed),
+                    "mode {mode}"
+                );
+                assert_eq!(
+                    analysis.verified_draft_hash,
+                    Some(hash(&draft.body)),
+                    "mode {mode}: a passed verification pins the exact draft"
+                );
+            } else {
+                assert!(
+                    analysis.verified_draft_hash.is_none(),
+                    "mode {mode}: an unverified draft must never carry a verified hash"
+                );
+            }
+        }
+    }
+
+    /// Why: the verifier must be a second, independent model — qualifying a
+    /// verifier that shares the primary model's tag would let one model grade
+    /// its own homework, so the refusal must fire before any runtime work.
+    #[test]
+    fn qualify_verifier_refuses_a_shared_model_tag() {
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            verifier_model: crate::config::DEFAULT_MODEL.into(),
+            signature: "Test Applicant".into(),
+            ..Default::default()
+        };
+        let error = Ollama::new(&settings)
+            .unwrap()
+            .qualify_verifier()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "Independent verifier must use a different model tag from the primary model"
+        );
+    }
+
+    /// Why: failure records are routed by `processing_failure_code`, so an
+    /// untagged error must map to `AnalysisUnknown` (never to a stage it did
+    /// not fail in) and a tagged one to exactly its stage code.
+    #[test]
+    fn processing_failure_code_separates_tagged_and_untagged_errors() {
+        assert_eq!(
+            processing_failure_code(&anyhow::anyhow!("transient noise")),
+            ProcessingFailureCode::AnalysisUnknown
+        );
+        let tagged = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+            Err::<(), _>(anyhow::anyhow!("boom"))
+        })
+        .unwrap_err();
+        assert_eq!(
+            tagged.to_string(),
+            format!("{}: boom", ProcessingFailureCode::DraftGeneration.as_str())
+        );
+        assert_eq!(
+            processing_failure_code(&tagged),
+            ProcessingFailureCode::DraftGeneration
+        );
+    }
+
+    /// Why: `unload_and_wait` runs before every verifier hand-off; when no
+    /// model is loaded it must be a one-probe no-op — issuing a spurious
+    /// unload against an idle runtime could evict a model another client just
+    /// loaded.
+    #[test]
+    fn unload_and_wait_is_a_single_probe_when_no_model_is_loaded() {
+        let runtime = crate::test_support::MockServer::new(|route, _| {
+            (route == "/api/ps").then(|| serde_json::json!({"models": []}))
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Default::default()
+        };
+        Ollama::new(&settings).unwrap().unload_and_wait().unwrap();
+        assert_eq!(
+            runtime.routes(),
+            vec!["/api/ps".to_owned()],
+            "an idle runtime must not receive an unload request"
+        );
+    }
+
+    /// Why: verifier inspection and download run unpinned (the verifier's
+    /// digest is established by qualification, not assumed), and the pull must
+    /// target the verifier model tag — pulling the primary model instead would
+    /// silently download the wrong weights.
+    #[test]
+    fn verifier_inspect_and_pull_run_unpinned_against_the_verifier_tag() {
+        let runtime = crate::test_support::MockServer::new(|route, body| match route {
+            "/api/version" => Some(crate::test_support::version_ok()),
+            "/api/tags" => Some(serde_json::json!({"models": [
+                {"name": crate::config::DEFAULT_MODEL, "digest": "a".repeat(64), "size": 7_200_000_000u64},
+                {"name": crate::config::DEFAULT_VERIFIER_MODEL, "digest": "b".repeat(64), "size": 7_200_000_000u64}
+            ]})),
+            "/api/show" => Some(crate::test_support::show_ok()),
+            "/api/pull" => Some(serde_json::json!({"status": "success"})),
+            _ => {
+                let _ = body;
+                None
+            }
+        });
+        let settings = Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            verifier_model: crate::config::DEFAULT_VERIFIER_MODEL.into(),
+            verifier_model_digest: Some("b".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Default::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let status = llm.inspect_verifier().expect("unpinned inspect succeeds");
+        assert_eq!(status.digest, "b".repeat(64));
+        llm.pull_verifier(&std::sync::atomic::AtomicBool::new(false), |_| {})
+            .expect("verifier download completes");
+        let pulls: Vec<_> = runtime
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(route, _)| route == "/api/pull")
+            .cloned()
+            .collect();
+        assert_eq!(pulls.len(), 1);
+        assert_eq!(
+            pulls[0].1.as_ref().unwrap()["model"],
+            serde_json::json!(crate::config::DEFAULT_VERIFIER_MODEL),
+            "the pull must target the verifier model tag"
         );
     }
 }
@@ -2727,11 +3043,11 @@ mod runtime_contract_tests {
             }
             "/api/chat" => {
                 let payload: Value = serde_json::from_str(
-                    body.unwrap_or(serde_json::json!({}))["messages"][1]["content"]
+                    body.unwrap_or_else(|| serde_json::json!({}))["messages"][1]["content"]
                         .as_str()
                         .unwrap_or("{}"),
                 )
-                .unwrap_or(serde_json::json!({}));
+                .unwrap_or_else(|_| serde_json::json!({}));
                 if payload.get("proposed_reply").is_some() {
                     // The verification call fails outright.
                     return None;
@@ -2784,5 +3100,571 @@ mod runtime_contract_tests {
                 "Draft contains escalation, abusive language, or an unsolicited link; Human review required",
             ]
         );
+    }
+
+    /// The canned `/api/chat` envelope: `content` is the structured answer.
+    fn chat_envelope(
+        content: &str,
+        done: bool,
+        done_reason: &str,
+        prompt_eval_count: u32,
+        eval_count: u32,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "model": "m",
+            "message": {"role": "assistant", "content": content},
+            "done": done,
+            "done_reason": done_reason,
+            "prompt_eval_count": prompt_eval_count,
+            "eval_count": eval_count
+        })
+    }
+
+    /// Why: `chat_once` treats an incomplete generation, an exhausted context
+    /// window and unparseable structured output as authorizations that never
+    /// happened. Each refusal must carry its exact reason so a truncation is
+    /// never mistaken for a model answer, and none of them may trigger the
+    /// transport recovery retry (which is reserved for dropped connections).
+    #[test]
+    fn chat_refuses_incomplete_truncated_and_unparseable_model_answers() {
+        let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+            (
+                "generation not finished",
+                chat_envelope("{}", false, "stop", 10, 10),
+                "Model response was incomplete; no action is authorized",
+            ),
+            (
+                "truncated by the token cap",
+                chat_envelope("{}", true, "length", 10, 10),
+                "Model response was incomplete; no action is authorized",
+            ),
+            (
+                "no prompt tokens processed",
+                chat_envelope("{}", true, "stop", 0, 10),
+                "Model exhausted its context; no action is authorized",
+            ),
+            (
+                "context exhausted mid-answer",
+                chat_envelope("{}", true, "stop", 2048, 2048),
+                "Model exhausted its context; no action is authorized",
+            ),
+            (
+                "content is not JSON",
+                chat_envelope("not json", true, "stop", 10, 10),
+                "Model returned invalid structured output",
+            ),
+            (
+                "content does not match the schema",
+                chat_envelope("{\"ok\":true}", true, "stop", 10, 10),
+                "Model returned invalid structured output",
+            ),
+        ];
+        for (name, answer, expected) in cases {
+            let runtime =
+                MockServer::new(move |route, _| (route == "/api/chat").then(|| answer.clone()));
+            let llm = raw_client(Settings {
+                ollama_url: runtime.url.clone(),
+                num_ctx: 4096,
+                ..Settings::default()
+            });
+            let error = llm
+                .chat::<Verdict>("s", serde_json::json!({}), serde_json::json!({}), 16)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(error, expected, "case {name}");
+            assert_eq!(
+                runtime.routes(),
+                vec!["/api/chat".to_owned()],
+                "case {name}: a protocol refusal must not trigger the transport recovery retry"
+            );
+        }
+    }
+
+    /// Why: the context-budget check is the guarantee that a request is never
+    /// silently truncated on the wire — it must fire before any request is
+    /// sent and name the operator remediation.
+    #[test]
+    fn chat_refuses_oversized_inputs_before_touching_the_runtime() {
+        let runtime = MockServer::new(|_, _| None);
+        let llm = raw_client(Settings {
+            ollama_url: runtime.url.clone(),
+            num_ctx: 1024,
+            ..Settings::default()
+        });
+        let error = llm
+            .chat::<serde_json::Value>(
+                "s",
+                serde_json::json!({"x": "y".repeat(2000)}),
+                serde_json::json!({}),
+                16,
+            )
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "Input exceeds safe context budget. Shorten candidate context/reply or select 16384 context and requalify the GPU"
+        );
+        assert!(
+            runtime.routes().is_empty(),
+            "the refusal must happen before any request: {:?}",
+            runtime.routes()
+        );
+    }
+
+    /// Why: the version gate is the only thing keeping a pre-capability Ollama
+    /// out of the pipeline — a missing or unparseable version is not a pass,
+    /// and an obsolete runtime must name its exact floor. Reachability itself
+    /// stays version-agnostic so the upgrade path can see the daemon.
+    #[test]
+    fn runtime_version_enforces_the_report_shape_and_the_version_floor() {
+        let too_old = format!(
+            "Ollama 0.1.0 is too old; install the latest stable release (minimum supported {}.{}.{})",
+            MIN_OLLAMA_VERSION.0, MIN_OLLAMA_VERSION.1, MIN_OLLAMA_VERSION.2
+        );
+        for (name, body, expected) in [
+            (
+                "missing version",
+                serde_json::json!({}),
+                "Ollama did not report a runtime version".to_owned(),
+            ),
+            (
+                "unparseable version",
+                serde_json::json!({"version": "not-a-version"}),
+                "Ollama returned an invalid version".to_owned(),
+            ),
+            (
+                "obsolete runtime",
+                serde_json::json!({"version": "0.1.0"}),
+                too_old,
+            ),
+        ] {
+            let runtime =
+                MockServer::new(move |route, _| (route == "/api/version").then(|| body.clone()));
+            let llm = raw_client(Settings {
+                ollama_url: runtime.url.clone(),
+                ..Settings::default()
+            });
+            let error = llm.runtime_version().unwrap_err().to_string();
+            assert_eq!(error, expected, "case {name}");
+            assert!(
+                !llm.healthy(),
+                "case {name}: a refused runtime is not healthy"
+            );
+            assert!(
+                llm.reachable(),
+                "case {name}: reachability must stay version-agnostic so the upgrade path can see the daemon"
+            );
+        }
+        let runtime = MockServer::new(|route, _| {
+            (route == "/api/version").then(crate::test_support::version_ok)
+        });
+        let llm = raw_client(Settings {
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        });
+        assert_eq!(llm.runtime_version().unwrap(), "0.35.1");
+        assert!(llm.healthy());
+    }
+
+    /// A runtime answering fixed `/api/tags` and `/api/show` documents for one
+    /// configured model.
+    fn inspect_runtime(tags: serde_json::Value, show: serde_json::Value) -> MockServer {
+        MockServer::new(move |route, _| match route {
+            "/api/version" => Some(crate::test_support::version_ok()),
+            "/api/tags" => Some(tags.clone()),
+            "/api/show" => Some(show.clone()),
+            _ => None,
+        })
+    }
+
+    /// Why: `inspect` is the gate that admits a model to private email
+    /// inference; every refusal reason (uninstalled, oversized, cloud-backed,
+    /// missing metadata, unpinned digest) must stay fail-closed with its exact
+    /// operator guidance, and nothing may fall back to a remote model.
+    #[test]
+    fn inspect_refusals_are_fail_closed_with_exact_reasons() {
+        let tag = |size: u64, digest: &str| {
+            serde_json::json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": digest,
+                "size": size
+            }]})
+        };
+        let good = tag(7_200_000_000, &"a".repeat(64));
+        let cases: Vec<(&str, serde_json::Value, serde_json::Value, &str)> = vec![
+            (
+                "model not installed",
+                serde_json::json!({"models": []}),
+                crate::test_support::show_ok(),
+                "Selected model is not installed. Use Download model",
+            ),
+            (
+                "empty model file",
+                tag(0, &"a".repeat(64)),
+                crate::test_support::show_ok(),
+                "Model file is outside the supported 16 GiB GPU budget",
+            ),
+            (
+                "model over the GPU budget",
+                tag(GPU_BUDGET_BYTES, &"a".repeat(64)),
+                crate::test_support::show_ok(),
+                "Model file is outside the supported 16 GiB GPU budget",
+            ),
+            (
+                "cloud-backed model",
+                good.clone(),
+                serde_json::json!({
+                    "remote_host": "example.invalid",
+                    "details": {"format": "gguf"},
+                    "model_info": {"general.architecture": "gemma4"},
+                    "capabilities": ["completion"]
+                }),
+                "Cloud-backed models are forbidden",
+            ),
+            (
+                "missing format metadata",
+                good.clone(),
+                serde_json::json!({
+                    "model_info": {"general.architecture": "gemma4"},
+                    "capabilities": ["completion"]
+                }),
+                "Local model format metadata is missing",
+            ),
+            (
+                "missing model metadata",
+                good.clone(),
+                serde_json::json!({
+                    "details": {"format": "gguf"},
+                    "capabilities": ["completion"]
+                }),
+                "Local model metadata missing; no remote fallback is allowed",
+            ),
+            (
+                "missing capability metadata",
+                good.clone(),
+                serde_json::json!({
+                    "details": {"format": "gguf"},
+                    "model_info": {"general.architecture": "gemma4"}
+                }),
+                "Ollama model capability metadata is missing; upgrade Ollama and re-pull the model",
+            ),
+            (
+                "empty capability metadata",
+                good.clone(),
+                serde_json::json!({
+                    "details": {"format": "gguf"},
+                    "model_info": {"general.architecture": "gemma4"},
+                    "capabilities": []
+                }),
+                "Ollama model capability metadata is empty; upgrade Ollama and re-pull the model",
+            ),
+            (
+                "decision-only model in the drafting lane",
+                good.clone(),
+                serde_json::json!({
+                    "details": {"format": "gguf"},
+                    "model_info": {"general.architecture": "gemma4"},
+                    "capabilities": ["decision"]
+                }),
+                "Selected production model is not a general completion model; decision-only models are restricted to the non-sending R&D lane",
+            ),
+        ];
+        for (name, tags, show, expected) in cases {
+            let runtime = inspect_runtime(tags, show);
+            let llm = raw_client(Settings {
+                model: crate::config::DEFAULT_MODEL.into(),
+                model_digest: Some("a".repeat(64)),
+                ollama_url: runtime.url.clone(),
+                ..Settings::default()
+            });
+            let error = llm.inspect().unwrap_err().to_string();
+            assert_eq!(error, expected, "case {name}");
+        }
+
+        // A digest pin is a trust anchor: any drift must be re-qualified.
+        let runtime = inspect_runtime(
+            tag(7_200_000_000, &"d".repeat(64)),
+            crate::test_support::show_ok(),
+        );
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("c".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        });
+        let error = llm.inspect().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Model digest changed; explicitly qualify and pin the new model before use"
+        );
+    }
+
+    /// Why: the decision lane runs non-sending R&D models under their own
+    /// capability contract — a decision-only model must qualify there and be
+    /// refused everywhere else (and a completion model refused there), so the
+    /// two lanes can never trade models silently.
+    #[test]
+    fn decision_lane_accepts_decision_models_and_refuses_completion_models() {
+        let decision_show = serde_json::json!({
+            "details": {"format": "gguf"},
+            "model_info": {"general.architecture": "gemma4"},
+            "capabilities": ["decision"]
+        });
+        let runtime = inspect_runtime(
+            serde_json::json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": "a".repeat(64),
+                "size": 7_200_000_000u64
+            }]}),
+            decision_show.clone(),
+        );
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        });
+        let status = llm.inspect_decision().expect("decision model qualifies");
+        assert!(status.installed);
+        assert_eq!(status.digest, "a".repeat(64));
+        assert_eq!(
+            status.message,
+            "Local model installed; capability checked; GPU residency not yet measured"
+        );
+
+        let error = llm.inspect().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Selected production model is not a general completion model; decision-only models are restricted to the non-sending R&D lane"
+        );
+
+        let runtime = inspect_runtime(
+            serde_json::json!({"models": [{
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": "a".repeat(64),
+                "size": 7_200_000_000u64
+            }]}),
+            crate::test_support::show_ok(),
+        );
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            model_digest: Some("a".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        });
+        let error = llm.inspect_decision().unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Selected decision model does not declare the decision-only Ollama capability"
+        );
+    }
+
+    /// Why: the residency check is the precondition for private inference —
+    /// an unloaded or wrong-digest model is not the pinned model, and any
+    /// partial swap, multi-model contention, undersized context or budget
+    /// overshoot must answer `gpu_resident: false` with the documented
+    /// remediation instead of a quiet pass.
+    #[test]
+    fn residency_refuses_unloaded_swapped_and_oversized_models() {
+        fn ps_runtime(models: serde_json::Value) -> MockServer {
+            MockServer::new(move |route, _| {
+                (route == "/api/ps").then(|| serde_json::json!({"models": models.clone()}))
+            })
+        }
+        let client = |runtime: &MockServer| {
+            raw_client(Settings {
+                model: crate::config::DEFAULT_MODEL.into(),
+                model_digest: Some("a".repeat(64)),
+                ollama_url: runtime.url.clone(),
+                ..Settings::default()
+            })
+        };
+        let digest = "a".repeat(64);
+        let resident = |size_vram: u64, context_length: u32| {
+            serde_json::json!({
+                "name": crate::config::DEFAULT_MODEL,
+                "digest": digest,
+                "size": 7_200_000_000u64,
+                "size_vram": size_vram,
+                "context_length": context_length
+            })
+        };
+
+        let runtime = ps_runtime(serde_json::json!([]));
+        let error = client(&runtime).residency(&digest).unwrap_err().to_string();
+        assert_eq!(error, "Selected pinned model is not loaded");
+
+        // The name matches but the digest does not: not the pinned model.
+        let runtime = ps_runtime(serde_json::json!([{
+            "name": crate::config::DEFAULT_MODEL,
+            "digest": "e".repeat(64),
+            "size": 7_200_000_000u64,
+            "size_vram": 7_200_000_000u64,
+            "context_length": 32768u32
+        }]));
+        let error = client(&runtime).residency(&digest).unwrap_err().to_string();
+        assert_eq!(error, "Selected pinned model is not loaded");
+
+        let runtime = ps_runtime(serde_json::json!([resident(7_200_000_000, 32768)]));
+        let status = client(&runtime).residency(&digest).unwrap();
+        assert!(status.gpu_resident);
+        assert_eq!(
+            status.message,
+            "Ollama reports full GPU residency within 14 GiB; not whole-device peak certification"
+        );
+
+        for (name, models) in [
+            (
+                "partially swapped out",
+                serde_json::json!([resident(1_000_000_000, 32768)]),
+            ),
+            (
+                "a second model contends for the GPU",
+                serde_json::json!([
+                    resident(7_200_000_000, 32768),
+                    {
+                        "name": crate::config::DEFAULT_VERIFIER_MODEL,
+                        "digest": "b".repeat(64),
+                        "size": 7_200_000_000u64,
+                        "size_vram": 7_200_000_000u64,
+                        "context_length": 32768u32
+                    }
+                ]),
+            ),
+            (
+                "context below the configured window",
+                serde_json::json!([resident(7_200_000_000, 8192)]),
+            ),
+            (
+                "reported VRAM over the budget",
+                serde_json::json!([resident(GPU_BUDGET_BYTES + 1, 32768)]),
+            ),
+        ] {
+            let runtime = ps_runtime(models);
+            let status = client(&runtime).residency(&digest).unwrap();
+            assert!(!status.gpu_resident, "case {name}");
+            assert_eq!(
+                status.message,
+                "GPU check failed: close other models, check GPU support/context, then qualify again",
+                "case {name}"
+            );
+        }
+    }
+
+    /// Why: the download monitor parses a provider-controlled stream — every
+    /// broken shape (failed start, provider error record, oversized record,
+    /// malformed record, cancellation, missing completion) must refuse the
+    /// download with its exact reason instead of accepting partial weights.
+    #[test]
+    fn pull_refuses_every_broken_download_stream() {
+        let cases: Vec<(&str, u16, String, &str)> = vec![
+            (
+                "download cannot start",
+                500,
+                "{\"error\":\"unavailable\"}\n".to_owned(),
+                "Ollama model download could not start",
+            ),
+            (
+                "provider reports a download failure",
+                200,
+                "{\"status\":\"pulling\",\"error\":\"disk full\"}\n".to_owned(),
+                "Ollama reported a model download failure",
+            ),
+            (
+                "oversized progress record",
+                200,
+                format!("{{\"status\":\"{}\"}}\n", "x".repeat(40_000)),
+                "Oversized Ollama progress record",
+            ),
+            (
+                "malformed progress record",
+                200,
+                "garbage\n".to_owned(),
+                "expected value",
+            ),
+        ];
+        for (name, status, body, expected) in cases {
+            let runtime = MockServer::new_raw(move |route, _| {
+                (route == "/api/pull").then(|| (status, body.clone()))
+            });
+            let llm = raw_client(Settings {
+                model: crate::config::DEFAULT_MODEL.into(),
+                ollama_url: runtime.url.clone(),
+                ..Settings::default()
+            });
+            let error = llm
+                .pull(&std::sync::atomic::AtomicBool::new(false), |_| {})
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains(expected),
+                "case {name}: unexpected error {error:#}"
+            );
+        }
+
+        // Cancellation is checked before each record is trusted.
+        let runtime = MockServer::new_raw(|route, _| {
+            (route == "/api/pull").then(|| (200, "{\"status\":\"pulling\"}\n".to_owned()))
+        });
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        });
+        let error = llm
+            .pull(&std::sync::atomic::AtomicBool::new(true), |_| {})
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "Download monitoring cancelled");
+    }
+
+    /// Why: verification runs on bounded input like every other stage — an
+    /// oversized reply/context must be refused before any request (there is
+    /// no safe way to truncate a claim audit), and an oversized explanation
+    /// must not be recorded as evidence.
+    #[test]
+    fn verify_refuses_oversized_inputs_and_explanations() {
+        let runtime = MockServer::new(|_, _| None);
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            ollama_url: runtime.url.clone(),
+            num_ctx: 8192,
+            ..Settings::default()
+        });
+        let email = sample_email("Your application", "We rejected you.");
+        let error = llm
+            .verify(&email, &"x".repeat(5000))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "Reply/context too long to verify safely");
+        assert!(runtime.routes().is_empty());
+
+        let long_reason = "r".repeat(3001);
+        let runtime = MockServer::new(move |route, _| {
+            (route == "/api/chat").then(|| {
+                chat_envelope(
+                    &serde_json::json!({
+                        "genuine_rejection": true,
+                        "claims_supported": true,
+                        "professional": true,
+                        "injection_free": true,
+                        "purpose_aligned": true,
+                        "reason": long_reason
+                    })
+                    .to_string(),
+                    true,
+                    "stop",
+                    10,
+                    10,
+                )
+            })
+        });
+        let llm = raw_client(Settings {
+            model: crate::config::DEFAULT_MODEL.into(),
+            ollama_url: runtime.url.clone(),
+            num_ctx: 32768,
+            ..Settings::default()
+        });
+        let error = llm.verify(&email, "A reply.").unwrap_err().to_string();
+        assert_eq!(error, "Verification explanation too long");
     }
 }

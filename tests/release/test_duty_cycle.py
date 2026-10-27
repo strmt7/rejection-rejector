@@ -21,9 +21,11 @@ import duty_cycle as dc  # noqa: E402
 class ValidateTargetTests(unittest.TestCase):
     """Target bounds are a product decision: fan-noise floor vs runaway
     runtime. Out-of-range or non-finite input must be rejected so a
-    corrupt file can never throttle a run into a stall."""
+    corrupt file can never throttle a run into a stall.
+    """
 
     def test_bounds_are_exact(self):
+        """The 20.0 and 100.0 edges pass; anything beyond or malformed fails."""
         self.assertEqual(dc.validate_target_pct(20.0), 20.0)
         self.assertEqual(dc.validate_target_pct(100.0), 100.0)
         self.assertEqual(dc.validate_target_pct("55"), 55.0)
@@ -41,9 +43,11 @@ class ValidateTargetTests(unittest.TestCase):
 
 class SleepSecondsTests(unittest.TestCase):
     """The formula is the core of the ceiling: off = on * (100 - t) / t.
-    Exact at the boundaries; never negative."""
+    Exact at the boundaries; never negative.
+    """
 
     def test_formula_matches_duty_cycle_definition(self):
+        """off = on * (100 - t) / t at the pinned points; never negative."""
         self.assertEqual(dc.sleep_seconds(10.0, 100.0), 0.0)
         self.assertAlmostEqual(dc.sleep_seconds(10.0, 50.0), 10.0)
         self.assertAlmostEqual(dc.sleep_seconds(10.0, 25.0), 30.0)
@@ -52,22 +56,27 @@ class SleepSecondsTests(unittest.TestCase):
 
     def test_invalid_target_never_paces(self):
         # Fail closed to uncapped rather than crashing the training step.
+        """An out-of-range target fails closed to uncapped pacing."""
         self.assertEqual(dc.sleep_seconds(10.0, 999.0), 0.0)
 
 
 class ControlFileTests(unittest.TestCase):
     """duty.json is written by the GUI and read every training step:
-    reads must fail closed, writes must be atomic."""
+    reads must fail closed, writes must be atomic.
+    """
 
     def setUp(self):
+        """Create an isolated control file under a fresh temp directory."""
         self.dir = Path(tempfile.mkdtemp())
         self.path = self.dir / "duty.json"
 
     def test_round_trip(self):
+        """A written target round-trips through the reader."""
         dc.write_target(self.path, 45.0)
         self.assertEqual(dc.read_target(self.path), 45.0)
 
     def test_read_fail_closed(self):
+        """Missing, malformed, out-of-range and wrong-shape files read None."""
         self.assertIsNone(dc.read_target(self.path))  # missing
         self.path.write_text("garbage", encoding="utf-8")
         self.assertIsNone(dc.read_target(self.path))  # malformed
@@ -77,16 +86,19 @@ class ControlFileTests(unittest.TestCase):
         self.assertIsNone(dc.read_target(self.path))  # wrong shape
 
     def test_write_rejects_out_of_range_and_keeps_last_value(self):
+        """An out-of-range write raises and preserves the previous value."""
         dc.write_target(self.path, 55.0)
         with self.assertRaises(ValueError):
             dc.write_target(self.path, 5.0)
         self.assertEqual(dc.read_target(self.path), 55.0)
 
     def test_write_is_atomic_no_tmp_left(self):
+        """A successful write leaves no duty.json.tmp sibling behind."""
         dc.write_target(self.path, 70.0)
         self.assertFalse((self.dir / "duty.json.tmp").exists())
 
     def test_control_path_is_sibling_of_progress(self):
+        """The control path is the duty.json sibling of the progress file."""
         self.assertEqual(
             dc.control_path_for(Path("/run/progress.json")),
             Path("/run/duty.json"),
@@ -95,13 +107,16 @@ class ControlFileTests(unittest.TestCase):
 
 class PacedSleepTests(unittest.TestCase):
     """Sliced sleeping keeps heartbeats fresh under deep throttling (the
-    stall instruments watch heartbeat age, so long sleeps must touch)."""
+    stall instruments watch heartbeat age, so long sleeps must touch).
+    """
 
     def test_slices_and_touches(self):
+        """Long sleeps are sliced and each slice touches the heartbeat."""
         slept = []
         touches = []
 
         def fake_sleep(s):
+            """Record one requested sleep slice instead of sleeping."""
             slept.append(s)
 
         total = dc.paced_sleep(
@@ -116,8 +131,9 @@ class PacedSleepTests(unittest.TestCase):
         self.assertEqual(len(touches), 3)  # one refresh per slice
 
     def test_non_positive_returns_immediately(self):
+        """A non-positive total returns 0.0 and never calls the sleeper."""
         slept = []
-        total = dc.paced_sleep(-1.0, sleep_fn=lambda s: slept.append(s))
+        total = dc.paced_sleep(-1.0, sleep_fn=slept.append)
         self.assertEqual(total, 0.0)
         self.assertEqual(slept, [])
 

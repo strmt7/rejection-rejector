@@ -42,7 +42,8 @@ def load_rows(path: Path, limit: int | None) -> list[dict]:
 
 def build_prompt(row: dict, tokenizer) -> str:
     """Render the training prompt for one row. Inputs: row, tokenizer.
-    Output: the full chat-rendered prompt (same format as training)."""
+    Output: the full chat-rendered prompt (same format as training).
+    """
     messages = [
         {"role": "system", "content": row["messages"][0]["content"]},
         {"role": "user", "content": row["messages"][1]["content"]},
@@ -54,7 +55,8 @@ def build_prompt(row: dict, tokenizer) -> str:
 
 def parse_answer(text: str) -> dict | None:
     """Extract the assistant JSON object from generated text.
-    Inputs: raw model output. Output: parsed dict or None on failure."""
+    Inputs: raw model output. Output: parsed dict or None on failure.
+    """
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
@@ -67,13 +69,69 @@ def parse_answer(text: str) -> dict | None:
 
 def write_progress(path: Path, record: dict) -> None:
     """Atomically write the live-probe progress marker. Inputs: path, record.
-    Output: none (best-effort)."""
+    Output: none (best-effort).
+    """
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
     tmp.replace(path)
 
 
+def generate_answer(model, tokenizer, prompt: str) -> str:
+    """Generate and decode one answer. Inputs: loaded model, tokenizer,
+    rendered prompt. Output: the decoded generated text.
+    """
+    import torch
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        out = model.generate(
+            **inputs, max_new_tokens=96, do_sample=False, pad_token_id=tokenizer.eos_token_id
+        )
+    return tokenizer.decode(out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+
+
+def per_class_stats(confusion: dict) -> dict:
+    """Precision/recall per class from the confusion tally. Inputs:
+    `confusion` — true->pred->count tallies. Output: per-class report dict.
+    """
+    per_class = {}
+    for cat in sorted(confusion):
+        tp = confusion[cat][cat]
+        pred_total = sum(confusion[c][cat] for c in confusion)
+        true_total = sum(confusion[cat].values())
+        per_class[cat] = {
+            "support": true_total,
+            "recall": round(tp / true_total, 4) if true_total else None,
+            "precision": round(tp / pred_total, 4) if pred_total else None,
+        }
+    return per_class
+
+
+def fail_closed_split(results: list[dict]) -> dict[str, int]:
+    """Count the dangerous vs safe error classes. Inputs: result records.
+    Output: the fail-closed split for the report.
+    """
+    # Fail-closed analysis: predicted 'rejection' on a non-rejection is the
+    # dangerous error class (could authorize a reply); the reverse is a miss.
+    false_rejection = sum(
+        1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection"
+    )
+    missed_rejection = sum(
+        1 for r in results if r["true"] == "rejection" and r["pred"] != "rejection"
+    )
+    return {
+        "false_rejection_would_authorize": false_rejection,
+        "missed_rejection_fails_closed": missed_rejection,
+    }
+
+
 def main() -> int:
+    """Evaluate a trained adapter on the holdout set.
+
+    Inputs: argv (base model, adapter, holdout, output path, limit,
+    device). Output: exit status 0; writes the evaluation report and the
+    `<out>.progress.json` marker.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-model", default="XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B")
     parser.add_argument("--adapter", type=Path, required=True)
@@ -106,12 +164,7 @@ def main() -> int:
     for i, row in enumerate(rows):
         expected = json.loads(row["messages"][2]["content"])
         prompt = build_prompt(row, tokenizer)
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            out = model.generate(
-                **inputs, max_new_tokens=96, do_sample=False, pad_token_id=tokenizer.eos_token_id
-            )
-        generated = tokenizer.decode(out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
+        generated = generate_answer(model, tokenizer, prompt)
         got = parse_answer(generated)
         true_cat = expected["category"]
         pred_cat = got.get("category") if got else "parse_failure"
@@ -135,35 +188,14 @@ def main() -> int:
 
     total = len(results)
     correct = sum(1 for r in results if r["pred"] == r["true"])
-    per_class = {}
-    for cat in sorted(confusion):
-        tp = confusion[cat][cat]
-        pred_total = sum(confusion[c][cat] for c in confusion)
-        true_total = sum(confusion[cat].values())
-        per_class[cat] = {
-            "support": true_total,
-            "recall": round(tp / true_total, 4) if true_total else None,
-            "precision": round(tp / pred_total, 4) if pred_total else None,
-        }
-    # Fail-closed analysis: predicted 'rejection' on a non-rejection is the
-    # dangerous error class (could authorize a reply); the reverse is a miss.
-    false_rejection = sum(
-        1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection"
-    )
-    missed_rejection = sum(
-        1 for r in results if r["true"] == "rejection" and r["pred"] != "rejection"
-    )
     report = {
         "base_model": args.base_model,
         "adapter": str(args.adapter),
         "rows": total,
         "accuracy": round(correct / total, 4) if total else None,
-        "per_class": per_class,
+        "per_class": per_class_stats(confusion),
         "confusion": {k: dict(v) for k, v in confusion.items()},
-        "fail_closed": {
-            "false_rejection_would_authorize": false_rejection,
-            "missed_rejection_fails_closed": missed_rejection,
-        },
+        "fail_closed": fail_closed_split(results),
         "results": results,
         "torch": torch.__version__,
         "device": device,

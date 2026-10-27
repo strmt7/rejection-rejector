@@ -2,22 +2,43 @@ use anyhow::{Result, ensure};
 use serde::Serialize;
 use std::{fs, path::Path};
 
+/// Minimum free space kept available for runtime writes.
+///
+/// Inputs: none (constant). Output: `u64` — the headroom in bytes.
 pub const MIN_RUNTIME_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+/// Minimum free space kept available for backup writes.
+///
+/// Inputs: none (constant). Output: `u64` — the headroom in bytes.
 pub const MIN_BACKUP_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 const BACKUP_FIXED_MARGIN_BYTES: u64 = 128 * 1024 * 1024;
 
+/// Free-space and size report for the workspace volume.
+///
+/// Inputs: none (plain struct). Output: database and file sizes, available
+/// and total bytes and the runtime and backup requirements.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct StorageHealth {
+    /// Schema version of the health record.
     pub schema_version: u32,
+    /// Database file size in bytes.
     pub database_bytes: u64,
+    /// Write-ahead log size in bytes.
     pub wal_bytes: u64,
+    /// Shared-memory file size in bytes.
     pub shm_bytes: u64,
+    /// Workspace database size in bytes.
     pub workspace_database_bytes: u64,
+    /// Free bytes on the workspace volume.
     pub available_bytes: u64,
+    /// Total bytes on the workspace volume.
     pub total_bytes: u64,
+    /// Bytes required for runtime operation.
     pub runtime_required_bytes: u64,
+    /// Bytes required to take a backup.
     pub backup_required_bytes: u64,
+    /// Whether runtime writes are safe at current headroom.
     pub runtime_write_safe: bool,
+    /// Whether a backup is safe at current headroom.
     pub backup_safe: bool,
 }
 

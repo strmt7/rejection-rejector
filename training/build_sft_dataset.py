@@ -89,7 +89,10 @@ def build_record(entry: dict) -> dict:
         "category": category,
         "confidence": confidence,
         "evidence": pick_evidence(entry, category),
-        "explanation": f"Detected {entry.get('rejection_style', 'standard')} wording for a {entry.get('general' if False else 'industry', 'general')} role.",
+        "explanation": (
+            f"Detected {entry.get('rejection_style', 'standard')} wording"
+            f" for a {entry.get('industry', 'general')} role."
+        ),
         "company": "",
         "position": "",
         "language": entry.get("language", "en"),
@@ -113,7 +116,9 @@ def build_record(entry: dict) -> dict:
     }
 
 
-def stratified_split(records: list[dict], holdout_fraction: float, seed: int) -> tuple[list[dict], list[dict]]:
+def stratified_split(
+    records: list[dict], holdout_fraction: float, seed: int
+) -> tuple[list[dict], list[dict]]:
     """Split records into train and holdout sets stratified by category.
 
     Inputs: `records` — built SFT records; `holdout_fraction` — fraction per
@@ -137,6 +142,12 @@ def stratified_split(records: list[dict], holdout_fraction: float, seed: int) ->
 
 
 def main() -> int:
+    """Build the FP-weighted SFT train/holdout files and print the report.
+
+    Inputs: argv (corpus directory, output directory, holdout fraction,
+    hard-negative up-weight factor, seed). Output: exit status 0 on
+    success, 2 when a corpus file is missing.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--corpus-dir",
@@ -172,7 +183,11 @@ def main() -> int:
 
     upweighted: list[dict] = []
     for rec in trainable:
-        repeats = args.hard_negative_upweight if rec["meta"]["purpose"] == "training_hard_negative" else 1
+        repeats = (
+            args.hard_negative_upweight
+            if rec["meta"]["purpose"] == "training_hard_negative"
+            else 1
+        )
         upweighted.extend([rec] * repeats)
 
     train, holdout = stratified_split(upweighted, args.holdout_fraction, args.seed)
@@ -184,6 +199,7 @@ def main() -> int:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def counts(rows: list[dict]) -> dict[str, int]:
+        """Tally record categories. Inputs: built rows. Output: category counts."""
         out: dict[str, int] = {}
         for row in rows:
             out[row["meta"]["category"]] = out.get(row["meta"]["category"], 0) + 1
