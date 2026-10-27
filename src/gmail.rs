@@ -25,7 +25,9 @@ const ROOT: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
+    /// Mailbox address of the connected account.
     pub email_address: String,
+    /// Current history id of the mailbox.
     pub history_id: String,
 }
 /// Message identifier reference in a list or history response.
@@ -34,7 +36,9 @@ pub struct Profile {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRef {
+    /// Provider message id.
     pub id: String,
+    /// Provider thread id the message belongs to.
     pub thread_id: String,
 }
 /// Gmail `users.messages.list` response body.
@@ -44,8 +48,10 @@ pub struct MessageRef {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
+    /// Message references in this page.
     #[serde(default)]
     pub messages: Vec<MessageRef>,
+    /// Token for the next page, when more remain.
     pub next_page_token: Option<String>,
 }
 /// One `users.history.list` record.
@@ -55,6 +61,7 @@ pub struct MessagePage {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRecord {
+    /// Messages added to the mailbox in this history record.
     #[serde(default)]
     pub messages_added: Vec<Added>,
 }
@@ -63,6 +70,7 @@ pub struct HistoryRecord {
 /// Inputs: none (plain struct). Output: the added [`MessageRef`].
 #[derive(Deserialize)]
 pub struct Added {
+    /// The message reference added to the conversation.
     pub message: MessageRef,
 }
 /// Gmail `users.history.list` response body.
@@ -72,9 +80,12 @@ pub struct Added {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
+    /// History records returned for the queried window.
     #[serde(default)]
     pub history: Vec<HistoryRecord>,
+    /// Token for the next history page, when more remain.
     pub next_page_token: Option<String>,
+    /// History id the page ends at.
     pub history_id: String,
 }
 /// Outcome of one history-listing step.
@@ -83,6 +94,7 @@ pub struct HistoryPage {
 /// when the stored history id is no longer servable.
 pub enum HistoryResult {
     Page(HistoryPage),
+    /// The stored history token is expired; a full resync is required.
     Expired,
 }
 #[derive(Deserialize)]
@@ -102,8 +114,11 @@ struct RawMessage {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMessage {
+    /// Provider message id.
     pub id: String,
+    /// Provider-internal timestamp of the message.
     pub internal_date: String,
+    /// Provider label ids on the message.
     #[serde(default)]
     pub label_ids: Vec<String>,
 }
@@ -112,6 +127,7 @@ pub struct ThreadMessage {
 /// Inputs: none (plain struct). Output: the thread's [`ThreadMessage`]s.
 #[derive(Deserialize)]
 pub struct Thread {
+    /// Messages in the conversation, in provider order.
     pub messages: Vec<ThreadMessage>,
 }
 /// Gmail `users.messages.send` response body.
@@ -119,6 +135,7 @@ pub struct Thread {
 /// Inputs: none (plain struct). Output: the id assigned to the sent reply.
 #[derive(Deserialize, Serialize)]
 pub struct Sent {
+    /// Provider id assigned to the sent message.
     pub id: String,
 }
 
@@ -213,7 +230,9 @@ fn gmail_json<T: serde::de::DeserializeOwned>(
 /// failure) or `MalformedMessage` (unusable payload).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FetchFailureKind {
+    /// A transient transport or provider failure.
     Infrastructure,
+    /// The provider returned a message that cannot be parsed.
     MalformedMessage,
 }
 /// Fetch failure with its operator-facing message.
@@ -222,7 +241,9 @@ pub enum FetchFailureKind {
 /// message shown in the queue.
 #[derive(Debug)]
 pub struct FetchFailure {
+    /// Failure class distinguishing transport faults from bad messages.
     pub kind: FetchFailureKind,
+    /// Operator-facing failure text.
     pub message: String,
 }
 impl std::fmt::Display for FetchFailure {
@@ -242,7 +263,9 @@ impl std::error::Error for FetchFailure {}
 /// driving the retry posture and operator reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendFailureKind {
+    /// The provider definitively rejected the send request.
     NotAccepted,
+    /// The provider outcome is unknown; delivery must be reconciled.
     Uncertain,
 }
 /// Send failure with its operator-facing message.
@@ -251,7 +274,9 @@ pub enum SendFailureKind {
 /// message shown in the queue.
 #[derive(Debug)]
 pub struct SendFailure {
+    /// Failure class distinguishing rejection from uncertain delivery.
     pub kind: SendFailureKind,
+    /// Operator-facing failure text.
     pub message: String,
 }
 impl std::fmt::Display for SendFailure {
@@ -2038,5 +2063,128 @@ mod tests {
         let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
         let mut client = Gmail::with_endpoints(test_creds(false), dead_url, &fake.token_url);
         assert!(client.find_sent("<msg@example.com>").is_err());
+    }
+
+    /// Why: a conversation that vanished upstream must surface the typed API
+    /// error, never a phantom empty thread — an empty thread would drive the
+    /// engine to treat the conversation as resolved.
+    #[test]
+    fn thread_fetch_surfaces_the_typed_error_for_vanished_threads() {
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(false);
+        let error = match client.thread("thread-1") {
+            Err(error) => error,
+            Ok(_) => panic!("a vanished thread must surface an error"),
+        };
+        assert!(
+            error.to_string().contains("HTTP 404"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: a payload the MIME parser cannot survive must classify as
+    /// `MalformedMessage` with the parse context, never as infrastructure —
+    /// infrastructure failures retry forever on a permanently bad message.
+    #[test]
+    fn parser_fatal_payloads_classify_as_malformed_messages() {
+        // 120 nested multipart wrappers exceed the mailparse recursion limit.
+        let mut mime = String::from("Content-Type: text/plain\r\n\r\nleaf");
+        for level in (0..120).rev() {
+            let boundary = format!("deep{level}end");
+            mime = format!(
+                "Content-Type: multipart/mixed; boundary={boundary}\r\n\r\n--{boundary}\r\n{mime}\r\n--{boundary}--\r\n"
+            );
+        }
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages/msg-1",
+                200,
+                "",
+                &raw_json("msg-1", "thread-1", "1700000000000", &mime),
+            ),
+        ]);
+        let mut client = fake.client(false);
+        let failure = match client.email(&queued_stub()) {
+            Err(failure) => failure,
+            Ok(_) => panic!("a parser-fatal payload must fail the fetch"),
+        };
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        assert!(
+            failure
+                .message
+                .contains("Gmail message could not be parsed safely"),
+            "{}",
+            failure.message
+        );
+    }
+
+    /// Why: listed identities are untrusted provider data; an invalid id or
+    /// thread id must be refused at stub construction so it can never reach
+    /// request paths or provider-path interpolation.
+    #[test]
+    fn stub_construction_refuses_invalid_provider_identities() {
+        let error = crate::gmail::stub(
+            "me@example.com",
+            MessageRef {
+                id: "not a valid id!".into(),
+                thread_id: "t".into(),
+            },
+        )
+        .expect_err("an invalid provider id must be refused");
+        assert_eq!(error.to_string(), "Invalid provider ID");
+        let error = crate::gmail::stub(
+            "me@example.com",
+            MessageRef {
+                id: "m1".into(),
+                thread_id: "a/b".into(),
+            },
+        )
+        .expect_err("an invalid thread id must be refused");
+        assert_eq!(error.to_string(), "Invalid provider ID");
+    }
+
+    /// Why: a failed OAuth token refresh must surface the fixed reconnect
+    /// context — it is the operator's cue that consent expired, distinct from
+    /// any mailbox-level failure.
+    #[test]
+    fn token_refresh_failures_carry_the_reconnect_context() {
+        // Port 0 is eternally unconnectable: the refresh cannot reach a host.
+        let dead = "http://127.0.0.1:0";
+        let mut client = Gmail::with_endpoints(test_creds(false), dead, dead);
+        let error = match client.profile() {
+            Err(error) => error,
+            Ok(_) => panic!("an unreachable token endpoint must fail the refresh"),
+        };
+        assert!(
+            format!("{error:#}")
+                .contains("Google token refresh failed; reconnect if consent expired"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: a non-404 history failure is a typed API error, not cursor
+    /// expiry — treating it as expiry would trigger a needless full resync on
+    /// every outage.
+    #[test]
+    fn history_outages_surface_the_typed_api_error_not_expiry() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/history", 500, "", r#"{"error":"boom"}"#),
+        ]);
+        let mut client = fake.client(false);
+        let error = match client.history("1", None) {
+            Err(error) => error,
+            Ok(_) => panic!("a 500 history response must fail the poll"),
+        };
+        assert_eq!(error.to_string(), "Gmail API returned HTTP 500");
+    }
+
+    /// Why: a corrupt body transfer encoding must fail the bounded MIME parse
+    /// closed — decoding garbage would feed invented text to classification.
+    #[test]
+    fn corrupt_body_transfer_encoding_fails_the_mime_parse() {
+        let raw = b"Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!not base64!!!";
+        assert!(parse_mime_text(raw).is_err());
     }
 }

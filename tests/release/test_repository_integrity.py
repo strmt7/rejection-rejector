@@ -15,6 +15,7 @@ SPEC.loader.exec_module(audit)
 
 class TextChecks(unittest.TestCase):
     """Per-blob text checks on synthetic committed content."""
+
     @staticmethod
     def errors(name, content):
         """Return the error-severity finding codes for one blob."""
@@ -78,6 +79,7 @@ class TextChecks(unittest.TestCase):
 
 class HistoryChecks(unittest.TestCase):
     """History audit semantics on a synthetic Git repository."""
+
     def setUp(self):
         """Build a three-commit synthetic history with one corrupt blob."""
         self.tmp = tempfile.TemporaryDirectory()

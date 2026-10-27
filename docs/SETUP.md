@@ -78,11 +78,13 @@ Official references:
 
 ## Ollama and local AI
 
-Open **Local AI**, using `qwen3.5:9b-q8_0` and 8,192 context initially. This is a
-provisional task-specific default, not a permanent leaderboard choice (see
-[MODEL.md](MODEL.md)). The current curated generative challengers include
-`granite4.2:8b-q8_0`, `gemma4:12b-it-q8_0`, the higher-headroom `gemma4:12b-it-q4_K_M`,
-`ministral-3:14b`, the smaller `qwen3.5:9b` Q4 build and `gpt-oss:20b`. The separate
+Open **Local AI**, using `granite4.2:8b-q8_0` and 8,192 context initially
+(verified to pass the self-verification qualification gate; see
+[MODEL.md](MODEL.md)). The default independent verifier is `qwen3.5:4b`, a
+different family from the primary to preserve model-diversity independence.
+The curated generative challengers include `gemma4:12b-it-q8_0`, the
+higher-headroom `gemma4:12b-it-q4_K_M`, `ministral-3:14b`, the smaller
+`qwen3.5:9b` Q4 build and `gpt-oss:20b`. The separate
 non-sending typed-decision bake-off includes `nimble:9b-q8_0`, `clef-flash:9b-q8_0` and
 `tev1:4b`. Changing model/context disarms delivery until the new configuration is
 qualified.

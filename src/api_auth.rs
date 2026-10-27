@@ -29,10 +29,12 @@ pub struct ApiTokenVerifier([u8; 32]);
 /// Inputs: none (plain struct). Output: the [`ApiTokenVerifier`], the
 /// one-time plaintext (never persisted) and whether a legacy token migrated.
 pub struct ApiCredentialMaterial {
+    /// Verifier for API tokens issued from this material.
     pub verifier: ApiTokenVerifier,
     /// Present only for a newly created or explicitly rotated token. The
     /// plaintext is never persisted after the verifier has been committed.
     pub plaintext_once: Option<Zeroizing<String>>,
+    /// Whether the stored token hash was migrated from the legacy scheme.
     pub migrated_legacy: bool,
 }
 

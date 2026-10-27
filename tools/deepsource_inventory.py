@@ -29,7 +29,7 @@ else:
     from json_input import decode_json
 
 ENDPOINT = "https://api.deepsource.com/graphql/"
-USER_AGENT = "FlitzZip-DeepSource-Audit/1.0"
+USER_AGENT = "RejectionRejector-DeepSource-Audit/1.0"
 MAX_PAGE_BYTES = 4 * 1024 * 1024
 QUERY = """query Inventory($owner: String!, $name: String!, $commit: String!,
   $after: String, $first: Int!) {

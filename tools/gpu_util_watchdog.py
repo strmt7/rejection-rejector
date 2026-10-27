@@ -30,6 +30,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -305,12 +306,10 @@ class tempfile_script:
 
     def __init__(self) -> None:
         """Own a placeholder for the temp directory created on entry."""
-        self._dir = None
+        self._dir: tempfile.TemporaryDirectory[str] | None = None
 
     def __enter__(self) -> Path:
         """Write the sampler script to a fresh temp file and return its path."""
-        import tempfile
-
         self._dir = tempfile.TemporaryDirectory(prefix="rr_gpu_watch_")
         path = Path(self._dir.name) / "sampler.ps1"
         path.write_text(SAMPLER_SCRIPT, encoding="utf-8")
