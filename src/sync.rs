@@ -1055,4 +1055,160 @@ mod gmail_provider_and_checkpoint_tests {
                 .is_none()
         );
     }
+
+    /// Why: a store fault while inserting stubs must fail the whole sync and
+    /// leave no new baseline behind, or the next poll would silently skip the
+    /// messages the failed insert dropped. Inputs: fresh store with the items
+    /// table dropped. Output: the sync errors and the sync state stays absent.
+    #[test]
+    fn insert_stubs_store_fault_fails_the_sync_without_a_baseline() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut fake = Fake {
+            fail_second_page: false,
+        };
+        let stop = AtomicBool::new(false);
+        db.drop_table_for_tests("items");
+        let error = synchronize(
+            &mut fake,
+            &mut db,
+            &Settings::default(),
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a store fault while inserting stubs must fail the sync");
+        assert!(
+            format!("{error:#}").contains("items"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            db.meta::<SyncState>("sync/me@example.com")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Why: the sync-state read is a fail-closed point; a corrupt meta table
+    /// must abort the sync with an error instead of re-baselining from the
+    /// provider and losing history. Inputs: fresh store with meta dropped.
+    /// Output: the sync errors; nothing else is mutated.
+    #[test]
+    fn sync_state_read_store_fault_fails_closed() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut fake = Fake {
+            fail_second_page: false,
+        };
+        let stop = AtomicBool::new(false);
+        db.drop_table_for_tests("meta");
+        let error = synchronize(
+            &mut fake,
+            &mut db,
+            &Settings::default(),
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a store fault while reading the sync state must fail the sync");
+        assert!(
+            format!("{error:#}").contains("meta"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: wake_deferred requeues deferred jobs after a lookback increase; a
+    /// store fault there must surface to the caller rather than being counted
+    /// as a successful poll. Inputs: store with the items table dropped.
+    /// Output: the error propagates.
+    #[test]
+    fn wake_deferred_store_fault_propagates_to_the_caller() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.drop_table_for_tests("items");
+        let error = db
+            .wake_deferred("me@example.com")
+            .expect_err("a store fault while requeueing deferred jobs must error");
+        assert!(
+            format!("{error:#}").contains("items"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: the incremental history loop must keep the previous cursor when a
+    /// mid-page insert fails, so the next poll re-reads the lost page instead
+    /// of advancing past it. Inputs: store whose baseline was written by a
+    /// successful sync, then whose items table is dropped. Output: the sync
+    /// errors and the stored cursor is byte-identical to the baseline.
+    #[test]
+    fn history_insert_store_fault_keeps_the_previous_cursor() {
+        struct FaultyHistory;
+        impl Provider for FaultyHistory {
+            fn profile(&mut self) -> Result<Profile> {
+                Ok(Profile {
+                    email_address: "me@example.com".into(),
+                    history_id: "22".into(),
+                })
+            }
+            fn list(&mut self, _: &str, _: Option<&str>) -> Result<MessagePage> {
+                Ok(MessagePage::default())
+            }
+            fn history(&mut self, _: &str, _: Option<&str>) -> Result<HistoryResult> {
+                Ok(HistoryResult::Page(HistoryPage {
+                    history_id: "22".into(),
+                    history: vec![crate::gmail::HistoryRecord {
+                        messages_added: vec![crate::gmail::Added {
+                            message: MessageRef {
+                                id: "b".into(),
+                                thread_id: "tb".into(),
+                            },
+                        }],
+                    }],
+                    ..Default::default()
+                }))
+            }
+        }
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let settings = Settings::default();
+        let mut fake = Fake {
+            fail_second_page: false,
+        };
+        synchronize(
+            &mut fake,
+            &mut db,
+            &settings,
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .unwrap();
+        let before = db.meta::<SyncState>("sync/me@example.com").unwrap();
+        assert_eq!(
+            before.as_ref().and_then(|s| s.history_id.as_deref()),
+            Some("20"),
+            "the first sync must record the pre-listing profile baseline"
+        );
+        db.drop_table_for_tests("items");
+        let error = synchronize(
+            &mut FaultyHistory,
+            &mut db,
+            &settings,
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a store fault while inserting history stubs must fail the sync");
+        assert!(
+            format!("{error:#}").contains("items"),
+            "unexpected error: {error:#}"
+        );
+        let after = db.meta::<SyncState>("sync/me@example.com").unwrap();
+        assert_eq!(
+            after.as_ref().and_then(|s| s.history_id.as_deref()),
+            Some("20"),
+            "a failed incremental sync must retain the previous cursor"
+        );
+    }
 }
