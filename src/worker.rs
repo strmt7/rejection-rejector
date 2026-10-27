@@ -222,13 +222,13 @@ pub enum Command {
     Refresh,
     /// Poll the provider immediately.
     CheckNow,
-    Connect {
-        path: PathBuf,
-        send: bool,
-    },
+    /// Import a Google Desktop OAuth client file and connect the account.
+    Connect { path: PathBuf, send: bool },
+    /// Connect with an IMAP/SMTP app password instead of OAuth.
     ConnectAppPassword(AppPasswordCredentials),
     /// Disconnect the Google account.
     Disconnect,
+    /// Apply updated settings.
     Settings(Box<Settings>),
     /// Install the local Ollama runtime.
     InstallOllama,
@@ -256,47 +256,44 @@ pub enum Command {
     IntegrityCheck,
     /// Compact the SQLite database.
     CompactDatabase,
-    Backup {
-        out: PathBuf,
-    },
-    RecoveryDrill {
-        backup: PathBuf,
-    },
+    /// Write an encrypted same-vault backup to the requested path.
+    Backup { out: PathBuf },
+    /// Run the recovery drill against a backup without touching live state.
+    RecoveryDrill { backup: PathBuf },
+    /// Export a passphrase-wrapped recovery key for a backup.
     ExportRecoveryKey {
         out: PathBuf,
         passphrase: Zeroizing<String>,
     },
+    /// Verify a backup against a passphrase-wrapped recovery key.
     VerifyRecoveryKey {
         backup: PathBuf,
         recovery_key: PathBuf,
         passphrase: Zeroizing<String>,
     },
-    Diagnostics {
-        out: PathBuf,
-    },
-    List {
-        review: bool,
-        page: u32,
-    },
+    /// Write the workspace diagnostics report to the requested path.
+    Diagnostics { out: PathBuf },
+    /// List one page of items (review queue or full feed).
+    List { review: bool, page: u32 },
+    /// Make the addressed item the active selection.
     Select(String),
+    /// Save an edited reply body for the pinned item revision.
     Edit {
         id: String,
         revision: u64,
         body: String,
     },
-    Regenerate {
-        id: String,
-        revision: u64,
-    },
-    Dismiss {
-        id: String,
-        revision: u64,
-    },
+    /// Regenerate the draft for the pinned item revision.
+    Regenerate { id: String, revision: u64 },
+    /// Dismiss the pinned item revision.
+    Dismiss { id: String, revision: u64 },
+    /// Send the confirmed reply whose body hash matches the pinned revision.
     Send {
         id: String,
         revision: u64,
         body_hash: String,
     },
+    /// Reconcile one provider message id against the delivery records.
     Reconcile(String),
     /// Purge items past the retention window.
     Purge,
@@ -306,13 +303,10 @@ pub enum Command {
     HideApiToken,
     /// Rotate the local API token.
     RotateApiToken,
-    Api {
-        path: String,
-        reply: Sender<Value>,
-    },
-    OpenMetrics {
-        reply: Sender<String>,
-    },
+    /// Answer a read-only API query over the bounded reply channel.
+    Api { path: String, reply: Sender<Value> },
+    /// Answer the OpenMetrics exposition query over the bounded reply channel.
+    OpenMetrics { reply: Sender<String> },
     /// State-changing web command received by the loopback API (`rr web`).
     ///
     /// The request is already payload-validated by [`web::parse_write_request`];
@@ -5544,6 +5538,937 @@ mod orchestration_tests {
                     "the worker loop must stay responsive after an evaluation failure"
                 );
                 w.shutdown(Duration::from_secs(10));
+            },
+        );
+    }
+
+    /// A shared snapshot whose lock a panicking holder left poisoned.
+    ///
+    /// Why: the worker helpers must degrade instead of panicking across the
+    /// thread boundary when the UI-state lock is poisoned mid-operation.
+    fn poisoned_snapshot() -> Arc<Mutex<Snapshot>> {
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        poison_lock(&shared);
+        shared
+    }
+
+    /// Poison one snapshot lock with a panicking holder.
+    fn poison_lock(shared: &Arc<Mutex<Snapshot>>) {
+        let for_thread = shared.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = for_thread.lock().unwrap();
+            panic!("poison the shared snapshot");
+        });
+        let _ = handle.join();
+        assert!(shared.is_poisoned());
+    }
+
+    /// Why: a poisoned UI-state lock must degrade to a silent no-op at the
+    /// helper boundary (a panic here would take the worker thread down for a
+    /// UI-state accident), except for `refresh`, which must fail closed with
+    /// its exact documented error instead of publishing a stale snapshot.
+    #[test]
+    fn lifecycle_helpers_degrade_silently_on_a_poisoned_snapshot_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = poisoned_snapshot();
+        let pulse = WorkerPulse::default();
+
+        busy(&shared, &pulse, "progress");
+        report(&shared, &pulse, OperationKind::Refresh, &Ok(()));
+        report(
+            &shared,
+            &pulse,
+            OperationKind::Refresh,
+            &Err(anyhow::anyhow!("synthetic failure")),
+        );
+        report_silent_success(&shared, &pulse, OperationKind::Refresh, "quiet");
+        record_current_operation(&None, &shared);
+        expire_api_token(&shared);
+
+        // Reads degrade to the documented default instead of propagating.
+        assert_eq!(
+            format!("{:?}", current_operation(&shared)),
+            format!("{:?}", OperationStatus::default())
+        );
+        let liveness = pulse.snapshot(Utc::now());
+        assert_eq!(liveness.current_operation, OperationKind::Idle);
+
+        // `refresh` is the exception: it must refuse to publish.
+        let e = demo_engine(dir.path());
+        let error = refresh(&e, &shared, None, true, 0).unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+    }
+
+    /// Why: `busy` reports forward progress, not a new operation outcome —
+    /// when no operation is running it must not rewrite the published
+    /// operation status (that would erase the recorded outcome of the last
+    /// operation).
+    #[test]
+    fn busy_never_rewrites_a_finished_operation_status() {
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        begin_operation(&shared, &pulse, OperationKind::Refresh, "Working…");
+        report(&shared, &pulse, OperationKind::Refresh, &Ok(()));
+        busy(&shared, &pulse, "Background progress…");
+        let snapshot = shared.lock().unwrap();
+        assert_eq!(snapshot.busy, "Background progress…");
+        assert_eq!(snapshot.operation.state, OperationState::Succeeded);
+        assert_eq!(snapshot.operation.message, "Operation completed.");
+    }
+
+    /// Why: every read-route refusal is a stable operator-facing contract —
+    /// the exact reason is what tells a client whether to fix its request or
+    /// its expectations, so each guard's wording is pinned.
+    #[test]
+    fn read_api_error_arms_are_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = demo_engine(dir.path());
+        let cases = [
+            (
+                "/v1/capabilities?x=1",
+                "Capabilities endpoint takes no query parameters",
+            ),
+            (
+                "/v1/health?x=1",
+                "Health endpoint takes no query parameters",
+            ),
+            (
+                "/v1/metrics?x=1",
+                "Metrics endpoint takes no query parameters",
+            ),
+            (
+                "/v1/settings?x=1",
+                "Settings endpoint takes no query parameters",
+            ),
+            (
+                "/v1/status?x=1",
+                "Status endpoint takes no query parameters",
+            ),
+            (
+                "/v1/audit/anchor?x=1",
+                "Audit anchor endpoint takes no query parameters",
+            ),
+            ("/v1/items?page=1&page=2", "Duplicate query parameter: page"),
+            ("/v1/nope", "Unknown API route"),
+            ("/v1/items/short", "Invalid item identifier"),
+            (
+                "/v1/item-feed?bogus=1",
+                "Item-feed endpoint accepts only cursor and limit",
+            ),
+            ("/v1/item-feed?limit=0", "Item-feed limit must be 1..100"),
+            (
+                "/v1/item-feed?cursor=%21%21",
+                "Invalid item-feed cursor encoding",
+            ),
+            ("/v1/item-feed?cursor=AAAA", "Invalid item-feed cursor"),
+            ("/v1/items?page=1000001", "Page is outside supported range"),
+        ];
+        for (path, expected) in cases {
+            let error = api_query(&e, path).unwrap_err().to_string();
+            assert_eq!(error, expected, "path {path}");
+        }
+        // /v1/items rejects parameters other than page.
+        let error = api_query(&e, "/v1/items?bogus=1").unwrap_err().to_string();
+        assert_eq!(error, "Items endpoint accepts only page");
+    }
+
+    /// Why: an invalid request through the API relay must answer the stable
+    /// error document rather than drop the reply channel (the desktop would
+    /// hang on a missing reply) or leak internal error detail.
+    #[test]
+    fn api_relay_invalid_requests_answer_the_stable_error_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = Worker::spawn(dir.path().into(), true);
+        let start = Instant::now();
+        while !worker.view().initialized {
+            assert!(!worker.view().fatal, "{}", worker.view().error);
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            api(&worker, "/v1/nope"),
+            serde_json::json!({"error": "Invalid request or unavailable resource"})
+        );
+        assert!(worker.shutdown(Duration::from_secs(5)));
+    }
+
+    /// Why: the API relay commands are intercepted by the loop and must never
+    /// reach the command dispatchers — if one does, it must be reported as a
+    /// typed operation failure with the documented internal error (never run
+    /// as a half-formed worker command), without wedging the loop.
+    #[test]
+    fn wrong_dispatcher_api_commands_report_the_internal_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = &mut demo_engine(dir.path());
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let api_disabled = Arc::new(AtomicBool::new(false));
+        let mut gmail_gate = RetryGate::new(
+            Instant::now(),
+            Duration::from_secs(30),
+            Duration::from_secs(15 * 60),
+            3,
+            Duration::from_secs(10 * 60),
+        );
+        let (reply, _rx) = bounded(1);
+        let command = Command::Api {
+            path: "/v1/health".into(),
+            reply,
+        };
+        let result = execute_vault_ops(command, e, &shared, &pulse)
+            .expect("the dispatcher mismatch is an operation failure, not a fatal escape")
+            .unwrap_err();
+        assert_eq!(
+            result.to_string(),
+            "Internal API command reached the wrong dispatcher"
+        );
+
+        let (reply, _rx) = bounded(1);
+        let (selected_out, review_out, page_out, _due) = handle_worker_command(
+            Command::OpenMetrics { reply },
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &api_disabled,
+            &mut gmail_gate,
+            None,
+            true,
+            0,
+            Instant::now(),
+        )
+        .unwrap();
+        assert_eq!((selected_out, review_out, page_out), (None, true, 0));
+        // The failure is published through the typed operation status.
+        let snapshot = shared.lock().unwrap();
+        assert_eq!(snapshot.operation.state, OperationState::Failed);
+        assert_eq!(
+            snapshot.operation.code.as_deref(),
+            Some(OperationKind::ApiRequest.failure_code())
+        );
+        assert_eq!(
+            snapshot.operation.message, "Internal API command reached the wrong dispatcher",
+            "the dispatch must report the documented internal error"
+        );
+    }
+
+    /// Why: the app-password arm runs the same connect operation as the
+    /// interactive surface — on a demo workspace it must refuse with the exact
+    /// demo guard and leave settings untouched (never half-connect a demo
+    /// workspace to a real mailbox).
+    #[test]
+    fn connect_app_password_dispatch_reports_the_demo_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = &mut demo_engine(dir.path());
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let api_disabled = Arc::new(AtomicBool::new(false));
+        let mut gmail_gate = RetryGate::new(
+            Instant::now(),
+            Duration::from_secs(30),
+            Duration::from_secs(15 * 60),
+            3,
+            Duration::from_secs(10 * 60),
+        );
+        let outcome = execute_command(
+            Command::ConnectAppPassword(AppPasswordCredentials::new(
+                "applicant@example.invalid",
+                "abcd efgh ijkl mnop",
+            )),
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &api_disabled,
+            &mut gmail_gate,
+            None,
+            true,
+            0,
+        )
+        .unwrap();
+        assert!(!outcome.settings_changed);
+        let error = outcome.result.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Demo mode never connects to a real mailbox"
+        );
+    }
+
+    /// Why: the web connect arm must answer through the same stable envelope
+    /// as every other write — the exact demo refusal, with its typed operation
+    /// code and retryability, so clients can react consistently.
+    #[test]
+    fn handle_api_write_connect_app_password_answers_the_stable_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = demo_engine(dir.path());
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let mut arm_gate = None;
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::ConnectAppPassword {
+                creds: AppPasswordCredentials::new(
+                    "applicant@example.invalid",
+                    "abcd efgh ijkl mnop",
+                ),
+            },
+            &mut arm_gate,
+            &ctx(&shared, &pulse, &journal),
+        );
+        let (code, retryable) =
+            classify_operation_failure(OperationKind::ConnectGmail, &anyhow::anyhow!("x"));
+        assert_eq!(outcome.status, if retryable { 503 } else { 409 });
+        assert_eq!(outcome.body["code"], serde_json::json!(code));
+        assert_eq!(
+            outcome.body["message"],
+            serde_json::json!("Demo mode never connects to a real mailbox")
+        );
+    }
+
+    /// Why: these write arms run the same engine operations as their
+    /// interactive commands (mailbox sync, disconnect, integrity, compaction,
+    /// backup, retention) through the shared begin/report/audit/refresh
+    /// sequence — a regression here would let the web surface diverge from
+    /// the desktop on state-changing work.
+    #[test]
+    fn handle_api_write_executes_the_operational_arms() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mut e = live_engine(dir.path());
+        e.account = "applicant@example.invalid".into();
+        let gmail = crate::test_support::gmail_server(
+            &e.account,
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
+            crate::oauth::Credentials {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+                can_send: true,
+            },
+            &gmail.url,
+            &gmail.url,
+        ));
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let mut arm_gate = None;
+        let context = ctx(&shared, &pulse, &journal);
+
+        let outcome = handle_api_write(&mut e, &WriteRequest::CheckNow, &mut arm_gate, &context);
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert_eq!(
+            outcome.body["new_identities"],
+            serde_json::json!(0),
+            "the payload must report the exact number of new identities"
+        );
+
+        let backup_out = dir.path().join("api-backup");
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Backup {
+                out: backup_out.to_string_lossy().into_owned(),
+            },
+            &mut arm_gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert!(backup_out.exists(), "the verified backup bundle must exist");
+
+        for (request, label) in [
+            (WriteRequest::IntegrityCheck, "integrity"),
+            (WriteRequest::Compact, "compact"),
+            (WriteRequest::Purge, "purge"),
+        ] {
+            let outcome = handle_api_write(&mut e, &request, &mut arm_gate, &context);
+            assert_eq!(outcome.status, 200, "{label}: {:?}", outcome.body);
+        }
+
+        let outcome = handle_api_write(&mut e, &WriteRequest::Disconnect, &mut arm_gate, &context);
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert!(
+            !e.settings.sending_enabled || !e.connected(),
+            "disconnect must disarm the mailbox"
+        );
+    }
+
+    /// Why: the Qualify web arm pins provenance digests on success — the
+    /// primary pin from its smoke test and, when asked, the verifier pin from
+    /// its own qualification — and the `verifier` flag must only add the
+    /// verifier qualification after the primary one passed.
+    #[test]
+    fn handle_api_write_qualify_pins_the_primary_and_verifier_models() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let runtime = crate::test_support::ollama_runtime(
+            vec![
+                (crate::config::DEFAULT_MODEL.into(), "a".repeat(64)),
+                (crate::config::DEFAULT_VERIFIER_MODEL.into(), "b".repeat(64)),
+            ],
+            "Test Applicant",
+            |_| {
+                crate::test_support::verdict(
+                    "We have decided not to move forward with your application.",
+                )
+            },
+        );
+        let mut e = live_engine(dir.path());
+        e.settings.signature = "Test Applicant".into();
+        e.settings.model = crate::config::DEFAULT_MODEL.into();
+        e.settings.model_digest = None;
+        e.settings.verifier_model = crate::config::DEFAULT_VERIFIER_MODEL.into();
+        e.settings.independent_verifier_enabled = false;
+        e.settings.ollama_url.clone_from(&runtime.url);
+        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let mut arm_gate = None;
+        let context = ctx(&shared, &pulse, &journal);
+
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Qualify { verifier: false },
+            &mut arm_gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert_eq!(e.settings.model_digest, Some("a".repeat(64)));
+        assert_eq!(e.settings.verifier_model_digest, None);
+
+        let outcome = handle_api_write(
+            &mut e,
+            &WriteRequest::Qualify { verifier: true },
+            &mut arm_gate,
+            &context,
+        );
+        assert_eq!(outcome.status, 200, "body: {:?}", outcome.body);
+        assert_eq!(e.settings.verifier_model_digest, Some("b".repeat(64)));
+    }
+
+    /// Why: a poisoned UI-state lock must fail the scheduled stages closed at
+    /// their documented refresh boundary ("UI state lock failed") instead of
+    /// silently skipping the post-operation snapshot rebuild and leaving the
+    /// UI on stale state while retention/policy/backup work keeps running.
+    #[test]
+    fn poisoned_snapshot_fails_the_scheduled_maintenance_stages_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let e = &mut live_engine(dir.path());
+        let shared = poisoned_snapshot();
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let api_disabled = Arc::new(AtomicBool::new(false));
+        let selected = None;
+        let now = Instant::now();
+        let future = now + Duration::from_secs(3600);
+
+        // Retention purge runs (due), then refuses to publish the rebuild.
+        let error =
+            run_retention(e, &shared, &pulse, &journal, &selected, true, 0, 0, now).unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // The same boundary holds for the overdue scheduled backup.
+        e.settings.scheduled_backup_enabled = true;
+        let error = run_scheduled_backup(e, &shared, &pulse, &journal, &selected, true, 0, 0, now)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // And through the maintenance aggregator that drives them.
+        let mut policy_due = future;
+        let mut retention_due = now;
+        let mut backup_due = future;
+        let error = run_maintenance_operations(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &api_disabled,
+            &mut 0,
+            &mut policy_due,
+            &mut 0,
+            &mut retention_due,
+            &mut 0,
+            &mut backup_due,
+            &selected,
+            true,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+    }
+
+    /// Why: the AI stages share the same fail-closed refresh boundary — a
+    /// scheduled poll, local-AI tick or automatic dispatch that cannot publish
+    /// its outcome must stop the schedule, not continue dispatching against a
+    /// UI state nobody can observe.
+    #[test]
+    fn poisoned_snapshot_fails_the_scheduled_ai_stages_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let e = &mut live_engine(dir.path());
+        e.settings.model_digest = Some("a".repeat(64));
+        e.settings.ollama_url = MockServer::new(|_, _| None).url.clone();
+        let shared = poisoned_snapshot();
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let selected = None;
+        let now = Instant::now();
+        let mut gmail_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+        let mut local_ai_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+
+        // The scheduled poll runs its sync, then fails closed at the refresh.
+        let error = run_gmail_poll(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &selected,
+            true,
+            0,
+            &mut gmail_gate,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // The local-AI tick needs queued mail to reach its own refresh.
+        e.account = "applicant@example.invalid".into();
+        let email = crate::test_support::gmail_email(
+            "applicant@example.invalid",
+            1,
+            "Your application",
+            "We have decided not to move forward with your application.",
+        );
+        let job = Job::new(email.stub.clone(), Utc::now());
+        e.db.insert_stubs([job.stub.clone()], Utc::now()).unwrap();
+        let error = run_local_ai(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &selected,
+            true,
+            0,
+            &mut local_ai_gate,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // The automatic dispatch tick is governed by the enterprise emergency
+        // stop; an armed stop errors the tick, which still must fail closed at
+        // the same refresh boundary.
+        e.settings.mode = crate::config::Mode::Automatic;
+        e.settings.sending_enabled = true;
+        let error = crate::test_support::with_dispatch_gate(
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("emergency stop"))),
+            || run_automatic_dispatch(e, &shared, &pulse, &journal, &selected, true, 0, 0, now),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // And through the AI aggregator that drives them.
+        let error = run_ai_operations(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &selected,
+            true,
+            0,
+            &mut gmail_gate,
+            &mut local_ai_gate,
+            &mut 0,
+            &mut (now + Duration::from_secs(3600)),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+    }
+
+    /// Why: a recovery drill against a missing backup bundle is a documented
+    /// fatal dispatch escape (it bypasses the operation report exactly like
+    /// the original `?` sites) — the worker must latch fail-closed and journal
+    /// `worker_startup_failed` instead of pretending the drill was a routine
+    /// retryable operation failure.
+    #[test]
+    fn a_failed_recovery_drill_is_a_fatal_dispatch_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let worker = Worker::spawn(dir.path().into(), false);
+        let start = Instant::now();
+        while !worker.view().initialized {
+            assert!(!worker.view().fatal, "{}", worker.view().error);
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "worker did not initialize"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        worker.command(Command::RecoveryDrill {
+            backup: dir.path().join("missing-backup-bundle"),
+        });
+        assert!(
+            wait_for(|| worker.view().fatal),
+            "the drill escape must latch the fatal state: {}",
+            worker.view().error
+        );
+        let snapshot = worker.view();
+        assert!(
+            !snapshot.error.is_empty(),
+            "the fatal state must carry the drill failure reason"
+        );
+        assert!(
+            journaled_events(dir.path()).contains("worker_startup_failed"),
+            "the dispatch escape must journal worker_startup_failed: {:?}",
+            journaled_events(dir.path())
+        );
+    }
+
+    /// Why: the policy-reload and scheduled-backup stages forward their
+    /// fail-closed refresh errors through the maintenance aggregator — each
+    /// stage must stop the schedule at its own hand-off instead of continuing
+    /// with an unpublishable outcome.
+    #[test]
+    fn poisoned_snapshot_fails_the_policy_and_backup_aggregator_stages_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let e = &mut live_engine(dir.path());
+        let shared = poisoned_snapshot();
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let api_disabled = Arc::new(AtomicBool::new(false));
+        let selected = None;
+        let now = Instant::now();
+        let future = now + Duration::from_secs(3600);
+
+        // A policy that tightens settings reports the change; publishing that
+        // changed outcome must fail closed at the same refresh boundary as
+        // every other stage.
+        e.settings.sending_enabled = true;
+        crate::test_support::with_policy(
+            Some(crate::test_support::loaded_policy(
+                "d1",
+                crate::policy::EnterprisePolicy {
+                    version: 1,
+                    prohibit_sending: true,
+                    ..crate::policy::EnterprisePolicy::default()
+                },
+            )),
+            || {
+                let mut policy_due = now;
+                let mut retention_due = future;
+                let mut backup_due = future;
+                let error = run_maintenance_operations(
+                    e,
+                    &shared,
+                    &pulse,
+                    &journal,
+                    &api_disabled,
+                    &mut 0,
+                    &mut policy_due,
+                    &mut 0,
+                    &mut retention_due,
+                    &mut 0,
+                    &mut backup_due,
+                    &selected,
+                    true,
+                    0,
+                )
+                .unwrap_err();
+                assert_eq!(error.to_string(), "UI state lock failed");
+            },
+        );
+
+        // And the overdue scheduled-backup stage.
+        e.settings.scheduled_backup_enabled = true;
+        let mut policy_due = future;
+        let mut retention_due = future;
+        let mut backup_due = now;
+        let error = run_maintenance_operations(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &api_disabled,
+            &mut 0,
+            &mut policy_due,
+            &mut 0,
+            &mut retention_due,
+            &mut 0,
+            &mut backup_due,
+            &selected,
+            true,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+    }
+
+    /// Why: the AI aggregator forwards its stage errors the same way — the
+    /// poll stage and the automatic-dispatch stage must each stop the schedule
+    /// at their own hand-off when the outcome cannot be published.
+    #[test]
+    fn poisoned_snapshot_fails_the_poll_and_dispatch_aggregator_stages_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let e = &mut live_engine(dir.path());
+        e.settings.model_digest = Some("a".repeat(64));
+        e.settings.mode = crate::config::Mode::Automatic;
+        e.settings.sending_enabled = true;
+        let shared = poisoned_snapshot();
+        let pulse = WorkerPulse::default();
+        let journal = None;
+        let selected = None;
+        let now = Instant::now();
+        let future = now + Duration::from_secs(3600);
+
+        // The poll stage runs its sync, then fails closed at the refresh.
+        let mut gmail_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+        let mut local_ai_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+        let mut auto_due = future;
+        let error = run_ai_operations(
+            e,
+            &shared,
+            &pulse,
+            &journal,
+            &selected,
+            true,
+            0,
+            &mut gmail_gate,
+            &mut local_ai_gate,
+            &mut 0,
+            &mut auto_due,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+
+        // With both retry gates held back, the dispatch stage is the one that
+        // runs — an enterprise emergency stop errors the tick, which must fail
+        // closed at the same boundary.
+        let mut gmail_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+        gmail_gate.failure(Instant::now(), None);
+        let mut local_ai_gate = RetryGate::new(
+            now,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            3,
+            Duration::from_secs(60),
+        );
+        local_ai_gate.failure(Instant::now(), None);
+        let error = crate::test_support::with_dispatch_gate(
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("emergency stop"))),
+            || {
+                let mut auto_due = now;
+                run_ai_operations(
+                    e,
+                    &shared,
+                    &pulse,
+                    &journal,
+                    &selected,
+                    true,
+                    0,
+                    &mut gmail_gate,
+                    &mut local_ai_gate,
+                    &mut 0,
+                    &mut auto_due,
+                )
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "UI state lock failed");
+    }
+
+    /// Why: a corrupt incremental-sync record must fail the worker closed with
+    /// the exact parse error — both the startup snapshot build and the
+    /// scheduled poll read the record, and neither may treat an unreadable
+    /// cursor as "never polled" (that would re-poll a mailbox whose synced
+    /// state is unknown). The durable `worker_startup_failed` record carries
+    /// the failure into the runtime journal.
+    #[test]
+    fn corrupt_sync_state_fails_the_worker_closed_with_the_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            // A payload that cannot parse as `SyncState`: the snapshot build
+            // and the scheduled poll must escalate the read failure instead of
+            // treating it as "never polled".
+            e.db.set_meta(
+                &format!("sync/{}", e.account),
+                &serde_json::json!({"bogus": 1}),
+            )
+            .unwrap();
+        });
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let worker = Worker::spawn(dir.path().into(), false);
+                assert!(
+                    wait_for(|| worker.view().fatal),
+                    "the corrupt sync state must latch the fatal state: {}",
+                    worker.view().error
+                );
+                let snapshot = worker.view();
+                assert!(
+                    snapshot.error.contains("missing field"),
+                    "the fatal state must carry the parse failure: {}",
+                    snapshot.error
+                );
+                assert!(
+                    journaled_events(dir.path()).contains("worker_startup_failed"),
+                    "the escape must journal worker_startup_failed: {:?}",
+                    journaled_events(dir.path())
+                );
+            },
+        );
+    }
+
+    /// Why: when the scheduled stages cannot publish their outcomes (poisoned
+    /// UI-state lock), the worker loop must treat that as a fatal worker
+    /// failure and stop — continuing would run unobserved scheduled work
+    /// forever. The durable `worker_startup_failed` record is the observable,
+    /// because the fatal state itself cannot publish through the poisoned
+    /// lock.
+    #[test]
+    fn the_worker_loop_stops_when_scheduled_stages_cannot_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        // Zero intervals make every maintenance stage due on each loop pass.
+        crate::test_support::arm_worker_seams(
+            None,
+            None,
+            None,
+            None,
+            Some(Duration::ZERO),
+            None,
+            || {
+                let mut worker = Worker::spawn(dir.path().into(), false);
+                let start = Instant::now();
+                while !worker.view().initialized {
+                    assert!(!worker.view().fatal, "{}", worker.view().error);
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "worker did not initialize"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                poison_lock(&worker.snapshot);
+                assert!(
+                    wait_for(|| journaled_events(dir.path()).contains("worker_startup_failed")),
+                    "the loop must stop on the unpublishable scheduled outcome: {:?}",
+                    journaled_events(dir.path())
+                );
+                assert!(
+                    worker.shutdown(Duration::from_secs(10)),
+                    "the worker thread must exit once the schedule is stopped"
+                );
+            },
+        );
+    }
+
+    /// Why: the AI schedule shares the loop's fatal publish boundary — an
+    /// automatic dispatch tick that cannot publish its outcome must stop the
+    /// worker exactly like the maintenance stages, never keep dispatching
+    /// against a UI state nobody can observe.
+    #[test]
+    fn the_worker_loop_stops_when_the_ai_dispatch_cannot_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::headless_vault_seam();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let mock = crate::test_support::gmail_server(
+            "applicant@example.invalid",
+            vec![],
+            crate::test_support::SendOutcome::Deliver("sent000000000000000000000".into()),
+        );
+        seed_worker_workspace_with(dir.path(), &mock, |e| {
+            // Arm automatic dispatch so its tick runs on the schedule.
+            e.settings.mode = crate::config::Mode::Automatic;
+            e.settings.sending_enabled = true;
+        });
+        // The enterprise emergency stop errors every dispatch tick (its retry
+        // schedule keeps the tick due while the maintenance timers stay quiet).
+        crate::test_support::arm_worker_seams(
+            None,
+            Some(std::sync::Arc::new(|| {
+                Err(anyhow::anyhow!("emergency stop"))
+            })),
+            None,
+            None,
+            None,
+            Some((mock.url.clone(), mock.url.clone())),
+            || {
+                let mut worker = Worker::spawn(dir.path().into(), false);
+                let start = Instant::now();
+                while !worker.view().initialized {
+                    assert!(!worker.view().fatal, "{}", worker.view().error);
+                    assert!(
+                        start.elapsed() < Duration::from_secs(10),
+                        "worker did not initialize"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                poison_lock(&worker.snapshot);
+                let mut stopped = false;
+                for _ in 0..240 {
+                    if journaled_events(dir.path()).contains("worker_startup_failed") {
+                        stopped = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                assert!(
+                    stopped,
+                    "the AI schedule must stop the loop on the unpublishable outcome: {:?}",
+                    journaled_events(dir.path())
+                );
+                assert!(worker.shutdown(Duration::from_secs(10)));
             },
         );
     }

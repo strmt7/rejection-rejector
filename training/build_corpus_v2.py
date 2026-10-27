@@ -977,7 +977,9 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
         count_by(hard_neg_rows, neg_type) == report["by_negative_type"]
     )
     amb_rows = [r for r in train + holdout if r["meta"]["category"] == "uncertain"]
-    checks["ambiguous_type_counts_match"] = count_by(amb_rows, neg_type) == report["by_ambiguous_type"]
+    checks["ambiguous_type_counts_match"] = (
+        count_by(amb_rows, neg_type) == report["by_ambiguous_type"]
+    )
     return checks
 
 

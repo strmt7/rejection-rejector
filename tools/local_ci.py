@@ -40,9 +40,11 @@ GATES = [
             "--ignore", "RUSTSEC-2026-0371",
             "--ignore", "RUSTSEC-2026-0372", "--ignore", "RUSTSEC-2023-0086",
         ],
-        3,
     ),
 ]
+
+# Transient network fetches must not flip the gate: per-gate retry budget.
+GATE_ATTEMPTS = {"cargo audit (advisories)": 3}
 
 
 def run(
@@ -50,7 +52,8 @@ def run(
 ) -> bool:
     """Run one gate. Inputs: display name, argv, optional env, and retry
     attempts (for network-dependent steps whose transient fetch failures must
-    not flip the gate). Output: True when green on any attempt."""
+    not flip the gate). Output: True when green on any attempt.
+    """
     print(f"== {name}: {' '.join(cmd)}")
     ok = False
     for attempt in range(1, attempts + 1):
@@ -104,8 +107,7 @@ def main(argv: list[str] | None = None) -> int:
 
     check_credential_store()
     results = [
-        run(name, cmd, attempts=extra[0] if extra else 1)
-        for name, cmd, *extra in GATES
+        run(name, cmd, attempts=GATE_ATTEMPTS.get(name, 1)) for name, cmd in GATES
     ]
     # Rustdoc gate: deny warnings so doc-link regressions (e.g. public docs
     # linking a private item) fail here, not only in the deep-verification

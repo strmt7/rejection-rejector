@@ -4182,3 +4182,523 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod verification_gap_tests {
+    use super::*;
+    use crate::types::ProcessingFailureCode;
+
+    fn stub(id: &str, t: &str) -> Stub {
+        Stub {
+            account: "me@example.com".into(),
+            provider_id: id.into(),
+            thread_id: t.into(),
+            source: Source::Gmail,
+        }
+    }
+
+    fn ready(db: &mut Store, id: &str, t: &str) -> Job {
+        let s = stub(id, t);
+        let key = s.id();
+        db.insert_stub(s, Utc::now()).unwrap();
+        let mut j = db.get(&key).unwrap();
+        j.state = JobState::Ready;
+        db.save(&mut j, "test", "ready").unwrap();
+        j
+    }
+
+    /// Stored negative counters are refused instead of wrapping into huge
+    /// unsigned values.
+    ///
+    /// Why: a corrupted revision that wraps to a large u64 would defeat the
+    /// CAS guards that prevent duplicate sends.
+    #[test]
+    fn row_get_u64_refuses_negative_stored_counters() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "neg", "neg-thread");
+        db.conn.execute("UPDATE items SET revision=-1", []).unwrap();
+        let error = db.get(&job.id).expect_err("negative revisions are refused");
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::IntegralValueOutOfRange(1, -1))
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// The corruption seams accept only their fixed allowlists; arbitrary
+    /// table or state names panic instead of running ad-hoc SQL.
+    ///
+    /// Why: these seams execute raw SQL — an open-ended name would turn a test
+    /// helper into a SQL injection surface.
+    #[test]
+    #[should_panic(expected = "unsupported test table meta")]
+    fn drop_table_seam_refuses_unlisted_tables() {
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.drop_table_for_tests("meta");
+    }
+
+    /// The transition-refusal seam accepts only `sent` and `uncertain`.
+    ///
+    /// Why: the trigger fires on the state UPDATE — any other state would make
+    /// unrelated transitions fail and mask real bugs.
+    #[test]
+    #[should_panic(expected = "unsupported test refusal state queued")]
+    fn transition_refusal_seam_refuses_unlisted_states() {
+        let d = tempfile::tempdir().unwrap();
+        let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.refuse_state_transition_for_tests("queued");
+    }
+
+    /// Waking deferred mail requeues only the named account's deferred jobs,
+    /// resetting their retry budget and auditing the requeue.
+    ///
+    /// Why: an expanded lookback must not leak other accounts' mail into the
+    /// queue, and a requeue that kept an exhausted retry budget would strand
+    /// the job forever.
+    #[test]
+    fn wake_deferred_requeues_only_the_named_accounts_deferred_jobs() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let now = Utc::now();
+
+        let mine = ready(&mut db, "mine", "mine-thread");
+        let untouched = ready(&mut db, "untouched", "untouched-thread");
+        let mut job = db.get(&mine.id).unwrap();
+        let mut email = crate::ollama::sample_email("Old rejection", "We will not proceed.");
+        email.stub.clone_from(&job.stub);
+        email.received_at = now - chrono::Duration::days(10);
+        job.email = Some(email);
+        job.attempts = 3;
+        job.retry_at = now.timestamp() + 3_600;
+        db.save(&mut job, "test", "staged").unwrap();
+        let deferred_id = job.id.clone();
+        assert_eq!(
+            db.defer_review_outside_window("me@example.com", now - chrono::Duration::days(7), now)
+                .unwrap(),
+            1
+        );
+        assert_eq!(db.get(&deferred_id).unwrap().state, JobState::Deferred);
+
+        let other_identity = Stub {
+            account: "someone@example.com".into(),
+            provider_id: "other".into(),
+            thread_id: "other-thread".into(),
+            source: Source::Gmail,
+        };
+        let other_key = other_identity.id();
+        db.insert_stub(other_identity, Utc::now()).unwrap();
+        let mut other_job = db.get(&other_key).unwrap();
+        let mut email = crate::ollama::sample_email("Old rejection", "We will not proceed.");
+        email.stub.clone_from(&other_job.stub);
+        email.received_at = now - chrono::Duration::days(10);
+        other_job.email = Some(email);
+        other_job.state = JobState::Ready;
+        db.save(&mut other_job, "test", "staged").unwrap();
+        let other_id = other_job.id.clone();
+        assert_eq!(
+            db.defer_review_outside_window(
+                "someone@example.com",
+                now - chrono::Duration::days(7),
+                now
+            )
+            .unwrap(),
+            1
+        );
+
+        assert_eq!(db.wake_deferred("me@example.com").unwrap(), 1);
+        let woken = db.get(&deferred_id).unwrap();
+        assert_eq!(woken.state, JobState::Queued, "deferred mail is requeued");
+        assert_eq!(woken.retry_at, 0, "the retry budget is reset");
+        assert_eq!(woken.attempts, 0, "the attempt counter is reset");
+        assert_eq!(
+            db.get(&other_id).unwrap().state,
+            JobState::Deferred,
+            "other accounts keep their deferrals"
+        );
+        assert_eq!(
+            db.get(&untouched.id).unwrap().state,
+            JobState::Ready,
+            "never-deferred jobs are untouched"
+        );
+        let events = db.events(0, 500).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|ev| ev.kind == "email.requeued" && ev.detail == "Lookback expanded"),
+            "the requeue is audited"
+        );
+    }
+
+    /// A failed audit append rolls back completely: no event row and no
+    /// movement of the journal head.
+    ///
+    /// Why: the head hash is the rollback evidence — a half-applied append
+    /// would desynchronize the chain and break every later verification.
+    #[test]
+    fn failed_audit_appends_roll_back_the_journal_head() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        db.log("test.first", None, "first").unwrap();
+        let seq = db.latest_event_seq().unwrap();
+        let head = db.audit_head().unwrap();
+
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_event BEFORE INSERT ON events \
+                 BEGIN SELECT RAISE(ABORT, 'synthetic SQL failure'); END",
+            )
+            .unwrap();
+        let error = db
+            .log("test.second", None, "second")
+            .expect_err("the append must fail");
+        assert_eq!(error.to_string(), "synthetic SQL failure");
+        assert_eq!(db.latest_event_seq().unwrap(), seq, "no event row survives");
+        assert_eq!(db.audit_head().unwrap(), head, "the head never moves");
+        db.conn.execute_batch("DROP TRIGGER refuse_event").unwrap();
+
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_head BEFORE INSERT ON meta WHEN NEW.name='audit_head' \
+                 BEGIN SELECT RAISE(ABORT, 'synthetic SQL failure'); END;
+                 CREATE TRIGGER refuse_head_update BEFORE UPDATE OF payload ON meta \
+                 WHEN OLD.name='audit_head' \
+                 BEGIN SELECT RAISE(ABORT, 'synthetic SQL failure'); END",
+            )
+            .unwrap();
+        let error = db
+            .log("test.third", None, "third")
+            .expect_err("the head update must fail");
+        assert_eq!(error.to_string(), "synthetic SQL failure");
+        assert_eq!(db.latest_event_seq().unwrap(), seq, "no event row survives");
+        assert_eq!(db.audit_head().unwrap(), head, "the head never moves");
+    }
+
+    /// Deep integrity refuses delivery records that are missing, unsealed or
+    /// decayed for a job that claims a delivery state.
+    ///
+    /// Why: the delivery row is the at-most-once evidence — a job in a
+    /// delivery state without its durable record means a send cannot be
+    /// proven or ruled out, which must surface as an integrity error.
+    #[test]
+    fn application_integrity_refuses_delivery_states_without_their_records() {
+        // A reserved job whose durable record vanished.
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "missing-record", "missing-record-thread");
+        let reserved = db.reserve_send(&job, 10, Utc::now()).unwrap();
+        assert_eq!(reserved.state, JobState::Sending);
+        db.conn.execute("DELETE FROM deliveries", []).unwrap();
+        let error = db
+            .application_integrity()
+            .expect_err("a delivery state without its record is refused");
+        assert_eq!(
+            error.to_string(),
+            "Delivery-state job is missing its durable delivery record"
+        );
+    }
+
+    /// Deep integrity refuses a sent delivery whose provider identifier is
+    /// missing or no longer authenticates.
+    ///
+    /// Why: the sealed provider id is what proves which provider-side message
+    /// was sent — losing it breaks reconciliation and duplicate protection.
+    #[test]
+    fn application_integrity_refuses_sent_deliveries_without_provider_evidence() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "sent-record", "sent-record-thread");
+        let reserved = db.reserve_send(&job, 10, Utc::now()).unwrap();
+        db.finish_send(&reserved.id, Some("provider-1".into()))
+            .unwrap();
+
+        db.conn
+            .execute("UPDATE deliveries SET provider_id=NULL", [])
+            .unwrap();
+        let error = db
+            .application_integrity()
+            .expect_err("a sent delivery without a provider id is refused");
+        assert_eq!(
+            error.to_string(),
+            "Sent delivery is missing its encrypted provider identifier"
+        );
+
+        let fake_provider = {
+            let mut bytes = vec![0u8; 45];
+            bytes[0] = 1;
+            bytes
+        };
+        db.conn
+            .execute(
+                "UPDATE deliveries SET provider_id=?1",
+                [fake_provider.as_slice()],
+            )
+            .unwrap();
+        let error = db
+            .application_integrity()
+            .expect_err("an unauthentic provider id is refused");
+        assert_eq!(
+            error.to_string(),
+            "Cannot decrypt record: wrong key, damaged data or authentication failure"
+        );
+    }
+
+    /// Processing-failure verification refuses unknown codes, invalid counters
+    /// and unauthentic payloads before touching any record state.
+    ///
+    /// Why: these rows gate retry budgets — a forged row with a wrapped
+    /// counter or foreign payload would either block mail forever or clear a
+    /// failure that is still real.
+    #[test]
+    fn processing_failure_rows_refuse_unsupported_records() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        ready(&mut db, "pf-item", "pf-thread");
+        let conn = &db.conn;
+        let vault = &db.vault;
+
+        let error =
+            verify_processing_failure_row(conn, vault, "pf-item", "bogus", 1, false, 1, &[])
+                .expect_err("unknown codes are refused");
+        assert_eq!(
+            error.to_string(),
+            "Processing-failure record has an unknown stable code"
+        );
+
+        let error = verify_processing_failure_row(
+            conn,
+            vault,
+            "pf-item",
+            ProcessingFailureCode::Classification.as_str(),
+            0,
+            false,
+            1,
+            &[],
+        )
+        .expect_err("zero attempts are refused");
+        assert_eq!(
+            error.to_string(),
+            "Processing-failure attempt count is invalid"
+        );
+
+        let error = verify_processing_failure_row(
+            conn,
+            vault,
+            "pf-item",
+            ProcessingFailureCode::Classification.as_str(),
+            1,
+            false,
+            0,
+            &[],
+        )
+        .expect_err("zero timestamps are refused");
+        assert_eq!(error.to_string(), "Processing-failure timestamp is invalid");
+
+        let garbage = vec![1u8; 45];
+        let error = verify_processing_failure_row(
+            conn,
+            vault,
+            "pf-item",
+            ProcessingFailureCode::Classification.as_str(),
+            1,
+            false,
+            1,
+            &garbage,
+        )
+        .expect_err("unauthentic payloads are refused");
+        assert_eq!(
+            error.to_string(),
+            "Cannot decrypt record: wrong key, damaged data or authentication failure"
+        );
+
+        // A missing item table must surface as a storage error, never as
+        // "item missing".
+        db.drop_table_for_tests("items");
+        let record = ProcessingFailureRecord {
+            code: ProcessingFailureCode::Classification,
+            attempts: 1,
+            retry_exhausted: false,
+            occurred_at: Utc::now(),
+        };
+        let payload = vault
+            .seal(&format!("processing_failure/{}", "pf-item"), &record)
+            .unwrap();
+        let error = verify_processing_failure_row(
+            conn,
+            vault,
+            "pf-item",
+            ProcessingFailureCode::Classification.as_str(),
+            1,
+            false,
+            record.occurred_at.timestamp(),
+            &payload,
+        )
+        .expect_err("a broken item table must propagate");
+        assert_eq!(error.to_string(), "no such table: items");
+    }
+
+    /// Backup verification refuses structurally valid images whose metadata,
+    /// items, events or vault marker were surgically altered.
+    ///
+    /// Why: operator tooling trusts the verification manifest — every record
+    /// class must authenticate or the backup must be reported broken, never
+    /// "verified".
+    #[test]
+    fn backup_verification_refuses_surgically_altered_images() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source.sqlite3");
+        let vault = Vault::random();
+        let mut db = Store::open(&source, vault).unwrap();
+        let identity = stub("tamper", "tamper-thread");
+        db.insert_stub(identity, Utc::now()).unwrap();
+        db.log("test.first", None, "first").unwrap();
+
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "missing-marker",
+                "DELETE FROM meta WHERE name='vault_check'",
+                "Backup vault marker is missing",
+            ),
+            (
+                "missing-head",
+                "DELETE FROM meta WHERE name='audit_head'",
+                "Audit journal head is missing",
+            ),
+            ("dropped-items", "DROP TABLE items", "no such table: items"),
+            (
+                "dropped-events",
+                "DROP TABLE events",
+                "no such table: events",
+            ),
+            ("dropped-meta", "DROP TABLE meta", "no such table: meta"),
+        ];
+        for (name, mutation, expected) in cases {
+            let backup = d.path().join(format!("{name}.sqlite3"));
+            db.backup_to(&backup).unwrap();
+            {
+                let connection = Connection::open(&backup).unwrap();
+                connection.execute_batch(mutation).unwrap();
+            }
+            let error = db
+                .verify_backup_file(&backup)
+                .expect_err("altered images must not verify");
+            assert_eq!(error.to_string(), *expected, "case {name}");
+        }
+    }
+
+    /// A metadata payload that is not a sealed blob fails verification with a
+    /// column-type error instead of being skipped.
+    ///
+    /// Why: skipping unparseable rows would let an attacker replace payloads
+    /// with junk and still get a "verified" manifest.
+    #[test]
+    fn backup_verification_refuses_untyped_metadata_payloads() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source.sqlite3");
+        let vault = Vault::random();
+        let mut db = Store::open(&source, vault).unwrap();
+        db.log("test.first", None, "first").unwrap();
+        let backup = d.path().join("backup.sqlite3");
+        db.backup_to(&backup).unwrap();
+        {
+            let connection = Connection::open(&backup).unwrap();
+            connection
+                .execute("UPDATE meta SET payload=123 WHERE name='vault_check'", [])
+                .unwrap();
+        }
+        let error = db
+            .verify_backup_file(&backup)
+            .expect_err("untyped payloads must not verify");
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::InvalidColumnType(_, _, _))
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Read and write surfaces propagate storage failures instead of
+    /// reporting empty success.
+    ///
+    /// Why: a `list` or `counts` call that answers "nothing here" while the
+    /// table is broken would hide queued mail from review and undercount the
+    /// safety limits.
+    #[test]
+    fn broken_tables_propagate_errors_without_false_success() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "broken", "broken-thread");
+        db.drop_table_for_tests("items");
+
+        let error = db.get(&job.id).expect_err("get must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db
+            .list("me@example.com", false, 0, 10)
+            .expect_err("list must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db.counts("me@example.com").expect_err("counts must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db
+            .ready_ids("me@example.com")
+            .expect_err("ready_ids must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db
+            .next_queued("me@example.com", Utc::now())
+            .expect_err("next_queued must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db
+            .wake_deferred("me@example.com")
+            .expect_err("wake_deferred must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db.purge(3650).expect_err("purge must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+        let error = db
+            .application_integrity()
+            .expect_err("deep integrity must fail");
+        assert_eq!(error.to_string(), "no such table: items");
+
+        // The processing-failure scanner must surface its own storage error.
+        db.conn
+            .execute_batch("DROP TABLE processing_failures")
+            .unwrap();
+        let error = verify_processing_failure_records(&db.conn, &db.vault, 5)
+            .expect_err("the failure scan must fail");
+        assert_eq!(error.to_string(), "no such table: processing_failures");
+    }
+
+    /// Recipient burst accounting propagates delivery-table failures instead
+    /// of counting zero attempts.
+    ///
+    /// Why: a zero count would unlock the per-recipient burst limit while
+    /// sends are actually unaccounted — the exact duplicate-send hazard the
+    /// limit exists to prevent.
+    #[test]
+    fn recipient_accounting_propagates_delivery_table_failures() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let job = ready(&mut db, "burst", "burst-thread");
+        let mut job = db.get(&job.id).unwrap();
+        let mut email = crate::ollama::sample_email("Old rejection", "We will not proceed.");
+        email.stub.clone_from(&job.stub);
+        job.email = Some(email);
+        db.save(&mut job, "test", "staged").unwrap();
+        let reserved = db.reserve_send(&job, 10, Utc::now()).unwrap();
+        db.drop_table_for_tests("deliveries");
+
+        let error = recipient_attempts_since(&db.conn, &db.vault, "hr@example.com", 0)
+            .expect_err("the attempt scan must fail");
+        assert_eq!(error.to_string(), "no such table: deliveries");
+        let error = db
+            .recipient_attempts_24h(&reserved, Utc::now())
+            .expect_err("the burst counter must fail");
+        assert_eq!(error.to_string(), "no such table: deliveries");
+        let error = db
+            .application_integrity()
+            .expect_err("deep integrity must fail");
+        assert_eq!(error.to_string(), "no such table: deliveries");
+    }
+}

@@ -6187,3 +6187,600 @@ mod dispatch_error_path_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod open_stage_and_automatic_gap_tests {
+    use super::*;
+    use crate::policy::{EnterprisePolicy, PolicyRevisionFloor};
+    use crate::test_support::{arm_automatic, eligible_job, loaded_policy, verified_analysis};
+
+    /// Open a live (non-demo) workspace, serializing OS credential-store access.
+    ///
+    /// Why: non-demo opens derive the vault key from the OS credential store,
+    /// so tests must hold the credential-store lock and clean up the entry.
+    fn live(dir: &std::path::Path) -> Engine {
+        crate::test_support::headless_vault_seam();
+        Engine::open(
+            dir.to_path_buf(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    /// Open a synthetic demo workspace for negative-path tests.
+    ///
+    /// Why: demo workspaces live in throwaway directories and never touch the
+    /// OS credential store, so refusal paths can be exercised safely.
+    fn demo(dir: &std::path::Path) -> Engine {
+        Engine::open(
+            dir.to_path_buf(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap()
+    }
+
+    fn armed() -> Settings {
+        let mut settings = Settings::default();
+        arm_automatic(&mut settings);
+        settings
+    }
+
+    /// Recompute the analysis provenance for the job's current email/draft.
+    ///
+    /// Why: the provenance gates hash the stored analysis against the message
+    /// and settings, so tests mutating one input must rebind the analysis to
+    /// isolate the single gate under test.
+    fn rebind_analysis(job: &mut Job, settings: &Settings) {
+        let email = job.email.clone().unwrap();
+        let body = job.draft.as_ref().unwrap().body.clone();
+        job.analysis = Some(verified_analysis(settings, &email, &body));
+    }
+
+    fn single(
+        job: &Job,
+        settings: &Settings,
+        now: DateTime<Utc>,
+        account: &str,
+    ) -> Vec<AutomaticPolicyBlock> {
+        let decision = automatic_policy(job, settings, account, now);
+        assert_eq!(decision.eligible, decision.blocks.is_empty());
+        decision.blocks
+    }
+
+    /// App-password connect persists encrypted credentials atomically and
+    /// stays disarmed; reopening rebuilds the IMAP/SMTP transport from the
+    /// stored credentials without any network round trip.
+    ///
+    /// Why: an account switch must never inherit sending rights, and the
+    /// persisted credentials are the only bridge back to the mailbox after a
+    /// restart — losing them silently would strand the workspace.
+    #[test]
+    fn app_password_connect_persists_encrypted_state_and_reopen_rebuilds_the_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            arm_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+            let creds = crate::mail_transport::AppPasswordCredentials::new(
+                "user@example.com",
+                "abcdefghijklmnop",
+            );
+            e.connect_app_password(creds).expect("connect succeeds");
+            assert!(
+                !e.settings.sending_enabled && e.settings.mode == Mode::HumanReview,
+                "an account switch disarms delivery fail-closed"
+            );
+            assert_eq!(e.account, "user@example.com");
+            assert!(e.connected(), "the IMAP/SMTP transport is attached");
+            let stored: Option<serde_json::Value> = e.db.meta("app_password_credentials").unwrap();
+            assert!(stored.is_some(), "credentials are persisted encrypted");
+            let events = e.db.events(0, 500).unwrap();
+            assert!(events.iter().any(|ev| ev.kind == "account.connected"));
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
+        let e = live(dir.path());
+        assert!(
+            e.connected(),
+            "reopen rebuilds the transport from the stored app-password credentials"
+        );
+        assert_eq!(e.account, "user@example.com");
+        assert!(!e.settings.sending_enabled, "reopen never re-arms delivery");
+    }
+
+    /// App-password connect refuses malformed mailbox identities before any
+    /// state is written.
+    ///
+    /// Why: the mailbox identity keys the account and the recipient buckets —
+    /// persisting an unparseable identity would corrupt every downstream gate.
+    #[test]
+    fn app_password_connect_refuses_invalid_mailbox_identities_without_touching_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            arm_automatic(&mut e.settings);
+            e.db.set_meta("settings", &e.settings).unwrap();
+            let error = e
+                .connect_app_password(crate::mail_transport::AppPasswordCredentials::new(
+                    "user\u{7}@example.com",
+                    "abcdefghijklmnop",
+                ))
+                .expect_err("control characters are refused");
+            assert_eq!(error.to_string(), "Invalid mailbox characters");
+            let error = e
+                .connect_app_password(crate::mail_transport::AppPasswordCredentials::new(
+                    "a@example.com, b@example.com",
+                    "abcdefghijklmnop",
+                ))
+                .expect_err("multiple mailboxes are refused");
+            assert_eq!(error.to_string(), "Exactly one mailbox is required");
+            assert!(
+                e.db.meta::<serde_json::Value>("app_password_credentials")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(e.db.meta::<String>("account").unwrap().is_none());
+            assert!(
+                e.settings.sending_enabled && e.settings.mode == Mode::Automatic,
+                "a refused connect leaves the prior settings untouched"
+            );
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
+    }
+
+    /// Compaction is refused in demo mode and reports real page statistics on a
+    /// live workspace.
+    ///
+    /// Why: demo data lives in a throwaway directory — compacting it would
+    /// claim maintenance on a workspace that does not exist; the live path
+    /// must report measured page counts, not a canned success.
+    #[test]
+    fn compact_database_refuses_demo_and_reports_real_compaction() {
+        let d = tempfile::tempdir().unwrap();
+        let mut demo_engine = demo(d.path());
+        let error = demo_engine
+            .compact_database()
+            .expect_err("demo never compacts");
+        assert_eq!(
+            error.to_string(),
+            "Synthetic demo mode does not compact a real workspace"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let (report, vault) = {
+            let mut e = live(dir.path());
+            let report = e.compact_database().expect("live compaction succeeds");
+            (report, crate::vault::vault_id(dir.path()).unwrap())
+        };
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
+        assert!(
+            report.after_page_count > 0,
+            "pages are measured after compaction"
+        );
+        assert!(report.page_size_bytes > 0);
+        assert!(
+            report.after_freelist_count <= report.before_freelist_count,
+            "compaction never grows the freelist"
+        );
+    }
+
+    /// Staged-settings persistence fails closed: a lost revision-floor stage, a
+    /// floor without an active policy, and a broken audit journal each abort
+    /// without writing partial settings state.
+    ///
+    /// Why: settings and the policy rollback floor are committed together — a
+    /// partial write would let relaxed settings outlive the policy that
+    /// constrained them.
+    #[test]
+    fn staged_settings_persistence_fails_closed_without_half_committing() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = demo(d.path());
+        let settings = Settings::default();
+        let floor = PolicyRevisionFloor::default();
+
+        // Staging claimed a floor change but the staged floor is gone.
+        let error = persist_staged_settings(
+            &mut e.db, &settings, &None, &None, true, false, false, false, false, false,
+        )
+        .expect_err("a lost staging buffer must abort");
+        assert_eq!(error.to_string(), "Policy revision floor staging was lost");
+
+        // A staged floor without an active policy cannot describe its audit
+        // detail; nothing may be committed.
+        let error = persist_staged_settings(
+            &mut e.db,
+            &settings,
+            &None,
+            &Some(floor),
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect_err("a floor without an active policy must abort");
+        assert_eq!(
+            error.to_string(),
+            "Policy revision floor changed without active policy"
+        );
+        assert!(
+            e.db.meta::<PolicyRevisionFloor>("enterprise_policy_revision_floor")
+                .unwrap()
+                .is_none(),
+            "no floor metadata is written on failure"
+        );
+
+        // A broken audit journal aborts the staged migration commit.
+        e.db.drop_table_for_tests("events");
+        let before = e.db.meta::<Settings>("settings").unwrap();
+        let error = persist_staged_settings(
+            &mut e.db, &settings, &None, &None, false, true, false, false, false, false,
+        )
+        .expect_err("a broken audit journal must abort the commit");
+        assert_eq!(error.to_string(), "no such table: events");
+        assert_eq!(
+            e.db.meta::<Settings>("settings").unwrap(),
+            before,
+            "the staged migration left no partial settings write"
+        );
+    }
+
+    /// Opening a workspace whose audit journal cannot authenticate fails
+    /// closed with the storage error instead of starting unverified.
+    ///
+    /// Why: engine open verifies the chained audit evidence before any runtime
+    /// recovery event is appended; a workspace that cannot present its journal
+    /// must never open.
+    #[test]
+    fn engine_open_fails_closed_when_the_audit_journal_is_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            let legacy = Settings {
+                mode: Mode::Automatic,
+                ..Settings::default()
+            };
+            e.db.set_meta("settings", &legacy).unwrap();
+            e.db.drop_table_for_tests("events");
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
+        let error = Engine::open(
+            dir.path().into(),
+            false,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .err()
+        .expect("an unverifiable audit journal must refuse to open");
+        assert_eq!(error.to_string(), "no such table: events");
+    }
+
+    /// Connecting without the login seam propagates the OAuth client-file
+    /// failure before any credential state is touched.
+    ///
+    /// Why: `connect` must not half-persist a connection — a failed login
+    /// leaves the previous account and settings exactly as they were.
+    #[test]
+    fn connect_without_the_login_seam_fails_closed_before_any_state_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let _credential_store = crate::vault::test_support::lock_credential_store();
+        let vault = {
+            let mut e = live(dir.path());
+            let client = dir.path().join("client.json");
+            std::fs::write(&client, b"{}").unwrap();
+            let error = e
+                .connect(&client, false)
+                .expect_err("a non-OAuth client file is refused");
+            assert_eq!(
+                error.to_string(),
+                "Choose a Google Desktop app OAuth JSON file containing an installed object"
+            );
+            assert!(!e.connected());
+            assert!(e.db.meta::<String>("account").unwrap().is_none());
+            assert!(
+                e.db.meta::<serde_json::Value>("google_credentials")
+                    .unwrap()
+                    .is_none()
+            );
+            crate::vault::vault_id(dir.path()).unwrap()
+        };
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
+    }
+
+    /// Automatic policy blocks dispatch when model verification or residency
+    /// evidence is missing, naming the gate exactly.
+    ///
+    /// Why: the verifier result and GPU residency are the only independent
+    /// checks on the classifier — dispatch must not proceed without them.
+    #[test]
+    fn automatic_policy_blocks_unverified_model_provenance() {
+        let settings = armed();
+        let account = "applicant@example.invalid";
+
+        let mut job = eligible_job(&settings, account, 1, Utc::now());
+        job.analysis.as_mut().unwrap().verification = None;
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
+                message: "Model verification or residency failed".into(),
+            }]
+        );
+
+        let mut job = eligible_job(&settings, account, 2, Utc::now());
+        job.analysis.as_mut().unwrap().gpu_resident = false;
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
+                message: "Model verification or residency failed".into(),
+            }]
+        );
+
+        let mut job = eligible_job(&settings, account, 3, Utc::now());
+        job.analysis.as_mut().unwrap().input_complete = false;
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
+                message: "Model verification or residency failed".into(),
+            }]
+        );
+    }
+
+    /// Automatic policy blocks dispatch when the verified draft no longer
+    /// matches the stored draft.
+    ///
+    /// Why: verification binds to one exact draft body — an origin change or a
+    /// body edit after verification voids the evidence.
+    #[test]
+    fn automatic_policy_blocks_stale_draft_provenance() {
+        let settings = armed();
+        let account = "applicant@example.invalid";
+
+        let mut job = eligible_job(&settings, account, 1, Utc::now());
+        job.draft.as_mut().unwrap().origin = "human".into();
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::DraftVerificationStale,
+                message: "Draft changed since verification".into(),
+            }]
+        );
+
+        let mut job = eligible_job(&settings, account, 2, Utc::now());
+        job.draft.as_mut().unwrap().body = "tampered body".into();
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::DraftVerificationStale,
+                message: "Draft changed since verification".into(),
+            }]
+        );
+    }
+
+    /// Automatic policy enforces the send cooldown boundary and the
+    /// enrollment cutoff.
+    ///
+    /// Why: the cooldown stops burst replies to one recipient and the
+    /// enrollment cutoff stops retroactive replies to old mail — both are
+    /// operator safety limits with exact boundaries.
+    #[test]
+    fn automatic_policy_enforces_the_cooldown_boundary_and_enrollment_cutoff() {
+        let account = "applicant@example.invalid";
+
+        // Exactly at the cooldown boundary the send is already allowed.
+        let settings = armed();
+        let mut job = eligible_job(&settings, account, 1, Utc::now());
+        let now = Utc::now();
+        job.drafted_at =
+            Some(now - chrono::Duration::minutes(i64::from(settings.cooldown_minutes)));
+        assert!(single(&job, &settings, now, account).is_empty());
+
+        // One minute inside the cooldown the send is held.
+        let mut job = eligible_job(&settings, account, 2, Utc::now());
+        let now = Utc::now();
+        job.drafted_at =
+            Some(now - chrono::Duration::minutes(i64::from(settings.cooldown_minutes) - 1));
+        assert_eq!(
+            single(&job, &settings, now, account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::CooldownActive,
+                message: "Cooldown active".into(),
+            }]
+        );
+
+        // No draft timestamp is treated as "just drafted" and held.
+        let mut job = eligible_job(&settings, account, 3, Utc::now());
+        job.drafted_at = None;
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::CooldownActive,
+                message: "Cooldown active".into(),
+            }]
+        );
+
+        // Without backlog inclusion, mail from before enrollment is held even
+        // when it is inside the lookback window.
+        let mut settings = armed();
+        settings.include_backlog = false;
+        settings.automatic_since = Some(Utc::now() + chrono::Duration::hours(1));
+        let job = eligible_job(&settings, account, 4, Utc::now());
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::PredatesAutomaticEnrollment,
+                message: "Predates automatic-mode enrollment".into(),
+            }]
+        );
+    }
+
+    /// Automatic policy requires independent deterministic rejection evidence
+    /// in the current message and blocks conflicting offer/interview language.
+    ///
+    /// Why: the classifier can be wrong; only an explicit rejection phrase in
+    /// the message itself may authorize an unattended rejection, and offer
+    /// language contradicts sending one.
+    #[test]
+    fn automatic_policy_enforces_deterministic_rejection_language() {
+        let settings = armed();
+        let account = "applicant@example.invalid";
+
+        let mut job = eligible_job(&settings, account, 1, Utc::now());
+        job.email.as_mut().unwrap().text =
+            "Thank you for applying to the R&D Engineer role.".into();
+        rebind_analysis(&mut job, &settings);
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::MissingDeterministicRejectionEvidence,
+                message: "No independent clear rejection phrase in the current message".into(),
+            }]
+        );
+
+        let mut job = eligible_job(&settings, account, 2, Utc::now());
+        job.email.as_mut().unwrap().text = "We have decided not to move forward with your \
+                                           application. We would like to offer you the position."
+            .into();
+        rebind_analysis(&mut job, &settings);
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::ConflictingEmailLanguage,
+                message: "Conflicting or suspicious email language".into(),
+            }]
+        );
+    }
+
+    /// Automatic policy holds automatic-reply loops and bulk traffic, and
+    /// refuses mismatched Reply-To targets.
+    ///
+    /// Why: replying to a list or an auto-submitted message creates mail
+    /// loops, and a Reply-To that differs from the sender would send the
+    /// rejection to a third party.
+    #[test]
+    fn automatic_policy_holds_reply_loops_bulk_traffic_and_reply_to_mismatches() {
+        let settings = armed();
+        let account = "applicant@example.invalid";
+
+        for value in ["auto-replied", "Auto-Reply"] {
+            let mut job = eligible_job(&settings, account, 1, Utc::now());
+            job.email
+                .as_mut()
+                .unwrap()
+                .headers
+                .insert("auto-submitted".into(), vec![value.into()]);
+            rebind_analysis(&mut job, &settings);
+            assert_eq!(
+                single(&job, &settings, Utc::now(), account),
+                vec![
+                    AutomaticPolicyBlock {
+                        code: AutomaticPolicyCode::MailboxSafetyBlock,
+                        message: "Automatic reply loop prevented".into(),
+                    },
+                    AutomaticPolicyBlock {
+                        code: AutomaticPolicyCode::AutomaticReplyLoop,
+                        message: "Automatic reply-loop marker requires Human review".into(),
+                    },
+                ],
+                "auto-submitted={value} must hold the reply"
+            );
+        }
+        for value in ["no", "auto-generated"] {
+            let mut job = eligible_job(&settings, account, 2, Utc::now());
+            job.email
+                .as_mut()
+                .unwrap()
+                .headers
+                .insert("auto-submitted".into(), vec![value.into()]);
+            rebind_analysis(&mut job, &settings);
+            assert!(
+                single(&job, &settings, Utc::now(), account).is_empty(),
+                "auto-submitted={value} is not a reply loop"
+            );
+        }
+
+        for name in [
+            "list-id",
+            "list-unsubscribe",
+            "precedence",
+            "x-auto-response-suppress",
+        ] {
+            let mut job = eligible_job(&settings, account, 3, Utc::now());
+            job.email
+                .as_mut()
+                .unwrap()
+                .headers
+                .insert(name.into(), vec!["bulk@example.invalid".into()]);
+            rebind_analysis(&mut job, &settings);
+            assert_eq!(
+                single(&job, &settings, Utc::now(), account),
+                vec![AutomaticPolicyBlock {
+                    code: AutomaticPolicyCode::AutomaticReplySuppressed,
+                    message: format!("Automatic replies suppressed by {name}"),
+                }],
+                "{name} must suppress automatic replies"
+            );
+        }
+
+        let mut job = eligible_job(&settings, account, 4, Utc::now());
+        job.email.as_mut().unwrap().reply_to = Some("other@example.invalid".into());
+        rebind_analysis(&mut job, &settings);
+        assert_eq!(
+            single(&job, &settings, Utc::now(), account),
+            vec![AutomaticPolicyBlock {
+                code: AutomaticPolicyCode::ReplyToMismatch,
+                message: "Reply-To differs from sender; human review required".into(),
+            }]
+        );
+
+        let mut job = eligible_job(&settings, account, 5, Utc::now());
+        job.email.as_mut().unwrap().reply_to = Some("hr5@example.invalid".into());
+        rebind_analysis(&mut job, &settings);
+        assert!(
+            single(&job, &settings, Utc::now(), account).is_empty(),
+            "a Reply-To equal to the sender is not a mismatch"
+        );
+    }
+
+    /// The audit detail for an accepted enterprise policy pins the exact
+    /// policy identity and says what was committed together.
+    ///
+    /// Why: the detail is the operator's rollback evidence — it must name the
+    /// accepted policy id, revision and digest, not just "policy accepted".
+    #[test]
+    fn policy_acceptance_detail_pins_the_accepted_policy_identity() {
+        let policy = loaded_policy(
+            "digest-anchor-hint",
+            EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.anchor".into()),
+                revision: Some(1),
+                require_external_audit_anchor: true,
+                ..Default::default()
+            },
+        );
+        let message =
+            staged_settings_detail(&Some(policy), true, false, false, false, false).unwrap();
+        assert!(
+            message.contains("policy_id=corp.anchor revision=1 sha256=digest-anchor-hint"),
+            "the audit detail must pin the accepted policy identity: {message}"
+        );
+        assert!(
+            message.contains("persisted settings and rollback floor committed together"),
+            "the audit detail must say what was committed together: {message}"
+        );
+    }
+}

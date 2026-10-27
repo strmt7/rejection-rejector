@@ -754,6 +754,349 @@ mod tests {
         private_dir(&unidentified).unwrap();
         assert!(recovered.install_os_key_if_missing(&unidentified).is_err());
     }
+
+    /// Extract the error text from a fail-closed result whose success type does
+    /// not implement `Debug` (e.g. `Vault`, `Argon2`, `InstanceLock`); a
+    /// successful call fails the test instead.
+    fn err<T>(result: Result<T>) -> String {
+        match result {
+            Ok(_) => panic!("expected a fail-closed error"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    /// Why: passphrase derivation is the Linux and hermetic-test key source; it
+    /// must be deterministic for one (passphrase, vault id) pair and reject a
+    /// short passphrase or unparsable vault id before deriving anything, so a
+    /// weak input can never silently produce a key.
+    #[test]
+    fn passphrase_derivation_is_deterministic_and_fail_closed() {
+        assert_eq!(
+            err(Vault::from_passphrase(
+                "short",
+                &uuid::Uuid::new_v4().to_string()
+            )),
+            "Vault passphrase must be at least 20 characters"
+        );
+        assert!(
+            Vault::from_passphrase(&"p".repeat(20), "not-a-uuid").is_err(),
+            "an unparsable vault id cannot serve as a derivation salt"
+        );
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = Vault::from_passphrase(&"p".repeat(20), &id).unwrap();
+        let second = Vault::from_passphrase(&"p".repeat(20), &id).unwrap();
+        let sealed = first.seal("ctx", &"value").unwrap();
+        assert_eq!(
+            second.open_value::<String>("ctx", &sealed).unwrap(),
+            "value",
+            "the same passphrase and vault id must derive the same key"
+        );
+        let other =
+            Vault::from_passphrase(&"p".repeat(20), &uuid::Uuid::new_v4().to_string()).unwrap();
+        assert!(
+            other.open_value::<String>("ctx", &sealed).is_err(),
+            "a different vault id must derive a different key"
+        );
+    }
+
+    /// Why: the recovery envelope is only useful while it binds the exact vault
+    /// id and a strong passphrase; each invalid input must be refused up front
+    /// with its own reason so operators can tell a typo from a damaged file.
+    #[test]
+    fn recovery_envelope_input_validation_names_each_defect() {
+        let vault = Vault::random();
+        let id = uuid::Uuid::new_v4().to_string();
+        let error = vault
+            .recovery_envelope("not-a-uuid", b"a strong enough passphrase")
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid vault identifier");
+        let error = vault
+            .recovery_envelope(&id, b"1234567890123456789")
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Recovery passphrase must be at least 20 bytes"
+        );
+    }
+
+    /// Why: a recovery envelope is an offline trust artifact; every malformed
+    /// field (format, KDF, ids, encodings, lengths, KDF bounds) must fail
+    /// closed with its own reason before any key material is unwrapped, and a
+    /// wrong passphrase must surface as an authentication failure, never as a
+    /// different error that could mask tampering.
+    #[test]
+    fn recovery_envelope_decoding_rejects_every_malformed_field() {
+        let vault = Vault::random();
+        let id = uuid::Uuid::new_v4().to_string();
+        let passphrase = b"correct horse battery staple";
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+
+        let mut altered = envelope.clone();
+        altered.format_version = 2;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Unsupported recovery-key format"
+        );
+
+        let mut altered = envelope.clone();
+        altered.kdf = "argon2i".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Unsupported recovery-key KDF"
+        );
+
+        let mut altered = envelope.clone();
+        altered.vault_id = "not-a-uuid".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid vault identifier"
+        );
+
+        assert_eq!(
+            err(Vault::from_recovery_envelope(
+                &envelope,
+                b"1234567890123456789"
+            )),
+            "Recovery passphrase must be at least 20 bytes"
+        );
+
+        let mut altered = envelope.clone();
+        altered.salt_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery salt encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.nonce_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery nonce encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.wrapped_key_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid wrapped recovery key encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.salt_b64 = STANDARD.encode([0u8; 8]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery salt length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.nonce_b64 = STANDARD.encode([0u8; 23]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery nonce length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.wrapped_key_b64 = STANDARD.encode([0u8; 47]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid wrapped recovery key length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.memory_kib = 1024 * 1024;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF memory cost is outside the supported safety range"
+        );
+
+        let mut altered = envelope.clone();
+        altered.time_cost = 11;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF time cost is outside the supported safety range"
+        );
+
+        let mut altered = envelope.clone();
+        altered.lanes = 9;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF parallelism is outside the supported safety range"
+        );
+
+        const AUTH: &str =
+            "Recovery envelope authentication failed: wrong passphrase or damaged file";
+        assert_eq!(
+            err(Vault::from_recovery_envelope(
+                &envelope,
+                b"this passphrase is definitely wrong"
+            )),
+            AUTH
+        );
+
+        let mut altered = envelope.clone();
+        let mut wrapped = STANDARD.decode(&altered.wrapped_key_b64).unwrap();
+        wrapped[0] ^= 1;
+        altered.wrapped_key_b64 = STANDARD.encode(wrapped);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            AUTH,
+            "tampered ciphertext must surface as an authentication failure"
+        );
+    }
+
+    /// Why: the recovery KDF parameters are a resource-exhaustion boundary;
+    /// the documented bounds are exact (inclusive), so an attacker-controlled
+    /// envelope can neither freeze the machine with huge costs nor weaken
+    /// derivation with tiny ones.
+    #[test]
+    fn recovery_kdf_bounds_are_exact_and_inclusive() {
+        recovery_argon2(19 * 1024, 1, 1).unwrap();
+        recovery_argon2(512 * 1024, 10, 8).unwrap();
+        for (memory, reason) in [
+            (
+                19 * 1024 - 1,
+                "Recovery KDF memory cost is outside the supported safety range",
+            ),
+            (
+                512 * 1024 + 1,
+                "Recovery KDF memory cost is outside the supported safety range",
+            ),
+        ] {
+            assert_eq!(err(recovery_argon2(memory, 1, 1)), reason);
+        }
+        for time in [0, 11] {
+            assert_eq!(
+                err(recovery_argon2(19 * 1024, time, 1)),
+                "Recovery KDF time cost is outside the supported safety range"
+            );
+        }
+        for lanes in [0, 9] {
+            assert_eq!(
+                err(recovery_argon2(19 * 1024, 1, lanes)),
+                "Recovery KDF parallelism is outside the supported safety range"
+            );
+        }
+    }
+
+    /// Why: `open_value` is the decryption boundary; structurally broken
+    /// records must be refused as invalid, and a sealed value must only ever
+    /// open as the type it was sealed with — a silent coercion would corrupt
+    /// stored state.
+    #[test]
+    fn open_value_refuses_malformed_records_and_cross_type_reads() {
+        let vault = Vault::random();
+        assert_eq!(
+            vault
+                .open_value::<String>("ctx", b"short")
+                .unwrap_err()
+                .to_string(),
+            "Invalid encrypted record"
+        );
+        let mut wrong_version = vault.seal("ctx", &"payload").unwrap();
+        wrong_version[0] = 2;
+        assert_eq!(
+            vault
+                .open_value::<String>("ctx", &wrong_version)
+                .unwrap_err()
+                .to_string(),
+            "Invalid encrypted record"
+        );
+        let sealed = vault.seal("ctx", &"42").unwrap();
+        assert!(
+            vault.open_value::<u64>("ctx", &sealed).is_err(),
+            "a sealed string must not open as a number"
+        );
+    }
+
+    /// Why: the vault identifier is the credential-store account name and the
+    /// recovery salt; a missing file must fail with its own reason, an invalid
+    /// identifier must never reach the key layer, and incidental whitespace is
+    /// trimmed to the canonical id.
+    #[test]
+    fn vault_id_reads_trims_and_validates_the_workspace_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            vault_id(dir.path()).unwrap_err().to_string(),
+            "Vault identifier is missing"
+        );
+        write_new_private(&dir.path().join("vault-id"), b"not-a-uuid").unwrap();
+        assert_eq!(
+            vault_id(dir.path()).unwrap_err().to_string(),
+            "Invalid vault identifier"
+        );
+        let id = uuid::Uuid::new_v4().to_string();
+        fs::write(dir.path().join("vault-id"), format!("  {id}\n")).unwrap();
+        assert_eq!(vault_id(dir.path()).unwrap(), id);
+    }
+
+    /// Why: `write_new_private` is create-only so no code path can silently
+    /// clobber key material or a pinned vault identifier; an existing file
+    /// must be refused and left byte-identical.
+    #[test]
+    fn write_new_private_refuses_to_overwrite_and_leaves_data_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault-id");
+        write_new_private(&path, b"first").unwrap();
+        let error = write_new_private(&path, b"second").unwrap_err();
+        let io = error.downcast_ref::<std::io::Error>().expect("an io error");
+        assert_eq!(io.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+    }
+
+    /// Why: the instance lock is the single-writer guard for a workspace; it
+    /// must be free again after its holder drops, or a crashed run's lock
+    /// cleanup would leave the workspace permanently unusable.
+    #[test]
+    fn instance_lock_is_released_on_drop_and_reacquirable() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = InstanceLock::acquire(dir.path()).unwrap();
+        assert!(InstanceLock::acquire(dir.path()).is_err());
+        drop(first);
+        let _second = InstanceLock::acquire(dir.path()).unwrap();
+    }
+
+    /// Why: a symlinked lock file could redirect the single-writer guard to a
+    /// shared location and defeat mutual exclusion across workspaces; it must
+    /// be refused before any lock is taken.
+    #[cfg(windows)]
+    #[test]
+    fn instance_lock_refuses_a_symlinked_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.lock");
+        fs::write(&target, b"").unwrap();
+        if std::os::windows::fs::symlink_file(&target, dir.path().join("instance.lock")).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix symlink tests cover the same guard there.
+            return;
+        }
+        assert_eq!(
+            err(InstanceLock::acquire(dir.path())),
+            "Lock must not be a symlink"
+        );
+    }
+
+    /// Why: a symlinked data directory could redirect every secret in the
+    /// workspace to attacker-controlled storage; it must be refused before the
+    /// vault touches anything inside.
+    #[cfg(windows)]
+    #[test]
+    fn private_dir_refuses_a_symlinked_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real");
+        fs::create_dir(&target).unwrap();
+        if std::os::windows::fs::symlink_dir(&target, dir.path().join("linked")).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix symlink tests cover the same guard there.
+            return;
+        }
+        assert_eq!(
+            private_dir(&dir.path().join("linked"))
+                .unwrap_err()
+                .to_string(),
+            "Data directory must not be a symlink"
+        );
+    }
 }
 
 #[cfg(test)]
