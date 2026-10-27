@@ -97,7 +97,16 @@ network transit to protect locally) — the strictest configuration that keeps
 the local model probe functional. The rule's pattern still matches any
 `urlopen` call, so this exact-source disposition records the evidence.
 
-### `RS-R1000` cyclomatic complexity: resolved
+#### BUG_RISK — `RS-W1217` `.split("
+")` (2 findings)
+
+`src/mail.rs` (the raw-reply envelope tests). The rule suggests `.lines()`,
+but the assertions exist to prove the rendered envelope uses CRLF line breaks
+exactly: `.lines()` also accepts bare-LF text and would let a regression
+through. The deliberate `split("
+")` is the assertion's subject.
+
+## `RS-R1000` cyclomatic complexity: resolved
 
 All 14 functions previously over the threshold were decomposed into
 documented helpers with verbatim block moves; every function now scores at

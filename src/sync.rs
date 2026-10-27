@@ -434,11 +434,14 @@ mod tests {
             let step = if self.steps.len() > 1 {
                 self.steps.remove(0)
             } else {
-                self.steps.first().cloned().unwrap_or(HistoryStep::Page {
-                    added: Vec::new(),
-                    next: None,
-                    history_id: "20",
-                })
+                self.steps
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| HistoryStep::Page {
+                        added: Vec::new(),
+                        next: None,
+                        history_id: "20",
+                    })
             };
             Ok(match step {
                 HistoryStep::Expired => return Ok(HistoryResult::Expired),
