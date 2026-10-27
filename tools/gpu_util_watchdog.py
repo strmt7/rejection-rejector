@@ -80,10 +80,13 @@ while ($true) {
 """
 
 
-def clamp_target(current: float, ceiling_pct: float) -> float:
+def clamp_target(current: float, _ceiling_pct: float) -> float:
     """Next duty target after one breach.
 
-    Input: current duty target percentage, enforced ceiling.
+    Input: current duty target percentage and the enforced ceiling. The
+    ceiling argument is intentionally unused (underscore-prefixed): the
+    clamp is a fixed 10 pp notch toward the floor regardless of where the
+    ceiling sits; the argument documents the call-site policy.
     Output: the target lowered by one notch (10 pp) toward the pacing
     floor (MIN_TARGET_PCT), or the floor itself when already low.
     """
@@ -123,6 +126,7 @@ class Watchdog:
         self._lock = threading.Lock()
 
     def _log(self, event: dict) -> None:
+        """Append one JSONL evidence event with a timestamp. Output: none."""
         event = {"ts": round(time.time(), 3), **event}
         with self.log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(event) + "\n")
@@ -287,7 +291,8 @@ while :; do
         [ -n "$busy" ] && break
     done
     if [ -z "$busy" ] || [ "$busy" = "-1" ]; then
-        busy=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9')
+        busy=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null |
+            head -1 | tr -dc '0-9')
     fi
     if [ -n "$busy" ] && [ "$busy" != "-1" ]; then echo "$busy,$busy"; else echo "-1,-1"; fi
     sleep 0.2
@@ -298,7 +303,12 @@ done
 class tempfile_script:
     """Context manager writing the sampler script to a temp file."""
 
+    def __init__(self) -> None:
+        """Own a placeholder for the temp directory created on entry."""
+        self._dir = None
+
     def __enter__(self) -> Path:
+        """Write the sampler script to a fresh temp file and return its path."""
         import tempfile
 
         self._dir = tempfile.TemporaryDirectory(prefix="rr_gpu_watch_")
@@ -307,7 +317,9 @@ class tempfile_script:
         return path
 
     def __exit__(self, *exc) -> None:
-        self._dir.cleanup()
+        """Remove the temp directory. Inputs/Output: none."""
+        if self._dir is not None:
+            self._dir.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:

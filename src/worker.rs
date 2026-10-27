@@ -24,6 +24,11 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Point-in-time worker and engine state rendered by the UI and API surfaces.
+///
+/// Inputs: none (plain struct). Output: the operation lifecycle, settings,
+/// account and connection state, counts, storage and model health, the paged
+/// item list, audit events, and the one-time API-token exposure state.
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub initialized: bool,
@@ -57,6 +62,10 @@ pub struct Snapshot {
     pub api_listening: bool,
 }
 
+/// Shared liveness probe for the background worker thread.
+///
+/// Inputs: none (plain struct). Output: cheap progress heartbeats that
+/// readers turn into [`WorkerLiveness`] snapshots.
 #[derive(Clone)]
 pub struct WorkerPulse {
     inner: Arc<Mutex<WorkerPulseState>>,
@@ -175,6 +184,10 @@ impl Default for WorkerPulse {
         Self::new()
     }
 }
+/// One command sent to the background worker over the bounded channel.
+///
+/// Inputs: none (plain enum). Output: the action the worker loop executes
+/// against the engine, mirroring the interactive and web surfaces.
 pub enum Command {
     Refresh,
     CheckNow,
@@ -343,6 +356,10 @@ fn report_unqueued_command(snapshot: &mut Snapshot, kind: OperationKind, disconn
     };
 }
 
+/// Handle to the spawned background worker thread and its shared state.
+///
+/// Inputs: none (plain struct). Output: the command channel, shared
+/// snapshot, pause/stop flags, liveness pulse and thread join handle.
 pub struct Worker {
     pub tx: Sender<Command>,
     pub snapshot: Arc<Mutex<Snapshot>>,
@@ -361,7 +378,7 @@ impl Worker {
         let snapshot = Arc::new(Mutex::new(Snapshot::default()));
         let paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let journal = if demo {
             None
         } else {
@@ -447,7 +464,12 @@ impl Worker {
     /// Inputs: none. Output: [`Snapshot`] (the default snapshot when the state
     /// lock is poisoned).
     pub fn view(&self) -> Snapshot {
-        self.snapshot.lock().map(|s| s.clone()).unwrap_or_default()
+        self.snapshot
+            .lock()
+            .ok()
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Request a graceful worker stop.
@@ -507,7 +529,7 @@ impl Drop for Worker {
 /// and clears busy state.
 fn set_worker_fatal(shared: &Arc<Mutex<Snapshot>>, message: String) {
     if let Ok(mut view) = shared.lock() {
-        view.error = message.clone();
+        view.error.clone_from(&message);
         view.fatal = true;
         view.busy.clear();
         view.operation = OperationStatus {
@@ -545,19 +567,19 @@ fn refresh(
         .lock()
         .map_err(|_| anyhow::anyhow!("UI state lock failed"))?;
     s.initialized = true;
-    s.account = e.account.clone();
+    s.account.clone_from(&e.account);
     s.connected = e.connected();
     s.send_scope = e.send_scope();
     s.demo = e.demo;
     s.enterprise_policy = e.enterprise_policy_status();
-    s.settings = e.settings.clone();
+    s.settings.clone_from(&e.settings);
     s.counts = counts;
     s.storage = crate::storage::inspect(&e.directory).ok();
     s.scheduled_backup =
         crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now()).ok();
     s.backup_isolation = crate::recovery::backup_isolation_status(&e.directory, &e.settings).ok();
-    s.model = e.model.clone();
-    s.verifier_model = e.verifier_model.clone();
+    s.model.clone_from(&e.model);
+    s.verifier_model.clone_from(&e.verifier_model);
     s.last_poll = last;
     s.next_poll = last.map(|t| t + chrono::Duration::seconds(e.settings.interval_seconds()));
     s.items = items;
@@ -700,7 +722,7 @@ fn report(
             Err(e) => {
                 let message = format!("{e:#}");
                 let (code, retryable) = classify_operation_failure(kind, e);
-                s.error = message.clone();
+                s.error.clone_from(&message);
                 s.notice.clear();
                 s.operation = OperationStatus {
                     operation_id: s.operation.operation_id.clone(),
@@ -2268,8 +2290,8 @@ mod tests {
         assert_eq!(value["mode"], "human_review");
         assert_eq!(value["tone"], "hardline");
         assert_eq!(value["reply_language"], "auto");
-        assert_eq!(value["sending_enabled"], false);
-        assert_eq!(value["automatic_confirmed"], false);
+        assert!(!value["sending_enabled"].as_bool().unwrap());
+        assert!(!value["automatic_confirmed"].as_bool().unwrap());
         assert_eq!(
             value["automatic_arm_cooldown_seconds"],
             crate::config::AUTOMATIC_ARM_COOLDOWN_SECONDS
@@ -2288,21 +2310,22 @@ mod tests {
         )
         .unwrap();
         let health = api_query(&engine, "/v1/health").unwrap();
-        assert_eq!(health["healthy"], true);
+        assert!(health["healthy"].as_bool().unwrap());
         assert!(health["runtime_log"].is_object());
-        assert_eq!(health["database"]["integrity_ok"], true);
-        assert_eq!(health["enterprise_policy"]["active"], false);
-        assert_eq!(health["emergency_stop"]["active"], false);
-        assert_eq!(health["emergency_stop"]["configured"], false);
-        assert_eq!(
-            health["audit_protection"]["independent_anchor_configured"],
-            false
+        assert!(health["database"]["integrity_ok"].as_bool().unwrap());
+        assert!(!health["enterprise_policy"]["active"].as_bool().unwrap());
+        assert!(!health["emergency_stop"]["active"].as_bool().unwrap());
+        assert!(!health["emergency_stop"]["configured"].as_bool().unwrap());
+        assert!(
+            !health["audit_protection"]["independent_anchor_configured"]
+                .as_bool()
+                .unwrap()
         );
         assert!(health.get("account").is_none());
 
         let value = api_query(&engine, "/v1/capabilities").unwrap();
         assert_eq!(value["api_version"], crate::api::API_VERSION);
-        assert_eq!(value["read_only"], true);
+        assert!(value["read_only"].as_bool().unwrap());
         assert_eq!(value["mail_provider"], "gmail");
         assert_eq!(
             value["poll_hours"],
@@ -2336,7 +2359,11 @@ mod tests {
         assert_eq!(health["worker"]["operation"]["operation_id"], operation_id);
         assert_eq!(health["worker"]["operation"]["state"], "failed");
         assert_eq!(health["worker"]["operation"]["code"], "backup_failed");
-        assert_eq!(health["worker"]["operation"]["retryable"], true);
+        assert!(
+            health["worker"]["operation"]["retryable"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -2375,7 +2402,7 @@ mod tests {
         assert_eq!(items.len(), 3);
         let job = items.pop().unwrap();
         let value = api_query(&engine, &format!("/v1/items/{}/automatic-policy", job.id)).unwrap();
-        assert_eq!(value["eligible"], false);
+        assert!(!value["eligible"].as_bool().unwrap());
         let codes = value["blocks"]
             .as_array()
             .unwrap()
@@ -2421,7 +2448,7 @@ mod tests {
             .unwrap();
 
         let contains = api_query(&engine, &format!("/v1/audit/contains?head={head}")).unwrap();
-        assert_eq!(contains["known"], true);
+        assert!(contains["known"].as_bool().unwrap());
         assert_ne!(
             api_query(&engine, "/v1/audit/anchor").unwrap()["head"],
             head
@@ -2562,7 +2589,7 @@ mod tests {
 
     #[test]
     fn worker_pulse_distinguishes_idle_health_from_stalled_operation() {
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let now = Utc::now();
         let idle = pulse.snapshot(now);
         assert!(idle.worker_responsive);
@@ -2756,7 +2783,7 @@ mod orchestration_tests {
     fn operation_lifecycle_helpers_publish_typed_status() {
         let dir = tempfile::tempdir().unwrap();
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         assert_eq!(
             WorkerPulse::default().snapshot(Utc::now()).schema_version,
             1
@@ -2814,7 +2841,7 @@ mod orchestration_tests {
     /// instead of panicking across the worker boundary.
     #[test]
     fn poisoned_pulse_reports_the_unresponsive_default() {
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let inner = pulse.inner.clone();
         let handle = std::thread::spawn(move || {
             let _guard = inner.lock().unwrap();
@@ -2921,7 +2948,7 @@ mod orchestration_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut e = demo_engine(dir.path());
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let journal = RuntimeJournal::open(dir.path()).ok();
         let context = ctx(&shared, &pulse, &journal);
         let mut gate: Option<AutomaticArmGate> = None;
@@ -3073,7 +3100,7 @@ mod orchestration_tests {
         e.db.set_meta("settings", &e.settings).unwrap();
 
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let journal = RuntimeJournal::open(dir.path()).ok();
         let context = ctx(&shared, &pulse, &journal);
         // A gate whose cooldown elapsed long ago may be confirmed now.
@@ -3118,7 +3145,7 @@ mod orchestration_tests {
         });
 
         let mut settings = worker.view().settings;
-        settings.ollama_url = runtime.url.clone();
+        settings.ollama_url.clone_from(&runtime.url);
         settings.signature = "Test Applicant".into();
         worker.command(Command::Settings(Box::new(settings)));
 
@@ -3277,7 +3304,7 @@ mod orchestration_tests {
             snapshot: Arc::new(Mutex::new(Snapshot::default())),
             paused: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
-            pulse: WorkerPulse::new(),
+            pulse: WorkerPulse::default(),
             join: None,
         };
         // A full queue reports pressure without disturbing running operations.
@@ -3636,7 +3663,7 @@ mod orchestration_tests {
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let journal = None;
         let mut arm_gate = None;
         let now = Utc::now();
@@ -4097,7 +4124,7 @@ mod orchestration_tests {
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
         let shared = Arc::new(Mutex::new(Snapshot::default()));
-        let pulse = WorkerPulse::new();
+        let pulse = WorkerPulse::default();
         let journal = None;
         let mut arm_gate = None;
         let now = Utc::now();
@@ -4514,7 +4541,7 @@ mod orchestration_tests {
         seed_worker_workspace_with(dir.path(), &mock, |e| {
             e.settings.signature = "Test Applicant".into();
             e.settings.model_digest = Some("a".repeat(64));
-            e.settings.ollama_url = runtime.url.clone();
+            e.settings.ollama_url.clone_from(&runtime.url);
             let job = Job::new(seed_stub, Utc::now());
             e.db.insert_stubs([job.stub.clone()], Utc::now()).unwrap();
         });
@@ -4588,7 +4615,7 @@ mod orchestration_tests {
         seed_worker_workspace_with(dir.path(), &mock, |e| {
             e.settings.signature = "Test Applicant".into();
             e.settings.model_digest = Some("a".repeat(64));
-            e.settings.ollama_url = dead.url.clone();
+            e.settings.ollama_url.clone_from(&dead.url);
             let job = Job::new(job_stub, Utc::now());
             e.db.insert_stubs([job.stub.clone()], Utc::now()).unwrap();
         });
@@ -4690,7 +4717,7 @@ mod orchestration_tests {
         );
         let dead = MockServer::new(|_, _| None);
         seed_worker_workspace_with(dir.path(), &mock, |e| {
-            e.settings.ollama_url = dead.url.clone();
+            e.settings.ollama_url.clone_from(&dead.url);
         });
         crate::test_support::arm_worker_seams(
             None,

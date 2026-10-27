@@ -81,7 +81,7 @@ impl Fixture {
                         json!({"models":[{"name":DEFAULT_MODEL,"digest":"a".repeat(64),"size":9_000_000_000u64,"size_vram":if scenario==Scenario::CpuOnly {2_000_000_000u64}else{9_000_000_000u64},"context_length":32768}]})
                     }
                     "/api/generate" => {
-                        let mut body = String::new();
+                        let mut body = String::default();
                         req.as_reader().read_to_string(&mut body).unwrap();
                         warm_calls
                             .lock()
@@ -90,7 +90,7 @@ impl Fixture {
                         json!({"model":DEFAULT_MODEL,"response":"ready","done":true,"done_reason":"length","prompt_eval_count":4,"eval_count":1})
                     }
                     "/api/chat" => {
-                        let mut body = String::new();
+                        let mut body = String::default();
                         req.as_reader().read_to_string(&mut body).unwrap();
                         calls
                             .lock()
@@ -169,8 +169,8 @@ fn three_stage_protocol_binds_draft_and_model_and_uses_reasoning() {
     assert_eq!(calls.len(), 3);
     assert_eq!(f.warms.lock().unwrap().len(), 1);
     for call in calls.iter() {
-        assert_eq!(call["think"], true);
-        assert_eq!(call["stream"], false);
+        assert!(call["think"].as_bool().unwrap());
+        assert!(!call["stream"].as_bool().unwrap());
         assert_eq!(call["model"], DEFAULT_MODEL);
         assert_eq!(call["options"]["num_ctx"], 32768);
         assert!(call["format"].is_object());

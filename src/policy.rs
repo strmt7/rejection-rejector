@@ -12,6 +12,10 @@ use std::{
 
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_POLICY_SIGNATURE_BYTES: u64 = 4 * 1024;
+/// Schema version of the enterprise policy document.
+///
+/// Inputs: none (constant). Output: `u32` — the version accepted when
+/// parsing.
 pub const ENTERPRISE_POLICY_SCHEMA_VERSION: u32 = 1;
 
 /// The bundled enterprise-policy JSON schema.
@@ -28,6 +32,11 @@ pub fn schema_sha256() -> String {
     crate::hex_lower(Sha256::digest(schema_text().as_bytes()))
 }
 
+/// Enterprise policy document restricting unattended operation.
+///
+/// Inputs: none (plain struct). Output: lifecycle bounds and the
+/// prohibitions, limits and model allowlists enforced on the workspace
+/// settings.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnterprisePolicy {
@@ -49,6 +58,10 @@ pub struct EnterprisePolicy {
     pub allowed_verifier_models: Vec<String>,
 }
 
+/// Current policy posture surfaced to operators.
+///
+/// Inputs: none (plain struct). Output: activation state, lifecycle, digest
+/// and signature verification results and the enforced restrictions.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PolicyStatus {
     pub active: bool,
@@ -88,40 +101,38 @@ impl EnterprisePolicy {
             matches!(self.version, 1..=3),
             "Unsupported enterprise policy version"
         );
-        match self.version {
-            1 => ensure!(
+        if self.version == 1 {
+            ensure!(
                 self.policy_id.is_none()
                     && self.revision.is_none()
                     && self.not_before.is_none()
                     && self.expires_at.is_none(),
                 "Policy v1 cannot contain v2 lifecycle fields"
-            ),
+            );
+        } else {
             // Versions 2 and 3 share the v2 lifecycle contract; the guard
-            // above already rejected every other version, so there is no
-            // unreachable fallback arm to pad with tests.
-            _ => {
-                let policy_id = self
-                    .policy_id
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .context("Policy v2 requires policy_id")?;
+            // above already rejected every other version.
+            let policy_id = self
+                .policy_id
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .context("Policy v2 requires policy_id")?;
+            ensure!(
+                policy_id.len() <= 128
+                    && policy_id
+                        .bytes()
+                        .all(|byte| { byte.is_ascii_alphanumeric() || b"._:-".contains(&byte) }),
+                "Policy v2 policy_id contains unsupported characters"
+            );
+            ensure!(
+                self.revision.is_some_and(|revision| revision >= 1),
+                "Policy v2 requires revision >= 1"
+            );
+            if let (Some(not_before), Some(expires_at)) = (self.not_before, self.expires_at) {
                 ensure!(
-                    policy_id.len() <= 128
-                        && policy_id.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || b"._:-".contains(&byte)
-                        }),
-                    "Policy v2 policy_id contains unsupported characters"
+                    not_before < expires_at,
+                    "Policy v2 not_before must be before expires_at"
                 );
-                ensure!(
-                    self.revision.is_some_and(|revision| revision >= 1),
-                    "Policy v2 requires revision >= 1"
-                );
-                if let (Some(not_before), Some(expires_at)) = (self.not_before, self.expires_at) {
-                    ensure!(
-                        not_before < expires_at,
-                        "Policy v2 not_before must be before expires_at"
-                    );
-                }
             }
         }
         if self.version < 3 {
@@ -257,7 +268,7 @@ impl EnterprisePolicy {
 
         if !self.allowed_models.is_empty() && !self.allowed_models.contains(&settings.model) {
             if startup {
-                settings.model = self.allowed_models[0].clone();
+                settings.model.clone_from(&self.allowed_models[0]);
                 settings.model_digest = None;
                 settings.task_qualification = None;
                 settings.disarm_delivery();
@@ -271,7 +282,9 @@ impl EnterprisePolicy {
                 .contains(&settings.verifier_model)
         {
             if startup {
-                settings.verifier_model = self.allowed_verifier_models[0].clone();
+                settings
+                    .verifier_model
+                    .clone_from(&self.allowed_verifier_models[0]);
                 settings.verifier_model_digest = None;
                 settings.task_qualification = None;
                 settings.disarm_delivery();
@@ -329,6 +342,10 @@ impl EnterprisePolicy {
     }
 }
 
+/// Policy document loaded from disk with its verification state.
+///
+/// Inputs: none (plain struct). Output: the parsed policy, its digest, the
+/// pinned digest if any, and the signature enforcement results.
 #[derive(Clone, Debug)]
 pub struct LoadedPolicy {
     pub policy: EnterprisePolicy,
@@ -354,12 +371,20 @@ struct SignatureRequirement {
     signature_path: PathBuf,
 }
 
+/// Per-policy revision floor preventing rollback to older policies.
+///
+/// Inputs: none (plain struct). Output: the policy id to
+/// [`PolicyRevisionRecord`] floor map.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyRevisionFloor {
     pub policies: std::collections::BTreeMap<String, PolicyRevisionRecord>,
 }
 
+/// Highest accepted revision and digest for one policy id.
+///
+/// Inputs: none (plain struct). Output: the revision number and digest
+/// recorded for rollback protection.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRevisionRecord {
@@ -875,7 +900,7 @@ mod tests {
             schema["$schema"],
             "https://json-schema.org/draft/2020-12/schema"
         );
-        assert_eq!(schema["additionalProperties"], false);
+        assert!(!schema["additionalProperties"].as_bool().unwrap());
         assert_eq!(
             schema["properties"]["version"]["enum"],
             serde_json::json!([1, 2, 3])

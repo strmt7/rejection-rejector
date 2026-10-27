@@ -4,11 +4,35 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+/// Selectable mailbox poll intervals, in hours.
+///
+/// Inputs: none (constant). Output: `[u8; 5]` — the choices offered in
+/// settings.
 pub const POLL_HOURS: [u8; 5] = [1, 2, 4, 8, 24];
+/// Selectable mailbox lookback windows, in days.
+///
+/// Inputs: none (constant). Output: `[u8; 5]` — the choices offered in
+/// settings.
 pub const LOOKBACK_DAYS: [u8; 5] = [1, 3, 7, 14, 28];
+/// Selectable scheduled-backup intervals, in hours.
+///
+/// Inputs: none (constant). Output: `[u16; 4]` — the choices offered in
+/// settings.
 pub const BACKUP_INTERVAL_HOURS: [u16; 4] = [24, 72, 168, 336];
+/// Default local decision model.
+///
+/// Inputs: none (constant). Output: `&str` — the model name used when
+/// settings carry none.
 pub const DEFAULT_MODEL: &str = "granite4.2:8b-q8_0";
+/// Default independent verifier model.
+///
+/// Inputs: none (constant). Output: `&str` — the verifier name used when
+/// settings carry none.
 pub const DEFAULT_VERIFIER_MODEL: &str = "qwen3.5:4b";
+/// Curated decision-model choices with their display labels.
+///
+/// Inputs: none (constant). Output: `[(&str, &str); 3]` — `(label, model
+/// name)` pairs.
 pub const DECISION_MODEL_CANDIDATES: [(&str, &str); 3] = [
     (
         "Nimble 9B Q8 · typed classification R&D default",
@@ -20,6 +44,10 @@ pub const DECISION_MODEL_CANDIDATES: [(&str, &str); 3] = [
     ),
     ("Tev1 4B · compact experimental baseline", "tev1:4b"),
 ];
+/// Curated verifier-model choices with their display labels.
+///
+/// Inputs: none (constant). Output: `[(&str, &str); 3]` — `(label, model
+/// name)` pairs.
 pub const VERIFIER_CANDIDATES: [(&str, &str); 3] = [
     (
         "Granite 4.2 8B Q8 · enterprise default",
@@ -61,9 +89,24 @@ pub const MODEL_CANDIDATES: [(&str, &str); 8] = [
 /// Hard safety ceiling for unattended replies to one normalized recipient mailbox.
 /// This is intentionally not user-raiseable; Human Review remains the override path.
 pub const AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H: u16 = 2;
+/// GPU memory budget assumed for local inference.
+///
+/// Inputs: none (constant). Output: `u64` — the residency budget in bytes.
 pub const GPU_BUDGET_BYTES: u64 = 14 * 1024 * 1024 * 1024;
+/// Version tag of the bundled prompt templates.
+///
+/// Inputs: none (constant). Output: `&str` — the tag bound into model
+/// qualifications.
 pub const PROMPT_VERSION: &str = "rr-prompts-v1";
+/// Version tag of the model-evaluation contract.
+///
+/// Inputs: none (constant). Output: `&str` — the contract evaluations
+/// assert against.
 pub const EVALUATION_CONTRACT_VERSION: &str = "rr-eval-contract-v5";
+/// Settings document format version this build writes.
+///
+/// Inputs: none (constant). Output: `u32` — the version stamped into new
+/// settings.
 pub const SETTINGS_FORMAT_VERSION: u32 = 2;
 
 /// Return the current settings format version.
@@ -74,6 +117,10 @@ fn default_settings_format_version() -> u32 {
     SETTINGS_FORMAT_VERSION
 }
 
+/// Reply-processing mode for the workspace.
+///
+/// Inputs: none (plain enum). Output: `HumanReview` (default) or
+/// `Automatic`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
@@ -111,6 +158,11 @@ pub enum Tone {
     /// Offensive level: hostile and borderline profane within legal limits.
     Insane,
 }
+/// Evidence that one model configuration passed the task suite.
+///
+/// Inputs: none (plain struct). Output: the model, digest, prompt and
+/// context hashes qualified, the suite hash, runtime version, score,
+/// fixture count and qualification time.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TaskQualification {
@@ -238,38 +290,69 @@ impl AutomaticArmGate {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Settings document format version this configuration was written with.
     #[serde(default = "default_settings_format_version")]
     pub settings_format_version: u32,
+    /// Mailbox poll interval in hours (one of [`POLL_HOURS`]).
     pub poll_hours: u8,
+    /// Mailbox lookback window in days (one of [`LOOKBACK_DAYS`]).
     pub lookback_days: u8,
+    /// Reply-processing mode ([`Mode`]).
     pub mode: Mode,
+    /// Whether controlled reply sending is armed at all.
     pub sending_enabled: bool,
+    /// Whether the operator acknowledged the Automatic-mode risk warning.
     pub automatic_confirmed: bool,
+    /// Instant the current Automatic run was armed, when active.
     pub automatic_since: Option<DateTime<Utc>>,
+    /// Whether newly synced older messages are queued for review.
     pub include_backlog: bool,
+    /// Minimum minutes between sends to the same recipient.
     pub cooldown_minutes: u16,
+    /// Maximum replies that may be sent per rolling 24 hours.
     pub daily_send_limit: u16,
+    /// Reply-tone intensity ([`Tone`]).
     pub tone: Tone,
+    /// Reply-language policy ([`ReplyLanguage`]).
     #[serde(default)]
     pub reply_language: ReplyLanguage,
+    /// Signature appended to every generated reply.
     pub signature: String,
+    /// Operator-supplied context about the candidate shared with the model.
     pub candidate_context: String,
+    /// Local decision model name.
     pub model: String,
+    /// Pinned digest of the decision model, when pinned.
     pub model_digest: Option<String>,
+    /// Qualification record for the configured model ([`TaskQualification`]).
     pub task_qualification: Option<TaskQualification>,
+    /// Whether a second model must verify every draft.
     pub independent_verifier_enabled: bool,
+    /// Independent verifier model name.
     pub verifier_model: String,
+    /// Pinned digest of the verifier model, when pinned.
     pub verifier_model_digest: Option<String>,
+    /// Base URL of the local Ollama runtime.
     pub ollama_url: String,
+    /// Context window passed to the model.
     pub num_ctx: u32,
+    /// Per-request timeout for model calls, in seconds.
     pub llm_timeout_seconds: u64,
+    /// Whether the local integration API listens.
     pub api_enabled: bool,
+    /// Loopback port for the integration API.
     pub api_port: u16,
+    /// Whether API write commands are accepted, not just reads.
     pub api_allow_writes: bool,
+    /// Days to retain processed items before pruning.
     pub retention_days: u16,
+    /// Whether scheduled backups run automatically.
     pub scheduled_backup_enabled: bool,
+    /// Directory holding scheduled backup bundles.
     pub scheduled_backup_directory: String,
+    /// Hours between scheduled backups.
     pub scheduled_backup_interval_hours: u16,
+    /// Number of verified scheduled backups retained.
     pub scheduled_backup_keep: u8,
 }
 impl Default for Settings {
@@ -292,7 +375,7 @@ impl Default for Settings {
             tone: Tone::Hardline,
             reply_language: ReplyLanguage::Auto,
             signature: "Your name".into(),
-            candidate_context: String::new(),
+            candidate_context: String::default(),
             model: DEFAULT_MODEL.into(),
             model_digest: None,
             task_qualification: None,
@@ -307,7 +390,7 @@ impl Default for Settings {
             api_allow_writes: false,
             retention_days: 90,
             scheduled_backup_enabled: false,
-            scheduled_backup_directory: String::new(),
+            scheduled_backup_directory: String::default(),
             scheduled_backup_interval_hours: 24,
             scheduled_backup_keep: 7,
         }

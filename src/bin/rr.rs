@@ -502,7 +502,10 @@ fn run_daemon(
 /// path; without an override the platform data directory is used and its
 /// resolution failure propagates.
 fn resolve_dir(data_dir: &Option<PathBuf>) -> Result<PathBuf> {
-    Ok(data_dir.clone().unwrap_or(config::data_dir()?))
+    match data_dir {
+        Some(dir) => Ok(dir.clone()),
+        None => config::data_dir(),
+    }
 }
 
 /// Run the `rr` command-line interface.

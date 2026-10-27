@@ -23,8 +23,16 @@ const RECOVERY_KEY_NAME: &str = "recovery-key.json";
 const RESTORE_REARM_NAME: &str = ".restore-rearm-required";
 const RESTORE_REARM_CONTENT: &[u8] = b"restore-rearm:v1\n";
 const SCHEDULED_BACKUP_PREFIX: &str = "rejection-rejector-auto-";
+/// Metadata key recording the last successful scheduled backup.
+///
+/// Inputs: none (constant). Output: `&str` — the store metadata key.
 pub const LAST_SCHEDULED_BACKUP_META: &str = "scheduled_backup_last_success";
 
+/// Manifest describing one backup bundle.
+///
+/// Inputs: none (plain struct). Output: format and application versions,
+/// creation time, schema version and the names and digests of the archived
+/// database and vault.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BackupManifest {
@@ -42,6 +50,10 @@ pub struct BackupManifest {
     pub recovery_note: String,
 }
 
+/// Report produced by one restore.
+///
+/// Inputs: none (plain struct). Output: the source backup identity, the
+/// restored schema version, the rollback directory if any and a note.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RestoreReport {
     pub format_version: u32,
@@ -54,6 +66,10 @@ pub struct RestoreReport {
     pub note: String,
 }
 
+/// Status of the scheduled-backup loop.
+///
+/// Inputs: none (plain struct). Output: enablement, interval, retention,
+/// last success and overdue state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduledBackupStatus {
     pub schema_version: u32,
@@ -64,6 +80,10 @@ pub struct ScheduledBackupStatus {
     pub age_seconds: Option<i64>,
     pub overdue: bool,
 }
+/// Whether backups sit outside the workspace failure domain.
+///
+/// Inputs: none (plain struct). Output: configuration and existence checks,
+/// the distinct-failure-domain measurement and how it was measured.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupIsolationStatus {
     pub schema_version: u32,
@@ -73,6 +93,10 @@ pub struct BackupIsolationStatus {
     pub measurement: &'static str,
 }
 
+/// Report from one restore drill against a real backup.
+///
+/// Inputs: none (plain struct). Output: the drilled backup identity and the
+/// record counts verified after restore.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecoveryDrillReport {
     pub format_version: u32,
@@ -1233,7 +1257,8 @@ mod tests {
         crate::test_support::headless_vault_seam();
         let minted = Vault::open(&foreign).unwrap();
         let foreign_id = vault_id(&foreign).unwrap();
-        let _foreign_cleanup = CredentialCleanup(foreign_id.clone());
+        let _foreign_cleanup =
+            crate::vault::test_support::OsCredentialCleanup::from_vault_id(foreign_id.clone());
         drop(minted);
         // The live database was written under a different vault key than the
         // one the workspace credential resolves.
@@ -1612,7 +1637,7 @@ mod tests {
             std::ffi::OsString::from_vec(vec![0xFF])
         };
         let weird = backups.join(&weird_name);
-        fs::create_dir(&weird).unwrap();
+        fs::create_dir_all(&weird).unwrap();
 
         assert_eq!(
             prune_verified_scheduled_backups(&store, &backups, 2).unwrap(),
@@ -1730,13 +1755,17 @@ mod tests {
     fn restore_backup_refuses_cross_vault_targets_and_cleans_up_minted_identity() {
         // Serialize OS credential-store access (see `vault::test_support`).
         let _lock = lock_credential_store();
+        // This test asserts the live OS-store fail-closed path.
+        let _live = crate::vault::test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         let (data, _id, _vault, store) = seeded_workspace(root.path(), "data");
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&data);
         let backup = root.path().join("backup");
         create_backup(&store, &data, &backup).unwrap();
 
         let foreign = root.path().join("foreign");
         private_dir(&foreign).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&foreign);
         let foreign_id = uuid::Uuid::new_v4().to_string();
         write_new_private(&foreign.join(VAULT_ID_NAME), foreign_id.as_bytes()).unwrap();
         let error =
@@ -1749,6 +1778,7 @@ mod tests {
 
         let fresh = root.path().join("fresh");
         private_dir(&fresh).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&fresh);
         let error = restore_backup(&fresh, &backup)
             .expect_err("restore without an OS credential must fail closed");
         assert!(
@@ -1947,25 +1977,6 @@ mod tests {
         );
     }
 
-    /// Removes a test credential from the OS credential store even when an
-    /// assertion panics, so repeated runs never collide with stale keys.
-    struct CredentialCleanup(String);
-    impl Drop for CredentialCleanup {
-        /// Delete the credential bound to this test's vault identifier, where
-        /// the platform has one.
-        /// Inputs: `self.0` holds the vault identifier used as account name.
-        /// Output: none; deletion errors are ignored during teardown.
-        fn drop(&mut self) {
-            let _id = &self.0;
-            // Only Windows/macOS vault opens mint an OS credential; headless
-            // hosts derive the key from the passphrase and have nothing to
-            // remove.
-            #[cfg(any(windows, target_os = "macos"))]
-            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
     /// Why: the full recovery-key export path must work against a real
     /// workspace: the exported envelope has to authenticate the backup, wrong
     /// passphrases must be rejected, and the same key must drive the drill and
@@ -1986,7 +1997,7 @@ mod tests {
         private_dir(&data).unwrap();
         let vault = Vault::open(&data).unwrap();
         let id = vault_id(&data).unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
         let mut store = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
         store
             .insert_stub(
@@ -2060,8 +2071,11 @@ mod tests {
     fn import_recovery_key_for_backup_enforces_identity_and_rolls_back_failures() {
         // Serialize OS credential-store access (see `vault::test_support`).
         let _lock = lock_credential_store();
+        // These tests verify the live OS-store install/read-back round trip.
+        let _live = crate::vault::test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&data);
         let backup = root.path().join("backup");
         create_backup(&store, &data, &backup).unwrap();
         let passphrase = b"correct horse battery staple";
@@ -2072,10 +2086,11 @@ mod tests {
             &serde_json::to_vec_pretty(&envelope).unwrap(),
         )
         .unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
 
         let other = root.path().join("other-vault");
         private_dir(&other).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&other);
         let other_id = uuid::Uuid::new_v4().to_string();
         write_new_private(&other.join(VAULT_ID_NAME), other_id.as_bytes()).unwrap();
         let error = import_recovery_key_for_backup(&other, &backup, &recovery_file, passphrase)
@@ -2087,6 +2102,7 @@ mod tests {
 
         let mismatched = root.path().join("mismatched-live");
         private_dir(&mismatched).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&mismatched);
         drop(Store::open(&mismatched.join(DATABASE_NAME), Vault::random()).unwrap());
         let error =
             import_recovery_key_for_backup(&mismatched, &backup, &recovery_file, passphrase)
@@ -2102,6 +2118,7 @@ mod tests {
 
         let clean = root.path().join("clean");
         private_dir(&clean).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&clean);
         let imported =
             import_recovery_key_for_backup(&clean, &backup, &recovery_file, passphrase).unwrap();
         assert_eq!(imported.vault_id, id);
@@ -2115,6 +2132,7 @@ mod tests {
 
         let second = root.path().join("second");
         private_dir(&second).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&second);
         let error = import_recovery_key_for_backup(&second, &backup, &recovery_file, passphrase)
             .expect_err("import must never overwrite an existing OS credential");
         assert!(
@@ -2143,8 +2161,11 @@ mod tests {
     fn recover_workspace_from_backup_installs_key_and_preserves_foreign_targets() {
         // Serialize OS credential-store access (see `vault::test_support`).
         let _lock = lock_credential_store();
+        // These tests verify the live OS-store install/read-back round trip.
+        let _live = crate::vault::test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         let (data, id, vault, store) = seeded_workspace(root.path(), "source");
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&data);
         let backup = root.path().join("backup");
         let manifest = create_backup(&store, &data, &backup).unwrap();
         let passphrase = b"correct horse battery staple";
@@ -2155,10 +2176,11 @@ mod tests {
             &serde_json::to_vec_pretty(&envelope).unwrap(),
         )
         .unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
 
         let target = root.path().join("target");
         private_dir(&target).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&target);
         let report =
             recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase).unwrap();
         assert_eq!(report.source_database_sha256, manifest.database_sha256);
@@ -2170,6 +2192,7 @@ mod tests {
 
         let same_vault = root.path().join("same-vault");
         private_dir(&same_vault).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&same_vault);
         write_new_private(&same_vault.join(VAULT_ID_NAME), id.as_bytes()).unwrap();
         // A consistent image of the live database (the raw file alone would miss
         // WAL content) gives the target an existing same-key database to verify.
@@ -2181,6 +2204,7 @@ mod tests {
 
         let foreign = root.path().join("foreign");
         private_dir(&foreign).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&foreign);
         write_new_private(
             &foreign.join(VAULT_ID_NAME),
             uuid::Uuid::new_v4().to_string().as_bytes(),
@@ -2251,7 +2275,8 @@ mod tests {
         let outcome = import_recovery_key_for_backup(&clean, &backup, &recovery_file, passphrase);
         #[cfg(any(windows, target_os = "macos"))]
         {
-            let _cleanup = CredentialCleanup(id.clone());
+            let _cleanup =
+                crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
             assert!(
                 outcome.is_ok(),
                 "with a credential store the clean import installs the key"
@@ -2293,7 +2318,7 @@ mod tests {
         private_dir(&data).unwrap();
         let vault = Vault::open(&data).unwrap();
         let id = vault_id(&data).unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
         let mut store = Store::open(&data.join(DATABASE_NAME), vault).unwrap();
         store
             .insert_stub(
@@ -2360,7 +2385,7 @@ mod tests {
             &serde_json::to_vec_pretty(&envelope).unwrap(),
         )
         .unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
 
         // Mint an OS credential for the same vault identifier that holds an
         // unrelated key, then point the recovery at a matching target.
@@ -2416,7 +2441,7 @@ mod tests {
         let backup = root.path().join("backup");
         create_backup(&store, &data, &backup).unwrap();
         drop(store);
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
 
         // Mint the OS credential for the bundle's vault identifier from an
         // unrelated decoy key so the target workspace's vault opens but cannot
@@ -2448,8 +2473,11 @@ mod tests {
     fn corrupt_os_credential_aborts_recovery_and_rolls_back_the_vault_id() {
         // Serialize OS credential-store access (see `vault::test_support`).
         let _lock = lock_credential_store();
+        // These tests verify the live OS-store install/read-back round trip.
+        let _live = crate::vault::test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         let (data, id, vault, store) = seeded_workspace(root.path(), "data");
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&data);
         let backup = root.path().join("backup");
         create_backup(&store, &data, &backup).unwrap();
         drop(store);
@@ -2461,7 +2489,7 @@ mod tests {
             &serde_json::to_vec_pretty(&envelope).unwrap(),
         )
         .unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id.clone());
 
         // A credential that is not a valid stored key makes vault opening fail
         // and the guarded install refuse to overwrite it.
@@ -2472,6 +2500,7 @@ mod tests {
 
         let target = root.path().join("target");
         private_dir(&target).unwrap();
+        let _guard = crate::vault::test_support::OsCredentialCleanup::for_workspace(&target);
         let error = recover_workspace_from_backup(&target, &backup, &recovery_file, passphrase)
             .expect_err("a corrupt OS credential must abort the recovery");
         assert!(
@@ -2490,7 +2519,7 @@ mod tests {
         let mut manifest: BackupManifest =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest.format_version = 1;
-        manifest.audit_head = String::new();
+        manifest.audit_head = String::default();
         fs::write(
             &manifest_path,
             serde_json::to_vec_pretty(&manifest).unwrap(),

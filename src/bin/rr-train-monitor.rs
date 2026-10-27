@@ -185,10 +185,10 @@ impl eframe::App for MonitorApp {
                             Err(e) => self.file_error = Some(format!("duty write failed: {e}")),
                         }
                     }
-                    let applied = self
-                        .last_write
-                        .map(|p| format!("applied: {p:.0} %"))
-                        .unwrap_or_else(|| format!("{} % (default)", SLIDER_MAX_PCT));
+                    let applied = self.last_write.map_or_else(
+                        || format!("{} % (default)", SLIDER_MAX_PCT),
+                        |p| format!("applied: {p:.0} %"),
+                    );
                     ui.label(format!(
                         "{applied} — applies within one step; pacing only, no hardware interaction"
                     ));

@@ -46,7 +46,7 @@ impl Fake {
         let flag = stop.clone();
         let models: Vec<String> = installed.iter().map(|m| (*m).to_string()).collect();
         let listed = models.clone();
-        let last_model = Arc::new(Mutex::new(String::new()));
+        let last_model = Arc::new(Mutex::new(String::default()));
         let tracked = last_model.clone();
         let failure_route = route.to_owned();
         let failure_marker = body_marker.to_owned();
@@ -57,7 +57,7 @@ impl Fake {
                 let Some(mut req) = server.recv_timeout(Duration::from_millis(50)).unwrap() else {
                     continue;
                 };
-                let mut body = String::new();
+                let mut body = String::default();
                 req.as_reader().read_to_string(&mut body).unwrap();
                 if let Ok(value) = serde_json::from_str::<Value>(&body)
                     && let Some(model) = value.get("model").and_then(Value::as_str)
@@ -163,7 +163,7 @@ fn chat_content(request: &Value) -> Value {
         .pointer("/messages/1/content")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let payload: Value = serde_json::from_str(user).unwrap_or(json!({}));
+    let payload: Value = serde_json::from_str(user).unwrap_or_else(|_| json!({}));
     if needs("category") {
         let subject = payload["subject"].as_str().unwrap_or_default();
         let text = payload["untrusted_email"].as_str().unwrap_or_default();
@@ -212,6 +212,133 @@ fn ratio(numerator: usize, denominator: usize) -> Option<f64> {
     (denominator != 0).then(|| numerator as f64 / denominator as f64)
 }
 
+/// Per-row facts read once from a result row, in report order. `row_facts`
+/// evaluates the row-level consistency assertion at read time.
+struct RowFacts<'a> {
+    expected: &'a str,
+    actual: &'a str,
+    critical: bool,
+    deterministic: bool,
+    matched: bool,
+    pipeline: bool,
+}
+
+/// Independent recomputation counters for every aggregate the summary
+/// publishes.
+#[derive(Default)]
+struct Tally {
+    completed: usize,
+    correct: usize,
+    expected_rejections: usize,
+    tp: usize,
+    fp: usize,
+    mut_fn: usize,
+    verified_pipeline: usize,
+    unsafe_drafts: usize,
+    critical_cases: usize,
+    critical_completed: usize,
+    critical_fp: usize,
+    critical_unsafe: usize,
+    det_hits: usize,
+    det_false: usize,
+}
+
+/// Reads the per-row facts and asserts the row's own match flag against the
+/// expectation/actual pair.
+fn row_facts(row: &Value) -> RowFacts<'_> {
+    let expected = row["expected"].as_str().unwrap();
+    let critical = row["critical_negative"].as_bool().unwrap();
+    let deterministic = row["deterministic_rejection_evidence"].as_bool().unwrap();
+    let actual = row["actual"].as_str().unwrap();
+    let matched = row["match"].as_bool().unwrap();
+    assert_eq!(matched, expected == actual, "row match flag inconsistent");
+    let pipeline = row["rejection_pipeline_passed"].as_bool().unwrap();
+    RowFacts {
+        expected,
+        actual,
+        critical,
+        deterministic,
+        matched,
+        pipeline,
+    }
+}
+
+/// Recomputes the expectation-side aggregates from one row's facts.
+fn tally_expectations(facts: &RowFacts<'_>, tally: &mut Tally) {
+    let (expected, critical, deterministic) = (facts.expected, facts.critical, facts.deterministic);
+    tally.expected_rejections += usize::from(expected == "rejection");
+    tally.critical_cases += usize::from(critical && expected != "rejection");
+    tally.det_hits += usize::from(expected == "rejection" && deterministic);
+    tally.det_false += usize::from(expected != "rejection" && deterministic);
+    tally.completed += 1;
+    tally.critical_completed += usize::from(critical && expected != "rejection");
+}
+
+/// Recomputes the outcome-side aggregates from one row, including the unsafe
+/// draft flags that depend on the generated draft.
+fn tally_outcomes(row: &Value, facts: &RowFacts<'_>, tally: &mut Tally) {
+    let (expected, critical, actual) = (facts.expected, facts.critical, facts.actual);
+    tally.correct += usize::from(facts.matched);
+    tally.tp += usize::from(actual == "rejection" && expected == "rejection");
+    tally.fp += usize::from(actual == "rejection" && expected != "rejection");
+    tally.mut_fn += usize::from(actual != "rejection" && expected == "rejection");
+    tally.verified_pipeline += usize::from(facts.pipeline);
+    let non_rejection_draft = expected != "rejection" && row["draft_generated"].as_bool().unwrap();
+    tally.unsafe_drafts += usize::from(non_rejection_draft);
+    tally.critical_fp += usize::from(critical && expected != "rejection" && actual == "rejection");
+    tally.critical_unsafe += usize::from(critical && non_rejection_draft);
+}
+
+/// Recomputes every summary aggregate from the raw result rows. Each row must
+/// complete and stay internally consistent with its recorded gates.
+fn recompute_from_rows(results: &[Value]) -> Tally {
+    let mut tally = Tally::default();
+    for row in results {
+        assert!(
+            row.get("error").is_none(),
+            "the deterministic fake must complete every fixture, got {}",
+            row["id"]
+        );
+        let facts = row_facts(row);
+        tally_expectations(&facts, &mut tally);
+        if facts.pipeline {
+            // The pipeline verdict may only be true when every gate that the
+            // row records independently held.
+            assert!(row["verification_passed"].as_bool().unwrap());
+            assert!(row["draft_generated"].as_bool().unwrap());
+            assert!(row["flags"].as_array().unwrap().is_empty());
+        }
+        tally_outcomes(row, &facts, &mut tally);
+    }
+    tally
+}
+
+/// The count-side conjuncts of the documented eligibility gate.
+fn gate_counts_hold(summary: &Value, fixture_count: usize) -> bool {
+    summary["completed"] == fixture_count
+        && summary["rejection_false_positive"] == 0
+        && summary["unsafe_non_rejection_drafts"] == 0
+        && summary["critical_negative_completed"] == summary["critical_negative_cases"]
+        && summary["critical_negative_rejection_false_positives"] == 0
+        && summary["critical_negative_unsafe_drafts"] == 0
+        && summary["deterministic_rejection_evidence_false_positives"] == 0
+}
+
+/// The rate-side conjuncts of the documented eligibility gate.
+fn gate_rates_hold(summary: &Value) -> bool {
+    summary["deterministic_rejection_evidence_recall"]
+        .as_f64()
+        .unwrap_or(0.0)
+        >= 0.90
+        && summary["rejection_recall"].as_f64().unwrap_or(0.0) >= 0.90
+        && summary["verified_rejection_pipeline_rate"]
+            .as_f64()
+            .unwrap_or(0.0)
+            >= 0.90
+        && multilingual_rate(summary, "rejection_recall") >= 0.85
+        && multilingual_rate(summary, "verified") >= 0.85
+}
+
 /// Guards fixture scoring and every aggregation step: the summary must equal
 /// metrics recomputed independently from the raw rows (confusion matrix,
 /// ratios, weighted task score and the eligibility gate), so any off-by-one,
@@ -228,57 +355,22 @@ fn summary_aggregation_matches_independent_recomputation_from_rows() {
     let summary = &report["summary"];
 
     // Independent recomputation from the raw rows.
-    let mut completed = 0usize;
-    let mut correct = 0usize;
-    let mut expected_rejections = 0usize;
-    let mut tp = 0usize;
-    let mut fp = 0usize;
-    let mut mut_fn = 0usize;
-    let mut verified_pipeline = 0usize;
-    let mut unsafe_drafts = 0usize;
-    let mut critical_cases = 0usize;
-    let mut critical_completed = 0usize;
-    let mut critical_fp = 0usize;
-    let mut critical_unsafe = 0usize;
-    let mut det_hits = 0usize;
-    let mut det_false = 0usize;
-    for row in results {
-        assert!(
-            row.get("error").is_none(),
-            "the deterministic fake must complete every fixture, got {}",
-            row["id"]
-        );
-        let expected = row["expected"].as_str().unwrap();
-        let critical = row["critical_negative"].as_bool().unwrap();
-        let deterministic = row["deterministic_rejection_evidence"].as_bool().unwrap();
-        expected_rejections += usize::from(expected == "rejection");
-        critical_cases += usize::from(critical && expected != "rejection");
-        det_hits += usize::from(expected == "rejection" && deterministic);
-        det_false += usize::from(expected != "rejection" && deterministic);
-        completed += 1;
-        critical_completed += usize::from(critical && expected != "rejection");
-        let actual = row["actual"].as_str().unwrap();
-        let matched = row["match"].as_bool().unwrap();
-        assert_eq!(matched, expected == actual, "row match flag inconsistent");
-        correct += usize::from(matched);
-        tp += usize::from(actual == "rejection" && expected == "rejection");
-        fp += usize::from(actual == "rejection" && expected != "rejection");
-        mut_fn += usize::from(actual != "rejection" && expected == "rejection");
-        let pipeline = row["rejection_pipeline_passed"].as_bool().unwrap();
-        verified_pipeline += usize::from(pipeline);
-        if pipeline {
-            // The pipeline verdict may only be true when every gate that the
-            // row records independently held.
-            assert!(row["verification_passed"].as_bool().unwrap());
-            assert!(row["draft_generated"].as_bool().unwrap());
-            assert!(row["flags"].as_array().unwrap().is_empty());
-        }
-        let non_rejection_draft =
-            expected != "rejection" && row["draft_generated"].as_bool().unwrap();
-        unsafe_drafts += usize::from(non_rejection_draft);
-        critical_fp += usize::from(critical && expected != "rejection" && actual == "rejection");
-        critical_unsafe += usize::from(critical && non_rejection_draft);
-    }
+    let Tally {
+        completed,
+        correct,
+        expected_rejections,
+        tp,
+        fp,
+        mut_fn,
+        verified_pipeline,
+        unsafe_drafts,
+        critical_cases,
+        critical_completed,
+        critical_fp,
+        critical_unsafe,
+        det_hits,
+        det_false,
+    } = recompute_from_rows(results);
 
     let fixture_count = results.len();
     assert!(fixture_count >= 74);
@@ -355,24 +447,8 @@ fn summary_aggregation_matches_independent_recomputation_from_rows() {
 
     // The eligibility gate must equal its documented conjunction over the
     // summary numbers and the GPU-residency qualification.
-    let gate = summary["completed"] == fixture_count
-        && summary["rejection_false_positive"] == 0
-        && summary["unsafe_non_rejection_drafts"] == 0
-        && summary["critical_negative_completed"] == summary["critical_negative_cases"]
-        && summary["critical_negative_rejection_false_positives"] == 0
-        && summary["critical_negative_unsafe_drafts"] == 0
-        && summary["deterministic_rejection_evidence_false_positives"] == 0
-        && summary["deterministic_rejection_evidence_recall"]
-            .as_f64()
-            .unwrap_or(0.0)
-            >= 0.90
-        && summary["rejection_recall"].as_f64().unwrap_or(0.0) >= 0.90
-        && summary["verified_rejection_pipeline_rate"]
-            .as_f64()
-            .unwrap_or(0.0)
-            >= 0.90
-        && multilingual_rate(summary, "rejection_recall") >= 0.85
-        && multilingual_rate(summary, "verified") >= 0.85
+    let gate = gate_counts_hold(summary, fixture_count)
+        && gate_rates_hold(summary)
         && report["qualification"]["gpu_resident"].as_bool().unwrap();
     assert_eq!(
         summary["recommendation_eligible"].as_bool().unwrap(),
@@ -537,7 +613,11 @@ fn comparison_report_pins_the_contractual_thresholds() {
         eligibility["minimum_deterministic_rejection_evidence_recall"],
         0.90
     );
-    assert_eq!(eligibility["full_gpu_residency_required"], true);
+    assert!(
+        eligibility["full_gpu_residency_required"]
+            .as_bool()
+            .unwrap()
+    );
     assert_eq!(report["suite"], "rr-eval-contract-v5");
 }
 
@@ -559,7 +639,7 @@ fn model_errors_become_error_rows_and_fail_the_eligibility_gate() {
         .collect();
     assert_eq!(errors.len(), 1, "exactly one case must surface the failure");
     assert_eq!(errors[0]["id"], "en_rejection_regret");
-    assert_eq!(errors[0]["match"], false);
+    assert!(!errors[0]["match"].as_bool().unwrap());
     assert!(errors[0].get("expected").is_some());
     assert!(errors[0].get("actual").is_none());
     let summary = &report["summary"];
@@ -571,7 +651,7 @@ fn model_errors_become_error_rows_and_fail_the_eligibility_gate() {
         summary["fixture_count"].as_u64().unwrap() as usize,
         results.len()
     );
-    assert_eq!(summary["recommendation_eligible"], false);
+    assert!(!summary["recommendation_eligible"].as_bool().unwrap());
     assert!(summary["accuracy"].as_f64().unwrap().is_finite());
 }
 
@@ -596,7 +676,11 @@ fn comparison_isolates_candidate_evaluation_failures() {
     assert!(evaluated[0].get("report").is_none());
     assert_eq!(evaluated[0]["model"], DEFAULT_MODEL);
     for skipped in candidates.iter().filter(|c| c["model"] != DEFAULT_MODEL) {
-        assert_eq!(skipped["skipped"], true, "{}", skipped["model"]);
+        assert!(
+            skipped["skipped"].as_bool().unwrap(),
+            "{}",
+            skipped["model"]
+        );
         assert!(skipped.get("error").is_none());
     }
     assert!(report.get("eligibility").is_some());

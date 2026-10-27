@@ -25,9 +25,11 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 
@@ -81,7 +83,8 @@ CONDITIONS = {
 
 def load_stratified(path: Path, per_class: int) -> list[dict]:
     """Sample rows evenly across classes. Inputs: holdout path, per-class
-    cap (deterministic: first N of each class in file order). Output: rows."""
+    cap (deterministic: first N of each class in file order). Output: rows.
+    """
     by_class: dict[str, list[dict]] = defaultdict(list)
     with path.open(encoding="utf-8") as fh:
         for line in fh:
@@ -98,7 +101,8 @@ def call_ollama(model: str, system: str, user: str, think, num_predict: int,
                 temperature: float, timeout_s: float = 300.0) -> dict:
     """One chat call. Inputs: model tag, prompt parts, think control
     (bool|None), budget, temperature. Output: raw response dict with
-    thinking/content/duration fields."""
+    thinking/content/duration fields.
+    """
     body = {
         "model": model,
         "messages": [
@@ -115,13 +119,22 @@ def call_ollama(model: str, system: str, user: str, think, num_predict: int,
     req = urllib.request.Request(
         OLLAMA_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
     )
+    parsed = urllib.parse.urlparse(req.full_url)
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    # Remote endpoints must be https; plain http is allowed only for the
+    # loopback Ollama endpoint (no network transit to protect locally).
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
+        raise ValueError(
+            f"urlopen is restricted to https (or http on loopback), got {parsed.scheme!r}"
+        )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        return json.loads(resp.read())
+        return json.load(resp)
 
 
 def parse_answer(text: str) -> dict | None:
     """Extract the assistant JSON object. Inputs: raw content. Output: dict
-    or None (counted as a parse failure)."""
+    or None (counted as a parse failure).
+    """
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
@@ -139,7 +152,141 @@ def write_progress(path: Path, record: dict) -> None:
     tmp.replace(path)
 
 
+def probe_one_row(
+    model: str, row: dict, think, num_predict: int, temperature: float
+) -> tuple[dict, tuple[str, Any] | None]:
+    """Probe one holdout row. Inputs: model tag, row, condition knobs.
+    Output: `(record, tally)` where `record` is the result row and `tally`
+    is `(true_category, predicted)` for confusion counting, or None when
+    the call failed before a prediction existed (transport failure).
+    """
+    expected = json.loads(row["messages"][2]["content"])
+    t0 = time.time()
+    try:
+        resp = call_ollama(
+            model, PRODUCT_PROMPT, row["messages"][1]["content"],
+            think, num_predict, temperature,
+        )
+    except Exception as exc:  # transport failure = recorded, not fatal
+        record = {
+            "id": row["meta"]["id"], "true": expected["category"],
+            "pred": "transport_failure", "error": repr(exc)[:200],
+        }
+        return record, None
+    msg = resp.get("message", {})
+    got = parse_answer(msg.get("content", ""))
+    latency = time.time() - t0
+    pred = got.get("category") if got else "parse_failure"
+    record = {
+        "id": row["meta"]["id"], "true": expected["category"], "pred": pred,
+        "confidence": got.get("confidence") if got else None,
+        "latency_s": round(latency, 2),
+        "thinking_chars": len(msg.get("thinking") or ""),
+        "done_reason": resp.get("done_reason"),
+    }
+    return record, (expected["category"], pred)
+
+
+def accuracy_of(results: list[dict]) -> float | None:
+    """Exact-match category accuracy. Inputs: result records. Output:
+    rounded accuracy in [0, 1], or None while no results exist.
+    """
+    if not results:
+        return None
+    return round(sum(1 for r in results if r["pred"] == r["true"]) / len(results), 4)
+
+
+def run_condition(
+    model: str, rows: list[dict], cond: str, think, num_predict: int,
+    temperature: float, report: dict, out_path: Path, progress_path: Path,
+    began: float,
+) -> tuple[list[dict], dict[str, Counter]]:
+    """Probe every row under one condition, writing progress incrementally.
+
+    Inputs: model tag, sampled rows, condition id and knobs, the shared
+    report dict, the durable output/progress paths, and the start time.
+    Output: `(results, confusion)` tallies for the condition summary.
+    """
+    results: list[dict] = []
+    confusion: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        record, tally = probe_one_row(model, row, think, num_predict, temperature)
+        results.append(record)
+        if tally is not None:
+            confusion[tally[0]][tally[1]] += 1
+        write_progress(progress_path, {
+            "job": "probe_llm_limits", "condition": cond,
+            "done": len(results), "total": len(rows),
+            "elapsed_seconds": round(time.time() - began, 1), "status": "running",
+        })
+        # Incremental durable write: a silent process death must never
+        # lose completed rows (this exact flaw lost the first run).
+        report["conditions"][cond] = {
+            "accuracy": accuracy_of(results),
+            "results": results,
+        }
+        out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return results, confusion
+
+
+def fail_closed_counts(results: list[dict]) -> dict[str, int]:
+    """Count the fail-closed split. Inputs: result records. Output:
+    false_acceptances, safe_misses and parse_failures counts.
+    """
+    counts = {"false_acceptances": 0, "safe_misses": 0, "parse_failures": 0}
+    for r in results:
+        true, pred = r["true"], r["pred"]
+        if pred == "parse_failure":
+            counts["parse_failures"] += 1
+        if true != "rejection" and pred == "rejection":
+            counts["false_acceptances"] += 1
+        if true == "rejection" and pred != "rejection":
+            counts["safe_misses"] += 1
+    return counts
+
+
+def latency_stats(results: list[dict]) -> dict:
+    """Latency and thinking-length statistics. Inputs: result records.
+    Output: mean latency, mean thinking chars and budget truncations.
+    """
+    lat = [r["latency_s"] for r in results if "latency_s" in r]
+    think_chars = [r["thinking_chars"] for r in results if "thinking_chars" in r]
+    truncated = sum(1 for r in results if r.get("done_reason") == "length")
+    return {
+        "latency_s_mean": round(sum(lat) / len(lat), 2) if lat else None,
+        "thinking_chars_mean": round(sum(think_chars) / len(think_chars)) if think_chars else 0,
+        "truncated_by_budget": truncated,
+    }
+
+
+def summarize_condition(results: list[dict], confusion: dict[str, Counter]) -> dict:
+    """Assemble the final per-condition report block. Inputs: result
+    records and confusion tallies. Output: the condition summary dict.
+    """
+    counts = fail_closed_counts(results)
+    stats = latency_stats(results)
+    return {
+        "accuracy": accuracy_of(results),
+        "confusion": {k: dict(v) for k, v in confusion.items()},
+        "fail_closed": {
+            "false_acceptances": counts["false_acceptances"],
+            "safe_misses": counts["safe_misses"],
+        },
+        "parse_failures": counts["parse_failures"],
+        "latency_s_mean": stats["latency_s_mean"],
+        "thinking_chars_mean": stats["thinking_chars_mean"],
+        "truncated_by_budget": stats["truncated_by_budget"],
+        "results": results,
+    }
+
+
 def main() -> int:
+    """Run the capability probe over a stratified holdout slice.
+
+    Inputs: argv (`--model`, `--holdout`, `--per-class`, `--out`,
+    `--conditions`). Output: the JSON report at `--out`, live progress at
+    `<out>.progress.json`, and exit status 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="qwen3.5:9b-q8_0")
     parser.add_argument("--holdout", type=Path, default=Path("training/data/sft_holdout_v2.jsonl"))
@@ -157,65 +304,15 @@ def main() -> int:
     began = time.time()
     for cond in conds:
         think, num_predict, temperature = CONDITIONS[cond]
-        results, confusion = [], defaultdict(Counter)
-        for row in rows:
-            expected = json.loads(row["messages"][2]["content"])
-            t0 = time.time()
-            try:
-                resp = call_ollama(
-                    args.model, PRODUCT_PROMPT, row["messages"][1]["content"],
-                    think, num_predict, temperature,
-                )
-            except Exception as exc:  # transport failure = recorded, not fatal
-                results.append({"id": row["meta"]["id"], "true": expected["category"],
-                                "pred": "transport_failure", "error": repr(exc)[:200]})
-                continue
-            msg = resp.get("message", {})
-            got = parse_answer(msg.get("content", ""))
-            latency = time.time() - t0
-            pred = got.get("category") if got else "parse_failure"
-            confusion[expected["category"]][pred] += 1
-            results.append({
-                "id": row["meta"]["id"], "true": expected["category"], "pred": pred,
-                "confidence": got.get("confidence") if got else None,
-                "latency_s": round(latency, 2),
-                "thinking_chars": len(msg.get("thinking") or ""),
-                "done_reason": resp.get("done_reason"),
-            })
-            write_progress(progress_path, {
-                "job": "probe_llm_limits", "condition": cond,
-                "done": len(results), "total": len(rows),
-                "elapsed_seconds": round(time.time() - began, 1), "status": "running",
-            })
-            # Incremental durable write: a silent process death must never
-            # lose completed rows (this exact flaw lost the first run).
-            report["conditions"][cond] = {
-                "accuracy": round(
-                    sum(1 for r in results if r["pred"] == r["true"]) / len(results), 4
-                ) if results else None,
-                "results": results,
-            }
-            args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-        total = len(results)
-        correct = sum(1 for r in results if r["pred"] == r["true"])
-        false_accept = sum(1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection")
-        missed = sum(1 for r in results if r["true"] == "rejection" and r["pred"] != "rejection")
-        parse_fail = sum(1 for r in results if r["pred"] == "parse_failure")
-        lat = [r["latency_s"] for r in results if "latency_s" in r]
-        think_chars = [r["thinking_chars"] for r in results if "thinking_chars" in r]
-        truncated = sum(1 for r in results if r.get("done_reason") == "length")
-        report["conditions"][cond] = {
-            "accuracy": round(correct / total, 4) if total else None,
-            "confusion": {k: dict(v) for k, v in confusion.items()},
-            "fail_closed": {"false_acceptances": false_accept, "safe_misses": missed},
-            "parse_failures": parse_fail,
-            "latency_s_mean": round(sum(lat) / len(lat), 2) if lat else None,
-            "thinking_chars_mean": round(sum(think_chars) / len(think_chars)) if think_chars else 0,
-            "truncated_by_budget": truncated,
-            "results": results,
-        }
-        print(f"condition {cond}: accuracy={report['conditions'][cond]['accuracy']} "
-              f"false_accept={false_accept} parse_fail={parse_fail}", flush=True)
+        results, confusion = run_condition(
+            args.model, rows, cond, think, num_predict, temperature,
+            report, args.out, progress_path, began,
+        )
+        block = summarize_condition(results, confusion)
+        report["conditions"][cond] = block
+        print(f"condition {cond}: accuracy={block['accuracy']} "
+              f"false_accept={block['fail_closed']['false_acceptances']} "
+              f"parse_fail={block['parse_failures']}", flush=True)
 
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     write_progress(progress_path, {"job": "probe_llm_limits", "status": "complete",

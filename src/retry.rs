@@ -3,6 +3,9 @@ use std::time::{Duration, Instant};
 
 const MAX_PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 
+/// Circuit-breaker state transition after one provider outcome.
+///
+/// Inputs: none (plain enum). Output: `None`, `Opened` or `Closed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CircuitTransition {
     None,

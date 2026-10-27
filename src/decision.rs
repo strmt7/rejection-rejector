@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Instant};
 
+/// Version tag of the decision-evaluation contract.
+///
+/// Inputs: none (constant). Output: `&str` — the contract decision-model
+/// scoring asserts against.
 pub const DECISION_EVALUATION_CONTRACT_VERSION: &str = "rr-decision-eval-v1";
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

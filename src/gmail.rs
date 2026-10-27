@@ -18,18 +18,29 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 
 const ROOT: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+/// Gmail `users.getProfile` response body.
+///
+/// Inputs: none (plain struct). Output: the mailbox address, history id and
+/// message and thread counts.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub email_address: String,
     pub history_id: String,
 }
+/// Message identifier reference in a list or history response.
+///
+/// Inputs: none (plain struct). Output: the message id and its thread id.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRef {
     pub id: String,
     pub thread_id: String,
 }
+/// Gmail `users.messages.list` response body.
+///
+/// Inputs: none (plain struct). Output: one page of message references with
+/// the next-page token and history id.
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
@@ -37,16 +48,27 @@ pub struct MessagePage {
     pub messages: Vec<MessageRef>,
     pub next_page_token: Option<String>,
 }
+/// One `users.history.list` record.
+///
+/// Inputs: none (plain struct). Output: the history id and the messages
+/// added in this change.
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRecord {
     #[serde(default)]
     pub messages_added: Vec<Added>,
 }
+/// Message added within one history record.
+///
+/// Inputs: none (plain struct). Output: the added [`MessageRef`].
 #[derive(Deserialize)]
 pub struct Added {
     pub message: MessageRef,
 }
+/// Gmail `users.history.list` response body.
+///
+/// Inputs: none (plain struct). Output: one page of history records with
+/// the next-page token and history id.
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
@@ -55,6 +77,10 @@ pub struct HistoryPage {
     pub next_page_token: Option<String>,
     pub history_id: String,
 }
+/// Outcome of one history-listing step.
+///
+/// Inputs: none (plain enum). Output: the next [`HistoryPage`], or `Expired`
+/// when the stored history id is no longer servable.
 pub enum HistoryResult {
     Page(HistoryPage),
     Expired,
@@ -69,6 +95,10 @@ struct RawMessage {
     label_ids: Vec<String>,
     raw: String,
 }
+/// One message inside a fetched thread.
+///
+/// Inputs: none (plain struct). Output: the message id, thread id and raw
+/// RFC822 payload.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMessage {
@@ -77,15 +107,25 @@ pub struct ThreadMessage {
     #[serde(default)]
     pub label_ids: Vec<String>,
 }
+/// Gmail `users.threads.get` response body.
+///
+/// Inputs: none (plain struct). Output: the thread's [`ThreadMessage`]s.
 #[derive(Deserialize)]
 pub struct Thread {
     pub messages: Vec<ThreadMessage>,
 }
+/// Gmail `users.messages.send` response body.
+///
+/// Inputs: none (plain struct). Output: the id assigned to the sent reply.
 #[derive(Deserialize, Serialize)]
 pub struct Sent {
     pub id: String,
 }
 
+/// Normalized Gmail API failure.
+///
+/// Inputs: none (plain struct). Output: the HTTP status and the parsed
+/// retry-after hint for backoff.
 #[derive(Debug)]
 pub struct GmailApiError {
     status: u16,
@@ -167,11 +207,19 @@ fn gmail_json<T: serde::de::DeserializeOwned>(
     net::json(response, limit)
 }
 
+/// Why one mailbox fetch could not produce a usable message.
+///
+/// Inputs: none (plain enum). Output: `Infrastructure` (transport or API
+/// failure) or `MalformedMessage` (unusable payload).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FetchFailureKind {
     Infrastructure,
     MalformedMessage,
 }
+/// Fetch failure with its operator-facing message.
+///
+/// Inputs: none (plain struct). Output: the [`FetchFailureKind`] and the
+/// message shown in the queue.
 #[derive(Debug)]
 pub struct FetchFailure {
     pub kind: FetchFailureKind,
@@ -188,11 +236,19 @@ impl std::fmt::Display for FetchFailure {
 }
 impl std::error::Error for FetchFailure {}
 
+/// Why one send attempt failed.
+///
+/// Inputs: none (plain enum). Output: the machine-readable failure class
+/// driving the retry posture and operator reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendFailureKind {
     NotAccepted,
     Uncertain,
 }
+/// Send failure with its operator-facing message.
+///
+/// Inputs: none (plain struct). Output: the [`SendFailureKind`] and the
+/// message shown in the queue.
 #[derive(Debug)]
 pub struct SendFailure {
     pub kind: SendFailureKind,
@@ -209,6 +265,10 @@ impl std::fmt::Display for SendFailure {
 }
 impl std::error::Error for SendFailure {}
 
+/// Authenticated Gmail REST client with cached tokens.
+///
+/// Inputs: none (plain struct). Output: the mailbox fetch and send surface
+/// used by synchronization and delivery.
 pub struct Gmail {
     creds: Credentials,
     token: Option<(Zeroizing<String>, Instant)>,
@@ -637,10 +697,10 @@ fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
         || disposition.params.contains_key("filename")
         || part.ctype.params.contains_key("name")
     {
-        return Ok((String::new(), true));
+        return Ok((String::default(), true));
     }
     if part.ctype.mimetype == "message/rfc822" {
-        return Ok((String::new(), false));
+        return Ok((String::default(), false));
     }
     if !part.subparts.is_empty() {
         ensure!(part.subparts.len() <= 100, "Too many MIME parts");
@@ -661,9 +721,9 @@ fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
                     return Ok((text.0, text.1 && plain_complete));
                 }
             }
-            return Ok((String::new(), false));
+            return Ok((String::default(), false));
         }
-        let mut output = String::new();
+        let mut output = String::default();
         let mut complete = true;
         for child in &part.subparts {
             let (t, c) = mime_text(child, depth + 1)?;
@@ -687,7 +747,7 @@ fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
                 true,
             ))
         }
-        _ => Ok((String::new(), true)),
+        _ => Ok((String::default(), true)),
     }
 }
 
@@ -1428,7 +1488,7 @@ mod tests {
                         .iter()
                         .find(|(p, _, _, _)| *p == path)
                         .map(|(_, s, h, b)| (*s, h.clone(), b.clone()))
-                        .unwrap_or((404, String::new(), "{}".into()));
+                        .unwrap_or_else(|| (404, String::default(), "{}".into()));
                     let mut response =
                         tiny_http::Response::from_string(body).with_status_code(status);
                     if !headers.is_empty() {

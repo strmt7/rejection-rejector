@@ -9,6 +9,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+/// One OpenMetrics exposition snapshot for a workspace.
+///
+/// Inputs: none (plain struct). Output: service identity, database and
+/// storage health, backup state, audit position and operational counters.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct MetricsSnapshot {
     pub schema_version: u32,

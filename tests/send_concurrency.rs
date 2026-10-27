@@ -66,7 +66,7 @@ fn race_same_recipient(recipient_cap: u16) -> usize {
             "Synthetic rejection",
             "We have decided not to move forward with your application.",
         );
-        email.stub = job.stub.clone();
+        email.stub.clone_from(&job.stub);
         email.from = "Recruiter <recruiter@example.com>".into();
         email.reply_to = None;
         job.email = Some(email);

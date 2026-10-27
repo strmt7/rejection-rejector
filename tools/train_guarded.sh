@@ -87,7 +87,23 @@ mkdir -p "$RUN_DIR"
 cd "$REPO" || exit 1
 
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-    CKPT=$(ls -d "$RUN_DIR"/checkpoints/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1)
+    # Latest checkpoint by numeric checkpoint-<N> suffix. Discovery uses
+    # `find` (never `ls`: filenames are untrusted and may contain spaces,
+    # newlines or dashes), and the suffix is extracted and compared as an
+    # integer in the shell — splitting full paths on '-' (as `sort -t-`
+    # would) is fragile because run paths themselves contain dashes.
+    CKPT=""
+    CKPT_N=-1
+    while IFS= read -r -d '' cand; do
+        base=${cand##*/}
+        n=${base#checkpoint-}
+        case "$n" in ('' | *[!0-9]*) continue ;; esac
+        n=$((10#$n))
+        if [ "$n" -gt "$CKPT_N" ]; then
+            CKPT=$cand
+            CKPT_N=$n
+        fi
+    done < <(find "$RUN_DIR/checkpoints" -mindepth 1 -maxdepth 1 -name 'checkpoint-*' -print0 2>/dev/null)
     echo "=== attempt $attempt from ${CKPT:-scratch} ==="
     rm -f "$RUN_DIR/duty.json"
 

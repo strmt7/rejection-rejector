@@ -12,12 +12,25 @@ use std::{
 };
 
 const MAX_ANCHOR_BYTES: u64 = 64 * 1024;
+/// Environment variable naming the external audit-anchor file.
+///
+/// Inputs: none (constant). Output: `&str` — the variable name read by the
+/// anchor checks.
 pub const AUDIT_ANCHOR_ENV: &str = "RR_AUDIT_ANCHOR_FILE";
+/// Environment variable selecting the OS-level audit anchor.
+///
+/// Inputs: none (constant). Output: `&str` — the variable name for the
+/// platform anchor.
 pub const OS_AUDIT_ANCHOR_ENV: &str = "RR_OS_AUDIT_ANCHOR";
 const OS_AUDIT_ANCHOR_REQUIRED: &str = "required";
 #[cfg(any(windows, target_os = "macos"))]
-const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
+pub(crate) const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-anchor.v1";
 
+/// External anchor document bound to the workspace audit chain.
+///
+/// Inputs: none (plain struct). Output: the anchor format version,
+/// application version, creation time, workspace fingerprint and the
+/// anchored audit sequence and head.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditAnchor {
@@ -685,7 +698,7 @@ mod anchor_boundary_tests {
         assert!(read_small_regular_file(&missing).is_err());
 
         let as_dir = dir.path().join("dir");
-        std::fs::create_dir(&as_dir).unwrap();
+        std::fs::create_dir_all(&as_dir).unwrap();
         assert!(read_small_regular_file(&as_dir).is_err());
 
         let oversized = dir.path().join("big");
@@ -723,24 +736,19 @@ mod os_anchor_tests {
         Vault, private_dir, test_support::lock_credential_store, vault_id, write_new_private,
     };
 
-    /// Removes this test's audit-anchor credential even when an assertion
-    /// panics, so repeated runs never collide with stale anchors.
-    struct CredentialCleanup(String);
-    impl Drop for CredentialCleanup {
-        fn drop(&mut self) {
-            let _ = keyring::Entry::new(OS_AUDIT_ANCHOR_SERVICE, &self.0)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
-    fn workspace() -> (tempfile::TempDir, Store, PathBuf, CredentialCleanup) {
+    fn workspace() -> (
+        tempfile::TempDir,
+        Store,
+        PathBuf,
+        crate::vault::test_support::OsCredentialCleanup,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("workspace");
         private_dir(&dir).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         write_new_private(&dir.join("vault-id"), id.as_bytes()).unwrap();
         let store = Store::open(&dir.join("state.sqlite3"), Vault::random()).unwrap();
-        let cleanup = CredentialCleanup(id);
+        let cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(id);
         (root, store, dir, cleanup)
     }
 

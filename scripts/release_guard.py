@@ -33,7 +33,9 @@ DEEP = {
     "reproducibility.yml": "Windows reproducibility",
 }
 # Keep this conservative; workflow-trigger tests ensure it cannot outgrow CI.
-INPUT_PREFIXES = ("src/", "tests/", "fuzz/", "scripts/", "config/", ".cargo/", ".github/", "windows/")
+INPUT_PREFIXES = (
+    "src/", "tests/", "fuzz/", "scripts/", "config/", ".cargo/", ".github/", "windows/",
+)
 INPUT_FILES = frozenset({
     "Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml",
     "rustfmt.toml", ".rustfmt.toml", "deny.toml",
@@ -60,6 +62,7 @@ class PendingEvidence(GateError):
 
 
 def checked_output(args: list[str], timeout: int = 60) -> str:
+    """Run one trusted argv and return its stdout; raise GateError on any failure."""
     try:
         result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
                                 errors="strict", timeout=timeout, check=False)
@@ -71,10 +74,12 @@ def checked_output(args: list[str], timeout: int = 60) -> str:
 
 
 def affects_evidence(path: str) -> bool:
+    """True when a changed path invalidates deep build/test evidence."""
     return path.startswith(INPUT_PREFIXES) or path in INPUT_FILES
 
 
 def parse_time(value: Any) -> datetime:
+    """Parse an ISO-8601 timestamp with timezone; raise GateError otherwise."""
     if not isinstance(value, str):
         raise GateError("Evidence timestamp is missing")
     try:
@@ -86,8 +91,11 @@ def parse_time(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def validate_run(run: dict[str, Any], workflow: str, repository: str,
-                 commit: str, now: datetime) -> None:
+def _validate_run_identity(run: dict[str, Any], workflow: str, repository: str) -> None:
+    """Reject runs whose workflow/repository/ref/event identity is untrusted.
+
+    Raises GateError on any identity mismatch or malformed run identity.
+    """
     expected_name = {**EXACT, **DEEP}[workflow]
     if (run.get("name") != expected_name
             or run.get("path") != f".github/workflows/{workflow}"
@@ -99,6 +107,15 @@ def validate_run(run: dict[str, Any], workflow: str, repository: str,
     if (type(run_id) is not int or run_id <= 0
             or type(attempt) is not int or attempt <= 0):
         raise GateError(f"{workflow}: invalid run identity")
+
+
+def _validate_run_outcome(
+    run: dict[str, Any], workflow: str, commit: str, now: datetime
+) -> None:
+    """Reject runs with the wrong commit, state, conclusion or timestamp.
+
+    Raises PendingEvidence while incomplete and GateError otherwise.
+    """
     head = run.get("head_sha")
     if not isinstance(head, str) or not SHA.fullmatch(head):
         raise GateError(f"{workflow}: invalid evidence commit")
@@ -113,8 +130,19 @@ def validate_run(run: dict[str, Any], workflow: str, repository: str,
         raise GateError(f"{workflow}: evidence timestamp is stale or in the future")
 
 
+def validate_run(run: dict[str, Any], workflow: str, repository: str,
+                 commit: str, now: datetime) -> None:
+    """Accept exactly one trusted, green, fresh workflow run; raise otherwise.
+
+    Raises PendingEvidence when the latest run is still in progress.
+    """
+    _validate_run_identity(run, workflow, repository)
+    _validate_run_outcome(run, workflow, commit, now)
+
+
 def assert_unchanged_inputs(base: str, head: str,
                             execute: Callable[[list[str]], str] = checked_output) -> None:
+    """Fail closed when build/test inputs changed between base and head."""
     if not SHA.fullmatch(base) or not SHA.fullmatch(head):
         raise GateError("Invalid commit for source comparison")
     # Full checkout history is mandatory. Missing or non-ancestor commits fail closed.
@@ -122,11 +150,14 @@ def assert_unchanged_inputs(base: str, head: str,
     changed = execute(["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"])
     invalidating = [p for p in changed.split("\0") if p and affects_evidence(p)]
     if invalidating:
-        raise GateError("Deep evidence predates changed build/test inputs; rerun the workflow on main")
+        raise GateError(
+            "Deep evidence predates changed build/test inputs; rerun the workflow on main"
+        )
 
 
 def latest_run(repository: str, workflow: str, commit: str,
                execute: Callable[[list[str]], str] = checked_output) -> dict[str, Any]:
+    """Return the newest workflow run row (even a failure), or raise."""
     params = {"branch": "main", "per_page": "1"}
     if workflow in EXACT:
         params["head_sha"] = commit
@@ -148,6 +179,7 @@ def latest_run(repository: str, workflow: str, commit: str,
 
 def check_main(repository: str, commit: str,
                execute: Callable[[list[str]], str] = checked_output) -> None:
+    """Verify clean checkout, HEAD, and remote main all equal the release commit."""
     if execute(["git", "rev-parse", "HEAD"]).strip() != commit:
         raise GateError("Checkout does not match the release commit")
     # A matching HEAD is insufficient if a build or operator changed tracked files.
@@ -159,6 +191,7 @@ def check_main(repository: str, commit: str,
 
 def collect_evidence(repository: str, commit: str, now: datetime,
                      execute: Callable[[list[str]], str] = checked_output) -> dict[str, Any]:
+    """Collect green evidence for every required workflow bound to the commit."""
     if (not REPO.fullmatch(repository) or repository.split("/")[-1] in {".", ".."}
             or not SHA.fullmatch(commit)):
         raise GateError("Invalid repository or release commit")
@@ -180,6 +213,7 @@ def collect_evidence(repository: str, commit: str, now: datetime,
 
 def audit_binaries(paths: list[Path], output: Path,
                    run: Callable[..., Any] = subprocess.run) -> None:
+    """Audit each release executable independently; retain the audit output."""
     output.mkdir(parents=True, exist_ok=True)
     for path in paths:
         if not path.is_file() or path.is_symlink():
@@ -196,6 +230,7 @@ def audit_binaries(paths: list[Path], output: Path,
 
 
 def main() -> int:
+    """Run the evidence or audit subcommand; return 0 only when released."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     evidence = sub.add_parser("evidence")

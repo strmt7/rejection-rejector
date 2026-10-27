@@ -117,7 +117,7 @@ fn randomized_utf8_bounding_is_prefix_safe_and_never_splits_codepoints() {
 
     for case_index in 0..512u32 {
         let units = rng.random_range(0..=180);
-        let mut input = String::new();
+        let mut input = String::default();
         for _ in 0..units {
             input.push_str(alphabet[rng.random_range(0..alphabet.len())]);
         }

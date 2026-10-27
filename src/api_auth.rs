@@ -5,13 +5,29 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
+/// Metadata key under which the hashed API-token verifier is committed.
+///
+/// Inputs: none (constant). Output: `&str` — the store metadata key.
 pub const TOKEN_HASH_META: &str = "api_token_sha256_v1";
+/// Metadata key of the legacy plaintext token format.
+///
+/// Inputs: none (constant). Output: `&str` — read only to migrate pre-hash
+/// tokens.
 pub const LEGACY_TOKEN_META: &str = "api_token";
 const DOMAIN: &[u8] = b"rejection-rejector/api-token/v1\0";
 
+/// Fixed-size verifier compared in place of the plaintext API token.
+///
+/// Inputs: none (plain struct). Output: the 32-byte domain-separated digest
+/// for one token.
 #[derive(Clone)]
 pub struct ApiTokenVerifier([u8; 32]);
 
+/// Token verifier plus the one-time plaintext produced by creation or
+/// rotation.
+///
+/// Inputs: none (plain struct). Output: the [`ApiTokenVerifier`], the
+/// one-time plaintext (never persisted) and whether a legacy token migrated.
 pub struct ApiCredentialMaterial {
     pub verifier: ApiTokenVerifier,
     /// Present only for a newly created or explicitly rotated token. The

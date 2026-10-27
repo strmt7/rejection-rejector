@@ -94,28 +94,7 @@ pub fn current_text(s: &str) -> String {
     let mut lines = Vec::new();
     for line in s.lines() {
         let t = line.trim();
-        let l = t.to_lowercase();
-        if l.contains("-----original message-----")
-            || l.contains("---------- forwarded message")
-            || l.contains("begin forwarded message")
-            || (l.starts_with("on ") && l.ends_with("wrote:"))
-            || (l.starts_with("am ") && l.contains("schrieb"))
-            || (l.starts_with("le ") && l.contains("écrit"))
-            || (l.starts_with("il ") && l.contains("ha scritto"))
-            || (l.starts_with("el ") && l.contains("escribió"))
-            || (l.starts_with("em ") && l.contains("escreveu"))
-            || (l.starts_with("op ") && l.contains("schreef"))
-            || (l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε")))
-            || l.contains("oorspronkelijk bericht")
-            || l.contains("doorgestuurd bericht")
-            || l.contains("αρχικό μήνυμα")
-            || l.contains("αρχικο μηνυμα")
-            || l.contains("προωθημένο μήνυμα")
-            || l.contains("προωθημενο μηνυμα")
-            || l.contains("messaggio inoltrato")
-            || l.contains("mensaje reenviado")
-            || l.contains("mensagem encaminhada")
-        {
+        if is_quote_start(&t.to_lowercase()) {
             break;
         }
         if !t.starts_with('>') {
@@ -123,6 +102,49 @@ pub fn current_text(s: &str) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Whether one lowercased line opens a quoted or forwarded section.
+///
+/// Inputs: `l` — trimmed, lowercased body line. Output: `true` for the
+/// English structural markers and attributions.
+fn is_quote_start(l: &str) -> bool {
+    l.contains("-----original message-----")
+        || l.contains("---------- forwarded message")
+        || l.contains("begin forwarded message")
+        || (l.starts_with("on ") && l.ends_with("wrote:"))
+        || is_localized_attribution(l)
+}
+
+/// Whether one lowercased line is a localized reply-attribution marker.
+///
+/// Inputs: `l` — trimmed, lowercased body line. Output: `true` for the
+/// German, French, Italian, Spanish, Portuguese and Dutch attributions.
+fn is_localized_attribution(l: &str) -> bool {
+    (l.starts_with("am ") && l.contains("schrieb"))
+        || (l.starts_with("le ") && l.contains("écrit"))
+        || (l.starts_with("il ") && l.contains("ha scritto"))
+        || (l.starts_with("el ") && l.contains("escribió"))
+        || (l.starts_with("em ") && l.contains("escreveu"))
+        || (l.starts_with("op ") && l.contains("schreef"))
+        || is_forward_marker(l)
+}
+
+/// Whether one lowercased line is a forwarded-message heading.
+///
+/// Inputs: `l` — trimmed, lowercased body line. Output: `true` for the
+/// Greek attributions and the localized "forwarded message" headings.
+fn is_forward_marker(l: &str) -> bool {
+    (l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε")))
+        || l.contains("oorspronkelijk bericht")
+        || l.contains("doorgestuurd bericht")
+        || l.contains("αρχικό μήνυμα")
+        || l.contains("αρχικο μηνυμα")
+        || l.contains("προωθημένο μήνυμα")
+        || l.contains("προωθημενο μηνυμα")
+        || l.contains("messaggio inoltrato")
+        || l.contains("mensaje reenviado")
+        || l.contains("mensagem encaminhada")
 }
 
 /// Validate a draft reply against the reply envelope.
@@ -458,7 +480,7 @@ pub fn automatic_draft_conflict(body: &str, signature: &str) -> bool {
 /// long runs base64-encoded as `=?UTF-8?B?...?=` chunks.
 fn encoded_subject(subject: &str) -> String {
     let mut out = Vec::new();
-    let mut part = String::new();
+    let mut part = String::default();
     for c in subject.chars() {
         if part.len() + c.len_utf8() > 42 {
             out.push(format!("=?UTF-8?B?{}?=", STANDARD.encode(part.as_bytes())));

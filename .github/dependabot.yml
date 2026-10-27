@@ -10,3 +10,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      # All github/codeql-action steps must run the same version; a lone
+      # bump of init/analyze/upload-sarif breaks the CodeQL workflow with a
+      # configuration-version mismatch. Bump the family atomically.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+      actions-core:
+        patterns:
+          - "actions/*"
+          - "Swatinem/*"

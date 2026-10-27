@@ -12,11 +12,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// Default rotation size of the current runtime log.
+///
+/// Inputs: none (constant). Output: `u64` — the byte cap before rotation.
 pub const DEFAULT_MAX_CURRENT_BYTES: u64 = 2 * 1024 * 1024;
+/// Default number of rotated runtime-log archives kept.
+///
+/// Inputs: none (constant). Output: `usize` — the retained archive count.
 pub const DEFAULT_MAX_ARCHIVES: usize = 3;
 const LOG_SCHEMA_VERSION: u32 = 3;
 const CURRENT_FILE: &str = "runtime.jsonl";
 
+/// Notable process-level event recorded in the runtime log.
+///
+/// Inputs: none (plain enum). Output: the event kind from process start
+/// through worker and API listener failures.
 #[derive(Clone, Copy, Debug)]
 pub enum RuntimeEvent {
     ProcessStarted,
@@ -87,6 +97,10 @@ impl RuntimeSignal {
     }
 }
 
+/// Operation-duration summary parsed from the runtime log.
+///
+/// Inputs: none (plain struct). Output: retained, succeeded, failed and
+/// timed operation counts with mean and max durations and parse errors.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimePerformanceSummary {
     pub schema_version: u32,
@@ -99,6 +113,10 @@ pub struct RuntimePerformanceSummary {
     pub parse_errors: u64,
 }
 
+/// Rotation status of the runtime log files.
+///
+/// Inputs: none (plain struct). Output: availability, per-file byte sizes,
+/// archive count and the configured caps.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeLogStatus {
     pub schema_version: u32,
@@ -139,6 +157,9 @@ struct Inner {
     max_archives: usize,
 }
 
+/// Cloneable handle appending events to the runtime journal.
+///
+/// Inputs: none (plain struct). Output: the shared journal writer.
 #[derive(Clone)]
 pub struct RuntimeJournal {
     inner: Arc<Mutex<Inner>>,
@@ -226,7 +247,7 @@ impl RuntimeJournal {
             state,
             code: (state == OperationState::Failed).then(|| kind.failure_code().into()),
             retryable: state == OperationState::Failed && kind.retryable(),
-            message: String::new(),
+            message: String::default(),
             started_at: None,
             finished_at: None,
         };
@@ -272,7 +293,7 @@ impl RuntimeJournal {
             .map_err(|_| anyhow::anyhow!("Runtime log lock is poisoned"))?;
         let current = inner.directory.join(CURRENT_FILE);
         reject_symlink_if_present(&current)?;
-        let current_bytes = fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+        let current_bytes = fs::metadata(&current).map_or(0, |m| m.len());
         if current_bytes > 0 && current_bytes.saturating_add(line.len() as u64) > inner.max_bytes {
             rotate(&inner.directory, inner.max_archives)?;
         }
@@ -418,7 +439,7 @@ fn status_for(directory: &Path, max_bytes: u64, max_archives: usize) -> Result<R
     );
     let current = directory.join(CURRENT_FILE);
     reject_symlink_if_present(&current)?;
-    let current_bytes = fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+    let current_bytes = fs::metadata(&current).map_or(0, |m| m.len());
     let mut archive_count = 0usize;
     let mut archive_bytes = 0u64;
     for index in 1..=max_archives {

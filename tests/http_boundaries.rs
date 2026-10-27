@@ -33,7 +33,11 @@ fn wire(status: &str, body: &str, headers: &str) -> String {
 #[test]
 fn bounded_valid_json_decodes() {
     let r = response(wire("200 OK", "{\"ok\":true}", "Content-Length: 11\r\n"));
-    assert_eq!(net::json::<serde_json::Value>(r, 100).unwrap()["ok"], true);
+    assert!(
+        net::json::<serde_json::Value>(r, 100).unwrap()["ok"]
+            .as_bool()
+            .unwrap()
+    );
 }
 #[test]
 fn large_unknown_length_body_is_rejected() {
