@@ -19,6 +19,10 @@ use std::{
     time::Duration,
 };
 
+/// One model's installed and residency state.
+///
+/// Inputs: none (plain struct). Output: installation flag, digest, size and
+/// VRAM size, context window, GPU residency and an operator message.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelStatus {
     pub installed: bool,
@@ -29,6 +33,10 @@ pub struct ModelStatus {
     pub gpu_resident: bool,
     pub message: String,
 }
+/// Timing and outcome profile of one inference pipeline run.
+///
+/// Inputs: none (plain struct). Output: elapsed time, request count, token
+/// counts, category, draft and verification outcomes and input completeness.
 #[derive(Clone, Debug, Serialize)]
 pub struct PipelineProfile {
     pub elapsed_millis: u64,
@@ -45,6 +53,10 @@ pub struct PipelineProfile {
     pub flags: Vec<String>,
 }
 
+/// Runtime capability record for the local model toolchain.
+///
+/// Inputs: none (plain struct). Output: build identity, Ollama runtime
+/// version, model and digest, prompt version and the residency budget.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelRuntimeProfile {
     pub schema_version: u32,
@@ -238,6 +250,10 @@ struct Progress {
     error: Option<String>,
 }
 
+/// Local Ollama client bound to one settings copy.
+///
+/// Inputs: none (plain struct). Output: the inference and preflight surface
+/// with per-model request counters.
 pub struct Ollama {
     settings: Settings,
     counters: Arc<Mutex<InferenceCounters>>,
@@ -326,7 +342,7 @@ impl Ollama {
         let mut settings = self.settings.clone();
         settings.disarm_delivery();
         settings.task_qualification = None;
-        settings.model = settings.verifier_model.clone();
+        settings.model.clone_from(&settings.verifier_model);
         settings.model_digest = if pinned {
             settings.verifier_model_digest.clone()
         } else {
@@ -996,102 +1012,12 @@ impl Ollama {
         let mut verification_model = self.settings.model.clone();
         let mut verification_model_digest = preflight.digest.clone();
         if verdict.category == Category::Rejection {
-            let current = mail::current_text(&email.text);
-            let extra = self.settings.candidate_context.len() + self.settings.signature.len();
-            let max = self.settings.num_ctx as usize
-                - self.draft_predict() as usize
-                - TEMPLATE_MARGIN_BYTES
-                - SYSTEM_PROMPT_BOUND_BYTES
-                - extra.min(3000);
-            let (text, within) = mail::bounded_text(&current, max.min(9500));
-            complete &= within;
-            let reply_language = match self.settings.reply_language {
-                crate::config::ReplyLanguage::English => "en".to_string(),
-                crate::config::ReplyLanguage::Auto => {
-                    crate::language::first_language(&current, "en")
-                }
-            };
-            let output = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
-                self.chat(
-                        DRAFT_SYSTEM_PROMPT,
-                        json!({"tone":self.settings.tone.instruction(),"reply_language":reply_language,"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
-                        json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}),
-                    self.draft_predict())
-            });
-            let output: ReplyOutput = output?;
-            analysis_stage(AnalysisFailureStage::DraftGeneration, || {
-                crate::language::ensure_reply_language(&output.body, &reply_language)?;
-                mail::validate_draft(&output.body)?;
-                let generated_words = output.body.split_whitespace().count();
-                ensure!(
-                    (40..=180).contains(&generated_words),
-                    "Model draft length is outside the supported 40-180 word envelope"
-                );
-                ensure!(
-                    output
-                        .body
-                        .trim_end()
-                        .ends_with(self.settings.signature.trim()),
-                    "Model draft did not preserve the configured signature exactly"
-                );
-                Ok(())
-            })?;
-            let d = Draft {
-                body: output.body,
-                origin: "ollama-v1".into(),
-            };
-            if self.settings.independent_verifier_enabled {
-                let primary_resident =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        self.residency(&preflight.digest)
-                    })?;
-                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                    ensure!(
-                        primary_resident.gpu_resident,
-                        "Primary model lost full GPU residency before independent verification"
-                    );
-                    self.unload_and_wait()
-                })?;
-                let verifier = analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                    self.verifier_client(true)
-                })?;
-                let verifier_preflight =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        verifier.preflight_private_inference()
-                    })?;
-                verification_model = verifier.settings.model.clone();
-                verification_model_digest = verifier_preflight.digest.clone();
-                match verifier.verify(email, &d.body) {
-                    Ok((v, full)) => {
-                        complete &= full;
-                        if !v.passed() {
-                            flags.push("Independent verifier did not pass".into());
-                        }
-                        verification = Some(v);
-                    }
-                    Err(_) => {
-                        flags.push("Independent verification failed; human review required".into())
-                    }
-                }
-                let verifier_resident =
-                    analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
-                        verifier.residency(&verifier_preflight.digest)
-                    })?;
-                if !verifier_resident.gpu_resident {
-                    flags.push("Independent verifier lost full GPU residency".into());
-                }
-            } else {
-                match self.verify(email, &d.body) {
-                    Ok((v, full)) => {
-                        complete &= full;
-                        if !v.passed() {
-                            flags.push("Local model verification did not pass".into());
-                        }
-                        verification = Some(v);
-                    }
-                    Err(_) => flags.push("Verification failed; human review required".into()),
-                }
-            }
+            let d = self.draft_rejection_reply(email, &mut complete)?;
+            let (v, model, digest) =
+                self.verify_draft(email, &d, &preflight.digest, &mut complete, &mut flags)?;
+            verification = v;
+            verification_model = model;
+            verification_model_digest = digest;
             draft = Some(d);
         }
         let gpu = if self.settings.independent_verifier_enabled
@@ -1102,8 +1028,7 @@ impl Ollama {
                 .is_ok_and(|status| status.gpu_resident)
         } else {
             self.residency(&preflight.digest)
-                .map(|s| s.gpu_resident)
-                .unwrap_or(false)
+                .is_ok_and(|s| s.gpu_resident)
         };
         if !gpu {
             flags.push("Full GPU residency was lost during analysis".into());
@@ -1145,6 +1070,131 @@ impl Ollama {
             draft,
             flags,
         ))
+    }
+
+    /// Generate the model reply for one rejection message.
+    ///
+    /// Inputs: `email` — original message; `complete` — input completeness
+    /// flag, updated when the bounded body had to be cut. Output:
+    /// `Result<Draft>` — the validated draft reply.
+    fn draft_rejection_reply(&self, email: &Email, complete: &mut bool) -> Result<Draft> {
+        let current = mail::current_text(&email.text);
+        let extra = self.settings.candidate_context.len() + self.settings.signature.len();
+        let max = self.settings.num_ctx as usize
+            - self.draft_predict() as usize
+            - TEMPLATE_MARGIN_BYTES
+            - SYSTEM_PROMPT_BOUND_BYTES
+            - extra.min(3000);
+        let (text, within) = mail::bounded_text(&current, max.min(9500));
+        *complete &= within;
+        let reply_language = match self.settings.reply_language {
+            crate::config::ReplyLanguage::English => "en".to_string(),
+            crate::config::ReplyLanguage::Auto => crate::language::first_language(&current, "en"),
+        };
+        let output = analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+            self.chat(
+                        DRAFT_SYSTEM_PROMPT,
+                        json!({"tone":self.settings.tone.instruction(),"reply_language":reply_language,"candidate_facts":self.settings.candidate_context,"signature":self.settings.signature,"untrusted_subject":email.subject,"untrusted_email":text}),
+                        json!({"type":"object","additionalProperties":false,"required":["body"],"properties":{"body":{"type":"string"}}}),
+                    self.draft_predict())
+        });
+        let output: ReplyOutput = output?;
+        analysis_stage(AnalysisFailureStage::DraftGeneration, || {
+            crate::language::ensure_reply_language(&output.body, &reply_language)?;
+            mail::validate_draft(&output.body)?;
+            let generated_words = output.body.split_whitespace().count();
+            ensure!(
+                (40..=180).contains(&generated_words),
+                "Model draft length is outside the supported 40-180 word envelope"
+            );
+            ensure!(
+                output
+                    .body
+                    .trim_end()
+                    .ends_with(self.settings.signature.trim()),
+                "Model draft did not preserve the configured signature exactly"
+            );
+            Ok(())
+        })?;
+        let d = Draft {
+            body: output.body,
+            origin: "ollama-v1".into(),
+        };
+        Ok(d)
+    }
+
+    /// Run the verification stage for one drafted reply.
+    ///
+    /// Inputs: `email` — original message; `d` — drafted reply;
+    /// `preflight_digest` — pinned primary model digest; `complete` — input
+    /// completeness flag, updated by verification; `flags` — operator flags,
+    /// extended with verification findings. Output:
+    /// `Result<(Option<Verification>, String, String)>` — the verification
+    /// verdict plus the verification model and digest actually used.
+    fn verify_draft(
+        &self,
+        email: &Email,
+        d: &Draft,
+        preflight_digest: &str,
+        complete: &mut bool,
+        flags: &mut Vec<String>,
+    ) -> Result<(Option<Verification>, String, String)> {
+        let mut verification = None;
+        let mut verification_model = self.settings.model.clone();
+        let mut verification_model_digest = preflight_digest.to_string();
+        if self.settings.independent_verifier_enabled {
+            let primary_resident =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    self.residency(preflight_digest)
+                })?;
+            analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                ensure!(
+                    primary_resident.gpu_resident,
+                    "Primary model lost full GPU residency before independent verification"
+                );
+                self.unload_and_wait()
+            })?;
+            let verifier = analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                self.verifier_client(true)
+            })?;
+            let verifier_preflight =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    verifier.preflight_private_inference()
+                })?;
+            verification_model.clone_from(&verifier.settings.model);
+            verification_model_digest.clone_from(&verifier_preflight.digest);
+            match verifier.verify(email, &d.body) {
+                Ok((v, full)) => {
+                    *complete &= full;
+                    if !v.passed() {
+                        flags.push("Independent verifier did not pass".into());
+                    }
+                    verification = Some(v);
+                }
+                Err(_) => {
+                    flags.push("Independent verification failed; human review required".into())
+                }
+            }
+            let verifier_resident =
+                analysis_stage(AnalysisFailureStage::VerificationRuntime, || {
+                    verifier.residency(&verifier_preflight.digest)
+                })?;
+            if !verifier_resident.gpu_resident {
+                flags.push("Independent verifier lost full GPU residency".into());
+            }
+        } else {
+            match self.verify(email, &d.body) {
+                Ok((v, full)) => {
+                    *complete &= full;
+                    if !v.passed() {
+                        flags.push("Local model verification did not pass".into());
+                    }
+                    verification = Some(v);
+                }
+                Err(_) => flags.push("Verification failed; human review required".into()),
+            }
+        }
+        Ok((verification, verification_model, verification_model_digest))
     }
     /// Verify one drafted reply against its message.
     ///
@@ -1458,7 +1508,7 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
         received_at: chrono::Utc::now(),
         message_id: "<synthetic@example.invalid>".into(),
         references: vec![],
-        headers: Default::default(),
+        headers: std::collections::BTreeMap::default(),
         labels: vec![],
         body_complete: true,
     }
@@ -1554,7 +1604,7 @@ mod tests {
                 )
             },
         );
-        settings.ollama_url = runtime.url.clone();
+        settings.ollama_url.clone_from(&runtime.url);
         let llm = Ollama::new(&settings).unwrap();
         let email = sample_email(
             "Your application",
@@ -1592,7 +1642,7 @@ mod tests {
         let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let probe = probes.clone();
         crate::test_support::MockServer::new(move |route, body| {
-            let body = body.unwrap_or(json!({}));
+            let body = body.unwrap_or_else(|| json!({}));
             let model = body["model"].as_str().unwrap_or("").to_owned();
             match route {
                 "/api/version" => Some(crate::test_support::version_ok()),
@@ -1638,7 +1688,7 @@ mod tests {
                     let payload: serde_json::Value = serde_json::from_str(
                         body["messages"][1]["content"].as_str().unwrap_or("{}"),
                     )
-                    .unwrap_or(json!({}));
+                    .unwrap_or_else(|_| json!({}));
                     let content = if payload.get("proposed_reply").is_some() {
                         match verify {
                             "error" => return None,
@@ -1841,9 +1891,9 @@ mod tests {
             category: Category::Rejection,
             confidence: 99,
             evidence: "not selected".into(),
-            explanation: String::new(),
-            company: String::new(),
-            position: String::new(),
+            explanation: String::default(),
+            company: String::default(),
+            position: String::default(),
             language: "en".into(),
         };
         assert!(validate_verdict(&v, "Please book an interview").is_err());
@@ -2727,11 +2777,11 @@ mod runtime_contract_tests {
             }
             "/api/chat" => {
                 let payload: Value = serde_json::from_str(
-                    body.unwrap_or(serde_json::json!({}))["messages"][1]["content"]
+                    body.unwrap_or_else(|| serde_json::json!({}))["messages"][1]["content"]
                         .as_str()
                         .unwrap_or("{}"),
                 )
-                .unwrap_or(serde_json::json!({}));
+                .unwrap_or_else(|_| serde_json::json!({}));
                 if payload.get("proposed_reply").is_some() {
                     // The verification call fails outright.
                     return None;

@@ -4,8 +4,16 @@ use anyhow::{Context, ensure};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+/// Scheduled-task name of the worker autostart registration.
+///
+/// Inputs: none (constant). Output: `&str` — the task name installed and
+/// queried.
 pub const TASK_NAME: &str = "Rejection Rejector Worker";
 
+/// Report of the OS autostart registration for the worker.
+///
+/// Inputs: none (plain struct). Output: platform support, installation
+/// state, installed-definition drift and the registered paths.
 #[derive(Clone, Debug, Serialize)]
 pub struct AutostartStatus {
     pub supported: bool,
@@ -693,7 +701,7 @@ mod tests {
         assert!(error.contains("MSIX"), "{error}");
         assert!(canonical_inputs(&root.path().join("missing.exe"), root.path()).is_err());
         let dir_exe = root.path().join("a-directory");
-        std::fs::create_dir(&dir_exe).unwrap();
+        std::fs::create_dir_all(&dir_exe).unwrap();
         let error = canonical_inputs(&dir_exe, root.path())
             .unwrap_err()
             .to_string();
@@ -866,7 +874,7 @@ mod tests {
             }
             let (code, stdout) = SCRIPT
                 .with(|s| s.borrow_mut().pop_front())
-                .unwrap_or((0, Vec::new()));
+                .unwrap_or_else(|| (0, Vec::new()));
             Ok(output(code, stdout))
         }
 

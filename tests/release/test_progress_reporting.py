@@ -20,6 +20,7 @@ class ProgressReportingTest(unittest.TestCase):
     def test_write_progress_is_atomic_for_readers(self):
         # Why: a probe reading a torn write would report garbage; the writer
         # must land complete JSON in one rename.
+        """A written heartbeat lands as complete JSON in one rename."""
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "progress.json"
             progress.write_progress(path, {"step": 1, "total_steps": 2, "updated_at_unix": 1000.0})
@@ -28,6 +29,7 @@ class ProgressReportingTest(unittest.TestCase):
 
     def test_malformed_heartbeat_fails_closed(self):
         # Why: invented progress would hide a crashed job.
+        """Malformed heartbeat JSON raises instead of inventing progress."""
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "progress.json"
             path.write_text("{not json", encoding="utf-8")
@@ -35,6 +37,7 @@ class ProgressReportingTest(unittest.TestCase):
                 progress.load_heartbeat(path)
 
     def test_summary_computes_rate_percent_and_eta(self):
+        """Percent, rate and ETA derive from the heartbeat fields."""
         record = {"step": 50, "total_steps": 200, "elapsed_seconds": 100.0, "updated_at_unix": 1000.0, "status": "running"}
         summary = progress.summarize(record, now=1010.0)
         self.assertEqual(summary["percent"], 25.0)
@@ -45,11 +48,13 @@ class ProgressReportingTest(unittest.TestCase):
     def test_stale_heartbeat_reports_stalled_even_while_status_says_running(self):
         # Why: a killed job leaves a "running" heartbeat; the probe must not
         # present it as healthy.
+        """A stale heartbeat is stalled despite status saying running."""
         record = {"step": 5, "total_steps": 10, "elapsed_seconds": 5.0, "updated_at_unix": 0.0, "status": "running"}
         summary = progress.summarize(record, now=10_000.0)
         self.assertTrue(summary["stalled"])
 
     def test_rate_and_eta_are_none_when_not_computable(self):
+        """Zero-step/zero-elapsed input yields None rate/ETA and 0%."""
         record = {"step": 0, "total_steps": 10, "elapsed_seconds": 0.0, "updated_at_unix": 1.0, "status": "running"}
         summary = progress.summarize(record, now=2.0)
         self.assertIsNone(summary["rate_per_second"])

@@ -2,8 +2,9 @@
 //!
 //! Gmail app passwords authenticate over IMAP (read) and SMTP (send) only; the
 //! Gmail REST API is OAuth-only. This backend therefore speaks IMAP/SMTP with
-//! the app password held in [`AppPasswordCredentials`]. The `raw` message the
-//! engine hands [`MailTransport::send`] is base64url-encoded RFC-5322 MIME (see
+//! the app password held in [`crate::mail_transport::AppPasswordCredentials`]. The `raw` message the
+//! engine hands [`crate::mail_transport::MailTransport::send`] is base64url-encoded
+//! RFC-5322 MIME (see
 //! `mail::raw_reply`), which is decoded and submitted over SMTP as-is so the
 //! threading headers written by `raw_reply` are preserved exactly.
 //!
@@ -16,7 +17,9 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use io_imap::client::{ImapClient, ImapClientStd, ImapClientStdConnectOptions};
+use io_imap::rfc3501::login::ImapLoginOptions;
 use io_imap::rfc3501::search::ImapMessageSearchOptions;
+use io_imap::rfc3501::select::ImapMailboxSelectOptions;
 use io_imap::types::core::{AString, Vec1};
 use io_imap::types::datetime::NaiveDate as ImapDate;
 use io_imap::types::mailbox::Mailbox as ImapMailbox;
@@ -125,13 +128,13 @@ impl ImapSmtp {
             .login(
                 self.creds.email.as_str(),
                 self.creds.password(),
-                Default::default(),
+                ImapLoginOptions::default(),
             )
             .map_err(|e| anyhow!("IMAP login failed: {e:?}"))?;
         client
             .select(
                 ImapMailbox::try_from("INBOX").map_err(|e| anyhow!("invalid mailbox: {e:?}"))?,
-                Default::default(),
+                ImapMailboxSelectOptions::default(),
             )
             .map_err(|e| anyhow!("select INBOX failed: {e:?}"))?;
         // `uid: true` makes this a UID SEARCH: the returned ids are UIDs, which
@@ -592,7 +595,7 @@ impl MailTransport for ImapSmtp {
             .filter(|r| r.thread_id == id)
             .map(|r| crate::gmail::ThreadMessage {
                 id: r.id,
-                internal_date: String::new(),
+                internal_date: String::default(),
                 label_ids: Vec::new(),
             })
             .collect();
@@ -795,7 +798,7 @@ mod tests {
                                 let _ = sock.write_all(b"235 2.7.0 ok\r\n");
                             }
                         } else if upper.starts_with("MAIL FROM") {
-                            out.mail_from = line.clone();
+                            out.mail_from.clone_from(&line);
                             if reject {
                                 let _ = sock.write_all(b"550 5.1.0 refused\r\n");
                             } else {
@@ -1009,7 +1012,7 @@ mod tests {
     /// Read one logical command line, inlining any `{n}` literals as quoted
     /// strings so callers can treat the command as plain text.
     fn read_command(sock: &mut std::net::TcpStream, buf: &mut Vec<u8>) -> Option<String> {
-        let mut out = String::new();
+        let mut out = String::default();
         let mut tmp = [0u8; 4096];
         loop {
             let segment = loop {
@@ -1064,9 +1067,10 @@ mod tests {
                     let _ = sock.write_all(b"* OK [CAPABILITY IMAP4rev1] fake ready\r\n");
                     let mut buf: Vec<u8> = Vec::new();
                     while let Some(line) = read_command(&mut sock, &mut buf) {
-                        let mut parts = line.splitn(2, ' ');
-                        let tag = parts.next().unwrap_or("").to_string();
-                        let rest = parts.next().unwrap_or("").to_string();
+                        let (tag, rest) = match line.split_once(' ') {
+                            Some((tag, rest)) => (tag.to_string(), rest.to_string()),
+                            None => (line.clone(), String::default()),
+                        };
                         let upper = rest.to_uppercase();
                         if upper.starts_with("LOGOUT") {
                             let _ = sock

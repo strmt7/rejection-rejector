@@ -5,6 +5,11 @@ use std::sync::OnceLock;
 const UNVERIFIED_COMMIT: &str = "unverified-local-build";
 const BUILD_IDENTITY_DOMAIN: &[u8] = b"rejection-rejector-build-identity-v1\0";
 
+/// Build provenance recorded for one binary.
+///
+/// Inputs: none (plain struct). Output: schema and application versions,
+/// source commit and its verification state, compiler, target, profile and
+/// the Cargo.lock and build-identity digests.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct BuildInfo {
     pub schema_version: u32,

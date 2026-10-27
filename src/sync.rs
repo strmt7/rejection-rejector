@@ -42,6 +42,10 @@ fn charge_sync_budget(
     Ok(())
 }
 
+/// Mailbox provider surface consumed by synchronization.
+///
+/// Inputs: none (trait). Output: profile, message listing and history
+/// fetching implemented by each transport backend.
 pub trait Provider {
     /// Fetch the provider account profile.
     ///

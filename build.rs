@@ -1,6 +1,11 @@
 use std::{env, path::PathBuf, process::Command};
 
 const UNVERIFIED_COMMIT: &str = "unverified-local-build";
+const ENV_BUILD_COMMIT: &str = "RR_BUILD_COMMIT";
+const ENV_TARGET: &str = "TARGET";
+const ENV_PROFILE: &str = "PROFILE";
+const ENV_RUSTC: &str = "RUSTC";
+const ENV_MANIFEST_DIR: &str = "CARGO_MANIFEST_DIR";
 
 fn reject_controls(name: &str, value: &str, max_len: usize) {
     assert!(
@@ -10,9 +15,9 @@ fn reject_controls(name: &str, value: &str, max_len: usize) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=RR_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed={ENV_BUILD_COMMIT}");
 
-    let commit = env::var("RR_BUILD_COMMIT").unwrap_or_else(|_| UNVERIFIED_COMMIT.into());
+    let commit = env::var(ENV_BUILD_COMMIT).unwrap_or_else(|_| UNVERIFIED_COMMIT.into());
     if commit != UNVERIFIED_COMMIT {
         assert!(
             commit.len() == 40
@@ -21,14 +26,14 @@ fn main() {
             "RR_BUILD_COMMIT must be a lowercase 40-character Git SHA"
         );
     }
-    reject_controls("RR_BUILD_COMMIT", &commit, 64);
+    reject_controls(ENV_BUILD_COMMIT, &commit, 64);
 
-    let target = env::var("TARGET").expect("Cargo must provide TARGET to build scripts");
-    let profile = env::var("PROFILE").expect("Cargo must provide PROFILE to build scripts");
-    reject_controls("TARGET", &target, 128);
-    reject_controls("PROFILE", &profile, 64);
+    let target = env::var(ENV_TARGET).expect("Cargo must provide TARGET to build scripts");
+    let profile = env::var(ENV_PROFILE).expect("Cargo must provide PROFILE to build scripts");
+    reject_controls(ENV_TARGET, &target, 128);
+    reject_controls(ENV_PROFILE, &profile, 64);
 
-    let rustc = env::var("RUSTC").expect("Cargo must provide RUSTC to build scripts");
+    let rustc = env::var(ENV_RUSTC).expect("Cargo must provide RUSTC to build scripts");
     let output = Command::new(&rustc)
         .arg("--version")
         .output()
@@ -43,7 +48,7 @@ fn main() {
     println!("cargo:rerun-if-changed=windows/app.manifest");
     if target.ends_with("-pc-windows-msvc") {
         let manifest = PathBuf::from(
-            env::var("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
+            env::var(ENV_MANIFEST_DIR).expect("Cargo must provide CARGO_MANIFEST_DIR"),
         )
         .join("windows")
         .join("app.manifest");

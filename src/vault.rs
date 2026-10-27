@@ -17,6 +17,10 @@ const RECOVERY_TIME_COST: u32 = 3;
 const RECOVERY_LANES: u32 = 1;
 const RECOVERY_MIN_PASSPHRASE_BYTES: usize = 20;
 
+/// Wrapped workspace key document written for recovery.
+///
+/// Inputs: none (plain struct). Output: format and application versions,
+/// vault id, KDF parameters, salt and the key wrapped under the recovery key.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryKeyEnvelope {
@@ -187,9 +191,19 @@ fn linux_vault_passphrase() -> Result<Zeroizing<String>> {
     if let Some(pass) = test_support::HEADLESS_PASSPHRASE.get() {
         return Ok(Zeroizing::new(pass.clone()));
     }
-    Ok(Zeroizing::new(std::env::var("RR_VAULT_PASSPHRASE").context("On Linux, set RR_VAULT_PASSPHRASE to a strong passphrase (20+ characters). Windows uses Credential Manager automatically")?))
+    const VAULT_PASSPHRASE_ENV: &str = "RR_VAULT_PASSPHRASE";
+    Ok(Zeroizing::new(
+        std::env::var(VAULT_PASSPHRASE_ENV).context(format!(
+            "On Linux, set {VAULT_PASSPHRASE_ENV} to a strong passphrase (20+ characters). \
+         Windows uses Credential Manager automatically"
+        ))?,
+    ))
 }
 
+/// Authenticated-encryption vault for one workspace.
+///
+/// Inputs: none (plain struct). Output: the sealing and opening surface for
+/// values stored under the workspace key.
 #[derive(Clone)]
 pub struct Vault {
     key: Arc<Zeroizing<[u8; 32]>>,
@@ -233,6 +247,16 @@ impl Vault {
         );
         #[cfg(any(windows, target_os = "macos"))]
         {
+            // Test builds are hermetic by default: derive the key from the
+            // one-shot test passphrase instead of minting OS credential
+            // entries. Leaked entries accumulate until the store rejects new
+            // ones and flakes unrelated tests; tests asserting live OS-store
+            // behavior opt in with `test_support::LiveOsCredentialStore`.
+            #[cfg(test)]
+            if !test_support::live_os_credential_store_active() {
+                let pass = test_support::test_vault_passphrase();
+                return Self::from_passphrase(pass.as_str(), id.trim());
+            }
             let entry = keyring::Entry::new("rejection-rejector.v1", id.trim())?;
             let key = key_from_credential_store(entry.get_password(), is_new, |encoded| {
                 entry
@@ -245,17 +269,29 @@ impl Vault {
         {
             // Linux fallback is explicit and requires a user-supplied passphrase on every run.
             let pass = linux_vault_passphrase()?;
-            ensure!(
-                pass.len() >= 20,
-                "Vault passphrase must be at least 20 characters"
-            );
-            let salt = uuid::Uuid::parse_str(id.trim())?;
-            let mut key = Zeroizing::new([0u8; 32]);
-            argon2::Argon2::default()
-                .hash_password_into(pass.as_bytes(), salt.as_bytes(), key.as_mut())
-                .map_err(|_| anyhow::anyhow!("Key derivation failed"))?;
-            Ok(Self::from_zeroizing_key(key))
+            Self::from_passphrase(pass.as_str(), id.trim())
         }
+    }
+
+    /// Derive the vault master key from a passphrase (the Linux flow and the
+    /// hermetic test flow).
+    ///
+    /// Inputs: `pass` — 20+ character passphrase; `id` — vault identifier used
+    /// as the derivation salt. Output: `Result<Self>` — the deterministically
+    /// derived vault, or the fail-closed error for a short passphrase or a
+    /// derivation failure.
+    #[cfg(any(test, not(any(windows, target_os = "macos"))))]
+    fn from_passphrase(pass: &str, id: &str) -> Result<Self> {
+        ensure!(
+            pass.len() >= 20,
+            "Vault passphrase must be at least 20 characters"
+        );
+        let salt = uuid::Uuid::parse_str(id)?;
+        let mut key = Zeroizing::new([0u8; 32]);
+        argon2::Argon2::default()
+            .hash_password_into(pass.as_bytes(), salt.as_bytes(), key.as_mut())
+            .map_err(|_| anyhow::anyhow!("Key derivation failed"))?;
+        Ok(Self::from_zeroizing_key(key))
     }
     /// Wrap this vault's master key for offline disaster recovery.
     ///
@@ -498,6 +534,9 @@ pub fn write_new_private(path: &Path, data: &[u8]) -> Result<()> {
     f.sync_all()?;
     Ok(())
 }
+/// Exclusive process lock for one workspace directory.
+///
+/// Inputs: none (plain struct). Output: the held file lock, released on drop.
 pub struct InstanceLock {
     _file: fs::File,
 }
@@ -587,6 +626,7 @@ mod tests {
     fn existing_vault_id_without_credential_never_mints_a_replacement_key() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
@@ -630,21 +670,6 @@ mod tests {
         assert!(!root.path().join("vault-id").exists());
     }
 
-    /// Removes a test credential from the OS credential store even when an
-    /// assertion panics, so repeated test runs never collide with stale keys.
-    #[cfg(any(windows, target_os = "macos"))]
-    struct CredentialCleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
-    impl Drop for CredentialCleanup {
-        /// Delete the credential bound to this test's vault identifier.
-        /// Inputs: `self.0` holds the vault identifier used as account name.
-        /// Output: none; deletion errors are ignored during teardown.
-        fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
     /// Why: the OS-credential path must mint exactly one key on first open and
     /// reuse that same key on every later open; a second mint would orphan all
     /// previously sealed records. Exercises the mint arm, the read arm and the
@@ -659,11 +684,11 @@ mod tests {
     fn vault_open_mints_and_reuses_the_os_credential_key() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let minted = Vault::open(root.path()).unwrap();
-        let id = vault_id(root.path()).unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = test_support::OsCredentialCleanup::for_workspace(root.path());
         let reopened = Vault::open(root.path()).unwrap();
         let sealed = minted.seal("job:1", &"payload").unwrap();
         assert_eq!(
@@ -692,11 +717,12 @@ mod tests {
     fn install_os_key_if_missing_installs_once_and_refuses_overwrite() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         write_new_private(&root.path().join("vault-id"), id.as_bytes()).unwrap();
-        let _cleanup = CredentialCleanup(id);
+        let _cleanup = test_support::OsCredentialCleanup::for_workspace(root.path());
         let recovered = Vault::random();
         recovered.install_os_key_if_missing(root.path()).unwrap();
         let overwrite = recovered
@@ -724,15 +750,45 @@ pub(crate) mod test_support {
     //! Test-only helpers shared by every module that exercises the OS
     //! credential store.
 
+    use zeroize::Zeroizing;
+
+    // Per-thread nesting depth for the credential-store lock: cleanup guards
+    // drop inside tests that already hold the lock, and re-acquiring the same
+    // OS file lock from the same thread would deadlock.
+    std::thread_local! {
+        static CREDENTIAL_LOCK_DEPTH: std::cell::Cell<u32> =
+            const { std::cell::Cell::new(0) };
+    }
+
+    /// RAII handle for one credential-store lock level on the calling thread.
+    /// Only the outermost handle owns the OS file lock.
+    pub(crate) struct CredentialStoreLock {
+        file: Option<std::fs::File>,
+    }
+
+    impl Drop for CredentialStoreLock {
+        /// Inputs: `self` — the handle. Output: none; releases the OS file
+        /// lock (when this level owns it) and lowers the nesting depth.
+        fn drop(&mut self) {
+            drop(self.file.take());
+            CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+
     /// Serializes OS credential-store access across tests: the store is one
     /// shared system resource and concurrent mint/read/delete sequences have
-    /// been observed to lose writes between parallel tests.
+    /// been observed to lose writes between parallel tests. Reentrant per
+    /// thread: a cleanup guard may drop inside an already-locked test without    /// deadlocking on the same thread.
     ///
     /// Acquire the credential-store serialization lock for the calling test.
-    /// Inputs: none. Output: a file handle holding an exclusive OS file lock
-    /// until drop. The lock is cross-process, so it also serializes nextest's
+    /// Inputs: none. Output: [`CredentialStoreLock`] held until drop. The
+    /// lock is cross-process, so it also serializes nextest's
     /// one-process-per-test execution of credential-store tests.
-    pub(crate) fn lock_credential_store() -> std::fs::File {
+    pub(crate) fn lock_credential_store() -> CredentialStoreLock {
+        if CREDENTIAL_LOCK_DEPTH.with(|depth| depth.get()) > 0 {
+            CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
+            return CredentialStoreLock { file: None };
+        }
         let path = std::env::temp_dir().join("rr-test-credential-store.lock");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -742,7 +798,8 @@ pub(crate) mod test_support {
             .open(&path)
             .expect("open credential-store test lock");
         fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
-        file
+        CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(1));
+        CredentialStoreLock { file: Some(file) }
     }
 
     /// One-shot in-process stand-in for the headless `RR_VAULT_PASSPHRASE`
@@ -753,16 +810,150 @@ pub(crate) mod test_support {
     /// ones worker threads perform on their own threads — read it race-free.
     /// Windows and macOS never consult it: their `Vault::open` resolves the key
     /// from the OS credential store instead.
-    #[cfg(not(any(windows, target_os = "macos")))]
     pub(crate) static HEADLESS_PASSPHRASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
     /// Install the documented headless vault input for this test process.
     ///
     /// Inputs: none. Output: none; idempotent one-shot installation, so any
     /// number of tests and worker threads may call it.
-    #[cfg(not(any(windows, target_os = "macos")))]
     pub(crate) fn install_headless_passphrase() {
         let _ = HEADLESS_PASSPHRASE.set("rr-test-headless-vault-passphrase".to_owned());
+    }
+
+    // Thread-local live-OS-store opt-in: while held on the calling test
+    // thread, `Vault::open` drives the real OS credential store. Tests that
+    // assert live-store behavior must hold it; every other test derives the
+    // key hermetically and never touches the store.
+    std::thread_local! {
+        static LIVE_OS_CREDENTIAL_STORE: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
+    /// Guard that opts the calling test thread into the live OS credential
+    /// store for its duration.
+    pub(crate) struct LiveOsCredentialStore {
+        _private: (),
+    }
+
+    impl LiveOsCredentialStore {
+        /// Inputs: none. Output: `Self` — guard; the thread derives vault keys
+        /// from the live OS store until the guard drops.
+        pub(crate) fn acquire() -> Self {
+            LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.set(true));
+            Self { _private: () }
+        }
+    }
+
+    impl Drop for LiveOsCredentialStore {
+        fn drop(&mut self) {
+            LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.set(false));
+        }
+    }
+
+    /// Inputs: none. Output: `true` when the running test thread opted into    /// the live OS credential store.
+    pub(crate) fn live_os_credential_store_active() -> bool {
+        LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.get())
+    }
+
+    /// Deterministic passphrase for hermetic test vault derivation.
+    ///
+    /// Inputs: none. Output: `Zeroizing<String>` — the armed headless seam
+    /// value when installed, else a fixed test passphrase of sufficient length.
+    pub(crate) fn test_vault_passphrase() -> Zeroizing<String> {
+        if let Some(pass) = HEADLESS_PASSPHRASE.get() {
+            return Zeroizing::new(pass.clone());
+        }
+        Zeroizing::new("rr-test-hermetic-vault-passphrase".to_owned())
+    }
+
+    /// Deletes a workspace's OS credentials on drop so tests never leak
+    /// Credential Manager entries. Leaked entries accumulate until `CredWrite`
+    /// fails with OS error 8 and flakes unrelated tests, so every test that
+    /// mints a workspace credential must hold one of these guards.
+    ///
+    /// Inputs: `dir` — workspace directory whose `vault-id` names the entries.
+    /// Output: guard that deletes the workspace vault key and audit-anchor
+    /// entries when dropped. A no-op on platforms without an OS store.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) struct OsCredentialCleanup {
+        vault_id: Option<String>,
+        workspace: Option<std::path::PathBuf>,
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl OsCredentialCleanup {
+        /// Inputs: `dir` — workspace directory that will contain `vault-id`.
+        /// Output: `Self` — cleanup guard; the vault identity is resolved at
+        /// drop time, so the guard may be created before the workspace opens.
+        pub(crate) fn for_workspace(dir: &std::path::Path) -> Self {
+            Self {
+                vault_id: None,
+                workspace: Some(dir.to_path_buf()),
+            }
+        }
+
+        /// Inputs: `id` — vault identifier used as the credential account
+        /// name. Output: `Self` — cleanup guard bound to that identity.
+        pub(crate) fn from_vault_id(id: impl Into<String>) -> Self {
+            Self {
+                vault_id: Some(id.into()),
+                workspace: None,
+            }
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for OsCredentialCleanup {
+        fn drop(&mut self) {
+            let vault_id = match self.vault_id.take() {
+                Some(id) => id,
+                None => self
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| {
+                        std::fs::read_to_string(workspace.join("vault-id"))
+                            .unwrap_or_default()
+                            .trim()
+                            .to_owned()
+                    })
+                    .unwrap_or_default(),
+            };
+            if vault_id.is_empty() {
+                return;
+            }
+            // Serialize with the shared credential-store lock and remove both
+            // entries this workspace may have minted. Deleting an absent entry
+            // is harmless.
+            let _lock = lock_credential_store();
+            for service in [
+                "rejection-rejector.v1",
+                crate::audit_anchor::OS_AUDIT_ANCHOR_SERVICE,
+            ] {
+                let _ = keyring::Entry::new(service, &vault_id)
+                    .and_then(|entry| entry.delete_credential());
+            }
+        }
+    }
+
+    /// Cross-platform shape of [`OsCredentialCleanup`] on hosts without an OS
+    /// credential store: construction is cheap and dropping is a no-op, so
+    /// test code can hold the guard unconditionally.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub(crate) struct OsCredentialCleanup;
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    impl OsCredentialCleanup {
+        /// Inputs: `_dir` — workspace directory (unused without an OS store).
+        /// Output: `Self` — no-op guard.
+        pub(crate) fn for_workspace(_dir: &std::path::Path) -> Self {
+            Self
+        }
+
+        /// Inputs: `_id` — vault identifier (unused without an OS store).
+        /// Output: `Self` — no-op guard.
+        pub(crate) fn from_vault_id(_id: impl Into<String>) -> Self {
+            Self
+        }
     }
 }
 

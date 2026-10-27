@@ -2,10 +2,20 @@ use anyhow::{Result, ensure};
 use serde::Serialize;
 use std::{fs, path::Path};
 
+/// Minimum free space kept available for runtime writes.
+///
+/// Inputs: none (constant). Output: `u64` — the headroom in bytes.
 pub const MIN_RUNTIME_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
+/// Minimum free space kept available for backup writes.
+///
+/// Inputs: none (constant). Output: `u64` — the headroom in bytes.
 pub const MIN_BACKUP_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 const BACKUP_FIXED_MARGIN_BYTES: u64 = 128 * 1024 * 1024;
 
+/// Free-space and size report for the workspace volume.
+///
+/// Inputs: none (plain struct). Output: database and file sizes, available
+/// and total bytes and the runtime and backup requirements.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct StorageHealth {
     pub schema_version: u32,

@@ -6,8 +6,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Environment variable naming the emergency-stop sentinel file.
+///
+/// Inputs: none (constant). Output: `&str` — the variable name read to
+/// override the default sentinel location.
 pub const EMERGENCY_STOP_FILE_ENV: &str = "RR_EMERGENCY_STOP_FILE";
 
+/// Status of the externally managed emergency-stop sentinel.
+///
+/// Inputs: none (plain struct). Output: whether a stop is configured and
+/// active, and the reason string shown to operators.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct EmergencyStopStatus {
@@ -180,7 +188,7 @@ mod tests {
         assert!(evaluate(Some(OsString::from("relative.stop"))).is_err());
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("stop-directory");
-        fs::create_dir(&directory).unwrap();
+        fs::create_dir_all(&directory).unwrap();
         assert!(status_for_path(&directory).is_err());
 
         #[cfg(unix)]

@@ -10,12 +10,20 @@ pub fn hash(value: impl AsRef<[u8]>) -> String {
     crate::hex_lower(Sha256::digest(value.as_ref()))
 }
 
+/// Where one message originated.
+///
+/// Inputs: none (plain enum). Output: `Gmail` (live mailbox) or `Demo`
+/// (synthetic demonstration data).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Gmail,
     Demo,
 }
+/// Lightweight message identity that survives without the full email.
+///
+/// Inputs: none (plain struct). Output: the account, provider message id,
+/// thread id and [`Source`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stub {
     pub account: String,
@@ -49,6 +57,10 @@ impl Stub {
         ))
     }
 }
+/// One received message preserved for review.
+///
+/// Inputs: none (plain struct). Output: the [`Stub`], sender, subject, body,
+/// routing headers and receipt metadata.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Email {
     pub stub: Stub,
@@ -99,6 +111,10 @@ impl Email {
         ))
     }
 }
+/// Model classification of one message.
+///
+/// Inputs: none (plain enum). Output: `Rejection`, `Opportunity`, `Other` or
+/// `Uncertain`.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
@@ -107,6 +123,11 @@ pub enum Category {
     Other,
     Uncertain,
 }
+/// Model verdict for one message.
+///
+/// Inputs: none (plain struct). Output: the [`Category`], self-reported
+/// confidence, evidence, explanation and the derived company, position and
+/// language.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {
@@ -119,6 +140,11 @@ pub struct Verdict {
     pub position: String,
     pub language: String,
 }
+/// Independent verifier's checks on one generated draft.
+///
+/// Inputs: none (plain struct). Output: the pass/fail checks — genuine
+/// rejection, supported claims, professionalism, injection freedom and
+/// purpose alignment — plus the verifier's reason.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Verification {
@@ -177,7 +203,7 @@ mod verification_tests {
             professional: p,
             injection_free: i,
             purpose_aligned: pa,
-            reason: String::new(),
+            reason: String::default(),
         }
     }
 
@@ -196,6 +222,11 @@ mod verification_tests {
         );
     }
 }
+/// Full model analysis recorded for one message.
+///
+/// Inputs: none (plain struct). Output: the [`Verdict`], optional
+/// [`Verification`], the model and prompt identities and the email
+/// fingerprint binding.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Analysis {
     pub verdict: Verdict,
@@ -213,12 +244,20 @@ pub struct Analysis {
     pub input_complete: bool,
     pub gpu_resident: bool,
 }
+/// One generated reply draft.
+///
+/// Inputs: none (plain struct). Output: the draft body and the origin tag
+/// naming the producing path.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Draft {
     pub body: String,
     pub origin: String,
 }
 
+/// Stage that produced one processing failure.
+///
+/// Inputs: none (plain enum). Output: the failing stage code, serialized in
+/// snake_case for storage and reporting.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessingFailureCode {
@@ -261,6 +300,10 @@ impl ProcessingFailureCode {
     }
 }
 
+/// Lifecycle state of one reviewable item.
+///
+/// Inputs: none (plain enum). Output: the state driving queue placement and
+/// send eligibility.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
@@ -359,6 +402,11 @@ impl JobState {
         }
     }
 }
+/// One reviewable item: identity, analysis, draft and delivery posture.
+///
+/// Inputs: none (plain struct). Output: the [`Stub`], [`JobState`], the
+/// stored [`Email`], [`Analysis`] and [`Draft`], flags, revision and retry
+/// counters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
@@ -400,6 +448,10 @@ impl Job {
         }
     }
 }
+/// Per-account mailbox synchronization position.
+///
+/// Inputs: none (plain struct). Output: the account, Gmail history id and
+/// the last poll and full-sync instants with the lookback window.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SyncState {
     pub account: String,
@@ -408,6 +460,10 @@ pub struct SyncState {
     pub last_full: Option<DateTime<Utc>>,
     pub lookback_days: u8,
 }
+/// Keyset cursor into the stored item list.
+///
+/// Inputs: none (plain struct). Output: the snapshot rowid and the last
+/// delivered rowid.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ItemCursor {
@@ -415,12 +471,20 @@ pub struct ItemCursor {
     pub last_rowid: i64,
 }
 
+/// One page of items with its continuation cursor.
+///
+/// Inputs: none (plain struct). Output: the page's [`Job`]s and the
+/// [`ItemCursor`] for the next page.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemCursorPage {
     pub items: Vec<Job>,
     pub next_cursor: Option<ItemCursor>,
 }
 
+/// Queue counters shown on every operator surface.
+///
+/// Inputs: none (plain struct). Output: stored, queued, review, sent and
+/// uncertain totals plus the 24-hour attempt count.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Counts {
     pub stored: u64,
@@ -430,6 +494,10 @@ pub struct Counts {
     pub uncertain: u64,
     pub attempts_24h: u64,
 }
+/// Kind of one background operation.
+///
+/// Inputs: none (plain enum). Output: the operation label driving status
+/// reporting.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
@@ -489,6 +557,15 @@ impl OperationKind {
             Self::InspectModel => "model_inspection_failed",
             Self::QualifyModel => "model_smoke_qualification_failed",
             Self::EvaluateModel => "model_task_evaluation_failed",
+            remaining => remaining.data_failure_code(),
+        }
+    }
+
+    /// Failure codes for the model-data and recovery operations.
+    ///
+    /// Inputs: none beyond the kind. Output: `&'static str` code.
+    fn data_failure_code(self) -> &'static str {
+        match self {
             Self::ProfileModel => "model_runtime_profile_failed",
             Self::CompareModels => "model_comparison_failed",
             Self::IntegrityCheck => "database_integrity_failed",
@@ -501,6 +578,15 @@ impl OperationKind {
             Self::ListItems => "item_listing_failed",
             Self::SelectItem => "item_selection_failed",
             Self::EditDraft => "draft_edit_failed",
+            remaining => remaining.dispatch_failure_code(),
+        }
+    }
+
+    /// Failure codes for the dispatch and policy operations.
+    ///
+    /// Inputs: none beyond the kind. Output: `&'static str` code.
+    fn dispatch_failure_code(self) -> &'static str {
+        match self {
             Self::RegenerateDraft => "draft_regeneration_failed",
             Self::DismissItem => "item_dismissal_failed",
             Self::SendReply => "reply_send_failed",
@@ -513,6 +599,9 @@ impl OperationKind {
             Self::EnterprisePolicyReload => "enterprise_policy_reload_failed",
             Self::AnalyzeQueuedMail => "mail_analysis_failed",
             Self::AutomaticDispatch => "automatic_dispatch_failed",
+            // Unreachable for the kinds matched above; kept so a new kind
+            // added without a code fails closed instead of panicking.
+            _ => "operation_failed",
         }
     }
 
@@ -672,6 +761,10 @@ mod operation_kind_tests {
     }
 }
 
+/// Lifecycle state of one operation.
+///
+/// Inputs: none (plain enum). Output: `Idle`, `Running`, `Succeeded` or
+/// `Failed`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationState {
@@ -682,6 +775,10 @@ pub enum OperationState {
     Failed,
 }
 
+/// How a failed operation should be recovered.
+///
+/// Inputs: none (plain enum). Output: the disposition from `None` through
+/// `Retryable` to `NonRetryable`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureDisposition {
@@ -693,6 +790,11 @@ pub enum FailureDisposition {
     NonRetryable,
 }
 
+/// Status of the current or last worker operation.
+///
+/// Inputs: none (plain struct). Output: the correlation id,
+/// [`OperationKind`] and [`OperationState`], failure code, retryability and
+/// timing.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationStatus {
     /// Locally generated correlation UUID for one worker operation lifecycle.
@@ -729,6 +831,10 @@ impl OperationStatus {
     }
 }
 
+/// Worker heartbeat summary for stall detection.
+///
+/// Inputs: none (plain struct). Output: responsiveness, last-progress age,
+/// current-operation age and the stall budget.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkerLiveness {
     pub schema_version: u32,
@@ -741,6 +847,9 @@ pub struct WorkerLiveness {
     pub stall_budget_seconds: u64,
 }
 
+/// Subsystem one audit event belongs to.
+///
+/// Inputs: none (plain enum). Output: the domain keying audit filtering.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditDomain {
@@ -780,6 +889,10 @@ impl AuditDomain {
     }
 }
 
+/// Severity of one audit event.
+///
+/// Inputs: none (plain enum). Output: `Info`, `Warning`, `Error` or
+/// `Security`.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditSeverity {
@@ -808,7 +921,15 @@ impl AuditSeverity {
 /// Inputs: `kind` — audit event kind. Output: `(AuditDomain, AuditSeverity)`
 /// derived from the kind's prefix.
 pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
-    let domain = if kind.starts_with("email.")
+    (audit_domain(kind), audit_severity(kind))
+}
+
+/// Map an audit event kind to its subsystem domain.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditDomain`] derived from
+/// the kind's prefix.
+fn audit_domain(kind: &str) -> AuditDomain {
+    if kind.starts_with("email.")
         || kind.starts_with("gmail.")
         || kind.starts_with("account.")
         || kind.starts_with("sync.")
@@ -826,7 +947,16 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditDomain::Security
     } else if kind.starts_with("backup.") || kind.starts_with("restore.") {
         AuditDomain::Recovery
-    } else if kind.starts_with("api.") || kind.starts_with("integration.") {
+    } else {
+        audit_domain_tail(kind)
+    }
+}
+
+/// Domain classification for the integration, retention and worker prefixes.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditDomain`].
+fn audit_domain_tail(kind: &str) -> AuditDomain {
+    if kind.starts_with("api.") || kind.starts_with("integration.") {
         AuditDomain::Integration
     } else if kind.starts_with("content.") || kind.starts_with("retention.") {
         AuditDomain::Retention
@@ -836,12 +966,15 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditDomain::Worker
     } else {
         AuditDomain::Other
-    };
+    }
+}
 
-    let severity = if kind.contains("security")
-        || kind.contains("tamper")
-        || kind.contains("integrity_failed")
-    {
+/// Map an audit event kind to its severity.
+///
+/// Inputs: `kind` — audit event kind. Output: [`AuditSeverity`] derived from
+/// the kind's keywords.
+fn audit_severity(kind: &str) -> AuditSeverity {
+    if kind.contains("security") || kind.contains("tamper") || kind.contains("integrity_failed") {
         AuditSeverity::Security
     } else if kind.contains("failed") || kind.contains("error") || kind.contains("fatal") {
         AuditSeverity::Error
@@ -854,10 +987,13 @@ pub fn audit_attributes(kind: &str) -> (AuditDomain, AuditSeverity) {
         AuditSeverity::Warning
     } else {
         AuditSeverity::Info
-    };
-    (domain, severity)
+    }
 }
 
+/// One appended audit-trail entry.
+///
+/// Inputs: none (plain struct). Output: the sequence number, timestamp,
+/// kind, [`AuditDomain`], [`AuditSeverity`], optional item id and detail.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub seq: i64,

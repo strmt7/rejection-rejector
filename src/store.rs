@@ -38,8 +38,16 @@ fn row_get_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     u64::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, raw))
 }
 
+/// Database schema version this build writes and verifies.
+///
+/// Inputs: none (constant). Output: `i64` — the version asserted by the
+/// migration and integrity-verification paths.
 pub const DATABASE_SCHEMA_VERSION: i64 = 5;
 
+/// Record counts collected while verifying one backup file.
+///
+/// Inputs: none (plain struct). Output: the schema version, audit head and
+/// per-table record totals observed inside the backup.
 #[derive(Clone, Debug, Serialize)]
 pub struct BackupVerificationSummary {
     pub schema_version: i64,
@@ -50,6 +58,10 @@ pub struct BackupVerificationSummary {
     pub delivery_records: u64,
 }
 
+/// Record totals inspected by the application-level invariant check.
+///
+/// Inputs: none (plain struct). Output: the metadata, item, audit-event and
+/// delivery record counts, split by active and sent deliveries.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ApplicationIntegritySummary {
     pub metadata_records: u64,
@@ -59,6 +71,10 @@ pub struct ApplicationIntegritySummary {
     pub active_delivery_records: u64,
     pub sent_delivery_records: u64,
 }
+/// One stored processing failure with its retry posture.
+///
+/// Inputs: none (plain struct). Output: the failure code, attempt count,
+/// retry-exhausted flag and occurrence time.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessingFailureRecord {
@@ -68,6 +84,10 @@ pub struct ProcessingFailureRecord {
     pub occurred_at: DateTime<Utc>,
 }
 
+/// Aggregate processing-failure counts for the diagnostics surface.
+///
+/// Inputs: none (plain struct). Output: the active and retry-exhausted
+/// record counts plus per-code totals.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct ProcessingFailureSummary {
     pub active_records: u64,
@@ -75,6 +95,10 @@ pub struct ProcessingFailureSummary {
     pub by_code: BTreeMap<String, u64>,
 }
 
+/// Page-level before/after report for one database compaction.
+///
+/// Inputs: none (plain struct). Output: the schema version, page and
+/// freelist counts before and after, and the page size in bytes.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct DatabaseCompactionReport {
     pub schema_version: u32,
@@ -85,6 +109,10 @@ pub struct DatabaseCompactionReport {
     pub page_size_bytes: u64,
 }
 
+/// Encrypted SQLite store owning the workspace connection and vault.
+///
+/// Inputs: none (plain struct). Output: the persisted-item surface used by
+/// the engine: items, deliveries, audit events, metadata and retention.
 pub struct Store {
     conn: Connection,
     vault: Vault,
@@ -459,28 +487,25 @@ fn verify_application_invariants_connection(
                     "Delivery record state does not match authenticated job state"
                 );
 
-                match job.state {
-                    JobState::Sent => {
-                        let provider_payload = provider_payload
-                            .context("Sent delivery is missing its encrypted provider identifier");
-                        let provider_payload = provider_payload?;
-                        let provider: String =
-                            vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
-                        ensure!(
-                            job.provider_sent_id.as_deref() == Some(provider.as_str()),
-                            "Sent provider identifier does not match authenticated job payload"
-                        );
-                        sent_delivery_records += 1;
-                    }
+                if let JobState::Sent = job.state {
+                    let provider_payload = provider_payload
+                        .context("Sent delivery is missing its encrypted provider identifier");
+                    let provider_payload = provider_payload?;
+                    let provider: String =
+                        vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
+                    ensure!(
+                        job.provider_sent_id.as_deref() == Some(provider.as_str()),
+                        "Sent provider identifier does not match authenticated job payload"
+                    );
+                    sent_delivery_records += 1;
+                } else {
                     // The outer match has already excluded every state that is
                     // not a delivery state, so the rest is Sending or Uncertain.
-                    _ => {
-                        ensure!(
-                            provider_payload.is_none() && job.provider_sent_id.is_none(),
-                            "Unresolved delivery unexpectedly contains a provider identifier"
-                        );
-                        active_delivery_records += 1;
-                    }
+                    ensure!(
+                        provider_payload.is_none() && job.provider_sent_id.is_none(),
+                        "Unresolved delivery unexpectedly contains a provider identifier"
+                    );
+                    active_delivery_records += 1;
                 }
             }
             _ => {
@@ -2332,7 +2357,7 @@ mod tests {
         db.insert_stub(identity, now).unwrap();
         let mut job = db.get(&id).unwrap();
         let mut email = crate::ollama::sample_email("Old rejection", "We will not proceed.");
-        email.stub = job.stub.clone();
+        email.stub.clone_from(&job.stub);
         email.received_at = now - chrono::Duration::days(10);
         job.email = Some(email);
         job.draft = Some(Draft {
@@ -2479,7 +2504,7 @@ mod tests {
         let target_id = stub("cursor-1", "thread-1").id();
         let mut target = db.get(&target_id).unwrap();
         let mut hydrated = crate::ollama::sample_email("Hydrated", "Rejected");
-        hydrated.stub = target.stub.clone();
+        hydrated.stub.clone_from(&target.stub);
         hydrated.received_at = Utc::now() + chrono::Duration::days(30);
         target.email = Some(hydrated);
         target.state = JobState::Ready;
@@ -2631,7 +2656,7 @@ mod tests {
             db.insert_stub(identity, now).unwrap();
             let mut job = db.get(&id).unwrap();
             let mut email = crate::ollama::sample_email(provider, "Rejected");
-            email.stub = job.stub.clone();
+            email.stub.clone_from(&job.stub);
             email.received_at = now - chrono::Duration::days(days);
             job.email = Some(email);
             job.state = JobState::Ready;
@@ -3158,7 +3183,7 @@ mod tests {
         for job in [&mut first, &mut second, &mut third] {
             let mut email =
                 crate::ollama::sample_email("Synthetic rejection", "We are not moving forward.");
-            email.stub = job.stub.clone();
+            email.stub.clone_from(&job.stub);
             email.from = "recruiter@example.com".into();
             email.reply_to = None;
             job.email = Some(email);
@@ -3898,7 +3923,7 @@ mod tests {
     fn prepare_backup_parent_refuses_a_symlinked_parent() {
         let root = tempfile::tempdir().unwrap();
         let real = root.path().join("real");
-        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let error = prepare_backup_parent(&link.join("backup.sqlite3"))

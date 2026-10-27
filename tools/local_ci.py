@@ -14,6 +14,7 @@ combined verdict as text; exit code 0 only when EVERY gate is green.
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,11 +47,10 @@ GATES = [
 def run(name: str, cmd: list[str], env: dict | None = None) -> bool:
     """Run one gate. Input: display name + argv + optional env. Output: True when green."""
     print(f"== {name}: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, cwd=ROOT, env=env)
+    proc = subprocess.run(cmd, cwd=ROOT, env=env, check=False)
     ok = proc.returncode == 0
     print(f"== {name}: {'GREEN' if ok else f'RED (exit {proc.returncode})'}")
     return ok
-
 
 
 def check_credential_store() -> None:
@@ -68,7 +68,10 @@ def check_credential_store() -> None:
     if sys.platform != "win32":
         return
     try:
-        out = subprocess.run(["cmdkey", "/list"], capture_output=True, text=True).stdout
+        cmdkey = shutil.which("cmdkey")
+        if cmdkey is None:
+            return
+        out = subprocess.run([cmdkey, "/list"], capture_output=True, text=True, check=False).stdout
     except OSError:
         return
     n = sum(1 for line in out.splitlines() if "rejection-rejector" in line.lower())
@@ -107,7 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     results.append(
         run(
             "python release suites",
-            [sys.executable, "-m", "unittest", "discover", "-s", "tests/release", "-p", "test_*.py"],
+            [sys.executable, "-m", "unittest", "discover",
+             "-s", "tests/release", "-p", "test_*.py"],
         )
     )
     if all(results):

@@ -1,7 +1,15 @@
 use serde::Serialize;
 
+/// Schema version of the [`ContractInfo`] document.
+///
+/// Inputs: none (constant). Output: `u32` — the version asserted by
+/// consumers.
 pub const CONTRACT_INFO_SCHEMA_VERSION: u32 = 1;
 
+/// Machine-readable description of every versioned integration contract.
+///
+/// Inputs: none (plain struct). Output: schema and API versions with the
+/// digests of the OpenAPI, policy and evaluation contracts.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ContractInfo {
     pub schema_version: u32,

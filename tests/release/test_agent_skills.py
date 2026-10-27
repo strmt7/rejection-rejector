@@ -18,6 +18,7 @@ class AgentSkillsTest(unittest.TestCase):
     """The three badge-backed skills must exist, carry discipline, and be routed."""
 
     def test_required_skills_exist_with_frontmatter(self):
+        """Every required skill exists with frontmatter naming and description."""
         for name in REQUIRED:
             path = SKILLS / name / "SKILL.md"
             self.assertTrue(path.is_file(), f"missing skill {name}")
@@ -28,17 +29,20 @@ class AgentSkillsTest(unittest.TestCase):
             self.assertIn("description:", head)
 
     def test_required_discipline_markers_present(self):
+        """Each required skill carries its discipline markers verbatim."""
         for name, markers in REQUIRED.items():
             text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
             for marker in markers:
                 self.assertIn(marker, text, f"{name}: missing marker {marker!r}")
 
     def test_agents_md_references_every_skill(self):
+        """AGENTS.md references every required skill by name."""
         guide = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         for name in REQUIRED:
             self.assertIn(name, guide, f"AGENTS.md must reference {name}")
 
     def test_secret_review_ledger_is_valid(self):
+        """The secret-review ledger is schema-1 with a reviews list."""
         path = ROOT / ".github" / "scanner-secret-reviews-crawl4ai.json"
         ledger = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(ledger["schema"], 1)

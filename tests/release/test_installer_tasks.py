@@ -18,14 +18,17 @@ class InstallerTasksTest(unittest.TestCase):
     """The installer ships all three surfaces with user-selectable ticks."""
 
     def setUp(self):
+        """Load the installer script source once per test."""
         self.text = ISS.read_text(encoding="utf-8")
 
     def components_section(self):
+        """Return the [Components] section body, failing when absent."""
         match = re.search(r"\[Components\](.*?)\n\[", self.text, re.S)
         self.assertIsNotNone(match, "missing [Components] section")
         return match.group(1)
 
     def test_three_interface_components_exist_and_are_user_selectable(self):
+        """desktop, cli and web components exist and can be deselected."""
         section = self.components_section()
         for name in ('"desktop"', '"cli"', '"web"'):
             self.assertIn(f"Name: {name};", section, f"missing component {name}")
@@ -36,12 +39,14 @@ class InstallerTasksTest(unittest.TestCase):
                 self.assertNotIn("Flags: fixed", line, f"component not deselectable: {line}")
 
     def test_all_components_are_selected_by_default(self):
+        """Every component line is default-checked via Types: custom."""
         section = self.components_section()
         for line in section.splitlines():
             if line.startswith("Name:"):
                 self.assertIn("Types: custom", line, f"not default-checked: {line}")
 
     def test_at_least_one_component_rule_is_present_and_enforced_before_install(self):
+        """The NextButtonClick guard enforces at least one component."""
         self.assertIn("function NextButtonClick", self.text)
         self.assertIn("wpSelectComponents", self.text)
         self.assertIn("Select at least one component", self.text)
@@ -52,6 +57,7 @@ class InstallerTasksTest(unittest.TestCase):
         )
 
     def test_least_privilege_posture_holds(self):
+        """The installer stays lowest-privilege and launches nothing."""
         self.assertIn("PrivilegesRequired=lowest", self.text)
         self.assertRegex(self.text, r"\[Run\]\s*\n; Nothing", "install time must launch nothing")
         self.assertIn('Source: "{#SourceDir}\\rejection-rejector.exe"', self.text)

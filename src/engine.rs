@@ -30,6 +30,10 @@ use std::{
     },
 };
 
+/// Stable code naming why one item is ineligible for unattended sending.
+///
+/// Inputs: none (plain enum). Output: the machine-readable block code,
+/// serialized in snake_case for the API and operator surfaces.
 #[derive(
     Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -57,12 +61,20 @@ pub enum AutomaticPolicyCode {
     ReplyToMismatch,
 }
 
+/// One automatic-policy refusal with its stable code and operator text.
+///
+/// Inputs: none (plain struct). Output: the [`AutomaticPolicyCode`] and the
+/// human-readable block message.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AutomaticPolicyBlock {
     pub code: AutomaticPolicyCode,
     pub message: String,
 }
 
+/// The eligibility verdict for one item's unattended send.
+///
+/// Inputs: none (plain struct). Output: the `eligible` flag plus every
+/// [`AutomaticPolicyBlock`] explaining a refusal.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AutomaticPolicyDecision {
     pub eligible: bool,
@@ -319,6 +331,11 @@ pub fn send_gate_eligible(job: &Job, ctx: &SendGateContext<'_>) -> bool {
         && !ctx.paused
 }
 
+/// Owned engine state: store, settings, account, models and session leases.
+///
+/// Inputs: none (plain struct). Output: the surface every command executes
+/// against — the database, mail transport, loaded enterprise policy and
+/// workspace directory.
 pub struct Engine {
     pub db: Store,
     pub settings: Settings,
@@ -395,8 +412,7 @@ impl Engine {
         };
         let directory = temporary
             .as_ref()
-            .map(|p| p.path().to_path_buf())
-            .unwrap_or(directory);
+            .map_or(directory, |p| p.path().to_path_buf());
         let lock = InstanceLock::acquire(&directory)?;
         let session = SessionLease::begin(&directory)?;
         let previous_unclean_session = session.previous_unclean();
@@ -589,8 +605,7 @@ impl Engine {
     pub fn enterprise_policy_status(&self) -> PolicyStatus {
         self.enterprise_policy
             .as_ref()
-            .map(LoadedPolicy::status)
-            .unwrap_or_else(policy::inactive_status)
+            .map_or_else(policy::inactive_status, LoadedPolicy::status)
     }
 
     /// Reload the optional machine-wide policy and apply only restrictive
@@ -831,13 +846,17 @@ impl Engine {
             settings.model_digest = None;
             self.model = ModelStatus::default();
         } else {
-            settings.model_digest = self.settings.model_digest.clone();
+            settings
+                .model_digest
+                .clone_from(&self.settings.model_digest);
         }
         if verifier_configuration_changed {
             settings.verifier_model_digest = None;
             self.verifier_model = ModelStatus::default();
         } else {
-            settings.verifier_model_digest = self.settings.verifier_model_digest.clone();
+            settings
+                .verifier_model_digest
+                .clone_from(&self.settings.verifier_model_digest);
         }
         let task_context_changed =
             settings_context_hash(&settings) != settings_context_hash(&self.settings);
@@ -845,7 +864,9 @@ impl Engine {
             settings.task_qualification = None;
             settings.disarm_delivery();
         } else {
-            settings.task_qualification = self.settings.task_qualification.clone();
+            settings
+                .task_qualification
+                .clone_from(&self.settings.task_qualification);
         }
         settings.validate()?;
         ensure!(
@@ -930,7 +951,9 @@ impl Engine {
                 let mut verifier_settings = self.settings.clone();
                 verifier_settings.disarm_delivery();
                 verifier_settings.task_qualification = None;
-                verifier_settings.model = verifier_settings.verifier_model.clone();
+                verifier_settings
+                    .model
+                    .clone_from(&verifier_settings.verifier_model);
                 verifier_settings.model_digest = Some(pin.clone());
                 verifier_settings.independent_verifier_enabled = false;
                 match Ollama::new(&verifier_settings)?.residency(&status.digest) {
@@ -2518,21 +2541,6 @@ mod dispatch_tests {
         .unwrap()
     }
 
-    /// Removes the OS credential minted for a test workspace even when an
-    /// assertion panics, so repeated runs never collide with stale keys.
-    struct Cleanup(String);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _id = &self.0;
-            // Only Windows/macOS vault opens mint an OS credential; headless
-            // hosts derive the key from the passphrase and have nothing to
-            // remove.
-            #[cfg(any(windows, target_os = "macos"))]
-            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
     fn verdict_content() -> Value {
         json!({"category":"rejection","confidence":99,
             "evidence":"We have decided not to move forward with your application.",
@@ -2551,7 +2559,7 @@ mod dispatch_tests {
         let state = loaded.clone();
         let ps_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         MockServer::new(move |route, body| {
-            let body = body.unwrap_or(json!({}));
+            let body = body.unwrap_or_else(|| json!({}));
             let model = body["model"].as_str().unwrap_or("").to_owned();
             match route {
                 "/api/version" => Some(json!({"version": "0.35.1"})),
@@ -2589,7 +2597,7 @@ mod dispatch_tests {
                     let payload: Value = serde_json::from_str(
                         body["messages"][1]["content"].as_str().unwrap_or("{}"),
                     )
-                    .unwrap_or(json!({}));
+                    .unwrap_or_else(|_| json!({}));
                     let content = if payload.get("proposed_reply").is_some() {
                         verification_content()
                     } else if payload.get("tone").is_some() {
@@ -2710,7 +2718,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
 
         let mut rejected = e.settings.clone();
@@ -2826,7 +2836,7 @@ mod dispatch_tests {
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = demo(dir.path());
         let server = runtime(usize::MAX);
-        e.settings.ollama_url = server.url.clone();
+        e.settings.ollama_url.clone_from(&server.url);
         e.settings.signature = "Test Applicant".into();
 
         // Qualify pins the digest and keeps unattended delivery disabled.
@@ -2865,10 +2875,12 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         crate::test_support::arm_automatic(&mut e.settings);
         let server = runtime(usize::MAX);
-        e.settings.ollama_url = server.url.clone();
+        e.settings.ollama_url.clone_from(&server.url);
         e.account = "applicant@example.invalid".into();
 
         let now = Utc::now();
@@ -2901,7 +2913,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         crate::test_support::arm_automatic(&mut e.settings);
         e.account = "applicant@example.invalid".into();
         let (mut job, body_hash) = seed_send_job(&mut e, 27);
@@ -2938,7 +2952,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -2992,7 +3008,7 @@ mod dispatch_tests {
             crate::vault::vault_id(dir.path()).unwrap()
         };
         std::fs::write(dir.path().join(".runtime-session.json"), b"not-json").unwrap();
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = live(dir.path());
         assert!(!e.settings.sending_enabled);
         assert!(!e.settings.automatic_confirmed);
@@ -3028,7 +3044,7 @@ mod dispatch_tests {
             b"restore-rearm:v1\n",
         )
         .unwrap();
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = live(dir.path());
         assert!(!e.settings.sending_enabled);
         assert!(!e.settings.automatic_confirmed);
@@ -3059,7 +3075,7 @@ mod dispatch_tests {
             e.db.set_meta("settings", &e.settings).unwrap();
             crate::vault::vault_id(dir.path()).unwrap()
         };
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = live(dir.path());
         assert!(e.settings.task_qualification.is_none());
         assert!(!e.settings.independent_verifier_enabled);
@@ -3091,7 +3107,7 @@ mod dispatch_tests {
             e.db.save(&mut job, "test.age", "aged").unwrap();
             (crate::vault::vault_id(dir.path()).unwrap(), job.id.clone())
         };
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = live(dir.path());
         assert!(!e.settings.sending_enabled);
         assert_eq!(e.settings.mode, Mode::HumanReview);
@@ -3128,7 +3144,7 @@ mod dispatch_tests {
                 ..Default::default()
             },
         );
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = crate::test_support::with_policy(Some(policy), || {
             let e = live(dir.path());
             // Restrictive policy is applied and delivery stays disarmed.
@@ -3174,7 +3190,7 @@ mod dispatch_tests {
                 ..Default::default()
             },
         );
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let mut e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
         assert!(e.enterprise_policy.is_some(), "policy must be active");
 
@@ -3209,7 +3225,7 @@ mod dispatch_tests {
                 ..Default::default()
             },
         );
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let mut e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
         assert_eq!(
             e.settings.model, "approved-model",
@@ -3238,7 +3254,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
 
         // Demo mode never consults the machine-wide policy.
         let mut d = demo(dir.path());
@@ -3382,7 +3400,9 @@ mod dispatch_tests {
         assert!(!d.process_one().unwrap());
 
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.account = "applicant@example.invalid".into();
         // No provider client yet.
         assert!(!e.process_one().unwrap());
@@ -3412,7 +3432,7 @@ mod dispatch_tests {
         let bare = crate::test_support::ollama_runtime(vec![], "Test Applicant", |_| {
             crate::test_support::verdict_category("other")
         });
-        e.settings.ollama_url = bare.url.clone();
+        e.settings.ollama_url.clone_from(&bare.url);
         let error = e.process_one().unwrap_err().to_string();
         assert!(
             error.contains("Pinned local model is unavailable"),
@@ -3425,7 +3445,7 @@ mod dispatch_tests {
             "Test Applicant",
             |_| crate::test_support::verdict_category("other"),
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         assert!(!e.process_one().unwrap());
     }
 
@@ -3440,13 +3460,15 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         let runtime = crate::test_support::ollama_runtime(
             vec![(e.settings.model.clone(), "a".repeat(64))],
             "Test Applicant",
             |_| crate::test_support::verdict_category("other"),
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         let out = dir.path().join("fresh").join("nested").join("profile.json");
         e.profile_model_runtime_to(&out)
             .expect("profile is written");
@@ -3484,7 +3506,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -3498,7 +3522,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
 
         // Provider has no record of the message: it becomes Other with the
         // reason preserved.
@@ -3607,7 +3631,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
         e.settings.model_digest = Some("a".repeat(64));
@@ -3623,7 +3649,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         let (job, gmail) = queue_message(&mut e, 1);
         e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
             test_creds(),
@@ -3651,7 +3677,7 @@ mod dispatch_tests {
             "Test Applicant",
             |_| crate::test_support::verdict_category("uncertain"),
         );
-        e.settings.ollama_url = uncertain.url.clone();
+        e.settings.ollama_url.clone_from(&uncertain.url);
         let (job2, gmail2) = queue_message(&mut e, 2);
         e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
             test_creds(),
@@ -3666,7 +3692,7 @@ mod dispatch_tests {
             "Test Applicant",
             |_| crate::test_support::verdict_category("other"),
         );
-        e.settings.ollama_url = other.url.clone();
+        e.settings.ollama_url.clone_from(&other.url);
         let (job3, gmail3) = queue_message(&mut e, 3);
         e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
             test_creds(),
@@ -3743,7 +3769,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
         e.settings.model_digest = Some("a".repeat(64));
@@ -3752,7 +3780,7 @@ mod dispatch_tests {
             "Test Applicant",
             |_| serde_json::json!("not-a-verdict"),
         );
-        e.settings.ollama_url = broken.url.clone();
+        e.settings.ollama_url.clone_from(&broken.url);
         let (job, gmail) = queue_message(&mut e, 1);
         e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
             test_creds(),
@@ -3800,7 +3828,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -3820,7 +3850,7 @@ mod dispatch_tests {
 
         macro_rules! gate {
             ($message:expr, $perturb:expr) => {{
-                e.settings = base.clone();
+                e.settings.clone_from(&base);
                 e.paused.store(false, Ordering::SeqCst);
                 e.attach_gmail_for_tests(crate::gmail::Gmail::with_endpoints(
                     test_creds(),
@@ -3958,7 +3988,7 @@ mod dispatch_tests {
         >| {});
         // Automatic dispatch has its own gates after the shared preflight.
         {
-            e.settings = base.clone();
+            e.settings.clone_from(&base);
             n += 1;
             let (mut job, body_hash) = seed_send_job(&mut e, n);
             job.state = JobState::Attention;
@@ -3989,7 +4019,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -4181,7 +4213,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -4264,7 +4298,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -4373,7 +4409,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         crate::test_support::arm_automatic(&mut e.settings);
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -4386,7 +4424,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         let now = Utc::now();
 
         // Every job shares one recipient mailbox so the per-recipient burst
@@ -4511,7 +4549,7 @@ mod dispatch_tests {
             "Test Applicant",
             |_| crate::test_support::verdict_category("other"),
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         e.settings.model_digest = None;
         e.inspect_model_status().unwrap();
         assert_eq!(e.model.digest, installed);
@@ -4547,7 +4585,7 @@ mod dispatch_tests {
             "/api/show" => Some(crate::test_support::show_ok()),
             _ => None,
         });
-        e.settings.ollama_url = server.url.clone();
+        e.settings.ollama_url.clone_from(&server.url);
         e.inspect_verifier_model_status().unwrap();
         assert!(!e.verifier_model.gpu_resident);
         assert!(
@@ -4640,7 +4678,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         crate::test_support::arm_automatic(&mut e.settings);
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -4653,7 +4693,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
 
         // Not armed for unattended work: nothing happens.
         e.settings.sending_enabled = false;
@@ -4716,7 +4756,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
 
@@ -4840,13 +4882,15 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.settings.reply_language = crate::config::ReplyLanguage::English;
 
         // A model mirroring the whole fixture suite passes and is bound.
         let perfect = evaluation_runtime(true);
-        e.settings.ollama_url = perfect.url.clone();
+        e.settings.ollama_url.clone_from(&perfect.url);
         let out = dir.path().join("reports").join("eval.json");
         e.evaluate_model_to(&out).unwrap();
         assert!(e.settings.task_qualification.is_some());
@@ -4856,7 +4900,11 @@ mod dispatch_tests {
         );
         let report: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
         assert_eq!(report["summary"]["fixture_count"], 74);
-        assert_eq!(report["summary"]["recommendation_eligible"], true);
+        assert!(
+            report["summary"]["recommendation_eligible"]
+                .as_bool()
+                .unwrap()
+        );
         let events = e.db.events(0, 500).unwrap();
         assert!(events.iter().any(|ev| ev.kind == "model.task_qualified"));
 
@@ -4866,7 +4914,7 @@ mod dispatch_tests {
         // A degraded model fails the gates: qualification is dropped and
         // unattended delivery disarms fail-closed.
         let degraded = evaluation_runtime(false);
-        e.settings.ollama_url = degraded.url.clone();
+        e.settings.ollama_url.clone_from(&degraded.url);
         let out2 = dir.path().join("eval2.json");
         let error = e.evaluate_model_to(&out2).unwrap_err().to_string();
         assert!(
@@ -4886,7 +4934,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.settings.reply_language = crate::config::ReplyLanguage::English;
         let runtime = crate::test_support::ollama_runtime(
@@ -4901,7 +4951,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
 
         // Qualify pins the digest and keeps unattended delivery disabled.
         e.settings.sending_enabled = true;
@@ -4936,7 +4986,7 @@ mod dispatch_tests {
             "/api/ps" => Some((200, serde_json::json!({"models": []}).to_string())),
             _ => None,
         });
-        e.settings.ollama_url = empty_ps.url.clone();
+        e.settings.ollama_url.clone_from(&empty_ps.url);
         e.inspect_model_status().unwrap();
         assert!(!e.model.gpu_resident);
         assert!(
@@ -4946,7 +4996,7 @@ mod dispatch_tests {
         );
 
         // Verifier qualification and status follow the same pin semantics.
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
         e.settings.verifier_model = crate::config::DEFAULT_VERIFIER_MODEL.into();
         e.settings.verifier_model_digest = None;
         e.qualify_verifier().unwrap();
@@ -4969,7 +5019,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.settings.reply_language = crate::config::ReplyLanguage::English;
         let runtime = crate::test_support::ollama_runtime(
@@ -4981,7 +5033,7 @@ mod dispatch_tests {
                 )
             },
         );
-        e.settings.ollama_url = runtime.url.clone();
+        e.settings.ollama_url.clone_from(&runtime.url);
 
         let report = e.profile_model_runtime().unwrap();
         assert!(report.exists());
@@ -5002,7 +5054,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.account = "applicant@example.invalid".into();
         assert!(e.last_poll().unwrap().is_none());
         let sync_server = MockServer::new_raw(move |route, _| {
@@ -5035,7 +5089,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
         let (job, _) = seed_send_job(&mut e, 1);
@@ -5085,7 +5141,9 @@ mod dispatch_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         let provider = MockServer::new_raw(move |route, _| {
             let answer = |status: u16, value: Value| Some((status, value.to_string()));
             match route {
@@ -5157,21 +5215,6 @@ mod fail_closed_open_tests {
     use super::*;
     use crate::policy::EnterprisePolicy;
 
-    /// Removes the OS credential minted for a test workspace even when an
-    /// assertion panics, so repeated runs never collide with stale keys.
-    struct Cleanup(String);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _id = &self.0;
-            // Only Windows/macOS vault opens mint an OS credential; headless
-            // hosts derive the key from the passphrase and have nothing to
-            // remove.
-            #[cfg(any(windows, target_os = "macos"))]
-            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
     /// Open a live (non-demo) workspace for these tests.
     ///
     /// Why: non-demo opens derive the vault key from the OS credential store on
@@ -5216,7 +5259,7 @@ mod fail_closed_open_tests {
                 ..Default::default()
             },
         );
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let error = crate::test_support::with_policy(Some(policy), || {
             Engine::open(
                 dir.path().into(),
@@ -5271,7 +5314,7 @@ mod fail_closed_open_tests {
             crate::test_support::arm_automatic(&mut e.settings);
             e.db.set_meta("settings", &e.settings).unwrap();
         }
-        let _cleanup = Cleanup(vault);
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(vault);
         let e = crate::test_support::with_policy(Some(policy), || live(dir.path()));
         assert_eq!(
             e.settings.mode,
@@ -5325,21 +5368,6 @@ mod dispatch_error_path_tests {
     use super::*;
     use crate::test_support::{self as ts, MockServer};
     use serde_json::Value;
-
-    /// Removes the OS credential minted for a test workspace even when an
-    /// assertion panics, so repeated runs never collide with stale keys.
-    struct Cleanup(String);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _id = &self.0;
-            // Only Windows/macOS vault opens mint an OS credential; headless
-            // hosts derive the key from the passphrase and have nothing to
-            // remove.
-            #[cfg(any(windows, target_os = "macos"))]
-            let _ = keyring::Entry::new("rejection-rejector.v1", _id)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
 
     /// Open a live (non-demo) workspace for these tests.
     ///
@@ -5420,7 +5448,9 @@ mod dispatch_error_path_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -5485,7 +5515,9 @@ mod dispatch_error_path_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -5535,7 +5567,9 @@ mod dispatch_error_path_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -5574,7 +5608,9 @@ mod dispatch_error_path_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         e.settings.sending_enabled = true;
         e.settings.signature = "Test Applicant".into();
         e.account = "applicant@example.invalid".into();
@@ -5646,7 +5682,9 @@ mod dispatch_error_path_tests {
         let dir = tempfile::tempdir().unwrap();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let mut e = live(dir.path());
-        let _cleanup = Cleanup(crate::vault::vault_id(dir.path()).unwrap());
+        let _cleanup = crate::vault::test_support::OsCredentialCleanup::from_vault_id(
+            crate::vault::vault_id(dir.path()).unwrap(),
+        );
         ts::arm_automatic(&mut e.settings);
         e.account = "applicant@example.invalid".into();
         let (job, body_hash) = seed_send_job(&mut e, 26);
@@ -5655,7 +5693,7 @@ mod dispatch_error_path_tests {
 
         // The version endpoint is unreachable: a transient, retryable failure.
         let broken_version = MockServer::new_raw(|_, _| None);
-        e.settings.ollama_url = broken_version.url.clone();
+        e.settings.ollama_url.clone_from(&broken_version.url);
         let failure = e
             .send_attempt(&job_id, revision, &body_hash, true)
             .expect_err("an unreachable runtime must not dispatch");
@@ -5669,7 +5707,7 @@ mod dispatch_error_path_tests {
 
         // The runtime version drifted from task qualification: re-evaluate.
         let foreign = runtime_version_exposing("9.9.9");
-        e.settings.ollama_url = foreign.url.clone();
+        e.settings.ollama_url.clone_from(&foreign.url);
         let failure = e
             .send_attempt(&job_id, revision, &body_hash, true)
             .expect_err("a changed runtime must not dispatch");
@@ -5685,7 +5723,7 @@ mod dispatch_error_path_tests {
         let broken_tags = MockServer::new_raw(move |route, _| {
             (route == "/api/version").then(|| (200, ts::version_ok().to_string()))
         });
-        e.settings.ollama_url = broken_tags.url.clone();
+        e.settings.ollama_url.clone_from(&broken_tags.url);
         let failure = e
             .send_attempt(&job_id, revision, &body_hash, true)
             .expect_err("an unreachable model catalogue must not dispatch");

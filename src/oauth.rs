@@ -17,10 +17,25 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod callback;
 
+/// Google OAuth2 token endpoint.
+///
+/// Inputs: none (constant). Output: `&str` — the endpoint used to exchange
+/// and refresh tokens.
 pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+/// OAuth scope granting Gmail read-only access.
+///
+/// Inputs: none (constant). Output: `&str` — the scope requested at consent.
 pub const READ_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+/// OAuth scope granting Gmail send access.
+///
+/// Inputs: none (constant). Output: `&str` — the scope requested for
+/// controlled sending.
 pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 
+/// Long-lived OAuth client and refresh credentials.
+///
+/// Inputs: none (plain struct). Output: the client id, client secret,
+/// refresh token and whether the send scope was granted.
 // Credentials intentionally do not implement Debug to prevent accidental logging of secrets.
 // The struct implements Drop to zeroize sensitive fields on destruction.
 // Handle the return value of oauth::login() carefully as it contains sensitive credential material.
@@ -58,6 +73,10 @@ impl Drop for Installed {
         self.client_secret.zeroize();
     }
 }
+/// OAuth token endpoint response.
+///
+/// Inputs: none (plain struct). Output: the access token, expiry, optional
+/// rotated refresh token and the granted scope.
 #[derive(Deserialize)]
 pub struct Tokens {
     pub access_token: String,
@@ -126,7 +145,7 @@ fn callback_code(target: &str, state: &str) -> Result<Option<String>> {
         "Exactly one OAuth authorization code is required"
     );
     let q: HashMap<_, _> = pairs.into_iter().collect();
-    let actual = q.get("state").map(|v| v.as_ref()).unwrap_or("");
+    let actual = q.get("state").map_or("", |v| v.as_ref());
     ensure!(
         actual.as_bytes().ct_eq(state.as_bytes()).unwrap_u8() == 1,
         "Invalid OAuth state"
@@ -658,7 +677,7 @@ mod tests {
                     .as_bytes(),
             )
             .unwrap();
-        let mut response = String::new();
+        let mut response = String::default();
         let _ = stream.read_to_string(&mut response);
         response
     }

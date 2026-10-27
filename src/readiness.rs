@@ -5,6 +5,11 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+/// Summarized operational posture of one workspace.
+///
+/// Inputs: none (plain struct). Output: sync freshness, queue and review
+/// depths, uncertain deliveries, qualification age and storage and backup
+/// health.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OperationalIndicators {
     pub sync_age_seconds: Option<i64>,
@@ -20,6 +25,10 @@ pub struct OperationalIndicators {
     pub degradation_reasons: Vec<&'static str>,
 }
 
+/// Borrowed inputs for the operational indicator computation.
+///
+/// Inputs: none (plain struct). Output: the settings, counts and health
+/// flags the indicator summary is derived from.
 #[derive(Clone, Copy, Debug)]
 pub struct OperationalContext<'a> {
     pub settings: &'a Settings,
@@ -102,6 +111,10 @@ pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalInd
     }
 }
 
+/// Per-surface readiness verdicts for the runtime.
+///
+/// Inputs: none (plain struct). Output: the liveness and readiness flags
+/// per stage plus the reasons automatic dispatch is blocked.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeReadiness {
     pub live: bool,
@@ -112,6 +125,10 @@ pub struct RuntimeReadiness {
     pub automatic_block_reasons: Vec<&'static str>,
 }
 
+/// Borrowed inputs for the runtime readiness computation.
+///
+/// Inputs: none (plain struct). Output: the settings and health flags the
+/// readiness verdicts are derived from.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeReadinessContext<'a> {
     pub settings: &'a Settings,
