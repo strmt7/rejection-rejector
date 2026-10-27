@@ -391,6 +391,312 @@ fn staged_policy_revision_floor(
     Ok((Some(floor), changed))
 }
 
+/// Resolve the workspace directory and open its exclusive session state.
+///
+/// Inputs: `directory` — workspace directory (replaced by a temporary
+/// directory in demo mode); `demo` — whether demo mode is active. Output:
+/// `Result<(Option<TempDir>, PathBuf, InstanceLock, SessionLease>, bool, Store)>`
+/// — the temporary holder, resolved directory, exclusive lock, session lease,
+/// prior-session cleanliness flag and the opened store.
+fn open_workspace(
+    directory: PathBuf,
+    demo: bool,
+) -> Result<(
+    Option<tempfile::TempDir>,
+    PathBuf,
+    InstanceLock,
+    SessionLease,
+    bool,
+    Store,
+)> {
+    let temporary = if demo {
+        Some(tempfile::tempdir()?)
+    } else {
+        None
+    };
+    let directory = temporary
+        .as_ref()
+        .map_or(directory, |p| p.path().to_path_buf());
+    let lock = InstanceLock::acquire(&directory)?;
+    let session = SessionLease::begin(&directory)?;
+    let previous_unclean_session = session.previous_unclean();
+    let vault = if demo {
+        let identity_written = write_new_private(
+            &directory.join("vault-id"),
+            uuid::Uuid::new_v4().to_string().as_bytes(),
+        );
+        identity_written?;
+        Vault::random()
+    } else {
+        Vault::open(&directory)?
+    };
+    let db = Store::open(&directory.join("state.sqlite3"), vault)?;
+    Ok((
+        temporary,
+        directory,
+        lock,
+        session,
+        previous_unclean_session,
+        db,
+    ))
+}
+
+/// Resolve the recovery and managed-policy context for an engine open.
+///
+/// Inputs: `directory` — workspace directory; `demo` — whether demo mode is
+/// active. Output: `Result<(bool, Option<LoadedPolicy>)>` — whether an offline
+/// restore requires rearming and the managed policy, if one is loaded.
+fn open_policy_context(directory: &Path, demo: bool) -> Result<(bool, Option<LoadedPolicy>)> {
+    let restored_workspace = !demo && recovery::restore_rearm_required(directory)?;
+    let enterprise_policy = if demo { None } else { policy::load_optional()? };
+    Ok((restored_workspace, enterprise_policy))
+}
+
+/// Verify independently persisted rollback evidence at engine open.
+///
+/// Inputs: `db` — opened store; `directory` — workspace directory;
+/// `enterprise_policy` — managed policy, if one was loaded; `demo` — whether
+/// demo mode is active. Output: `Result<()>` — `Ok` when the configured
+/// anchors satisfy policy; error otherwise.
+fn verify_bootstrap_audit_anchor(
+    db: &Store,
+    directory: &Path,
+    enterprise_policy: &Option<LoadedPolicy>,
+    demo: bool,
+) -> Result<()> {
+    if !demo {
+        let external_anchor = audit_anchor::verify_configured_anchor(db, directory)?;
+        let os_anchor_mode = audit_anchor::os_anchor_required()?;
+        audit_anchor::verify_os_anchor_if_required(db, directory)?;
+        if enterprise_policy
+            .as_ref()
+            .is_some_and(|loaded| loaded.policy.require_external_audit_anchor)
+        {
+            ensure!(
+                external_anchor.is_some() || os_anchor_mode,
+                "Enterprise policy requires independently protected audit anchoring: configure RR_AUDIT_ANCHOR_FILE or RR_OS_AUDIT_ANCHOR=required"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Recover interrupted sends and settle the settings that gate unattended
+/// delivery at engine open.
+///
+/// Inputs: `db` — opened store; `enterprise_policy` — managed policy, if one
+/// was loaded; `previous_unclean_session` — whether the previous session ended
+/// uncleanly; `restored_workspace` — whether an offline restore was detected;
+/// `demo` — whether demo mode is active. Output: `Result<Settings>` — the
+/// settled settings; any staged change is persisted as one commit.
+fn prepare_open_settings(
+    db: &mut Store,
+    enterprise_policy: &Option<LoadedPolicy>,
+    previous_unclean_session: bool,
+    restored_workspace: bool,
+    demo: bool,
+) -> Result<Settings> {
+    db.recover_interrupted_sends()?;
+    let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
+    let settings_migrated = settings.migrate_format()?;
+    let repaired = settings.repair_legacy_automatic_state();
+    let crash_disarmed =
+        disarm_after_unclean_session(&mut settings, previous_unclean_session && !demo);
+    let restore_disarmed = disarm_after_unclean_session(&mut settings, restored_workspace);
+    let (revision_floor, revision_floor_changed) =
+        staged_policy_revision_floor(db, enterprise_policy.as_ref())?;
+    let policy_changed = match &enterprise_policy {
+        Some(loaded) => loaded.policy.enforce(&mut settings, true)?,
+        None => false,
+    };
+    settings.validate()?;
+    persist_staged_settings(
+        db,
+        &settings,
+        enterprise_policy,
+        &revision_floor,
+        revision_floor_changed,
+        settings_migrated,
+        repaired,
+        crash_disarmed,
+        restore_disarmed,
+        policy_changed,
+    )?;
+    Ok(settings)
+}
+
+/// Persist the staged settings change and its audit event as one commit.
+///
+/// Inputs: `db` — opened store; `settings` — settled settings;
+/// `enterprise_policy` — managed policy, if one was loaded; `revision_floor` —
+/// staged policy revision floor; `revision_floor_changed` — whether the floor
+/// changed; `settings_migrated` — settings format was migrated; `repaired` —
+/// legacy Automatic state was repaired; `crash_disarmed` — unclean-session
+/// disarm applied; `restore_disarmed` — restore disarm applied;
+/// `policy_changed` — enterprise policy constrained settings. Output:
+/// `Result<()>` — `Ok` once committed (a no-op when nothing changed).
+#[allow(clippy::too_many_arguments)]
+fn persist_staged_settings(
+    db: &mut Store,
+    settings: &Settings,
+    enterprise_policy: &Option<LoadedPolicy>,
+    revision_floor: &Option<PolicyRevisionFloor>,
+    revision_floor_changed: bool,
+    settings_migrated: bool,
+    repaired: bool,
+    crash_disarmed: bool,
+    restore_disarmed: bool,
+    policy_changed: bool,
+) -> Result<()> {
+    if settings_migrated
+        || repaired
+        || crash_disarmed
+        || restore_disarmed
+        || policy_changed
+        || revision_floor_changed
+    {
+        let upserts = staged_settings_upserts(settings, revision_floor, revision_floor_changed)?;
+        let detail = staged_settings_detail(
+            enterprise_policy,
+            revision_floor_changed,
+            settings_migrated,
+            restore_disarmed,
+            crash_disarmed,
+            policy_changed,
+        )?;
+        let persisted = db.change_meta(
+            &upserts,
+            &[],
+            if revision_floor_changed {
+                "policy.accepted"
+            } else if settings_migrated {
+                "settings.migrated"
+            } else {
+                "settings.repaired"
+            },
+            &detail,
+        );
+        persisted?;
+    }
+    Ok(())
+}
+
+/// Build the metadata upserts for a staged settings change.
+///
+/// Inputs: `settings` — settled settings; `revision_floor` — staged policy
+/// revision floor; `revision_floor_changed` — whether the floor changed.
+/// Output: `Result<Vec<(&str, serde_json::Value)>>` — the metadata writes that
+/// commit with the change.
+fn staged_settings_upserts(
+    settings: &Settings,
+    revision_floor: &Option<PolicyRevisionFloor>,
+    revision_floor_changed: bool,
+) -> Result<Vec<(&'static str, serde_json::Value)>> {
+    let mut upserts = vec![("settings", serde_json::to_value(settings)?)];
+    if revision_floor_changed {
+        let staged = revision_floor
+            .as_ref()
+            .context("Policy revision floor staging was lost")?;
+        let staged = serde_json::to_value(staged)?;
+        upserts.push(("enterprise_policy_revision_floor", staged));
+    }
+    Ok(upserts)
+}
+
+/// Build the audit detail for a staged settings change.
+///
+/// Inputs: `enterprise_policy` — managed policy, if one was loaded;
+/// `revision_floor_changed` — whether the floor changed; `settings_migrated` —
+/// settings format was migrated; `restore_disarmed` — restore disarm applied;
+/// `crash_disarmed` — unclean-session disarm applied; `policy_changed` —
+/// enterprise policy constrained settings. Output: `Result<String>` — the
+/// operator-facing audit detail.
+fn staged_settings_detail(
+    enterprise_policy: &Option<LoadedPolicy>,
+    revision_floor_changed: bool,
+    settings_migrated: bool,
+    restore_disarmed: bool,
+    crash_disarmed: bool,
+    policy_changed: bool,
+) -> Result<String> {
+    let detail = if revision_floor_changed {
+        let loaded = enterprise_policy
+            .as_ref()
+            .context("Policy revision floor changed without active policy")?;
+        format!(
+            "Enterprise policy accepted fail-closed: policy_id={} revision={} sha256={}; persisted settings and rollback floor committed together",
+            loaded.policy.policy_id.as_deref().unwrap_or("<missing>"),
+            loaded.policy.revision.unwrap_or_default(),
+            loaded.digest
+        )
+    } else if settings_migrated {
+        "Encrypted settings migrated from format v1 to v2; prior task qualification was invalidated and unattended delivery was disabled".into()
+    } else if restore_disarmed {
+        "Restored workspace was opened with sending and Automatic mode disabled; explicit authorization is required".into()
+    } else if crash_disarmed {
+        "Previous runtime session ended uncleanly; unattended delivery was disabled fail-closed"
+            .into()
+    } else if policy_changed {
+        "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed".into()
+    } else {
+        "Legacy Automatic mode without current qualification was disabled fail-closed".into()
+    };
+    Ok(detail)
+}
+
+/// Log the security events for restored or uncleanly closed workspaces.
+///
+/// Inputs: `db` — opened store; `directory` — workspace directory;
+/// `restored_workspace` — whether an offline restore was detected;
+/// `previous_unclean_session` — whether the previous session ended uncleanly;
+/// `demo` — whether demo mode is active. Output: `Result<()>` — `Ok` once the
+/// events are written.
+fn log_open_security_events(
+    db: &mut Store,
+    directory: &Path,
+    restored_workspace: bool,
+    previous_unclean_session: bool,
+    demo: bool,
+) -> Result<()> {
+    if restored_workspace {
+        let logged = db.log(
+                "security.restore_rearm_required",
+                None,
+                "Offline backup restore detected; sending and Automatic mode disabled until explicitly reauthorized",
+            );
+        logged?;
+        recovery::clear_restore_rearm_marker(directory)?;
+    }
+    if previous_unclean_session && !demo {
+        let logged = db.log(
+                "security.unclean_shutdown_detected",
+                None,
+                "Previous runtime session marker remained after exclusive workspace lock acquisition; unattended delivery is disabled until explicitly re-enabled",
+            );
+        logged?;
+    }
+    Ok(())
+}
+
+/// Load the account and provider credentials staged at engine open.
+///
+/// Inputs: `db` — opened store; `settings` — settled settings. Output:
+/// `Result<(String, Option<Credentials>, Option<AppPasswordCredentials>)>` —
+/// the account key and the provider credentials, if any.
+fn load_open_account_state(
+    db: &mut Store,
+    settings: &Settings,
+) -> Result<(String, Option<Credentials>, Option<AppPasswordCredentials>)> {
+    let creds: Option<Credentials> = db.meta("google_credentials")?;
+    let app_creds: Option<AppPasswordCredentials> = db.meta("app_password_credentials")?;
+    let account = db.meta::<String>("account")?.unwrap_or_default();
+    if !account.is_empty() {
+        let now = Utc::now();
+        db.defer_review_outside_window(&account, settings.cutoff(now), now)?;
+    }
+    Ok((account, creds, app_creds))
+}
+
 impl Engine {
     /// Open (or create) the workspace engine.
     ///
@@ -405,137 +711,28 @@ impl Engine {
         paused: Arc<AtomicBool>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self> {
-        let temporary = if demo {
-            Some(tempfile::tempdir()?)
-        } else {
-            None
-        };
-        let directory = temporary
-            .as_ref()
-            .map_or(directory, |p| p.path().to_path_buf());
-        let lock = InstanceLock::acquire(&directory)?;
-        let session = SessionLease::begin(&directory)?;
-        let previous_unclean_session = session.previous_unclean();
-        let vault = if demo {
-            let identity_written = write_new_private(
-                &directory.join("vault-id"),
-                uuid::Uuid::new_v4().to_string().as_bytes(),
-            );
-            identity_written?;
-            Vault::random()
-        } else {
-            Vault::open(&directory)?
-        };
-        let mut db = Store::open(&directory.join("state.sqlite3"), vault)?;
-        let restored_workspace = !demo && recovery::restore_rearm_required(&directory)?;
-        let enterprise_policy = if demo { None } else { policy::load_optional()? };
+        let (temporary, directory, lock, session, previous_unclean_session, mut db) =
+            open_workspace(directory, demo)?;
+        let (restored_workspace, enterprise_policy) = open_policy_context(&directory, demo)?;
         // Verify independently persisted rollback evidence before any runtime
         // recovery event mutates the workspace audit journal. Managed policy may
         // make the external anchor mandatory.
-        if !demo {
-            let external_anchor = audit_anchor::verify_configured_anchor(&db, &directory)?;
-            let os_anchor_mode = audit_anchor::os_anchor_required()?;
-            audit_anchor::verify_os_anchor_if_required(&db, &directory)?;
-            if enterprise_policy
-                .as_ref()
-                .is_some_and(|loaded| loaded.policy.require_external_audit_anchor)
-            {
-                ensure!(
-                    external_anchor.is_some() || os_anchor_mode,
-                    "Enterprise policy requires independently protected audit anchoring: configure RR_AUDIT_ANCHOR_FILE or RR_OS_AUDIT_ANCHOR=required"
-                );
-            }
-        }
-        db.recover_interrupted_sends()?;
-        let mut settings: Settings = db.meta("settings")?.unwrap_or_default();
-        let settings_migrated = settings.migrate_format()?;
-        let repaired = settings.repair_legacy_automatic_state();
-        let crash_disarmed =
-            disarm_after_unclean_session(&mut settings, previous_unclean_session && !demo);
-        let restore_disarmed = disarm_after_unclean_session(&mut settings, restored_workspace);
-        let (revision_floor, revision_floor_changed) =
-            staged_policy_revision_floor(&db, enterprise_policy.as_ref())?;
-        let policy_changed = match &enterprise_policy {
-            Some(loaded) => loaded.policy.enforce(&mut settings, true)?,
-            None => false,
-        };
-        settings.validate()?;
-        if settings_migrated
-            || repaired
-            || crash_disarmed
-            || restore_disarmed
-            || policy_changed
-            || revision_floor_changed
-        {
-            let mut upserts = vec![("settings", serde_json::to_value(&settings)?)];
-            if revision_floor_changed {
-                let staged = revision_floor
-                    .as_ref()
-                    .context("Policy revision floor staging was lost")?;
-                let staged = serde_json::to_value(staged)?;
-                upserts.push(("enterprise_policy_revision_floor", staged));
-            }
-            let detail = if revision_floor_changed {
-                let loaded = enterprise_policy
-                    .as_ref()
-                    .context("Policy revision floor changed without active policy")?;
-                format!(
-                    "Enterprise policy accepted fail-closed: policy_id={} revision={} sha256={}; persisted settings and rollback floor committed together",
-                    loaded.policy.policy_id.as_deref().unwrap_or("<missing>"),
-                    loaded.policy.revision.unwrap_or_default(),
-                    loaded.digest
-                )
-            } else if settings_migrated {
-                "Encrypted settings migrated from format v1 to v2; prior task qualification was invalidated and unattended delivery was disabled".into()
-            } else if restore_disarmed {
-                "Restored workspace was opened with sending and Automatic mode disabled; explicit authorization is required".into()
-            } else if crash_disarmed {
-                "Previous runtime session ended uncleanly; unattended delivery was disabled fail-closed"
-                    .into()
-            } else if policy_changed {
-                "Persisted settings were constrained by enterprise policy and unattended delivery was revalidated fail-closed".into()
-            } else {
-                "Legacy Automatic mode without current qualification was disabled fail-closed"
-                    .into()
-            };
-            let persisted = db.change_meta(
-                &upserts,
-                &[],
-                if revision_floor_changed {
-                    "policy.accepted"
-                } else if settings_migrated {
-                    "settings.migrated"
-                } else {
-                    "settings.repaired"
-                },
-                &detail,
-            );
-            persisted?;
-        }
-        if restored_workspace {
-            let logged = db.log(
-                "security.restore_rearm_required",
-                None,
-                "Offline backup restore detected; sending and Automatic mode disabled until explicitly reauthorized",
-            );
-            logged?;
-            recovery::clear_restore_rearm_marker(&directory)?;
-        }
-        if previous_unclean_session && !demo {
-            let logged = db.log(
-                "security.unclean_shutdown_detected",
-                None,
-                "Previous runtime session marker remained after exclusive workspace lock acquisition; unattended delivery is disabled until explicitly re-enabled",
-            );
-            logged?;
-        }
-        let creds: Option<Credentials> = db.meta("google_credentials")?;
-        let app_creds: Option<AppPasswordCredentials> = db.meta("app_password_credentials")?;
-        let account = db.meta::<String>("account")?.unwrap_or_default();
-        if !account.is_empty() {
-            let now = Utc::now();
-            db.defer_review_outside_window(&account, settings.cutoff(now), now)?;
-        }
+        verify_bootstrap_audit_anchor(&db, &directory, &enterprise_policy, demo)?;
+        let settings = prepare_open_settings(
+            &mut db,
+            &enterprise_policy,
+            previous_unclean_session,
+            restored_workspace,
+            demo,
+        )?;
+        log_open_security_events(
+            &mut db,
+            &directory,
+            restored_workspace,
+            previous_unclean_session,
+            demo,
+        )?;
+        let (account, creds, app_creds) = load_open_account_state(&mut db, &settings)?;
         let mut e = Self {
             db,
             settings,
@@ -1531,6 +1728,34 @@ impl Engine {
         expected_hash: &str,
         automatic: bool,
     ) -> std::result::Result<(), DispatchFailure> {
+        self.require_dispatch_gates(automatic)?;
+        let job = self
+            .owned(id)
+            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        let original = self.validate_send_job(&job, revision, expected_hash)?;
+        if automatic {
+            self.validate_automatic_preflight(&job)?;
+        }
+        let gmail = self.mail.as_mut().ok_or_else(|| {
+            DispatchFailure::review_code(
+                "review_required_gmail_disconnected",
+                "Gmail is not connected",
+            )
+        })?;
+        preflight_gmail_account(gmail, &self.account)?;
+        fetch_fresh_original(gmail, &self.account, &job, original)?;
+        verify_thread_state(gmail, &job, original)?;
+        let raw = self.reserve_dispatch(&job, automatic)?;
+        self.guard_reserved_dispatch(id)?;
+        self.dispatch_to_provider(id, &raw, &job)
+    }
+
+    /// Validate the runtime-level dispatch gates shared by every send path.
+    ///
+    /// Inputs: `automatic` — whether this is an automatic send. Output:
+    /// `Result<(), DispatchFailure>` — `Ok(())` while demo state, the emergency
+    /// stop, pause/stop flags and send arming all allow dispatch.
+    fn require_dispatch_gates(&self, automatic: bool) -> std::result::Result<(), DispatchFailure> {
         dispatch_require(
             !self.demo,
             DispatchFailureKind::ReviewRequired,
@@ -1554,15 +1779,28 @@ impl Engine {
             DispatchFailureKind::ReviewRequired,
             "Manual sending is only available in Human review mode",
         )?;
-        let job = self
-            .owned(id)
-            .map_err(|error| DispatchFailure::review(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Validate the job, its approved draft and its original message for send.
+    ///
+    /// Inputs: `job` — owned job; `revision` — the revision the approval was
+    /// given for; `expected_hash` — draft body hash the operator confirmed.
+    /// Output: `Result<&Email, DispatchFailure>` — the validated original
+    /// message; otherwise the first violated precondition as the matching typed
+    /// failure.
+    fn validate_send_job<'a>(
+        &self,
+        job: &'a Job,
+        revision: u64,
+        expected_hash: &str,
+    ) -> std::result::Result<&'a Email, DispatchFailure> {
         dispatch_require(
             job.revision == revision && job.state.reviewable(),
             DispatchFailureKind::ReviewRequired,
             "Approval is stale or message is not reviewable",
         )?;
-        mail::validate_job_identity(&job)
+        mail::validate_job_identity(job)
             .map_err(|error| DispatchFailure::review(error.to_string()))?;
         let body = &job
             .draft
@@ -1589,115 +1827,72 @@ impl Engine {
             DispatchFailureKind::ReviewRequired,
             "Original message is outside the selected age window",
         )?;
-        if automatic {
-            dispatch_require(
-                auto_blocks(&job, &self.settings, &self.account, Utc::now()).is_empty(),
-                DispatchFailureKind::ReviewRequired,
-                "Automatic send conditions were not satisfied",
-            )?;
-            let burst_safety = self
-                .db
-                .recipient_attempts_24h(&job, Utc::now())
-                .map_err(recipient_burst_unavailable);
-            let recipient_attempts = burst_safety?;
-            dispatch_require(
-                recipient_attempts < u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
-                DispatchFailureKind::ReviewRequired,
-                "Automatic recipient 24-hour reply limit reached; Human Review is required",
-            )?;
-            let local_ai = Ollama::new(&self.settings)
-                .map_err(|error| DispatchFailure::review(error.to_string()))?;
-            let runtime_version = local_ai.runtime_version().map_err(|error| {
-                DispatchFailure::retryable(format!(
-                    "Local model runtime pre-send check is temporarily unavailable: {error}"
-                ))
-            })?;
-            let qualification = self
-                .settings
-                .task_qualification
-                .as_ref()
-                .ok_or_else(|| DispatchFailure::review("Task qualification is missing"))?;
-            dispatch_require(
-                runtime_version == qualification.ollama_runtime_version,
-                DispatchFailureKind::ReviewRequired,
-                "Ollama runtime changed since task qualification; re-evaluate before Automatic sending",
-            )?;
-            let status = local_ai.inspect().map_err(|error| {
-                DispatchFailure::retryable(format!(
-                    "Local model pre-send check is temporarily unavailable: {error}"
-                ))
-            })?;
-            let analyzed_digest = &job
-                .analysis
-                .as_ref()
-                .ok_or_else(|| DispatchFailure::review("Missing analysis"))?
-                .model_digest;
-            require_analysis_model_current(&status.digest, analyzed_digest)?;
-        }
+        Ok(original)
+    }
 
-        let gmail = self.mail.as_mut().ok_or_else(|| {
-            DispatchFailure::review_code(
-                "review_required_gmail_disconnected",
-                "Gmail is not connected",
-            )
-        })?;
+    /// Run every Automatic-only pre-send check for one job.
+    ///
+    /// Inputs: `job` — candidate job. Output: `Result<(), DispatchFailure>` —
+    /// `Ok(())` only when the automatic conditions, recipient burst ceiling,
+    /// runtime qualification and model currency all pass.
+    fn validate_automatic_preflight(&self, job: &Job) -> std::result::Result<(), DispatchFailure> {
         dispatch_require(
-            gmail.can_send(),
+            auto_blocks(job, &self.settings, &self.account, Utc::now()).is_empty(),
             DispatchFailureKind::ReviewRequired,
-            "Google send permission is missing",
+            "Automatic send conditions were not satisfied",
         )?;
-        let profile = gmail.profile().map_err(|error| {
-            DispatchFailure::retryable(format!(
-                "Gmail account preflight is temporarily unavailable: {error}"
-            ))
-        })?;
-        let profile_account = mail::mailbox(&profile.email_address)
+        let burst_safety = self
+            .db
+            .recipient_attempts_24h(job, Utc::now())
+            .map_err(recipient_burst_unavailable);
+        let recipient_attempts = burst_safety?;
+        dispatch_require(
+            recipient_attempts < u64::from(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
+            DispatchFailureKind::ReviewRequired,
+            "Automatic recipient 24-hour reply limit reached; Human Review is required",
+        )?;
+        let local_ai = Ollama::new(&self.settings)
             .map_err(|error| DispatchFailure::review(error.to_string()))?;
-        dispatch_require(
-            profile_account == self.account,
-            DispatchFailureKind::ReviewRequired,
-            "Connected account changed",
-        )?;
-        let fresh = match gmail.email(&job.stub) {
-            Ok(Some(email)) => email,
-            Ok(None) => return Err(DispatchFailure::review("Original message no longer exists")),
-            Err(error) if error.kind == FetchFailureKind::Infrastructure => {
-                return Err(DispatchFailure::retryable(error.message));
-            }
-            Err(error) => return Err(DispatchFailure::review(error.message)),
-        };
-        dispatch_require(
-            fresh.fingerprint() == original.fingerprint()
-                && mail::hard_blocks(&fresh, &self.account).is_empty(),
-            DispatchFailureKind::ReviewRequired,
-            "Original message changed; review it again",
-        )?;
-        let thread = gmail.thread(&job.stub.thread_id).map_err(|error| {
+        let runtime_version = local_ai.runtime_version().map_err(|error| {
             DispatchFailure::retryable(format!(
-                "Gmail conversation preflight is temporarily unavailable: {error}"
+                "Local model runtime pre-send check is temporarily unavailable: {error}"
             ))
         })?;
+        let qualification = self
+            .settings
+            .task_qualification
+            .as_ref()
+            .ok_or_else(|| DispatchFailure::review("Task qualification is missing"))?;
         dispatch_require(
-            thread
-                .messages
-                .iter()
-                .any(|message| message.id == job.stub.provider_id),
+            runtime_version == qualification.ollama_runtime_version,
             DispatchFailureKind::ReviewRequired,
-            "Original message is no longer in the conversation",
+            "Ollama runtime changed since task qualification; re-evaluate before Automatic sending",
         )?;
-        for message in thread.messages {
-            if message.id != job.stub.provider_id {
-                let at = message.internal_date.parse::<i64>().map_err(|_| {
-                    DispatchFailure::review("Conversation contains an invalid provider timestamp")
-                })?;
-                dispatch_require(
-                    at < original.received_at.timestamp_millis(),
-                    DispatchFailureKind::ReviewRequired,
-                    "Newer conversation activity exists; review it before replying",
-                )?;
-            }
-        }
-        let raw = mail::raw_reply(&job, &self.settings, &self.account, Utc::now())
+        let status = local_ai.inspect().map_err(|error| {
+            DispatchFailure::retryable(format!(
+                "Local model pre-send check is temporarily unavailable: {error}"
+            ))
+        })?;
+        let analyzed_digest = &job
+            .analysis
+            .as_ref()
+            .ok_or_else(|| DispatchFailure::review("Missing analysis"))?
+            .model_digest;
+        require_analysis_model_current(&status.digest, analyzed_digest)?;
+        Ok(())
+    }
+
+    /// Render the approved reply and hold the durable send reservation.
+    ///
+    /// Inputs: `job` — approved job; `automatic` — whether this is an automatic
+    /// send. Output: `Result<String, DispatchFailure>` — the rendered RFC 2822
+    /// reply once the reservation is held.
+    fn reserve_dispatch(
+        &mut self,
+        job: &Job,
+        automatic: bool,
+    ) -> std::result::Result<String, DispatchFailure> {
+        let raw = mail::raw_reply(job, &self.settings, &self.account, Utc::now())
             .map_err(|error| DispatchFailure::review(error.to_string()))?;
         dispatch_require(
             !self.paused.load(Ordering::SeqCst) && !self.stop.load(Ordering::SeqCst),
@@ -1710,13 +1905,22 @@ impl Engine {
         require_runtime_write_safe(&storage)?;
         self.db
             .reserve_send_with_recipient_limit(
-                &job,
+                job,
                 self.settings.daily_send_limit,
                 automatic.then_some(AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H),
                 Utc::now(),
             )
             .map_err(|error| DispatchFailure::retryable(error.to_string()))?;
+        Ok(raw)
+    }
 
+    /// Recheck the dispatch gates after the reservation and hold the send when
+    /// one fails.
+    ///
+    /// Inputs: `id` — job identifier holding the reservation. Output:
+    /// `Result<(), DispatchFailure>` — `Ok(())` when dispatch may proceed;
+    /// otherwise the reservation is released and the matching failure returned.
+    fn guard_reserved_dispatch(&mut self, id: &str) -> std::result::Result<(), DispatchFailure> {
         if let Err(error) = self.checkpoint_audit_protection() {
             self.db
                 .release_unsent_reservation(
@@ -1767,11 +1971,25 @@ impl Engine {
                 "Initiating provider network request",
             )
             .map_err(|error| DispatchFailure::handled(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Execute the provider send and settle the durable outcome.
+    ///
+    /// Inputs: `id` — job identifier holding the reservation; `raw` — rendered
+    /// reply; `job` — job being dispatched. Output: `Result<(), DispatchFailure>`
+    /// — `Ok(())` only on confirmed delivery; otherwise the settled failure.
+    fn dispatch_to_provider(
+        &mut self,
+        id: &str,
+        raw: &str,
+        job: &Job,
+    ) -> std::result::Result<(), DispatchFailure> {
         match self
             .mail
             .as_mut()
             .ok_or_else(|| DispatchFailure::handled("Gmail disconnected after reservation"))?
-            .send(&raw, &job.stub.thread_id)
+            .send(raw, &job.stub.thread_id)
         {
             Ok(provider_id) => {
                 self.db
@@ -1948,6 +2166,101 @@ impl Engine {
     }
 }
 
+/// Validate the connected provider account before dispatch.
+///
+/// Inputs: `gmail` — connected transport; `account` — workspace account key.
+/// Output: `Result<(), DispatchFailure>` — `Ok` when the transport may send and
+/// its profile matches the workspace account.
+fn preflight_gmail_account(
+    gmail: &mut Box<dyn MailTransport>,
+    account: &str,
+) -> std::result::Result<(), DispatchFailure> {
+    dispatch_require(
+        gmail.can_send(),
+        DispatchFailureKind::ReviewRequired,
+        "Google send permission is missing",
+    )?;
+    let profile = gmail.profile().map_err(|error| {
+        DispatchFailure::retryable(format!(
+            "Gmail account preflight is temporarily unavailable: {error}"
+        ))
+    })?;
+    let profile_account = mail::mailbox(&profile.email_address)
+        .map_err(|error| DispatchFailure::review(error.to_string()))?;
+    dispatch_require(
+        profile_account == account,
+        DispatchFailureKind::ReviewRequired,
+        "Connected account changed",
+    )?;
+    Ok(())
+}
+/// Refetch the original message and prove it is unchanged.
+///
+/// Inputs: `gmail` — connected transport; `account` — workspace account key;
+/// `job` — job being dispatched; `original` — the originally analyzed message.
+/// Output: `Result<Email, DispatchFailure>` — the fresh message copy; failure
+/// when the message vanished, changed, or became blocked.
+fn fetch_fresh_original(
+    gmail: &mut Box<dyn MailTransport>,
+    account: &str,
+    job: &Job,
+    original: &Email,
+) -> std::result::Result<Email, DispatchFailure> {
+    let fresh = match gmail.email(&job.stub) {
+        Ok(Some(email)) => email,
+        Ok(None) => return Err(DispatchFailure::review("Original message no longer exists")),
+        Err(error) if error.kind == FetchFailureKind::Infrastructure => {
+            return Err(DispatchFailure::retryable(error.message));
+        }
+        Err(error) => return Err(DispatchFailure::review(error.message)),
+    };
+    dispatch_require(
+        fresh.fingerprint() == original.fingerprint()
+            && mail::hard_blocks(&fresh, account).is_empty(),
+        DispatchFailureKind::ReviewRequired,
+        "Original message changed; review it again",
+    )?;
+    Ok(fresh)
+}
+/// Prove the conversation holds no activity newer than the original.
+///
+/// Inputs: `gmail` — connected transport; `job` — job being dispatched;
+/// `original` — the originally analyzed message. Output:
+/// `Result<(), DispatchFailure>` — `Ok` while the thread contains the original
+/// and every other message predates it.
+fn verify_thread_state(
+    gmail: &mut Box<dyn MailTransport>,
+    job: &Job,
+    original: &Email,
+) -> std::result::Result<(), DispatchFailure> {
+    let thread = gmail.thread(&job.stub.thread_id).map_err(|error| {
+        DispatchFailure::retryable(format!(
+            "Gmail conversation preflight is temporarily unavailable: {error}"
+        ))
+    })?;
+    dispatch_require(
+        thread
+            .messages
+            .iter()
+            .any(|message| message.id == job.stub.provider_id),
+        DispatchFailureKind::ReviewRequired,
+        "Original message is no longer in the conversation",
+    )?;
+    for message in thread.messages {
+        if message.id != job.stub.provider_id {
+            let at = message.internal_date.parse::<i64>().map_err(|_| {
+                DispatchFailure::review("Conversation contains an invalid provider timestamp")
+            })?;
+            dispatch_require(
+                at < original.received_at.timestamp_millis(),
+                DispatchFailureKind::ReviewRequired,
+                "Newer conversation activity exists; review it before replying",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Decide whether one job may dispatch automatically.
 ///
 /// Inputs: `job` — candidate job; `settings` — current settings; `account` —
@@ -1961,23 +2274,7 @@ pub fn automatic_policy(
 ) -> AutomaticPolicyDecision {
     let mut blocks = Vec::new();
 
-    if mail::validate_job_identity(job).is_err() {
-        push_policy_block(
-            &mut blocks,
-            AutomaticPolicyCode::QueueIdentityMismatch,
-            "Queue/message identity mismatch",
-        );
-    }
-    if settings.mode != Mode::Automatic
-        || !settings.sending_enabled
-        || !settings.automatic_confirmed
-    {
-        push_policy_block(
-            &mut blocks,
-            AutomaticPolicyCode::AutomaticModeNotArmed,
-            "Automatic mode not explicitly armed",
-        );
-    }
+    automatic_mode_blocks(&mut blocks, job, settings);
 
     let Some(email) = job.email.as_ref() else {
         push_policy_block(
@@ -1990,13 +2287,7 @@ pub fn automatic_policy(
             blocks,
         };
     };
-    for message in mail::hard_blocks(email, account) {
-        push_policy_block(
-            &mut blocks,
-            AutomaticPolicyCode::MailboxSafetyBlock,
-            message,
-        );
-    }
+    automatic_mailbox_blocks(&mut blocks, email, account);
 
     let Some(analysis) = job.analysis.as_ref() else {
         push_policy_block(
@@ -2021,12 +2312,67 @@ pub fn automatic_policy(
         };
     };
 
+    automatic_verdict_blocks(&mut blocks, job, analysis);
+    automatic_provenance_blocks(&mut blocks, settings, analysis, draft, email);
+    automatic_freshness_blocks(&mut blocks, settings, job, email, now);
+    automatic_language_blocks(&mut blocks, email, draft, settings);
+
+    AutomaticPolicyDecision {
+        eligible: blocks.is_empty(),
+        blocks,
+    }
+}
+
+/// Collect the identity and mode-arming blocks for automatic policy.
+///
+/// Inputs: `blocks` — block list being built; `job` — candidate job;
+/// `settings` — current settings. Output: none — blocks are appended in place.
+fn automatic_mode_blocks(blocks: &mut Vec<AutomaticPolicyBlock>, job: &Job, settings: &Settings) {
+    if mail::validate_job_identity(job).is_err() {
+        push_policy_block(
+            blocks,
+            AutomaticPolicyCode::QueueIdentityMismatch,
+            "Queue/message identity mismatch",
+        );
+    }
+    if settings.mode != Mode::Automatic
+        || !settings.sending_enabled
+        || !settings.automatic_confirmed
+    {
+        push_policy_block(
+            blocks,
+            AutomaticPolicyCode::AutomaticModeNotArmed,
+            "Automatic mode not explicitly armed",
+        );
+    }
+}
+
+/// Collect the mailbox-safety blocks for automatic policy.
+///
+/// Inputs: `blocks` — block list being built; `email` — original message;
+/// `account` — account key. Output: none — blocks are appended in place.
+fn automatic_mailbox_blocks(blocks: &mut Vec<AutomaticPolicyBlock>, email: &Email, account: &str) {
+    for message in mail::hard_blocks(email, account) {
+        push_policy_block(blocks, AutomaticPolicyCode::MailboxSafetyBlock, message);
+    }
+}
+
+/// Collect the verdict and model-verification blocks for automatic policy.
+///
+/// Inputs: `blocks` — block list being built; `job` — candidate job;
+/// `analysis` — local analysis record. Output: none — blocks are appended in
+/// place.
+fn automatic_verdict_blocks(
+    blocks: &mut Vec<AutomaticPolicyBlock>,
+    job: &Job,
+    analysis: &Analysis,
+) {
     if job.state != JobState::Ready
         || analysis.verdict.category != Category::Rejection
         || analysis.verdict.confidence < 95
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::NotHighConfidenceRejection,
             "Not a high-score reviewed rejection",
         );
@@ -2039,16 +2385,30 @@ pub fn automatic_policy(
             .is_some_and(Verification::passed)
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::ModelVerificationOrResidencyFailed,
             "Model verification or residency failed",
         );
     }
+}
+
+/// Collect the draft and analysis-provenance blocks for automatic policy.
+///
+/// Inputs: `blocks` — block list being built; `settings` — current settings;
+/// `analysis` — local analysis record; `draft` — approved draft; `email` —
+/// original message. Output: none — blocks are appended in place.
+fn automatic_provenance_blocks(
+    blocks: &mut Vec<AutomaticPolicyBlock>,
+    settings: &Settings,
+    analysis: &Analysis,
+    draft: &Draft,
+    email: &Email,
+) {
     if draft.origin != "ollama-v1"
         || analysis.verified_draft_hash.as_deref() != Some(hash(&draft.body).as_str())
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::DraftVerificationStale,
             "Draft changed since verification",
         );
@@ -2060,7 +2420,7 @@ pub fn automatic_policy(
         || analysis.email_fingerprint != email.fingerprint()
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::AnalysisIdentityStale,
             "Analysis identity is stale",
         );
@@ -2070,14 +2430,29 @@ pub fn automatic_policy(
             || settings.verifier_model_digest.as_ref() != Some(&analysis.verification_model_digest))
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::AnalysisIdentityStale,
             "Independent-verifier provenance is stale",
         );
     }
+}
+
+/// Collect the qualification, cooldown and age-window blocks for automatic
+/// policy.
+///
+/// Inputs: `blocks` — block list being built; `settings` — current settings;
+/// `job` — candidate job; `email` — original message; `now` — decision time.
+/// Output: none — blocks are appended in place.
+fn automatic_freshness_blocks(
+    blocks: &mut Vec<AutomaticPolicyBlock>,
+    settings: &Settings,
+    job: &Job,
+    email: &Email,
+    now: DateTime<Utc>,
+) {
     if !settings.task_qualification_current() {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::TaskQualificationStale,
             "Task-specific model qualification is missing or stale",
         );
@@ -2086,14 +2461,14 @@ pub fn automatic_policy(
         now.signed_duration_since(time).num_minutes() < i64::from(settings.cooldown_minutes)
     }) {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::CooldownActive,
             "Cooldown active",
         );
     }
     if email.received_at < settings.cutoff(now) || email.received_at > now {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::OutsideAgeWindow,
             "Outside selected age window",
         );
@@ -2104,28 +2479,42 @@ pub fn automatic_policy(
             .is_none_or(|time| email.received_at < time)
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::PredatesAutomaticEnrollment,
             "Predates automatic-mode enrollment",
         );
     }
+}
+
+/// Collect the rejection-evidence, language and reply-loop blocks for
+/// automatic policy.
+///
+/// Inputs: `blocks` — block list being built; `email` — original message;
+/// `draft` — approved draft; `settings` — current settings. Output: none —
+/// blocks are appended in place.
+fn automatic_language_blocks(
+    blocks: &mut Vec<AutomaticPolicyBlock>,
+    email: &Email,
+    draft: &Draft,
+    settings: &Settings,
+) {
     if !mail::clear_rejection_language(&email.subject, &email.text) {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::MissingDeterministicRejectionEvidence,
             "No independent clear rejection phrase in the current message",
         );
     }
     if mail::auto_language_conflict(&email.subject, &email.text) {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::ConflictingEmailLanguage,
             "Conflicting or suspicious email language",
         );
     }
     if mail::automatic_draft_conflict(&draft.body, &settings.signature) {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::DraftEscalationOrLink,
             "Draft requires Human review because of escalation or link content",
         );
@@ -2134,7 +2523,7 @@ pub fn automatic_policy(
         !value.eq_ignore_ascii_case("no") && !value.eq_ignore_ascii_case("auto-generated")
     }) {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::AutomaticReplyLoop,
             "Automatic reply-loop marker requires Human review",
         );
@@ -2147,7 +2536,7 @@ pub fn automatic_policy(
     ] {
         if email.headers.contains_key(name) {
             push_policy_block(
-                &mut blocks,
+                blocks,
                 AutomaticPolicyCode::AutomaticReplySuppressed,
                 format!("Automatic replies suppressed by {name}"),
             );
@@ -2157,15 +2546,10 @@ pub fn automatic_policy(
         && mail::mailbox(reply).ok() != mail::mailbox(&email.from).ok()
     {
         push_policy_block(
-            &mut blocks,
+            blocks,
             AutomaticPolicyCode::ReplyToMismatch,
             "Reply-To differs from sender; human review required",
         );
-    }
-
-    AutomaticPolicyDecision {
-        eligible: blocks.is_empty(),
-        blocks,
     }
 }
 

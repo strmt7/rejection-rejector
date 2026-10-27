@@ -750,6 +750,7 @@ pub(crate) mod test_support {
     //! Test-only helpers shared by every module that exercises the OS
     //! credential store.
 
+    #[cfg(any(windows, target_os = "macos"))]
     use zeroize::Zeroizing;
 
     // Per-thread nesting depth for the credential-store lock: cleanup guards

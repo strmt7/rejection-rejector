@@ -151,6 +151,19 @@ fn consume_shortcut(ctx: &egui::Context) -> Option<ShortcutAction> {
 ///
 /// Inputs: none (plain struct). Output: the worker handle, current tab,
 /// settings copy, editor state and pending dialogs.
+/// Prerequisite flags for Automatic mode, computed once per settings frame.
+///
+/// Inputs: none (constructed by `App::settings_prerequisites`). Output: the six
+/// gate booleans rendered by the reply-mode and save sections.
+struct SettingsPrereqs {
+    emergency_stop_clear: bool,
+    qualified_model_matches_draft: bool,
+    verifier_ready: bool,
+    task_qualification_ready: bool,
+    signature_ready: bool,
+    automatic_prerequisites: bool,
+}
+
 pub struct App {
     worker: Worker,
     tab: Tab,
@@ -730,165 +743,255 @@ impl App {
             ui.heading("16 GiB GPU profile");
             ui.label("Default: granite4.2:8b-q8_0 (verified) · validate against the task suite before Automatic mode");
             ui.label(RichText::new("A model's download size does not prove it fits in VRAM. Qualification checks Ollama's loaded-model counters and pins the digest.").color(MUTED));
-            egui::Grid::new("ai_status")
-                .num_columns(2)
-                .spacing([32.0, 12.0])
-                .show(ui, |ui| {
-                    ui.label("Configured model");
-                    ui.monospace(&s.settings.model);
-                    ui.end_row();
-                    ui.label("Pinned digest");
-                    ui.monospace(
+            self.local_ai_status_grid(ui, s);
+            self.local_ai_action_buttons(ui, s, model_config_dirty);
+            if model_config_dirty {
+                ui.colored_label(
+                    AMBER,
+                    "Model configuration has unsaved changes. Save it below before downloading, refreshing status, qualifying, or evaluating.",
+                );
+            }
+        });
+        ui.add_space(16.0);
+        self.local_ai_config_card(ui, s);
+    }
+
+    /// Render the local-model status card grid.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot. Output: none.
+    fn local_ai_status_grid(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        egui::Grid::new("ai_status")
+            .num_columns(2)
+            .spacing([32.0, 12.0])
+            .show(ui, |ui| {
+                ui.label("Configured model");
+                ui.monospace(&s.settings.model);
+                ui.end_row();
+                ui.label("Pinned digest");
+                ui.monospace(
+                    s.settings
+                        .model_digest
+                        .as_deref()
+                        .unwrap_or("Not qualified"),
+                );
+                ui.end_row();
+                ui.label("Last measured VRAM");
+                ui.label(if s.model.size_vram > 0 {
+                    format!("{:.2} GiB", s.model.size_vram as f64 / 1073741824.0)
+                } else {
+                    "Not measured in this session".into()
+                });
+                ui.end_row();
+                ui.label("GPU qualification");
+                ui.label(if s.model.message.is_empty() {
+                    "Not yet run"
+                } else {
+                    &s.model.message
+                });
+                ui.end_row();
+                ui.label("Independent verifier");
+                ui.label(if s.settings.independent_verifier_enabled {
+                    format!(
+                        "{} · {}",
+                        s.settings.verifier_model,
                         s.settings
-                            .model_digest
+                            .verifier_model_digest
                             .as_deref()
-                            .unwrap_or("Not qualified"),
-                    );
-                    ui.end_row();
-                    ui.label("Last measured VRAM");
-                    ui.label(if s.model.size_vram > 0 {
-                        format!("{:.2} GiB", s.model.size_vram as f64 / 1073741824.0)
-                    } else {
-                        "Not measured in this session".into()
-                    });
-                    ui.end_row();
-                    ui.label("GPU qualification");
-                    ui.label(if s.model.message.is_empty() {
+                            .map(|digest| format!("pinned {}", &digest[..digest.len().min(12)]))
+                            .unwrap_or_else(|| "not qualified".into())
+                    )
+                } else {
+                    "Disabled".into()
+                });
+                ui.end_row();
+                if s.settings.independent_verifier_enabled {
+                    ui.label("Verifier GPU status");
+                    ui.label(if s.verifier_model.message.is_empty() {
                         "Not yet run"
                     } else {
-                        &s.model.message
+                        &s.verifier_model.message
                     });
                     ui.end_row();
-                    ui.label("Independent verifier");
-                    ui.label(if s.settings.independent_verifier_enabled {
-                        format!(
-                            "{} · {}",
-                            s.settings.verifier_model,
-                            s.settings
-                                .verifier_model_digest
-                                .as_deref()
-                                .map(|digest| format!("pinned {}", &digest[..digest.len().min(12)]))
-                                .unwrap_or_else(|| "not qualified".into())
-                        )
-                    } else {
-                        "Disabled".into()
-                    });
-                    ui.end_row();
-                    if s.settings.independent_verifier_enabled {
-                        ui.label("Verifier GPU status");
-                        ui.label(if s.verifier_model.message.is_empty() {
-                            "Not yet run"
-                        } else {
-                            &s.verifier_model.message
-                        });
-                        ui.end_row();
-                    }
-                    ui.label("Task qualification");
-                    if let Some(qualification) = &s.settings.task_qualification {
-                        ui.label(format!(
-                            "PASS · score {:.1}/100 · {} fixtures · {}",
-                            qualification.task_score,
-                            qualification.fixture_count,
-                            qualification
-                                .qualified_at
-                                .with_timezone(&chrono::Local)
-                                .format("%d %b %Y %H:%M")
-                        ));
-                    } else {
-                        ui.label("Not passed for current configuration");
-                    }
-                    ui.end_row();
-                });
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo,
-                        egui::Button::new("1  Install Ollama"),
-                    )
-                    .clicked()
-                {
-                    self.install_confirmation = true;
                 }
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo,
-                        egui::Button::new("2  Start Ollama"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::StartOllama);
+                ui.label("Task qualification");
+                if let Some(qualification) = &s.settings.task_qualification {
+                    ui.label(format!(
+                        "PASS · score {:.1}/100 · {} fixtures · {}",
+                        qualification.task_score,
+                        qualification.fixture_count,
+                        qualification
+                            .qualified_at
+                            .with_timezone(&chrono::Local)
+                            .format("%d %b %Y %H:%M")
+                    ));
+                } else {
+                    ui.label("Not passed for current configuration");
                 }
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo && !model_config_dirty,
-                        egui::Button::new("3  Download model"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::PullModel);
-                }
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo && !model_config_dirty,
-                        egui::Button::new("4  Refresh status"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::InspectModel);
-                }
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo && !model_config_dirty,
-                        egui::Button::new("5  Qualify & pin"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::QualifyModel);
-                }
-                if s.settings.independent_verifier_enabled {
-                    if ui
-                        .add_enabled(
-                            s.busy.is_empty() && !s.demo && !model_config_dirty,
-                            egui::Button::new("Download verifier"),
-                        )
-                        .clicked()
-                    {
-                        self.worker.command(Command::PullVerifierModel);
-                    }
-                    if ui
-                        .add_enabled(
-                            s.busy.is_empty() && !s.demo && !model_config_dirty,
-                            egui::Button::new("Refresh verifier"),
-                        )
-                        .clicked()
-                    {
-                        self.worker.command(Command::InspectVerifierModel);
-                    }
-                    if ui
-                        .add_enabled(
-                            s.busy.is_empty() && !s.demo && !model_config_dirty,
-                            egui::Button::new("Qualify verifier"),
-                        )
-                        .clicked()
-                    {
-                        self.worker.command(Command::QualifyVerifierModel);
-                    }
-                }
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty()
-                            && !s.demo
-                            && !model_config_dirty
-                            && s.settings.model_digest.is_some()
-                            && (!s.settings.independent_verifier_enabled
-                                || s.settings.verifier_model_digest.is_some()),
-                        egui::Button::new("Evaluate current model"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::EvaluateModel);
-                }
-                if ui
+                ui.end_row();
+            });
+    }
+
+    /// Render the local-model action buttons row.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot; `model_config_dirty`
+    /// — whether the draft model configuration diverges from the saved one. Output:
+    /// none.
+    fn local_ai_action_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        model_config_dirty: bool,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            self.local_ai_setup_buttons(ui, s);
+            self.local_ai_qualification_buttons(ui, s, model_config_dirty);
+            self.local_ai_verifier_buttons(ui, s, model_config_dirty);
+            self.local_ai_evaluate_button(ui, s, model_config_dirty);
+            self.local_ai_profile_buttons(ui, s, model_config_dirty);
+        });
+    }
+
+    /// Render the Ollama install/start buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot. Output: none.
+    fn local_ai_setup_buttons(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo,
+                egui::Button::new("1  Install Ollama"),
+            )
+            .clicked()
+        {
+            self.install_confirmation = true;
+        }
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo,
+                egui::Button::new("2  Start Ollama"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::StartOllama);
+        }
+    }
+
+    /// Render the download/refresh/qualify buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot; `model_config_dirty`
+    /// — unsaved-configuration gate. Output: none.
+    fn local_ai_qualification_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        model_config_dirty: bool,
+    ) {
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo && !model_config_dirty,
+                egui::Button::new("3  Download model"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::PullModel);
+        }
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo && !model_config_dirty,
+                egui::Button::new("4  Refresh status"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::InspectModel);
+        }
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo && !model_config_dirty,
+                egui::Button::new("5  Qualify & pin"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::QualifyModel);
+        }
+    }
+
+    /// Render the independent-verifier action buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot; `model_config_dirty`
+    /// — unsaved-configuration gate. Output: none.
+    fn local_ai_verifier_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        model_config_dirty: bool,
+    ) {
+        if s.settings.independent_verifier_enabled {
+            if ui
+                .add_enabled(
+                    s.busy.is_empty() && !s.demo && !model_config_dirty,
+                    egui::Button::new("Download verifier"),
+                )
+                .clicked()
+            {
+                self.worker.command(Command::PullVerifierModel);
+            }
+            if ui
+                .add_enabled(
+                    s.busy.is_empty() && !s.demo && !model_config_dirty,
+                    egui::Button::new("Refresh verifier"),
+                )
+                .clicked()
+            {
+                self.worker.command(Command::InspectVerifierModel);
+            }
+            if ui
+                .add_enabled(
+                    s.busy.is_empty() && !s.demo && !model_config_dirty,
+                    egui::Button::new("Qualify verifier"),
+                )
+                .clicked()
+            {
+                self.worker.command(Command::QualifyVerifierModel);
+            }
+        }
+    }
+
+    /// Render the task-evaluation button.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot; `model_config_dirty`
+    /// — unsaved-configuration gate. Output: none.
+    fn local_ai_evaluate_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        model_config_dirty: bool,
+    ) {
+        if ui
+            .add_enabled(
+                s.busy.is_empty()
+                    && !s.demo
+                    && !model_config_dirty
+                    && s.settings.model_digest.is_some()
+                    && (!s.settings.independent_verifier_enabled
+                        || s.settings.verifier_model_digest.is_some()),
+                egui::Button::new("Evaluate current model"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::EvaluateModel);
+        }
+    }
+
+    /// Render the runtime-profile and candidate-comparison buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot; `model_config_dirty`
+    /// — unsaved-configuration gate. Output: none.
+    fn local_ai_profile_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        model_config_dirty: bool,
+    ) {
+        if ui
                     .add_enabled(
                         s.busy.is_empty()
                             && !s.demo
@@ -901,7 +1004,7 @@ impl App {
                 {
                     self.worker.command(Command::ProfileModel);
                 }
-                if ui
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo && !model_config_dirty,
                         egui::Button::new("Compare installed candidates"),
@@ -911,15 +1014,12 @@ impl App {
                 {
                     self.worker.command(Command::CompareModels);
                 }
-            });
-            if model_config_dirty {
-                ui.colored_label(
-                    AMBER,
-                    "Model configuration has unsaved changes. Save it below before downloading, refreshing status, qualifying, or evaluating.",
-                );
-            }
-        });
-        ui.add_space(16.0);
+    }
+
+    /// Render the local-model configuration card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
+    fn local_ai_config_card(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::card(ui, |ui| {
             ui.heading("Local model configuration");
             ui.label("Change these values, save, then qualify again. Remote endpoints and cloud tags are rejected.");
@@ -976,49 +1076,7 @@ impl App {
                         .color(AMBER),
                 );
             }
-            if self.settings.independent_verifier_enabled {
-                let verifier_label = ui.label("Independent verifier model tag");
-                if s.enterprise_policy.allowed_verifier_models.is_empty() {
-                    ui.text_edit_singleline(&mut self.settings.verifier_model)
-                        .labelled_by(verifier_label.id);
-                } else {
-                    let combo = egui::ComboBox::from_id_salt("enterprise_verifier_allowlist")
-                        .selected_text(&self.settings.verifier_model)
-                        .show_ui(ui, |ui| {
-                            for model in &s.enterprise_policy.allowed_verifier_models {
-                                ui.selectable_value(
-                                    &mut self.settings.verifier_model,
-                                    model.clone(),
-                                    model,
-                                );
-                            }
-                        });
-                    let _ = combo.response.labelled_by(verifier_label.id);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Verifier quick choices").small().color(MUTED));
-                    for (label, tag) in VERIFIER_CANDIDATES {
-                        let allowed = s.enterprise_policy.allowed_verifier_models.is_empty()
-                            || s.enterprise_policy
-                                .allowed_verifier_models
-                                .iter()
-                                .any(|model| model == tag);
-                        if ui
-                            .add_enabled(allowed, egui::Button::new(label).small())
-                            .clicked()
-                        {
-                            self.settings.verifier_model = tag.into();
-                        }
-                    }
-                });
-                ui.label(
-                    RichText::new(
-                        "Sequential mode unloads the primary before verifier inference, so only one model must fit VRAM at a time. When enabled, verifier failure never falls back to same-model verification.",
-                    )
-                    .small()
-                    .color(MUTED),
-                );
-            }
+            self.local_ai_verifier_config(ui, s);
             egui::ComboBox::from_id_salt("model_context")
                 .selected_text(format!("{} tokens", self.settings.num_ctx))
                 .show_ui(ui, |ui| {
@@ -1046,10 +1104,87 @@ impl App {
             ui.label(RichText::new("Qualify & pin is only a smoke/residency test. Automatic mode additionally requires the full task-specific evaluation to pass for the exact model digest, prompt version, signature/tone/candidate facts and context size. Editing those inputs invalidates that qualification. The suite is synthetic and sends no email; independently labelled private mailbox acceptance is still required for serious deployment.").small().color(AMBER));
         });
     }
+
+    /// Render the independent-verifier configuration block.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot. Output: none.
+    fn local_ai_verifier_config(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if self.settings.independent_verifier_enabled {
+            let verifier_label = ui.label("Independent verifier model tag");
+            if s.enterprise_policy.allowed_verifier_models.is_empty() {
+                ui.text_edit_singleline(&mut self.settings.verifier_model)
+                    .labelled_by(verifier_label.id);
+            } else {
+                let combo = egui::ComboBox::from_id_salt("enterprise_verifier_allowlist")
+                    .selected_text(&self.settings.verifier_model)
+                    .show_ui(ui, |ui| {
+                        for model in &s.enterprise_policy.allowed_verifier_models {
+                            ui.selectable_value(
+                                &mut self.settings.verifier_model,
+                                model.clone(),
+                                model,
+                            );
+                        }
+                    });
+                let _ = combo.response.labelled_by(verifier_label.id);
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Verifier quick choices").small().color(MUTED));
+                for (label, tag) in VERIFIER_CANDIDATES {
+                    let allowed = s.enterprise_policy.allowed_verifier_models.is_empty()
+                        || s.enterprise_policy
+                            .allowed_verifier_models
+                            .iter()
+                            .any(|model| model == tag);
+                    if ui
+                        .add_enabled(allowed, egui::Button::new(label).small())
+                        .clicked()
+                    {
+                        self.settings.verifier_model = tag.into();
+                    }
+                }
+            });
+            ui.label(
+                    RichText::new(
+                        "Sequential mode unloads the primary before verifier inference, so only one model must fit VRAM at a time. When enabled, verifier failure never falls back to same-model verification.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+        }
+    }
     /// Render the settings tab.
     ///
     /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
     fn settings(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        let prereqs = self.settings_prerequisites(s);
+        Self::heading(
+            ui,
+            "Settings",
+            "Explicit permissions, predictable scheduling, and control over every outgoing reply.",
+        );
+        if s.enterprise_policy.active {
+            self.settings_enterprise_policy_card(ui, s);
+            ui.add_space(12.0);
+        }
+        self.settings_gmail_card(ui, s);
+        ui.add_space(12.0);
+        self.settings_app_password_card(ui, s);
+        ui.add_space(12.0);
+        self.settings_schedule_card(ui);
+        ui.add_space(12.0);
+        self.settings_reply_mode_card(ui, s, &prereqs);
+        ui.add_space(12.0);
+        self.settings_storage_card(ui, s);
+        ui.add_space(12.0);
+        self.settings_save_button(ui, s, &prereqs);
+    }
+
+    /// Compute the Automatic-mode prerequisite flags.
+    ///
+    /// Inputs: `s` — current worker snapshot. Output: `SettingsPrereqs` — the six gate
+    /// booleans for the reply-mode and save sections.
+    fn settings_prerequisites(&self, s: &Snapshot) -> SettingsPrereqs {
         let qualified_model_matches_draft = s.settings.model_digest.is_some()
             && self.settings.model == s.settings.model
             && self.settings.num_ctx == s.settings.num_ctx
@@ -1068,63 +1203,75 @@ impl App {
             && verifier_ready
             && task_qualification_ready
             && signature_ready;
-        Self::heading(
-            ui,
-            "Settings",
-            "Explicit permissions, predictable scheduling, and control over every outgoing reply.",
-        );
-        if s.enterprise_policy.active {
-            Self::card(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    Self::badge(ui, "ENTERPRISE POLICY ACTIVE", AMBER);
-                    if let Some(digest) = &s.enterprise_policy.digest {
-                        ui.monospace(format!("sha256:{}", &digest[..digest.len().min(12)]));
-                    }
-                });
-                ui.label("Administrator policy is enforced at startup and on every settings update; locked controls cannot be bypassed through the GUI.");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Policy provenance");
-                    if s.enterprise_policy.digest_pin_enforced {
-                        Self::badge(
-                            ui,
-                            if s.enterprise_policy.digest_pin_matches {
-                                "DIGEST PIN VERIFIED"
-                            } else {
-                                "DIGEST PIN MISMATCH"
-                            },
-                            if s.enterprise_policy.digest_pin_matches {
-                                MINT
-                            } else {
-                                Color32::LIGHT_RED
-                            },
-                        );
-                    } else {
-                        Self::badge(ui, "ACL / FILE TRUST ONLY", AMBER);
-                    }
-                });
-                let mut constraints = Vec::<String>::new();
-                if s.enterprise_policy.force_human_review {
-                    constraints.push("Human Review forced".into());
-                }
-                if s.enterprise_policy.prohibit_sending {
-                    constraints.push("sending prohibited".into());
-                }
-                if s.enterprise_policy.prohibit_integration_api {
-                    constraints.push("integration API prohibited".into());
-                }
-                if let Some(limit) = s.enterprise_policy.max_daily_send_limit {
-                    constraints.push(format!("max {limit} sends/24h"));
-                }
-                if let Some(minutes) = s.enterprise_policy.min_cooldown_minutes {
-                    constraints.push(format!("cooldown ≥ {minutes} min"));
-                }
-                if let Some(days) = s.enterprise_policy.min_retention_days {
-                    constraints.push(format!("retention ≥ {days} days"));
-                }
-                ui.label(constraints.join(" · "));
-            });
-            ui.add_space(12.0);
+        SettingsPrereqs {
+            emergency_stop_clear,
+            qualified_model_matches_draft,
+            verifier_ready,
+            task_qualification_ready,
+            signature_ready,
+            automatic_prerequisites,
         }
+    }
+
+    /// Render the enterprise-policy status card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
+    fn settings_enterprise_policy_card(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        Self::card(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                Self::badge(ui, "ENTERPRISE POLICY ACTIVE", AMBER);
+                if let Some(digest) = &s.enterprise_policy.digest {
+                    ui.monospace(format!("sha256:{}", &digest[..digest.len().min(12)]));
+                }
+            });
+            ui.label("Administrator policy is enforced at startup and on every settings update; locked controls cannot be bypassed through the GUI.");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Policy provenance");
+                if s.enterprise_policy.digest_pin_enforced {
+                    Self::badge(
+                        ui,
+                        if s.enterprise_policy.digest_pin_matches {
+                            "DIGEST PIN VERIFIED"
+                        } else {
+                            "DIGEST PIN MISMATCH"
+                        },
+                        if s.enterprise_policy.digest_pin_matches {
+                            MINT
+                        } else {
+                            Color32::LIGHT_RED
+                        },
+                    );
+                } else {
+                    Self::badge(ui, "ACL / FILE TRUST ONLY", AMBER);
+                }
+            });
+            let mut constraints = Vec::<String>::new();
+            if s.enterprise_policy.force_human_review {
+                constraints.push("Human Review forced".into());
+            }
+            if s.enterprise_policy.prohibit_sending {
+                constraints.push("sending prohibited".into());
+            }
+            if s.enterprise_policy.prohibit_integration_api {
+                constraints.push("integration API prohibited".into());
+            }
+            if let Some(limit) = s.enterprise_policy.max_daily_send_limit {
+                constraints.push(format!("max {limit} sends/24h"));
+            }
+            if let Some(minutes) = s.enterprise_policy.min_cooldown_minutes {
+                constraints.push(format!("cooldown ≥ {minutes} min"));
+            }
+            if let Some(days) = s.enterprise_policy.min_retention_days {
+                constraints.push(format!("retention ≥ {days} days"));
+            }
+            ui.label(constraints.join(" · "));
+        });
+    }
+
+    /// Render the Gmail OAuth connection card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
+    fn settings_gmail_card(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::card(ui, |ui| {
             ui.heading("Gmail connection");
             ui.label(if s.connected {
@@ -1171,7 +1318,12 @@ impl App {
             });
             ui.label(RichText::new("The JSON, refresh token and mailbox content are not uploaded to this repository or an AI service.").small().color(MUTED));
         });
-        ui.add_space(12.0);
+    }
+
+    /// Render the app-password (IMAP/SMTP) connection card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
+    fn settings_app_password_card(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::card(ui, |ui| {
             ui.heading("App password (IMAP/SMTP)");
             ui.label("Sign in with just your Gmail address and a Google app password — no Cloud Console or OAuth client. Requires 2-Step-Verification and an app password created under your Google Account → Security → App passwords.");
@@ -1206,7 +1358,12 @@ impl App {
             }
             ui.label(RichText::new("The app password is held only in the encrypted local store (Windows Credential Manager-backed), zeroized after use, never logged or uploaded.").small().color(MUTED));
         });
-        ui.add_space(12.0);
+    }
+
+    /// Render the schedule and age-window card.
+    ///
+    /// Inputs: `ui` — target ui. Output: none.
+    fn settings_schedule_card(&mut self, ui: &mut egui::Ui) {
         Self::card(ui, |ui| {
             ui.heading("Schedule & age window");
             ui.horizontal(|ui| {
@@ -1237,7 +1394,18 @@ impl App {
             });
             ui.label(RichText::new("Only missing message identities are inserted; previously processed emails are not reclassified on every check. Use Check email now after changing the age window.").small().color(MUTED));
         });
-        ui.add_space(12.0);
+    }
+
+    /// Render the reply-mode and permissions card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot; `prereqs` — computed
+    /// Automatic-mode prerequisite flags. Output: none.
+    fn settings_reply_mode_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        prereqs: &SettingsPrereqs,
+    ) {
         Self::card(ui, |ui| {
             ui.heading("Reply mode & permissions");
             if s.enterprise_policy.force_human_review || s.enterprise_policy.prohibit_sending {
@@ -1264,63 +1432,7 @@ impl App {
                 ),
             );
             if self.settings.mode == Mode::Automatic {
-                ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
-                ui.label(
-                    RichText::new(format!(
-                        "Hard unattended safety ceiling: at most {} reply attempts to the same normalized recipient mailbox in any rolling 24 hours. Human Review is the only override path.",
-                        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
-                    ))
-                    .small()
-                    .color(MUTED),
-                );
-                ui.label(RichText::new("Automatic prerequisites").strong());
-                for (label, ready) in [
-                    ("Enterprise emergency stop cleared", emergency_stop_clear),
-                    ("Gmail connected", s.connected),
-                    ("Gmail send permission granted", s.send_scope),
-                    (
-                        "Current model smoke-qualified & pinned",
-                        qualified_model_matches_draft,
-                    ),
-                    (
-                        "Independent verifier qualified when enabled",
-                        verifier_ready,
-                    ),
-                    (
-                        "Task-specific evaluation passed for this exact configuration",
-                        task_qualification_ready,
-                    ),
-                    ("Non-placeholder signature set", signature_ready),
-                ] {
-                    ui.horizontal(|ui| {
-                        Self::badge(
-                            ui,
-                            if ready { "READY" } else { "REQUIRED" },
-                            if ready { MINT } else { AMBER },
-                        );
-                        ui.label(label);
-                    });
-                }
-                if self.settings.automatic_confirmed {
-                    if ui
-                        .button("Disable Automatic mode and return to Human review")
-                        .clicked()
-                    {
-                        self.settings.automatic_confirmed = false;
-                        self.settings.automatic_since = None;
-                        self.pending_arm = None;
-                    }
-                } else if ui
-                    .button("Enable Automatic mode (requires a deliberate risk confirmation)")
-                    .clicked()
-                {
-                    self.pending_arm =
-                        Some(crate::config::AutomaticArmGate::open(chrono::Utc::now()));
-                }
-                ui.checkbox(
-                    &mut self.settings.include_backlog,
-                    "Also allow older rejections within the selected age window (off by default)",
-                );
+                self.settings_automatic_block(ui, s, prereqs);
             }
             ui.horizontal(|ui| {
                 let cooldown_label = ui.label("Cooldown, minutes");
@@ -1378,7 +1490,83 @@ impl App {
             )
             .labelled_by(facts_label.id);
         });
-        ui.add_space(12.0);
+    }
+
+    /// Render the Automatic-mode confirmation and checklist block.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot; `prereqs` —
+    /// computed Automatic-mode prerequisite flags. Output: none.
+    fn settings_automatic_block(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &Snapshot,
+        prereqs: &SettingsPrereqs,
+    ) {
+        ui.colored_label(AMBER,"Automatic sends without per-message approval. Ambiguous, unsafe or unverifiable cases remain held. The Review tab is disabled until you switch back.");
+        ui.label(
+                    RichText::new(format!(
+                        "Hard unattended safety ceiling: at most {} reply attempts to the same normalized recipient mailbox in any rolling 24 hours. Human Review is the only override path.",
+                        AUTOMATIC_RECIPIENT_ATTEMPT_LIMIT_24H
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
+        ui.label(RichText::new("Automatic prerequisites").strong());
+        for (label, ready) in [
+            (
+                "Enterprise emergency stop cleared",
+                prereqs.emergency_stop_clear,
+            ),
+            ("Gmail connected", s.connected),
+            ("Gmail send permission granted", s.send_scope),
+            (
+                "Current model smoke-qualified & pinned",
+                prereqs.qualified_model_matches_draft,
+            ),
+            (
+                "Independent verifier qualified when enabled",
+                prereqs.verifier_ready,
+            ),
+            (
+                "Task-specific evaluation passed for this exact configuration",
+                prereqs.task_qualification_ready,
+            ),
+            ("Non-placeholder signature set", prereqs.signature_ready),
+        ] {
+            ui.horizontal(|ui| {
+                Self::badge(
+                    ui,
+                    if ready { "READY" } else { "REQUIRED" },
+                    if ready { MINT } else { AMBER },
+                );
+                ui.label(label);
+            });
+        }
+        if self.settings.automatic_confirmed {
+            if ui
+                .button("Disable Automatic mode and return to Human review")
+                .clicked()
+            {
+                self.settings.automatic_confirmed = false;
+                self.settings.automatic_since = None;
+                self.pending_arm = None;
+            }
+        } else if ui
+            .button("Enable Automatic mode (requires a deliberate risk confirmation)")
+            .clicked()
+        {
+            self.pending_arm = Some(crate::config::AutomaticArmGate::open(chrono::Utc::now()));
+        }
+        ui.checkbox(
+            &mut self.settings.include_backlog,
+            "Also allow older rejections within the selected age window (off by default)",
+        );
+    }
+
+    /// Render the storage and integration card.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot. Output: none.
+    fn settings_storage_card(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
         Self::card(ui, |ui| {
             ui.heading("Storage & integration");
             ui.label("SQLite stores authenticated encrypted payloads. Windows Credential Manager holds the master key. State/count/time indexes are not encrypted.");
@@ -1402,16 +1590,42 @@ impl App {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        s.busy.is_empty() && !s.demo,
-                        egui::Button::new("Check database integrity"),
-                    )
-                    .clicked()
-                {
-                    self.worker.command(Command::IntegrityCheck);
-                }
-                if ui
+                self.settings_database_buttons(ui, s);
+                self.settings_backup_buttons(ui, s);
+                self.settings_recovery_key_buttons(ui, s);
+                self.settings_diagnostics_button(ui, s);
+            });
+            ui.label(
+                RichText::new("Backups preserve the encrypted database and audit chain. Run a recovery drill regularly. Off-machine recovery requires a separately stored wrapped recovery-key envelope and its passphrase; no plaintext master-key export exists. The GUI can export and verify that envelope; installing it into a fresh or locked workspace remains an explicit pre-open recovery operation.")
+                    .small()
+                    .color(MUTED),
+            );
+            ui.separator();
+            ui.checkbox(
+                &mut self.settings.scheduled_backup_enabled,
+                "Create verified encrypted backups automatically",
+            );
+            self.settings_scheduled_backup(ui, s);
+            ui.label(RichText::new("Scheduled retention deletes only older directories that first verify as same-vault Rejection Rejector backups; unrelated folders are never pruned.").small().color(MUTED));
+            ui.separator();
+            self.settings_api_section(ui, s);
+        });
+    }
+
+    /// Render the database integrity/compaction buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot. Output: none.
+    fn settings_database_buttons(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if ui
+            .add_enabled(
+                s.busy.is_empty() && !s.demo,
+                egui::Button::new("Check database integrity"),
+            )
+            .clicked()
+        {
+            self.worker.command(Command::IntegrityCheck);
+        }
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Compact database"),
@@ -1421,7 +1635,13 @@ impl App {
                 {
                     self.worker.command(Command::CompactDatabase);
                 }
-                if ui
+    }
+
+    /// Render the backup creation and recovery-drill buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot. Output: none.
+    fn settings_backup_buttons(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Create encrypted backup…"),
@@ -1437,7 +1657,7 @@ impl App {
                     let out = parent.join(format!("rejection-rejector-backup-{stamp}"));
                     self.worker.command(Command::Backup { out });
                 }
-                if ui
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Run recovery drill…"),
@@ -1450,7 +1670,13 @@ impl App {
                 {
                     self.worker.command(Command::RecoveryDrill { backup });
                 }
-                if ui
+    }
+
+    /// Render the recovery-key export/verify buttons.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot. Output: none.
+    fn settings_recovery_key_buttons(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Export recovery key…"),
@@ -1469,7 +1695,7 @@ impl App {
                         confirmation: Zeroizing::new(String::default()),
                     });
                 }
-                if ui
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Verify recovery key…"),
@@ -1494,7 +1720,13 @@ impl App {
                         confirmation: Zeroizing::new(String::default()),
                     });
                 }
-                if ui
+    }
+
+    /// Render the diagnostics-export button.
+    ///
+    /// Inputs: `ui` — button row ui; `s` — current worker snapshot. Output: none.
+    fn settings_diagnostics_button(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if ui
                     .add_enabled(
                         s.busy.is_empty() && !s.demo,
                         egui::Button::new("Export diagnostics…"),
@@ -1509,93 +1741,90 @@ impl App {
                 {
                     self.worker.command(Command::Diagnostics { out: path });
                 }
-            });
-            ui.label(
-                RichText::new("Backups preserve the encrypted database and audit chain. Run a recovery drill regularly. Off-machine recovery requires a separately stored wrapped recovery-key envelope and its passphrase; no plaintext master-key export exists. The GUI can export and verify that envelope; installing it into a fresh or locked workspace remains an explicit pre-open recovery operation.")
-                    .small()
-                    .color(MUTED),
-            );
-            ui.separator();
-            ui.checkbox(
-                &mut self.settings.scheduled_backup_enabled,
-                "Create verified encrypted backups automatically",
-            );
-            if self.settings.scheduled_backup_enabled {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Backup folder");
-                    if ui.button("Choose folder…").clicked()
-                        && let Some(path) = (self.pickers.pick_folder)(rfd::FileDialog::new())
-                    {
-                        self.settings.scheduled_backup_directory =
-                            path.to_string_lossy().into_owned();
-                    }
-                    ui.monospace(if self.settings.scheduled_backup_directory.is_empty() {
-                        "Not selected"
-                    } else {
-                        &self.settings.scheduled_backup_directory
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Backup every");
-                    egui::ComboBox::from_id_salt("scheduled_backup_interval")
-                        .selected_text(format!(
-                            "{} hour(s)",
-                            self.settings.scheduled_backup_interval_hours
-                        ))
-                        .show_ui(ui, |ui| {
-                            for hours in crate::config::BACKUP_INTERVAL_HOURS {
-                                ui.selectable_value(
-                                    &mut self.settings.scheduled_backup_interval_hours,
-                                    hours,
-                                    format!("{hours} hour(s)"),
-                                );
-                            }
-                        });
-                    ui.label("Keep");
-                    ui.add(
-                        egui::DragValue::new(&mut self.settings.scheduled_backup_keep)
-                            .range(2..=30),
-                    );
-                    ui.label("verified backups");
-                });
-                if let Some(status) = &s.scheduled_backup {
-                    ui.label(
-                        RichText::new(match status.last_success_at {
-                            Some(at) => format!(
-                                "Last verified scheduled backup: {}{}",
-                                at.with_timezone(&chrono::Local).format("%d %b %Y · %H:%M"),
-                                if status.overdue { " · OVERDUE" } else { "" }
-                            ),
-                            None => "No scheduled backup completed yet".into(),
-                        })
-                        .small()
-                        .color(if status.overdue { AMBER } else { MUTED }),
-                    );
-                }
-            }
-            ui.label(RichText::new("Scheduled retention deletes only older directories that first verify as same-vault Rejection Rejector backups; unrelated folders are never pruned.").small().color(MUTED));
-            ui.separator();
-            if s.enterprise_policy.prohibit_integration_api {
-                self.settings.api_enabled = false;
-            }
-            ui.add_enabled(
-                !s.enterprise_policy.prohibit_integration_api,
-                egui::Checkbox::new(
-                    &mut self.settings.api_enabled,
-                    "Enable read-only loopback integration API (restart required)",
-                ),
-            );
-            ui.horizontal(|ui| {
-                let api_port_label = ui.label("API port");
-                ui.add(egui::DragValue::new(&mut self.settings.api_port).range(1024..=65535))
-                    .labelled_by(api_port_label.id);
-                ui.label(if s.api_listening {
-                    "Listening on loopback"
-                } else {
-                    "Not listening"
-                });
-            });
+    }
+
+    /// Render the scheduled-backup configuration block.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot. Output: none.
+    fn settings_scheduled_backup(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if self.settings.scheduled_backup_enabled {
             ui.horizontal_wrapped(|ui| {
+                ui.label("Backup folder");
+                if ui.button("Choose folder…").clicked()
+                    && let Some(path) = (self.pickers.pick_folder)(rfd::FileDialog::new())
+                {
+                    self.settings.scheduled_backup_directory = path.to_string_lossy().into_owned();
+                }
+                ui.monospace(if self.settings.scheduled_backup_directory.is_empty() {
+                    "Not selected"
+                } else {
+                    &self.settings.scheduled_backup_directory
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("Backup every");
+                egui::ComboBox::from_id_salt("scheduled_backup_interval")
+                    .selected_text(format!(
+                        "{} hour(s)",
+                        self.settings.scheduled_backup_interval_hours
+                    ))
+                    .show_ui(ui, |ui| {
+                        for hours in crate::config::BACKUP_INTERVAL_HOURS {
+                            ui.selectable_value(
+                                &mut self.settings.scheduled_backup_interval_hours,
+                                hours,
+                                format!("{hours} hour(s)"),
+                            );
+                        }
+                    });
+                ui.label("Keep");
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.scheduled_backup_keep).range(2..=30),
+                );
+                ui.label("verified backups");
+            });
+            if let Some(status) = &s.scheduled_backup {
+                ui.label(
+                    RichText::new(match status.last_success_at {
+                        Some(at) => format!(
+                            "Last verified scheduled backup: {}{}",
+                            at.with_timezone(&chrono::Local).format("%d %b %Y · %H:%M"),
+                            if status.overdue { " · OVERDUE" } else { "" }
+                        ),
+                        None => "No scheduled backup completed yet".into(),
+                    })
+                    .small()
+                    .color(if status.overdue { AMBER } else { MUTED }),
+                );
+            }
+        }
+    }
+
+    /// Render the loopback integration-API section.
+    ///
+    /// Inputs: `ui` — card body ui; `s` — current worker snapshot. Output: none.
+    fn settings_api_section(&mut self, ui: &mut egui::Ui, s: &Snapshot) {
+        if s.enterprise_policy.prohibit_integration_api {
+            self.settings.api_enabled = false;
+        }
+        ui.add_enabled(
+            !s.enterprise_policy.prohibit_integration_api,
+            egui::Checkbox::new(
+                &mut self.settings.api_enabled,
+                "Enable read-only loopback integration API (restart required)",
+            ),
+        );
+        ui.horizontal(|ui| {
+            let api_port_label = ui.label("API port");
+            ui.add(egui::DragValue::new(&mut self.settings.api_port).range(1024..=65535))
+                .labelled_by(api_port_label.id);
+            ui.label(if s.api_listening {
+                "Listening on loopback"
+            } else {
+                "Not listening"
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
                         !s.demo && s.busy.is_empty(),
@@ -1607,27 +1836,32 @@ impl App {
                     self.worker.command(Command::RotateApiToken);
                 }
             });
-            if let Some(token) = &s.api_token {
-                ui.horizontal_wrapped(|ui| {
-                    ui.monospace(token.as_str());
-                    if ui.button("Copy token").clicked() {
-                        ui.ctx().copy_text(token.as_str().to_owned());
-                    }
-                    if ui.button("Hide token").clicked() {
-                        self.worker.command(Command::HideApiToken);
-                    }
-                });
-                ui.label(
+        if let Some(token) = &s.api_token {
+            ui.horizontal_wrapped(|ui| {
+                ui.monospace(token.as_str());
+                if ui.button("Copy token").clicked() {
+                    ui.ctx().copy_text(token.as_str().to_owned());
+                }
+                if ui.button("Hide token").clicked() {
+                    self.worker.command(Command::HideApiToken);
+                }
+            });
+            ui.label(
                     RichText::new("One-time credential display: the plaintext token hides automatically after 60 seconds and cannot be revealed again. Copy it now. After rotation, restart the app/worker before integrations reconnect.")
                         .small()
                         .color(MUTED),
                 );
-            }
-            ui.label(RichText::new("Only a one-way token verifier is persisted. The plaintext bearer credential still grants access to local email data: store it in the consuming application's OS-protected secret store, rotate it after suspected exposure, and never put it in source control.").small().color(AMBER));
-        });
-        ui.add_space(12.0);
+        }
+        ui.label(RichText::new("Only a one-way token verifier is persisted. The plaintext bearer credential still grants access to local email data: store it in the consuming application's OS-protected secret store, rotate it after suspected exposure, and never put it in source control.").small().color(AMBER));
+    }
+
+    /// Render the save-settings gate button.
+    ///
+    /// Inputs: `ui` — target ui; `s` — current worker snapshot; `prereqs` — computed
+    /// Automatic-mode prerequisite flags. Output: none.
+    fn settings_save_button(&mut self, ui: &mut egui::Ui, s: &Snapshot, prereqs: &SettingsPrereqs) {
         let automatic_ready_to_save = self.settings.mode != Mode::Automatic
-            || (automatic_prerequisites
+            || (prereqs.automatic_prerequisites
                 && self.settings.sending_enabled
                 && self.settings.automatic_confirmed);
         if ui

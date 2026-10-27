@@ -514,252 +514,121 @@ fn resolve_dir(data_dir: &Option<PathBuf>) -> Result<PathBuf> {
 /// errors abort with a non-zero exit.
 fn main() -> Result<()> {
     let args = Args::parse();
-    match args.command {
+    let Args { data_dir, command } = args;
+    dispatch(command, &data_dir)
+}
+
+/// Route one parsed subcommand to its dispatch group.
+///
+/// Inputs: `command` — parsed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Run | Action::Tui { .. } | Action::Web | Action::Status | Action::Demo => {
+            dispatch_runtime(command, data_dir)
+        }
+        Action::BuildInfo
+        | Action::ContractInfo
+        | Action::PolicySchema
+        | Action::PolicyStatus
+        | Action::ValidatePolicy { .. }
+        | Action::Autostart { .. } => dispatch_info(command, data_dir),
+        Action::Evaluate { .. }
+        | Action::EvaluateDecision { .. }
+        | Action::CompareDecisionModels { .. }
+        | Action::ProfileModel { .. } => dispatch_model_evaluation(command, data_dir),
+        Action::Qualify { .. } | Action::CompareModels { .. } | Action::Metrics { .. } => {
+            dispatch_model_operations(command, data_dir)
+        }
+        Action::Configure { .. } | Action::Sync | Action::RotateApiToken => {
+            dispatch_configuration(command, data_dir)
+        }
+        Action::Integrity
+        | Action::Compact
+        | Action::Diagnostics { .. }
+        | Action::ShadowAutomatic { .. } => dispatch_database(command, data_dir),
+        Action::Backup { .. }
+        | Action::VerifyBackup { .. }
+        | Action::RecoveryDrill { .. }
+        | Action::RestoreBackup { .. } => dispatch_backup(command, data_dir),
+        Action::ExportRecoveryKey { .. }
+        | Action::VerifyRecoveryKey { .. }
+        | Action::ImportRecoveryKey { .. } => dispatch_recovery_key(command, data_dir),
+        Action::AuditAnchor { .. } | Action::VerifyAuditAnchor { .. } | Action::Doctor { .. } => {
+            dispatch_audit(command, data_dir)
+        }
+    }
+}
+
+/// Route the runtime surface subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_runtime(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Run => cmd_run(data_dir)?,
+        Action::Tui { demo } => cmd_tui(demo, data_dir)?,
+        Action::Web => cmd_web(data_dir)?,
+        Action::Status | Action::Demo => cmd_status(&command, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the build/policy inspection subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_info(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
         Action::BuildInfo => println!("{}", serde_json::to_string_pretty(&build_info::current())?),
         Action::ContractInfo => {
             println!("{}", serde_json::to_string_pretty(&contracts::current())?)
         }
         Action::PolicySchema => print!("{}", policy::schema_text()),
-        Action::Autostart { action } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
-            let report = autostart_report(&action, &executable, &dir, background::schtasks)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        Action::ValidatePolicy { path } => {
-            let absolute = std::fs::canonicalize(&path)?;
-            let loaded = policy::load_file(&absolute)?;
-            println!("{}", serde_json::to_string_pretty(&loaded.status())?);
-        }
-        Action::PolicyStatus => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&e.enterprise_policy_status())?
-            );
-        }
-        Action::Run => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let worker = Worker::spawn(dir, false);
-            run_daemon(&worker, |handler| {
-                ctrlc::set_handler(handler).map_err(Into::into)
-            })?;
-        }
-        Action::Metrics { openmetrics } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
-            if openmetrics {
-                let runtime = rejection_rejector::runtime_log::performance_summary(&e.directory)?;
-                print!(
-                    "{}",
-                    rejection_rejector::metrics::render_openmetrics_with_runtime_and_emergency(
-                        &metrics,
-                        &runtime,
-                        rejection_rejector::emergency::status_fail_closed().active,
-                    )
-                );
-            } else {
-                println!("{}", serde_json::to_string_pretty(&metrics)?);
-            }
-        }
-        Action::Doctor { require } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let database_integrity = e.db.integrity_check();
-            let database_integrity_ok = database_integrity.is_ok();
-            let database_message = database_integrity
-                .as_ref()
-                .map(|_| "SQLite and authenticated vault checks passed".to_string())
-                .unwrap_or_else(|error| error.to_string());
-            let database_bytes = std::fs::metadata(e.directory.join("state.sqlite3"))
-                .ok()
-                .map(|metadata| metadata.len());
-            let storage = rejection_rejector::storage::inspect(&e.directory)?;
-            let status_fn = rejection_rejector::recovery::scheduled_backup_status;
-            let scheduled_backup = status_fn(&e.db, &e.settings, chrono::Utc::now())?;
-            let backup_isolation =
-                rejection_rejector::recovery::backup_isolation_status(&e.directory, &e.settings)?;
-            let emergency_stop = rejection_rejector::emergency::status_fail_closed();
-            let readiness = rejection_rejector::readiness::assess_context(
-                rejection_rejector::readiness::RuntimeReadinessContext {
-                    settings: &e.settings,
-                    database_integrity_ok,
-                    storage_write_safe: storage.runtime_write_safe,
-                    connected: e.connected(),
-                    send_scope: e.send_scope(),
-                    paused: false,
-                    stopping: false,
-                    emergency_stop_active: emergency_stop.active,
-                },
-            );
-            let local_ai = Ollama::new(&e.settings)?;
-            let runtime_version = local_ai.runtime_version().ok();
-            let ollama_healthy = runtime_version.is_some();
-            let (installed, digest_matches, gpu_resident_now, model_message) = if ollama_healthy {
-                match local_ai.inspect() {
-                    Ok(info) => {
-                        let digest_matches = e.settings.model_digest.as_ref() == Some(&info.digest);
-                        match local_ai.residency(&info.digest) {
-                            Ok(status) => (
-                                info.installed,
-                                digest_matches,
-                                status.gpu_resident,
-                                status.message,
-                            ),
-                            Err(error) => (
-                                info.installed,
-                                digest_matches,
-                                false,
-                                format!(
-                                    "Model is installed but not currently qualified as GPU-resident: {error}"
-                                ),
-                            ),
-                        }
-                    }
-                    Err(error) => (
-                        false,
-                        false,
-                        false,
-                        format!("Model inspection failed: {error}"),
-                    ),
-                }
-            } else {
-                (
-                    false,
-                    false,
-                    false,
-                    "Ollama is not reachable on the configured loopback address".into(),
-                )
-            };
-            let payload = serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "build": build_info::current(),
-                    "configuration_readiness": readiness.clone(),
-                    "emergency_stop": emergency_stop,
-                    "enterprise_policy": e.enterprise_policy_status(),
-                    "storage": storage,
-                    "scheduled_backup": scheduled_backup,
-                    "backup_isolation": backup_isolation,
-                    "database": {
-                        "integrity_ok": database_integrity_ok,
-                        "schema_version": e.db.schema_version()?,
-                        "bytes": database_bytes,
-                        "message": database_message
-                    },
-                    "gmail": {
-                        "connected_locally": e.connected(),
-                        "send_scope_granted": e.send_scope(),
-                        "sending_enabled": e.settings.sending_enabled
-                    },
-                    "schedule": {
-                        "poll_hours": e.settings.poll_hours,
-                        "lookback_days": e.settings.lookback_days
-                    },
-                    "mode": e.settings.mode,
-                    "local_ai": {
-                        "ollama_healthy": ollama_healthy,
-                        "runtime_version": runtime_version,
-                        "model": e.settings.model,
-                        "digest_pinned": e.settings.model_digest.is_some(),
-                        "installed_and_pin_matches": installed && digest_matches,
-                        "gpu_resident_now": gpu_resident_now,
-                        "message": model_message
-                    },
-                    "note": "gpu_resident_now is a point-in-time Ollama check; Qualify & pin performs the full classification/draft/verification pipeline."
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-            if let Some(requirement) = require {
-                ensure!(
-                    requirement.satisfied(&readiness),
-                    "Requested readiness level {requirement:?} is not satisfied"
-                );
-            }
-        }
-        Action::RotateApiToken => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            let material = api_auth::rotate(&mut e.db)?;
-            e.checkpoint_audit_protection()?;
-            let token = material
-                .plaintext_once
-                .context("Token rotation did not return one-time plaintext")?;
-            println!("{}", token.as_str());
-            eprintln!(
-                "Store this credential in the consuming application's OS-protected secret store. It cannot be revealed again; rotate it if lost."
-            );
-        }
-        Action::Tui { demo } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let worker = Worker::spawn(dir, demo);
-            rejection_rejector::tui::run(worker)?;
-        }
-        Action::Web => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let worker = Worker::spawn(dir, false);
-            web_serve(&worker, |handler| {
-                ctrlc::set_handler(handler).map_err(Into::into)
-            })?;
-        }
-        Action::Status | Action::Demo => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let demo = matches!(args.command, Action::Demo);
-            let e = open_engine(dir, demo, false)?;
-            let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":build_info::current(),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()});
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        // Model-evidence commands below need a reachable model runtime to
-        // take their success paths. Their positive paths are pinned by the
-        // model-command suites in tests/cli_workspace.rs, which must pin the
-        // workspace at a fake runtime through an in-process workspace open —
-        // only possible where an OS credential store exists (Windows). The
-        // headless lanes cover the fail-closed paths instead of fabricating
-        // evidence.
-        Action::Evaluate { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            announce(
-                e.evaluate_model_to(&out),
-                "Task-specific evaluation passed and qualification was stored:",
-                &out,
-            )?;
-        }
-        Action::EvaluateDecision { model, out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            evaluate_decision(&e.settings, &model, &out)?;
-        }
-        Action::CompareDecisionModels { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            compare_decision_models(&e.settings, &out)?;
-        }
-        Action::ProfileModel { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            announce(
-                e.profile_model_runtime_to(&out),
-                "Local model runtime profile written to",
-                &out,
-            )?;
-        }
-        Action::Qualify { verifier } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            e.qualify()?;
-            if verifier {
-                e.qualify_verifier()?;
-            }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "qualified": true,
-                    "model": e.settings.model,
-                    "verifier_qualified": verifier,
-                }))?
-            );
-        }
+        Action::PolicyStatus => cmd_policy_status(data_dir)?,
+        Action::ValidatePolicy { path } => cmd_validate_policy(path)?,
+        Action::Autostart { action } => cmd_autostart(action, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the model-evidence evaluation subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_model_evaluation(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Evaluate { out } => cmd_evaluate(out, data_dir)?,
+        Action::EvaluateDecision { model, out } => cmd_evaluate_decision(model, out, data_dir)?,
+        Action::CompareDecisionModels { out } => cmd_compare_decision_models(out, data_dir)?,
+        Action::ProfileModel { out } => cmd_profile_model(out, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the model qualification/comparison subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_model_operations(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Qualify { verifier } => cmd_qualify(verifier, data_dir)?,
+        Action::CompareModels { out } => cmd_compare_models(out, data_dir)?,
+        Action::Metrics { openmetrics } => cmd_metrics(openmetrics, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the settings and credential subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_configuration(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
         Action::Configure {
             lookback_days,
             poll_hours,
@@ -767,193 +636,728 @@ fn main() -> Result<()> {
             signature,
             api_enabled,
             api_port,
-        } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            let mut settings = e.settings.clone();
-            if let Some(days) = lookback_days {
-                settings.lookback_days = days;
-            }
-            if let Some(hours) = poll_hours {
-                settings.poll_hours = hours;
-            }
-            if let Some(m) = model {
-                settings.model = m;
-            }
-            if let Some(sig) = signature {
-                settings.signature = sig;
-            }
-            if let Some(enabled) = api_enabled {
-                settings.api_enabled = enabled;
-            }
-            if let Some(port) = api_port {
-                settings.api_port = port;
-            }
-            e.update_settings(settings)?;
-            println!("{}", serde_json::to_string_pretty(&e.settings)?);
-        }
-        Action::Sync => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            let inserted = e.synchronize()?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "synchronized": true,
-                    "new_identities": inserted,
-                }))?
-            );
-        }
-        Action::CompareModels { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            compare_models(&e.settings, &out)?;
-        }
-        Action::Integrity => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            e.db.integrity_check()?;
-            let payload = serde_json::json!({
-                    "ok": true,
-                    "schema_version": e.db.schema_version()?,
-                    "note": "SQLite quick_check, foreign-key integrity and authenticated vault marker passed."
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        Action::Compact => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            let report = e.compact_database()?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        Action::Backup { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let manifest = recovery::create_backup(&e.db, &e.directory, &out)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
-        }
-        Action::VerifyBackup { path } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let manifest = recovery::verify_backup(&e.db, &path)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
-        }
-        Action::RecoveryDrill { path } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let mut e = open_engine(dir, false, true)?;
-            let report = recovery::recovery_drill(&e.directory, &path)?;
-            let entry = format!(
-                "Isolated recovery drill passed: schema={} metadata={} items={} audit_events={} delivery_records={}",
-                report.restored_schema_version,
-                report.metadata_records,
-                report.item_records,
-                report.audit_events,
-                report.delivery_records
-            );
-            e.db.log("backup.drill_passed", None, &entry)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        Action::RestoreBackup { path, confirm } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            anyhow::ensure!(confirm == "RESTORE", "Restore requires --confirm RESTORE");
-            let report = recovery::restore_backup(&dir, &path)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
+        } => cmd_configure(
+            lookback_days,
+            poll_hours,
+            model,
+            signature,
+            api_enabled,
+            api_port,
+            data_dir,
+        )?,
+        Action::Sync => cmd_sync(data_dir)?,
+        Action::RotateApiToken => cmd_rotate_api_token(data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the storage/maintenance subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_database(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Integrity => cmd_integrity(data_dir)?,
+        Action::Compact => cmd_compact(data_dir)?,
+        Action::Diagnostics { out } => cmd_diagnostics(out, data_dir)?,
+        Action::ShadowAutomatic { out } => cmd_shadow_automatic(out, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the backup/restore subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_backup(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::Backup { out } => cmd_backup(out, data_dir)?,
+        Action::VerifyBackup { path } => cmd_verify_backup(path, data_dir)?,
+        Action::RecoveryDrill { path } => cmd_recovery_drill(path, data_dir)?,
+        Action::RestoreBackup { path, confirm } => cmd_restore_backup(path, confirm, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Route the recovery-key subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_recovery_key(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
         Action::ExportRecoveryKey {
             out,
             passphrase_file,
-        } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            if let Some(loaded) = policy::load_optional()? {
-                ensure!(
-                    loaded.policy.allows_recovery_key_export(),
-                    "Enterprise policy prohibits portable recovery-key export"
-                );
-            }
-            let passphrase = recovery_passphrase(&passphrase_file)?;
-            let envelope = recovery::export_recovery_key(&dir, &passphrase, &out)?;
-            let payload = serde_json::json!({
-                    "created": out,
-                    "vault_id": envelope.vault_id,
-                    "format_version": envelope.format_version,
-                    "note": "Encrypted recovery key created. Store it separately from the backup and securely delete the passphrase file when appropriate."
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
+        } => cmd_export_recovery_key(out, passphrase_file, data_dir)?,
         Action::VerifyRecoveryKey {
             backup,
             recovery_key,
             passphrase_file,
-        } => {
-            let passphrase = recovery_passphrase(&passphrase_file)?;
-            let envelope =
-                recovery::verify_recovery_key_for_backup(&backup, &recovery_key, &passphrase)?;
-            let payload = serde_json::json!({
-                    "verified": true,
-                    "vault_id": envelope.vault_id,
-                    "format_version": envelope.format_version,
-                    "note": "Recovery key authenticated the backup; no OS credential was modified."
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
+        } => cmd_verify_recovery_key(backup, recovery_key, passphrase_file)?,
         Action::ImportRecoveryKey {
             backup,
             recovery_key,
             passphrase_file,
             confirm,
-        } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            ensure!(
-                confirm == "IMPORT",
-                "Recovery-key import requires --confirm IMPORT"
-            );
-            let passphrase = recovery_passphrase(&passphrase_file)?;
-            let import = recovery::import_recovery_key_for_backup;
-            let envelope = import(&dir, &backup, &recovery_key, &passphrase)?;
-            let payload = serde_json::json!({
-                    "imported": true,
-                    "vault_id": envelope.vault_id,
-                    "note": "Recovered key installed only after authenticating the backup. Existing OS credentials are never overwritten automatically."
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        Action::Diagnostics { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            rejection_rejector::diagnostics::write_report(&e, &out)?;
-            println!(
-                "Privacy-safe diagnostics written locally to {}. Review before sharing.",
-                out.display()
-            );
-        }
-        Action::ShadowAutomatic { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            shadow::write_report(&e, &out)?;
-            println!(
-                "Read-only Automatic shadow audit written to {}. No provider preflight or external write occurred.",
-                out.display()
-            );
-        }
-        Action::AuditAnchor { out } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let anchor = audit_anchor::write_anchor(&e.db, &e.directory, &out)?;
-            println!("{}", serde_json::to_string_pretty(&anchor)?);
-        }
-        Action::VerifyAuditAnchor { path } => {
-            let dir = resolve_dir(&args.data_dir)?;
-            let e = open_engine(dir, false, true)?;
-            let anchor = audit_anchor::verify_anchor(&e.db, &e.directory, &path)?;
-            let payload = serde_json::json!({
-                    "verified": true,
-                    "anchor": anchor,
-                    "current_audit_head": e.db.audit_head()?,
-                    "current_audit_sequence": e.db.latest_event_seq()?
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
+        } => cmd_import_recovery_key(backup, recovery_key, passphrase_file, confirm, data_dir)?,
+        other => dispatch(other, data_dir)?,
     }
+    Ok(())
+}
+
+/// Route the audit/doctor subcommands to their handlers.
+///
+/// Inputs: `command` — routed subcommand; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — the selected command's exit contract.
+fn dispatch_audit(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    match command {
+        Action::AuditAnchor { out } => cmd_audit_anchor(out, data_dir)?,
+        Action::VerifyAuditAnchor { path } => cmd_verify_audit_anchor(path, data_dir)?,
+        Action::Doctor { require } => cmd_doctor(require, data_dir)?,
+        other => dispatch(other, data_dir)?,
+    }
+    Ok(())
+}
+
+/// Execute the `rr run` scheduler daemon subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// unit on clean shutdown; propagated startup/worker failure.
+fn cmd_run(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let worker = Worker::spawn(dir, false);
+    run_daemon(&worker, |handler| {
+        ctrlc::set_handler(handler).map_err(Into::into)
+    })?;
+    Ok(())
+}
+
+/// Execute the `rr tui` subcommand.
+///
+/// Inputs: `demo` — synthetic offline mode; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — unit on exit; propagated terminal failure.
+fn cmd_tui(demo: bool, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let worker = Worker::spawn(dir, demo);
+    rejection_rejector::tui::run(worker)?;
+    Ok(())
+}
+
+/// Execute the `rr web` loopback web-interface subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// unit on stop; propagated listener failure.
+fn cmd_web(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let worker = Worker::spawn(dir, false);
+    web_serve(&worker, |handler| {
+        ctrlc::set_handler(handler).map_err(Into::into)
+    })?;
+    Ok(())
+}
+
+/// Execute the `rr status` / `rr demo` reporting subcommands.
+///
+/// Inputs: `command` — routed subcommand (`Status` selects live, `Demo`
+/// synthetic); `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the JSON status payload; propagated open/report failure.
+fn cmd_status(command: &Action, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let demo = matches!(command, Action::Demo);
+    let e = open_engine(dir, demo, false)?;
+    let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"build":build_info::current(),"demo":demo,"connected":e.connected(),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"poll_hours":e.settings.poll_hours,"lookback_days":e.settings.lookback_days,"model":e.settings.model,"counts":e.db.counts(&e.account)?,"enterprise_policy":e.enterprise_policy_status()});
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+/// Execute the `rr autostart` worker-registration subcommand.
+///
+/// Inputs: `action` — install/status/remove operation; `data_dir` — optional
+/// workspace override. Output: `Result<()>` — prints the JSON report;
+/// propagated scheduling failure.
+fn cmd_autostart(action: AutostartAction, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let executable = std::env::current_exe().context("Cannot resolve rr.exe path")?;
+    let report = autostart_report(&action, &executable, &dir, background::schtasks)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Execute the `rr validate-policy` subcommand.
+///
+/// Inputs: `path` — enterprise policy file. Output: `Result<()>` — prints the
+/// policy status JSON; propagated parse/IO failure.
+fn cmd_validate_policy(path: PathBuf) -> Result<()> {
+    let absolute = std::fs::canonicalize(&path)?;
+    let loaded = policy::load_file(&absolute)?;
+    println!("{}", serde_json::to_string_pretty(&loaded.status())?);
+    Ok(())
+}
+
+/// Execute the `rr policy-status` subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the effective enterprise-policy status; propagated open failure.
+fn cmd_policy_status(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&e.enterprise_policy_status())?
+    );
+    Ok(())
+}
+
+/// Execute the `rr metrics` subcommand.
+///
+/// Inputs: `openmetrics` — emit OpenMetrics 1.0 text instead of JSON;
+/// `data_dir` — optional workspace override. Output: `Result<()>` — prints the
+/// metrics payload; propagated collection failure.
+fn cmd_metrics(openmetrics: bool, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let metrics = rejection_rejector::metrics::collect(&e, chrono::Utc::now())?;
+    if openmetrics {
+        let runtime = rejection_rejector::runtime_log::performance_summary(&e.directory)?;
+        print!(
+            "{}",
+            rejection_rejector::metrics::render_openmetrics_with_runtime_and_emergency(
+                &metrics,
+                &runtime,
+                rejection_rejector::emergency::status_fail_closed().active,
+            )
+        );
+    } else {
+        println!("{}", serde_json::to_string_pretty(&metrics)?);
+    }
+    Ok(())
+}
+
+/// Execute the `rr doctor` readiness-report subcommand.
+///
+/// Inputs: `require` — optional readiness gate that must be satisfied;
+/// `data_dir` — optional workspace override. Output: `Result<()>` — prints the
+/// doctor JSON; fails when the requested gate is unsatisfied.
+fn cmd_doctor(require: Option<ReadinessRequirement>, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let database_integrity = e.db.integrity_check();
+    let database_integrity_ok = database_integrity.is_ok();
+    let database_message = database_integrity
+        .as_ref()
+        .map(|_| "SQLite and authenticated vault checks passed".to_string())
+        .unwrap_or_else(|error| error.to_string());
+    let database_bytes = std::fs::metadata(e.directory.join("state.sqlite3"))
+        .ok()
+        .map(|metadata| metadata.len());
+    let storage = rejection_rejector::storage::inspect(&e.directory)?;
+    let status_fn = rejection_rejector::recovery::scheduled_backup_status;
+    let scheduled_backup = status_fn(&e.db, &e.settings, chrono::Utc::now())?;
+    let backup_isolation =
+        rejection_rejector::recovery::backup_isolation_status(&e.directory, &e.settings)?;
+    let emergency_stop = rejection_rejector::emergency::status_fail_closed();
+    let readiness = rejection_rejector::readiness::assess_context(
+        rejection_rejector::readiness::RuntimeReadinessContext {
+            settings: &e.settings,
+            database_integrity_ok,
+            storage_write_safe: storage.runtime_write_safe,
+            connected: e.connected(),
+            send_scope: e.send_scope(),
+            paused: false,
+            stopping: false,
+            emergency_stop_active: emergency_stop.active,
+        },
+    );
+    let local_ai = Ollama::new(&e.settings)?;
+    let runtime_version = local_ai.runtime_version().ok();
+    let ollama_healthy = runtime_version.is_some();
+    let (installed, digest_matches, gpu_resident_now, model_message) = if ollama_healthy {
+        match local_ai.inspect() {
+            Ok(info) => {
+                let digest_matches = e.settings.model_digest.as_ref() == Some(&info.digest);
+                match local_ai.residency(&info.digest) {
+                    Ok(status) => (
+                        info.installed,
+                        digest_matches,
+                        status.gpu_resident,
+                        status.message,
+                    ),
+                    Err(error) => (
+                        info.installed,
+                        digest_matches,
+                        false,
+                        format!(
+                            "Model is installed but not currently qualified as GPU-resident: {error}"
+                        ),
+                    ),
+                }
+            }
+            Err(error) => (
+                false,
+                false,
+                false,
+                format!("Model inspection failed: {error}"),
+            ),
+        }
+    } else {
+        (
+            false,
+            false,
+            false,
+            "Ollama is not reachable on the configured loopback address".into(),
+        )
+    };
+    let payload = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "build": build_info::current(),
+            "configuration_readiness": readiness.clone(),
+            "emergency_stop": emergency_stop,
+            "enterprise_policy": e.enterprise_policy_status(),
+            "storage": storage,
+            "scheduled_backup": scheduled_backup,
+            "backup_isolation": backup_isolation,
+            "database": {
+                "integrity_ok": database_integrity_ok,
+                "schema_version": e.db.schema_version()?,
+                "bytes": database_bytes,
+                "message": database_message
+            },
+            "gmail": {
+                "connected_locally": e.connected(),
+                "send_scope_granted": e.send_scope(),
+                "sending_enabled": e.settings.sending_enabled
+            },
+            "schedule": {
+                "poll_hours": e.settings.poll_hours,
+                "lookback_days": e.settings.lookback_days
+            },
+            "mode": e.settings.mode,
+            "local_ai": {
+                "ollama_healthy": ollama_healthy,
+                "runtime_version": runtime_version,
+                "model": e.settings.model,
+                "digest_pinned": e.settings.model_digest.is_some(),
+                "installed_and_pin_matches": installed && digest_matches,
+                "gpu_resident_now": gpu_resident_now,
+                "message": model_message
+            },
+            "note": "gpu_resident_now is a point-in-time Ollama check; Qualify & pin performs the full classification/draft/verification pipeline."
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(requirement) = require {
+        ensure!(
+            requirement.satisfied(&readiness),
+            "Requested readiness level {requirement:?} is not satisfied"
+        );
+    }
+    Ok(())
+}
+
+/// Execute the `rr rotate-api-token` subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the one-time plaintext token; propagated rotation failure.
+fn cmd_rotate_api_token(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let material = api_auth::rotate(&mut e.db)?;
+    e.checkpoint_audit_protection()?;
+    let token = material
+        .plaintext_once
+        .context("Token rotation did not return one-time plaintext")?;
+    println!("{}", token.as_str());
+    eprintln!(
+        "Store this credential in the consuming application's OS-protected secret store. It cannot be revealed again; rotate it if lost."
+    );
+    Ok(())
+}
+
+// Model-evidence commands below need a reachable model runtime to
+// take their success paths. Their positive paths are pinned by the
+// model-command suites in tests/cli_workspace.rs, which must pin the
+// workspace at a fake runtime through an in-process workspace open —
+// only possible where an OS credential store exists (Windows). The
+// headless lanes cover the fail-closed paths instead of fabricating
+// evidence.
+/// Execute the `rr evaluate` task-qualification subcommand.
+///
+/// Inputs: `out` — evaluation report path; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — writes and announces the report;
+/// propagated evaluation failure.
+fn cmd_evaluate(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    announce(
+        e.evaluate_model_to(&out),
+        "Task-specific evaluation passed and qualification was stored:",
+        &out,
+    )?;
+    Ok(())
+}
+
+/// Execute the `rr evaluate-decision` research subcommand.
+///
+/// Inputs: `model` — typed decision model tag; `out` — report path; `data_dir`
+/// — optional workspace override. Output: `Result<()>` — writes the comparison;
+/// propagated evaluation failure.
+fn cmd_evaluate_decision(model: String, out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    evaluate_decision(&e.settings, &model, &out)?;
+    Ok(())
+}
+
+/// Execute the `rr compare-decision-models` research subcommand.
+///
+/// Inputs: `out` — report path; `data_dir` — optional workspace override.
+/// Output: `Result<()>` — writes the comparison; propagated failure.
+fn cmd_compare_decision_models(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    compare_decision_models(&e.settings, &out)?;
+    Ok(())
+}
+
+/// Execute the `rr profile-model` runtime profiling subcommand.
+///
+/// Inputs: `out` — profile JSON path; `data_dir` — optional workspace override.
+/// Output: `Result<()>` — writes and announces the profile; propagated failure.
+fn cmd_profile_model(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    announce(
+        e.profile_model_runtime_to(&out),
+        "Local model runtime profile written to",
+        &out,
+    )?;
+    Ok(())
+}
+
+/// Execute the `rr qualify` smoke-qualification subcommand.
+///
+/// Inputs: `verifier` — also qualify the independent verifier model;
+/// `data_dir` — optional workspace override. Output: `Result<()>` — prints the
+/// qualification JSON; propagated qualification failure.
+fn cmd_qualify(verifier: bool, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    e.qualify()?;
+    if verifier {
+        e.qualify_verifier()?;
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "qualified": true,
+            "model": e.settings.model,
+            "verifier_qualified": verifier,
+        }))?
+    );
+    Ok(())
+}
+
+/// Execute the `rr configure` settings-update subcommand.
+///
+/// Inputs: the six optional field overrides (omitted fields keep their current
+/// value); `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the effective settings JSON; propagated update failure.
+fn cmd_configure(
+    lookback_days: Option<u8>,
+    poll_hours: Option<u8>,
+    model: Option<String>,
+    signature: Option<String>,
+    api_enabled: Option<bool>,
+    api_port: Option<u16>,
+    data_dir: &Option<PathBuf>,
+) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let mut settings = e.settings.clone();
+    if let Some(days) = lookback_days {
+        settings.lookback_days = days;
+    }
+    if let Some(hours) = poll_hours {
+        settings.poll_hours = hours;
+    }
+    if let Some(m) = model {
+        settings.model = m;
+    }
+    if let Some(sig) = signature {
+        settings.signature = sig;
+    }
+    if let Some(enabled) = api_enabled {
+        settings.api_enabled = enabled;
+    }
+    if let Some(port) = api_port {
+        settings.api_port = port;
+    }
+    e.update_settings(settings)?;
+    println!("{}", serde_json::to_string_pretty(&e.settings)?);
+    Ok(())
+}
+
+/// Execute the `rr sync` mailbox-synchronization subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the new-identity count; propagated sync failure.
+fn cmd_sync(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let inserted = e.synchronize()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "synchronized": true,
+            "new_identities": inserted,
+        }))?
+    );
+    Ok(())
+}
+
+/// Execute the `rr compare-models` bake-off subcommand.
+///
+/// Inputs: `out` — report path; `data_dir` — optional workspace override.
+/// Output: `Result<()>` — writes the comparison; propagated failure.
+fn cmd_compare_models(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    compare_models(&e.settings, &out)?;
+    Ok(())
+}
+
+/// Execute the `rr integrity` database-check subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the integrity JSON; propagated check failure.
+fn cmd_integrity(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    e.db.integrity_check()?;
+    let payload = serde_json::json!({
+            "ok": true,
+            "schema_version": e.db.schema_version()?,
+            "note": "SQLite quick_check, foreign-key integrity and authenticated vault marker passed."
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+/// Execute the `rr compact` database-maintenance subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the compaction report; propagated failure.
+fn cmd_compact(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let report = e.compact_database()?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Execute the `rr backup` subcommand.
+///
+/// Inputs: `out` — backup destination directory; `data_dir` — optional
+/// workspace override. Output: `Result<()>` — prints the backup manifest;
+/// propagated backup failure.
+fn cmd_backup(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let manifest = recovery::create_backup(&e.db, &e.directory, &out)?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+/// Execute the `rr verify-backup` subcommand.
+///
+/// Inputs: `path` — backup directory; `data_dir` — optional workspace override.
+/// Output: `Result<()>` — prints the verification manifest; propagated failure.
+fn cmd_verify_backup(path: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let manifest = recovery::verify_backup(&e.db, &path)?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+/// Execute the `rr recovery-drill` subcommand.
+///
+/// Inputs: `path` — backup directory to drill against; `data_dir` — optional
+/// workspace override. Output: `Result<()>` — logs and prints the drill
+/// report; propagated restore/authentication failure.
+fn cmd_recovery_drill(path: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let report = recovery::recovery_drill(&e.directory, &path)?;
+    let entry = format!(
+        "Isolated recovery drill passed: schema={} metadata={} items={} audit_events={} delivery_records={}",
+        report.restored_schema_version,
+        report.metadata_records,
+        report.item_records,
+        report.audit_events,
+        report.delivery_records
+    );
+    e.db.log("backup.drill_passed", None, &entry)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Execute the `rr restore-backup` subcommand.
+///
+/// Inputs: `path` — backup directory; `confirm` — destructive-operation
+/// acknowledgement (`RESTORE`); `data_dir` — optional workspace override.
+/// Output: `Result<()>` — prints the restore report; propagated failure.
+fn cmd_restore_backup(path: PathBuf, confirm: String, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    anyhow::ensure!(confirm == "RESTORE", "Restore requires --confirm RESTORE");
+    let report = recovery::restore_backup(&dir, &path)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Execute the `rr export-recovery-key` subcommand.
+///
+/// Inputs: `out` — wrapped-key destination; `passphrase_file` — passphrase
+/// source; `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the envelope summary; propagated export failure.
+fn cmd_export_recovery_key(
+    out: PathBuf,
+    passphrase_file: PathBuf,
+    data_dir: &Option<PathBuf>,
+) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    if let Some(loaded) = policy::load_optional()? {
+        ensure!(
+            loaded.policy.allows_recovery_key_export(),
+            "Enterprise policy prohibits portable recovery-key export"
+        );
+    }
+    let passphrase = recovery_passphrase(&passphrase_file)?;
+    let envelope = recovery::export_recovery_key(&dir, &passphrase, &out)?;
+    let payload = serde_json::json!({
+            "created": out,
+            "vault_id": envelope.vault_id,
+            "format_version": envelope.format_version,
+            "note": "Encrypted recovery key created. Store it separately from the backup and securely delete the passphrase file when appropriate."
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+/// Execute the `rr verify-recovery-key` subcommand.
+///
+/// Inputs: `backup` — backup directory; `recovery_key` — wrapped key envelope;
+/// `passphrase_file` — passphrase source. Output: `Result<()>` — prints the
+/// verification summary; propagated authentication failure.
+fn cmd_verify_recovery_key(
+    backup: PathBuf,
+    recovery_key: PathBuf,
+    passphrase_file: PathBuf,
+) -> Result<()> {
+    let passphrase = recovery_passphrase(&passphrase_file)?;
+    let envelope = recovery::verify_recovery_key_for_backup(&backup, &recovery_key, &passphrase)?;
+    let payload = serde_json::json!({
+            "verified": true,
+            "vault_id": envelope.vault_id,
+            "format_version": envelope.format_version,
+            "note": "Recovery key authenticated the backup; no OS credential was modified."
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+/// Execute the `rr import-recovery-key` subcommand.
+///
+/// Inputs: `backup` — backup directory; `recovery_key` — wrapped key envelope;
+/// `passphrase_file` — passphrase source; `confirm` — acknowledgement
+/// (`IMPORT`); `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the import summary; propagated failure.
+fn cmd_import_recovery_key(
+    backup: PathBuf,
+    recovery_key: PathBuf,
+    passphrase_file: PathBuf,
+    confirm: String,
+    data_dir: &Option<PathBuf>,
+) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    ensure!(
+        confirm == "IMPORT",
+        "Recovery-key import requires --confirm IMPORT"
+    );
+    let passphrase = recovery_passphrase(&passphrase_file)?;
+    let import = recovery::import_recovery_key_for_backup;
+    let envelope = import(&dir, &backup, &recovery_key, &passphrase)?;
+    let payload = serde_json::json!({
+            "imported": true,
+            "vault_id": envelope.vault_id,
+            "note": "Recovered key installed only after authenticating the backup. Existing OS credentials are never overwritten automatically."
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+/// Execute the `rr diagnostics` subcommand.
+///
+/// Inputs: `out` — report destination; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — writes the redacted report; propagated
+/// failure.
+fn cmd_diagnostics(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    rejection_rejector::diagnostics::write_report(&e, &out)?;
+    println!(
+        "Privacy-safe diagnostics written locally to {}. Review before sharing.",
+        out.display()
+    );
+    Ok(())
+}
+
+/// Execute the `rr shadow-automatic` read-only audit subcommand.
+///
+/// Inputs: `out` — report destination; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — writes the shadow audit; propagated
+/// failure.
+fn cmd_shadow_automatic(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    shadow::write_report(&e, &out)?;
+    println!(
+        "Read-only Automatic shadow audit written to {}. No provider preflight or external write occurred.",
+        out.display()
+    );
+    Ok(())
+}
+
+/// Execute the `rr audit-anchor` export subcommand.
+///
+/// Inputs: `out` — anchor destination; `data_dir` — optional workspace
+/// override. Output: `Result<()>` — prints the anchor; propagated failure.
+fn cmd_audit_anchor(out: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let anchor = audit_anchor::write_anchor(&e.db, &e.directory, &out)?;
+    println!("{}", serde_json::to_string_pretty(&anchor)?);
+    Ok(())
+}
+
+/// Execute the `rr verify-audit-anchor` subcommand.
+///
+/// Inputs: `path` — previously exported anchor; `data_dir` — optional
+/// workspace override. Output: `Result<()>` — prints the verification
+/// summary; propagated failure.
+fn cmd_verify_audit_anchor(path: PathBuf, data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let e = open_engine(dir, false, true)?;
+    let anchor = audit_anchor::verify_anchor(&e.db, &e.directory, &path)?;
+    let payload = serde_json::json!({
+            "verified": true,
+            "anchor": anchor,
+            "current_audit_head": e.db.audit_head()?,
+            "current_audit_sequence": e.db.latest_event_seq()?
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 
