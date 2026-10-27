@@ -75,6 +75,101 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _add_finding(
+    findings: list[dict[str, str]], path: str, code: str, severity: str = "error"
+) -> None:
+    """Append one finding for the inspected path.
+
+    Inputs: `findings` - accumulator; `path` - repository-relative path;
+    `code` - stable finding code; `severity` - `error` or `warning`.
+    Output: none; the finding is appended.
+    """
+    findings.append({"path": path, "code": code, "severity": severity})
+
+
+def _decode_text(path: str, data: bytes, findings: list[dict[str, str]]) -> str | None:
+    """Run byte-level checks; return decoded text, or None to stop early.
+
+    Inputs: `path` - repository-relative path; `data` - raw blob bytes;
+    `findings` - accumulator. Output: decoded UTF-8 text, or `None` when the
+    bytes must not be parsed further.
+    """
+    if len(data) > MAX_TEXT_BYTES:
+        _add_finding(findings, path, "text_size_limit")
+        return None
+    if b"\0" in data:
+        _add_finding(findings, path, "nul_bytes_or_utf16_fragment")
+    if data.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
+        _add_finding(findings, path, "unexpected_byte_order_mark")
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        _add_finding(findings, path, "invalid_utf8")
+        return None
+
+
+def _check_control_characters(
+    path: str, text: str, findings: list[dict[str, str]]
+) -> None:
+    """Record unescaped control characters hidden in valid UTF-8.
+
+    Inputs: `path` - repository-relative path; `text` - decoded text;
+    `findings` - accumulator. Output: none.
+    """
+    if any(ord(c) < 32 and c not in "\t\r\n" for c in text) or "\x7f" in text:
+        _add_finding(findings, path, "unescaped_control_character")
+
+
+def _check_line_endings(path: str, text: str, findings: list[dict[str, str]]) -> None:
+    """Record carriage-return and final-newline findings.
+
+    Inputs: `path` - repository-relative path; `text` - decoded text;
+    `findings` - accumulator. Output: none.
+    """
+    if "\r" in text.replace("\r\n", ""):
+        _add_finding(findings, path, "bare_carriage_return")
+    if "\r\n" in text:
+        _add_finding(findings, path, "noncanonical_crlf", "warning")
+    if text and not text.endswith("\n"):
+        _add_finding(findings, path, "missing_final_newline", "warning")
+
+
+def _check_summary_language(path: str, text: str, findings: list[dict[str, str]]) -> None:
+    """Record Markdown heading padding that inflates commit counts.
+
+    Inputs: `path` - repository-relative path; `text` - decoded text;
+    `findings` - accumulator. Output: none.
+    """
+    if PurePosixPath(path).suffix.lower() == ".md" and re.search(
+        r"(?m)^#\s+Commit\s+\d+\s*$", text
+    ):
+        _add_finding(findings, path, "commit_count_padding")
+
+
+def _check_structure(path: str, text: str, findings: list[dict[str, str]]) -> None:
+    """Record TOML/JSON/Python parse failures as invalid_structured_text.
+
+    Inputs: `path` - repository-relative path; `text` - decoded text;
+    `findings` - accumulator. Output: none.
+    """
+    try:
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix == ".toml" or PurePosixPath(path).name == "Cargo.lock":
+            tomllib.loads(text)
+        elif suffix == ".json":
+            json.loads(
+                text,
+                object_pairs_hook=unique_object,
+                parse_constant=lambda _: (_ for _ in ()).throw(
+                    ValueError("nonfinite JSON")
+                ),
+            )
+        elif suffix == ".py":
+            ast.parse(text, filename=path)
+    except (ValueError, SyntaxError):
+        _add_finding(findings, path, "invalid_structured_text")
+
+
 def inspect_text(path: str, data: bytes) -> list[dict[str, str]]:
     """Inspect one committed text blob and report its findings.
 
@@ -84,73 +179,15 @@ def inspect_text(path: str, data: bytes) -> list[dict[str, str]]:
     finding also skips the structural parse.
     """
     findings: list[dict[str, str]] = []
-
-    def add(code: str, severity: str = "error") -> None:
-        """Append one finding for the inspected path."""
-        findings.append({"path": path, "code": code, "severity": severity})
-
-    def decode_text() -> str | None:
-        """Run byte-level checks; return decoded text, or None to stop early."""
-        if len(data) > MAX_TEXT_BYTES:
-            add("text_size_limit")
-            return None
-        if b"\0" in data:
-            add("nul_bytes_or_utf16_fragment")
-        if data.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
-            add("unexpected_byte_order_mark")
-        try:
-            return data.decode("utf-8", errors="strict")
-        except UnicodeDecodeError:
-            add("invalid_utf8")
-            return None
-
-    def check_control_characters(text: str) -> None:
-        """Record unescaped control characters hidden in valid UTF-8."""
-        if any(ord(c) < 32 and c not in "\t\r\n" for c in text) or "\x7f" in text:
-            add("unescaped_control_character")
-
-    def check_line_endings(text: str) -> None:
-        """Record carriage-return and final-newline findings."""
-        if "\r" in text.replace("\r\n", ""):
-            add("bare_carriage_return")
-        if "\r\n" in text:
-            add("noncanonical_crlf", "warning")
-        if text and not text.endswith("\n"):
-            add("missing_final_newline", "warning")
-
-    def check_summary_language(text: str) -> None:
-        """Record Markdown heading padding that inflates commit counts."""
-        if PurePosixPath(path).suffix.lower() == ".md" and re.search(
-            r"(?m)^#\s+Commit\s+\d+\s*$", text
-        ):
-            add("commit_count_padding")
-
-    def check_structure(text: str) -> None:
-        """Record TOML/JSON/Python parse failures as invalid_structured_text."""
-        try:
-            suffix = PurePosixPath(path).suffix.lower()
-            if suffix == ".toml" or PurePosixPath(path).name == "Cargo.lock":
-                tomllib.loads(text)
-            elif suffix == ".json":
-                json.loads(
-                    text,
-                    object_pairs_hook=unique_object,
-                    parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")),
-                )
-            elif suffix == ".py":
-                ast.parse(text, filename=path)
-        except (ValueError, SyntaxError):
-            add("invalid_structured_text")
-
-    text = decode_text()
+    text = _decode_text(path, data, findings)
     if text is None:
         return findings
-    check_control_characters(text)
-    check_line_endings(text)
-    check_summary_language(text)
+    _check_control_characters(path, text, findings)
+    _check_line_endings(path, text, findings)
+    _check_summary_language(path, text, findings)
     if any(f["severity"] == "error" for f in findings):
         return findings
-    check_structure(text)
+    _check_structure(path, text, findings)
     return findings
 
 

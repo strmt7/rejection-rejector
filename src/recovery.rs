@@ -36,17 +36,28 @@ pub const LAST_SCHEDULED_BACKUP_META: &str = "scheduled_backup_last_success";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BackupManifest {
+    /// Backup manifest format version.
     pub format_version: u32,
+    /// Application version that wrote the backup.
     pub app_version: String,
+    /// Timestamp of backup creation.
     pub created_at: DateTime<Utc>,
+    /// Database schema version of the backed-up store.
     pub schema_version: i64,
+    /// Name of the database file inside the backup.
     pub database_file: String,
+    /// SHA-256 of the backed-up database file.
     pub database_sha256: String,
+    /// Name of the vault identifier file inside the backup.
     pub vault_id_file: String,
+    /// Vault identifier bound to the backup.
     pub vault_id: String,
+    /// Audit head recorded at backup time.
     #[serde(default)]
     pub audit_head: String,
+    /// Whether the backup is portable across workspaces.
     pub portable: bool,
+    /// Operator-facing note recorded with the backup.
     pub recovery_note: String,
 }
 
@@ -56,13 +67,21 @@ pub struct BackupManifest {
 /// restored schema version, the rollback directory if any and a note.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RestoreReport {
+    /// Restore report format version.
     pub format_version: u32,
+    /// Timestamp of the restore.
     pub restored_at: DateTime<Utc>,
+    /// Creation timestamp of the source backup.
     pub source_backup_created_at: DateTime<Utc>,
+    /// SHA-256 of the source backup database.
     pub source_database_sha256: String,
+    /// Audit head of the source backup.
     pub source_audit_head: String,
+    /// Database schema version after the restore.
     pub restored_schema_version: i64,
+    /// Directory holding the pre-restore rollback copy.
     pub rollback_directory: Option<String>,
+    /// Operator-facing note about the restore.
     pub note: String,
 }
 
@@ -72,12 +91,19 @@ pub struct RestoreReport {
 /// last success and overdue state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScheduledBackupStatus {
+    /// Schema version of the status record.
     pub schema_version: u32,
+    /// Whether the scheduled backup is enabled.
     pub enabled: bool,
+    /// Backup interval in hours.
     pub interval_hours: u16,
+    /// Number of backups retained.
     pub keep: u8,
+    /// Timestamp of the last successful backup.
     pub last_success_at: Option<DateTime<Utc>>,
+    /// Age of the last successful backup in seconds.
     pub age_seconds: Option<i64>,
+    /// Whether the scheduled backup is overdue.
     pub overdue: bool,
 }
 /// Whether backups sit outside the workspace failure domain.
@@ -86,10 +112,15 @@ pub struct ScheduledBackupStatus {
 /// the distinct-failure-domain measurement and how it was measured.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackupIsolationStatus {
+    /// Schema version of the status record.
     pub schema_version: u32,
+    /// Whether backup isolation is configured.
     pub configured: bool,
+    /// Whether the backup destination exists.
     pub destination_exists: bool,
+    /// Whether the destination is a distinct failure domain, when measurable.
     pub distinct_failure_domain: Option<bool>,
+    /// How the failure-domain separation was measured.
     pub measurement: &'static str,
 }
 
@@ -99,17 +130,29 @@ pub struct BackupIsolationStatus {
 /// record counts verified after restore.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecoveryDrillReport {
+    /// Drill report format version.
     pub format_version: u32,
+    /// Timestamp of the drill run.
     pub drilled_at: DateTime<Utc>,
+    /// Creation timestamp of the drilled backup.
     pub source_backup_created_at: DateTime<Utc>,
+    /// SHA-256 of the drilled backup database.
     pub source_database_sha256: String,
+    /// Audit head of the drilled backup.
     pub source_audit_head: String,
+    /// Database schema version of the restored copy.
     pub restored_schema_version: i64,
+    /// Metadata record count in the restored copy.
     pub metadata_records: u64,
+    /// Item record count in the restored copy.
     pub item_records: u64,
+    /// Audit event count in the restored copy.
     pub audit_events: u64,
+    /// Delivery record count in the restored copy.
     pub delivery_records: u64,
+    /// Whether the isolated restore completed successfully.
     pub isolated_restore_succeeded: bool,
+    /// Operator-facing note about the drill outcome.
     pub note: String,
 }
 
@@ -2588,6 +2631,42 @@ mod tests {
         assert!(
             error.to_string().contains("manifest.json"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// Why: these three misconfiguration contracts are what the operator sees
+    /// when the scheduled-backup surface is wired wrong — a disabled schedule,
+    /// a file standing in for the backup root and a file standing in for the
+    /// isolation destination must each fail with their exact named error
+    /// instead of a generic IO failure or a silent no-op.
+    #[test]
+    fn scheduled_backup_misconfiguration_errors_are_named() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, mut store) = seeded_workspace(root.path(), "data");
+
+        let error = create_scheduled_backup(&mut store, &data, &Settings::default(), Utc::now())
+            .expect_err("a disabled schedule must refuse to back up");
+        assert_eq!(error.to_string(), "Scheduled backups are not enabled");
+
+        let plain_file = root.path().join("not-a-directory");
+        fs::write(&plain_file, b"x").unwrap();
+        let error = prune_verified_scheduled_backups(&store, &plain_file, 2)
+            .expect_err("a file root must be refused");
+        assert_eq!(
+            error.to_string(),
+            "Scheduled backup root is not a directory"
+        );
+
+        let settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: plain_file.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let error = backup_isolation_status(&data, &settings)
+            .expect_err("a file destination must be refused");
+        assert_eq!(
+            error.to_string(),
+            "Scheduled backup destination must be a real directory"
         );
     }
 }

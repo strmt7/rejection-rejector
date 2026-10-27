@@ -19,8 +19,11 @@ pub const EMERGENCY_STOP_FILE_ENV: &str = "RR_EMERGENCY_STOP_FILE";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct EmergencyStopStatus {
+    /// Whether an emergency stop is configured on this host.
     pub configured: bool,
+    /// Whether the emergency stop currently blocks dispatch.
     pub active: bool,
+    /// Operator-facing reason for the current stop state.
     pub reason: String,
 }
 

@@ -124,8 +124,10 @@ fn default_settings_format_version() -> u32 {
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    /// Every outbound reply waits for explicit operator approval.
     #[default]
     HumanReview,
+    /// Qualified rejections may dispatch without per-message operator approval.
     Automatic,
 }
 impl Mode {
@@ -166,16 +168,25 @@ pub enum Tone {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TaskQualification {
+    /// Qualified model name and digest.
     pub model: String,
+    /// Model digest that was qualified.
     pub digest: String,
+    /// Prompt version used during qualification.
     pub prompt_version: String,
+    /// Hash of the qualification context.
     pub context_hash: String,
+    /// Hash of the qualification suite.
     #[serde(default)]
     pub suite_hash: String,
+    /// Ollama runtime version used during qualification.
     #[serde(default)]
     pub ollama_runtime_version: String,
+    /// Measured task score for the qualification run.
     pub task_score: f64,
+    /// Number of qualification fixtures exercised.
     pub fixture_count: u32,
+    /// Timestamp of the qualification run.
     pub qualified_at: DateTime<Utc>,
 }
 

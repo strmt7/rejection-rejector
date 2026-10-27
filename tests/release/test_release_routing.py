@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class ReleaseRoutingTests(unittest.TestCase):
     """Verification workflows must never become a release path."""
+
     def test_rust_ci_does_not_publish_a_deployable_package(self):
         """Rust CI never packages or publishes a deployable artifact."""
         text = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')

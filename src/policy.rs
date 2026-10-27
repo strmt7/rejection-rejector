@@ -40,21 +40,37 @@ pub fn schema_sha256() -> String {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnterprisePolicy {
+    /// Policy document format version.
     pub version: u32,
+    /// Stable policy identifier.
     pub policy_id: Option<String>,
+    /// Monotonic policy revision.
     pub revision: Option<u64>,
+    /// Timestamp before which the policy is not valid.
     pub not_before: Option<DateTime<Utc>>,
+    /// Timestamp after which the policy expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Whether every reply must pass through human review.
     pub force_human_review: bool,
+    /// Whether sending is prohibited outright.
     pub prohibit_sending: bool,
+    /// Whether the integration API is prohibited.
     pub prohibit_integration_api: bool,
+    /// Whether recovery key export is prohibited.
     pub prohibit_recovery_key_export: bool,
+    /// Whether an external audit anchor is required.
     pub require_external_audit_anchor: bool,
+    /// Whether an independent verifier is required.
     pub require_independent_verifier: bool,
+    /// Maximum send attempts allowed per day.
     pub max_daily_send_limit: Option<u16>,
+    /// Minimum cooldown between sends, in minutes.
     pub min_cooldown_minutes: Option<u16>,
+    /// Minimum retention period for stored items, in days.
     pub min_retention_days: Option<u16>,
+    /// Model digests permitted for drafting.
     pub allowed_models: Vec<String>,
+    /// Model digests permitted for verification.
     pub allowed_verifier_models: Vec<String>,
 }
 
@@ -64,30 +80,55 @@ pub struct EnterprisePolicy {
 /// and signature verification results and the enforced restrictions.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PolicyStatus {
+    /// Whether the enterprise policy is active.
     pub active: bool,
+    /// Policy document format version.
     pub version: Option<u32>,
+    /// Stable policy identifier.
     pub policy_id: Option<String>,
+    /// Monotonic policy revision.
     pub revision: Option<u64>,
+    /// Timestamp before which the policy is not valid.
     pub not_before: Option<DateTime<Utc>>,
+    /// Timestamp after which the policy expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Digest of the loaded policy document.
     pub digest: Option<String>,
+    /// Whether the policy digest pin is enforced.
     pub digest_pin_enforced: bool,
+    /// Whether the loaded policy matches the pinned digest.
     pub digest_pin_matches: bool,
+    /// Whether a policy signature is required.
     pub signature_enforced: bool,
+    /// Whether the loaded policy signature verified.
     pub signature_verified: bool,
+    /// SHA-256 of the signer key that verified the policy.
     pub signer_key_sha256: Option<String>,
+    /// Whether every reply must pass through human review.
     pub force_human_review: bool,
+    /// Whether sending is prohibited outright.
     pub prohibit_sending: bool,
+    /// Whether the integration API is prohibited.
     pub prohibit_integration_api: bool,
+    /// Whether recovery key export is prohibited.
     pub prohibit_recovery_key_export: bool,
+    /// Whether an external audit anchor is required.
     pub require_external_audit_anchor: bool,
+    /// Whether an independent verifier is required.
     pub require_independent_verifier: bool,
+    /// Maximum send attempts allowed per day.
     pub max_daily_send_limit: Option<u16>,
+    /// Minimum cooldown between sends, in minutes.
     pub min_cooldown_minutes: Option<u16>,
+    /// Minimum retention period for stored items, in days.
     pub min_retention_days: Option<u16>,
+    /// Number of models permitted for drafting.
     pub allowed_model_count: usize,
+    /// Model digests permitted for drafting.
     pub allowed_models: Vec<String>,
+    /// Number of models permitted for verification.
     pub allowed_verifier_model_count: usize,
+    /// Model digests permitted for verification.
     pub allowed_verifier_models: Vec<String>,
 }
 
@@ -348,11 +389,17 @@ impl EnterprisePolicy {
 /// pinned digest if any, and the signature enforcement results.
 #[derive(Clone, Debug)]
 pub struct LoadedPolicy {
+    /// The parsed enterprise policy.
     pub policy: EnterprisePolicy,
+    /// Digest of the policy document being enforced.
     pub digest: String,
+    /// Expected policy digest recorded at load time.
     pub expected_digest: Option<String>,
+    /// Whether a policy signature is required.
     pub signature_enforced: bool,
+    /// Whether the loaded policy signature verified.
     pub signature_verified: bool,
+    /// SHA-256 of the signer key that verified the policy.
     pub signer_key_sha256: Option<String>,
 }
 
@@ -378,6 +425,7 @@ struct SignatureRequirement {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyRevisionFloor {
+    /// Per-policy minimum accepted revisions.
     pub policies: std::collections::BTreeMap<String, PolicyRevisionRecord>,
 }
 
@@ -388,7 +436,9 @@ pub struct PolicyRevisionFloor {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRevisionRecord {
+    /// Highest accepted revision for the policy.
     pub revision: u64,
+    /// Digest recorded with the accepted revision.
     pub digest: String,
 }
 
@@ -1729,5 +1779,556 @@ mod configuration_seam_tests {
             Some(policy)
         );
         assert!(policy_path_from(Some("relative.json".into()), None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod policy_control_tests {
+    use super::*;
+    use crate::config::Settings;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+
+    fn v3() -> EnterprisePolicy {
+        EnterprisePolicy {
+            version: 3,
+            policy_id: Some("corp".into()),
+            revision: Some(1),
+            ..Default::default()
+        }
+    }
+
+    /// Why: `validate` is the schema gate in front of every enforcement pass;
+    /// each rule must fail with its own stable reason so a malformed rollout
+    /// document can be diagnosed precisely instead of surfacing as a generic
+    /// parse failure later.
+    #[test]
+    fn validate_rejects_every_malformed_policy_with_its_own_reason() {
+        let instant = Utc::now();
+        let cases: Vec<(EnterprisePolicy, &str)> = vec![
+            (
+                EnterprisePolicy::default(),
+                "Unsupported enterprise policy version",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 4,
+                    ..Default::default()
+                },
+                "Unsupported enterprise policy version",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 1,
+                    policy_id: Some("corp".into()),
+                    ..Default::default()
+                },
+                "Policy v1 cannot contain v2 lifecycle fields",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 1,
+                    revision: Some(1),
+                    ..Default::default()
+                },
+                "Policy v1 cannot contain v2 lifecycle fields",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 1,
+                    not_before: Some(Utc::now()),
+                    ..Default::default()
+                },
+                "Policy v1 cannot contain v2 lifecycle fields",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 1,
+                    expires_at: Some(Utc::now()),
+                    ..Default::default()
+                },
+                "Policy v1 cannot contain v2 lifecycle fields",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    ..Default::default()
+                },
+                "Policy v2 requires policy_id",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some(String::new()),
+                    ..Default::default()
+                },
+                "Policy v2 requires policy_id",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("x".repeat(129)),
+                    revision: Some(1),
+                    ..Default::default()
+                },
+                "Policy v2 policy_id contains unsupported characters",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("bad@id".into()),
+                    revision: Some(1),
+                    ..Default::default()
+                },
+                "Policy v2 policy_id contains unsupported characters",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp".into()),
+                    ..Default::default()
+                },
+                "Policy v2 requires revision >= 1",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp".into()),
+                    revision: Some(0),
+                    ..Default::default()
+                },
+                "Policy v2 requires revision >= 1",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp".into()),
+                    revision: Some(1),
+                    not_before: Some(instant),
+                    expires_at: Some(instant),
+                    ..Default::default()
+                },
+                "Policy v2 not_before must be before expires_at",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp".into()),
+                    revision: Some(1),
+                    require_independent_verifier: true,
+                    ..Default::default()
+                },
+                "Independent-verifier policy controls require policy version 3",
+            ),
+            (
+                EnterprisePolicy {
+                    version: 2,
+                    policy_id: Some("corp".into()),
+                    revision: Some(1),
+                    allowed_verifier_models: vec!["verifier:1".into()],
+                    ..Default::default()
+                },
+                "Independent-verifier policy controls require policy version 3",
+            ),
+            (
+                EnterprisePolicy {
+                    require_independent_verifier: true,
+                    allowed_models: vec!["model:1".into()],
+                    allowed_verifier_models: vec!["model:1".into()],
+                    ..v3()
+                },
+                "Enterprise policy cannot require an independent verifier when every allowed primary/verifier pairing uses the same model tag",
+            ),
+            (
+                EnterprisePolicy {
+                    max_daily_send_limit: Some(0),
+                    ..v3()
+                },
+                "Enterprise daily send limit must be 1..100",
+            ),
+            (
+                EnterprisePolicy {
+                    max_daily_send_limit: Some(101),
+                    ..v3()
+                },
+                "Enterprise daily send limit must be 1..100",
+            ),
+            (
+                EnterprisePolicy {
+                    min_cooldown_minutes: Some(0),
+                    ..v3()
+                },
+                "Enterprise minimum cooldown must be 1..1440 minutes",
+            ),
+            (
+                EnterprisePolicy {
+                    min_cooldown_minutes: Some(1441),
+                    ..v3()
+                },
+                "Enterprise minimum cooldown must be 1..1440 minutes",
+            ),
+            (
+                EnterprisePolicy {
+                    min_retention_days: Some(29),
+                    ..v3()
+                },
+                "Enterprise minimum retention must be 30..3650 days",
+            ),
+            (
+                EnterprisePolicy {
+                    min_retention_days: Some(3651),
+                    ..v3()
+                },
+                "Enterprise minimum retention must be 30..3650 days",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_models: (0..65).map(|i| format!("m{i}:1")).collect(),
+                    ..v3()
+                },
+                "Enterprise model allow-list is too large",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_models: vec!["m:1".into(), "m:1".into()],
+                    ..v3()
+                },
+                "Enterprise model allow-list contains duplicates",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_models: vec![String::new()],
+                    ..v3()
+                },
+                "Invalid model name",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_verifier_models: (0..65).map(|i| format!("v{i}:1")).collect(),
+                    ..v3()
+                },
+                "Enterprise verifier-model allow-list is too large",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_verifier_models: vec!["v:1".into(), "v:1".into()],
+                    ..v3()
+                },
+                "Enterprise verifier-model allow-list contains duplicates",
+            ),
+            (
+                EnterprisePolicy {
+                    allowed_verifier_models: vec![String::new()],
+                    ..v3()
+                },
+                "Invalid model name",
+            ),
+        ];
+        for (policy, reason) in cases {
+            let error = policy.validate().unwrap_err();
+            assert_eq!(error.to_string(), reason, "policy: {policy:?}");
+        }
+
+        // Boundary values on each numeric control are accepted.
+        EnterprisePolicy {
+            max_daily_send_limit: Some(1),
+            min_cooldown_minutes: Some(1),
+            min_retention_days: Some(30),
+            ..v3()
+        }
+        .validate()
+        .unwrap();
+        EnterprisePolicy {
+            max_daily_send_limit: Some(100),
+            min_cooldown_minutes: Some(1440),
+            min_retention_days: Some(3650),
+            ..v3()
+        }
+        .validate()
+        .unwrap();
+        // A distinct verifier pairing satisfies the independence check.
+        EnterprisePolicy {
+            require_independent_verifier: true,
+            allowed_models: vec!["model:1".into(), "model:2".into()],
+            allowed_verifier_models: vec!["model:1".into()],
+            ..v3()
+        }
+        .validate()
+        .unwrap();
+    }
+
+    /// Why: `enforce` must report honestly whether it changed settings (the
+    /// caller persists on `true`), and the integration-API prohibition must
+    /// clear both the listener and the write scope, not just the listener.
+    #[test]
+    fn enforce_reports_change_detection_and_fully_disables_the_integration_api() {
+        let mut settings = Settings::default();
+        assert!(!v3().enforce(&mut settings, true).unwrap());
+        assert_eq!(settings, Settings::default());
+
+        let mut settings = Settings {
+            api_enabled: true,
+            api_allow_writes: true,
+            ..Settings::default()
+        };
+        let policy = EnterprisePolicy {
+            prohibit_integration_api: true,
+            ..v3()
+        };
+        assert!(policy.enforce(&mut settings, true).unwrap());
+        assert!(!settings.api_enabled);
+        assert!(!settings.api_allow_writes);
+    }
+
+    /// Why: requiring an independent verifier without a qualified verifier
+    /// digest must disarm delivery (the verifier cannot be trusted yet), and an
+    /// explicit update selecting an unapproved primary model must be refused
+    /// with the exact reason rather than silently swapping models.
+    #[test]
+    fn enforce_disarms_without_a_verifier_digest_and_refuses_unapproved_models() {
+        let policy = EnterprisePolicy {
+            require_independent_verifier: true,
+            ..v3()
+        };
+        let mut settings = Settings {
+            model: "model:1".into(),
+            verifier_model: "verifier:1".into(),
+            verifier_model_digest: None,
+            sending_enabled: true,
+            automatic_confirmed: true,
+            ..Settings::default()
+        };
+        assert!(policy.enforce(&mut settings, true).unwrap());
+        assert!(settings.independent_verifier_enabled);
+        assert!(!settings.sending_enabled);
+        assert!(!settings.automatic_confirmed);
+        assert_eq!(settings.mode, crate::config::Mode::HumanReview);
+
+        let policy = EnterprisePolicy {
+            allowed_models: vec!["approved:1".into()],
+            ..v3()
+        };
+        let mut settings = Settings {
+            model: "other:1".into(),
+            ..Settings::default()
+        };
+        assert_eq!(
+            policy
+                .enforce(&mut settings, false)
+                .unwrap_err()
+                .to_string(),
+            "Selected model is not approved by enterprise policy"
+        );
+    }
+
+    /// Why: the status is the operator's integrity view; a digest pin that does
+    /// not match the loaded policy must be reported as a mismatch, never
+    /// smoothed over by the `is_none_or` default.
+    #[test]
+    fn status_reports_a_digest_pin_mismatch() {
+        let loaded = LoadedPolicy {
+            policy: v3(),
+            digest: "a".repeat(64),
+            expected_digest: Some("b".repeat(64)),
+            signature_enforced: false,
+            signature_verified: false,
+            signer_key_sha256: None,
+        };
+        let status = loaded.status();
+        assert!(status.digest_pin_enforced);
+        assert!(!status.digest_pin_matches);
+    }
+
+    fn requirement(signature_path: PathBuf, public_key: Vec<u8>) -> SignatureRequirement {
+        SignatureRequirement {
+            signer_key_sha256: crate::hex_lower(Sha256::digest(&public_key)),
+            public_key,
+            signature_path,
+        }
+    }
+
+    fn signed_envelope(key_pair: &Ed25519KeyPair, body: &[u8]) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "version": 1,
+            "algorithm": "ed25519",
+            "signature": STANDARD.encode(key_pair.sign(body).as_ref()),
+        }))
+        .unwrap()
+    }
+
+    /// Why: the detached signature file is the authenticity root for enterprise
+    /// policy; every defect (path, size, envelope schema, key material,
+    /// cryptographic mismatch) must fail closed with its own reason so a broken
+    /// rollout is distinguishable from a forged policy.
+    #[test]
+    fn detached_signature_verification_fails_closed_on_every_defect() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).unwrap();
+        let public_key = key_pair.public_key().as_ref().to_vec();
+        let body = br#"{"version":3,"policy_id":"corp","revision":1}"#;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.json.sig");
+
+        let relative = requirement(PathBuf::from("policy.json.sig"), public_key.clone());
+        assert_eq!(
+            verify_detached_signature(&relative, body)
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy signature path must be absolute"
+        );
+
+        let missing = requirement(root.path().join("absent.sig"), public_key.clone());
+        assert_eq!(
+            verify_detached_signature(&missing, body)
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy signature file is missing"
+        );
+
+        std::fs::write(&path, vec![b'A'; (MAX_POLICY_SIGNATURE_BYTES + 1) as usize]).unwrap();
+        let oversized = requirement(path.clone(), public_key.clone());
+        assert_eq!(
+            verify_detached_signature(&oversized, body)
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy signature file exceeds 4 KiB"
+        );
+
+        std::fs::write(&path, b"not json").unwrap();
+        let broken = requirement(path.clone(), public_key.clone());
+        assert_eq!(
+            verify_detached_signature(&broken, body)
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy signature file is invalid JSON"
+        );
+
+        for (envelope, reason) in [
+            (
+                r#"{"version":2,"algorithm":"ed25519","signature":"AAAA"}"#.to_owned(),
+                "Unsupported enterprise policy signature version",
+            ),
+            (
+                r#"{"version":1,"algorithm":"rsa","signature":"AAAA"}"#.to_owned(),
+                "Unsupported enterprise policy signature algorithm",
+            ),
+            (
+                r#"{"version":1,"algorithm":"ed25519","signature":"!!!"}"#.to_owned(),
+                "Enterprise policy signature must be standard base64",
+            ),
+            (
+                serde_json::to_string(&serde_json::json!({
+                    "version": 1,
+                    "algorithm": "ed25519",
+                    "signature": STANDARD.encode([0u8; 63]),
+                }))
+                .unwrap(),
+                "Enterprise policy Ed25519 signature must decode to exactly 64 bytes",
+            ),
+            (
+                serde_json::to_string(&serde_json::json!({
+                    "version": 1,
+                    "algorithm": "ed25519",
+                    "signature": STANDARD.encode([0u8; 64]),
+                }))
+                .unwrap(),
+                "Enterprise policy Ed25519 signature verification failed",
+            ),
+        ] {
+            std::fs::write(&path, envelope).unwrap();
+            let req = requirement(path.clone(), public_key.clone());
+            assert_eq!(
+                verify_detached_signature(&req, body)
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
+        }
+
+        // The exact signed bytes verify; any other content does not.
+        std::fs::write(&path, signed_envelope(&key_pair, body)).unwrap();
+        let req = requirement(path.clone(), public_key.clone());
+        verify_detached_signature(&req, body).unwrap();
+        assert!(
+            verify_detached_signature(&req, br#"{"version":3}"#).is_err(),
+            "the signature must bind the exact policy bytes"
+        );
+    }
+
+    /// Why: loading is the last gate before enforcement; each structural defect
+    /// must be named precisely and the digest pin must compare against the
+    /// exact file bytes so any drift fails closed.
+    #[test]
+    fn policy_file_loading_names_each_structural_defect() {
+        assert_eq!(
+            load_file(Path::new("relative.json"))
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy path must be absolute"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("policy.json");
+        assert_eq!(
+            load_file(&path).unwrap_err().to_string(),
+            "Enterprise policy file is missing"
+        );
+
+        std::fs::write(&path, vec![b' '; (MAX_POLICY_BYTES + 1) as usize]).unwrap();
+        assert_eq!(
+            load_file(&path).unwrap_err().to_string(),
+            "Enterprise policy exceeds 64 KiB"
+        );
+
+        std::fs::write(&path, b"not json").unwrap();
+        assert_eq!(
+            load_file(&path).unwrap_err().to_string(),
+            "Enterprise policy is invalid JSON"
+        );
+
+        std::fs::write(&path, br#"{"version":9}"#).unwrap();
+        assert_eq!(
+            load_file(&path).unwrap_err().to_string(),
+            "Unsupported enterprise policy version"
+        );
+
+        let body = br#"{"version":3,"policy_id":"corp","revision":1}"#;
+        std::fs::write(&path, body).unwrap();
+        let digest = crate::hex_lower(Sha256::digest(body));
+        let loaded = load_file_with_controls(&path, Some(digest), None).unwrap();
+        assert_eq!(loaded.policy.policy_id.as_deref(), Some("corp"));
+        std::fs::write(&path, br#"{"version":3,"policy_id":"corp","revision":2}"#).unwrap();
+        assert_eq!(
+            load_file_with_controls(&path, Some("a".repeat(64)), None)
+                .unwrap_err()
+                .to_string(),
+            "Enterprise policy digest does not match RR_ENTERPRISE_POLICY_SHA256"
+        );
+    }
+
+    /// Why: reload and startup flows run against the armed policy-loader seam;
+    /// the substitution must answer exactly what was armed (including `None`),
+    /// or the flows under test would fall through to machine-wide state.
+    #[test]
+    fn load_optional_honours_the_armed_test_loader() {
+        let loaded = LoadedPolicy {
+            policy: EnterprisePolicy {
+                version: 1,
+                prohibit_sending: true,
+                ..Default::default()
+            },
+            digest: "d".repeat(64),
+            expected_digest: None,
+            signature_enforced: false,
+            signature_verified: false,
+            signer_key_sha256: None,
+        };
+        let returned = crate::test_support::with_policy(Some(loaded.clone()), load_optional)
+            .unwrap()
+            .expect("the armed policy must load");
+        assert_eq!(returned.policy, loaded.policy);
+        assert!(
+            crate::test_support::with_policy(None, load_optional)
+                .unwrap()
+                .is_none()
+        );
     }
 }
