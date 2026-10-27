@@ -1810,11 +1810,11 @@ mod tests {
     fn with_headless_vault_input<R>(body: impl FnOnce() -> R) -> R {
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            return temp_env::with_var(
+            temp_env::with_var(
                 "RR_VAULT_PASSPHRASE",
                 Some("rr-test-headless-vault-passphrase"),
                 body,
-            );
+            )
         }
         #[cfg(any(windows, target_os = "macos"))]
         {
