@@ -2814,7 +2814,11 @@ pub(super) mod headless {
             // Dropping the worker's own sender disconnects the engine loop;
             // wait for its one startup refresh before taking over the view.
             app.worker.tx = tx;
-            let deadline = Instant::now() + Duration::from_secs(10);
+            // 60s startup budget: 2-vCPU runners run the GUI test set in
+            // parallel and a 10s budget flaked with "worker never
+            // initialized" under load (same root cause as the worker demo
+            // test flake fixed in 71ede60).
+            let deadline = Instant::now() + Duration::from_secs(60);
             while !app.worker.view().initialized {
                 assert!(Instant::now() < deadline, "worker never initialized");
                 std::thread::sleep(Duration::from_millis(5));
