@@ -2087,7 +2087,7 @@ def verify_counts(path: Path, report: dict) -> dict:
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
-    def tally(key_fn) -> dict:
+    def count_by(key_fn) -> dict:
         """Count rows by key. Input: key function. Output: sorted counts."""
         out: dict[str, int] = {}
         for row in rows:
@@ -2113,10 +2113,11 @@ def verify_counts(path: Path, report: dict) -> dict:
 
     checks = {
         "total_matches": len(rows) == report.get("total_rows"),
-        "by_category_match": tally(category) == dict(sorted(report.get("by_category", {}).items())),
-        "by_label_match": tally(label) == dict(sorted(report.get("by_label", {}).items())),
-        "by_purpose_match": tally(purpose) == dict(sorted(report.get("by_purpose", {}).items())),
-        "by_language_match": tally(lang) == dict(sorted(report.get("by_language", {}).items())),
+        "by_category_match": count_by(category)
+        == dict(sorted(report.get("by_category", {}).items())),
+        "by_label_match": count_by(label) == dict(sorted(report.get("by_label", {}).items())),
+        "by_purpose_match": count_by(purpose) == dict(sorted(report.get("by_purpose", {}).items())),
+        "by_language_match": count_by(lang) == dict(sorted(report.get("by_language", {}).items())),
     }
     total = len(rows)
     rejection_share = sum(1 for r in rows if r["meta"]["category"] == "rejection") / max(1, total)
@@ -2364,7 +2365,9 @@ def _redact_dedup(candidates: list[dict], name_tokens: set[str], existing_exact:
     return accepted, dedup_stats, redactor
 
 
-def _select_rows(accepted: list[dict], plan: dict, args, rng) -> tuple[list[dict], dict[str, dict]]:
+def _select_rows(
+    accepted: list[dict], plan: dict, _args, rng
+) -> tuple[list[dict], dict[str, dict]]:
     """Phase 3: distribution-constrained selection. Inputs: accepted slots,
     the distribution plan, parsed args and the seeded rng. Output:
     `(rows, provenance)`.
@@ -2449,7 +2452,7 @@ def _build_report(
     rows,
     provenance,
     scanned,
-    kept_raw,
+    _kept_raw,
     candidates,
     reservoir_seen,
     accepted,
@@ -2461,7 +2464,7 @@ def _build_report(
     schema_sample,
     leakage,
     sweep_totals,
-    out_path,
+    _out_path,
 ) -> dict:
     """Assemble the mining report. Inputs: args, produced rows and
     provenance, phase counters and every verification result. Output: the

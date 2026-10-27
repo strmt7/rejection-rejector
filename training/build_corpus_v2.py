@@ -415,8 +415,8 @@ def assemble_adversarial(rng: random.Random, lang: str, fmt_name: str, slots: di
     plain = bank["neg"].get("adversarial", {}).get("core", [])
     for text in plain:
         rendered = fmt(text, slots)
-        cat = "opportunity" if ADV_POSITIVE_RE.search(rendered) else "other"
-        items.append((rendered, cat))
+        adv_cat = "opportunity" if ADV_POSITIVE_RE.search(rendered) else "other"
+        items.append((rendered, adv_cat))
     core, core_cat = pick(rng, items)
 
     # keep subject and body coherent: pick the adversarial subject with the
@@ -938,7 +938,7 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
             if line.strip()
         ]
 
-    def tally(rows: list[dict], key_fn) -> dict:
+    def count_by(rows: list[dict], key_fn) -> dict:
         """Count rows by key. Inputs: rows, key function. Output: sorted counts."""
         out: dict[str, int] = {}
         for row in rows:
@@ -957,11 +957,11 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
         return json.loads(row["messages"][2]["content"])["language"]
 
     checks = {
-        "train_by_category_match": tally(train, category) == report["train_by_category"],
-        "holdout_by_category_match": tally(holdout, category) == report["holdout_by_category"],
-        "train_by_language_match": tally(train, language) == report["train_by_language"],
-        "holdout_by_language_match": tally(holdout, language) == report["holdout_by_language"],
-        "total_by_language_match": tally(train + holdout, language) == report["by_language"],
+        "train_by_category_match": count_by(train, category) == report["train_by_category"],
+        "holdout_by_category_match": count_by(holdout, category) == report["holdout_by_category"],
+        "train_by_language_match": count_by(train, language) == report["train_by_language"],
+        "holdout_by_language_match": count_by(holdout, language) == report["holdout_by_language"],
+        "total_by_language_match": count_by(train + holdout, language) == report["by_language"],
     }
 
     def neg_type(row):
@@ -974,10 +974,12 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
         if r["meta"]["label"] == "not_rejection" and r["meta"]["category"] != "uncertain"
     ]
     checks["negative_type_counts_match"] = (
-        tally(hard_neg_rows, neg_type) == report["by_negative_type"]
+        count_by(hard_neg_rows, neg_type) == report["by_negative_type"]
     )
     amb_rows = [r for r in train + holdout if r["meta"]["category"] == "uncertain"]
-    checks["ambiguous_type_counts_match"] = tally(amb_rows, neg_type) == report["by_ambiguous_type"]
+    checks["ambiguous_type_counts_match"] = (
+        count_by(amb_rows, neg_type) == report["by_ambiguous_type"]
+    )
     return checks
 
 
@@ -1028,7 +1030,7 @@ def _build_report(
     records,
     train_rows,
     holdout_rows,
-    neg_type_by_id,
+    _neg_type_by_id,
     format_by_id,
     gen_stats,
     split_stats,
