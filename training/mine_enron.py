@@ -2113,7 +2113,8 @@ def verify_counts(path: Path, report: dict) -> dict:
 
     checks = {
         "total_matches": len(rows) == report.get("total_rows"),
-        "by_category_match": count_by(category) == dict(sorted(report.get("by_category", {}).items())),
+        "by_category_match": count_by(category)
+        == dict(sorted(report.get("by_category", {}).items())),
         "by_label_match": count_by(label) == dict(sorted(report.get("by_label", {}).items())),
         "by_purpose_match": count_by(purpose) == dict(sorted(report.get("by_purpose", {}).items())),
         "by_language_match": count_by(lang) == dict(sorted(report.get("by_language", {}).items())),
@@ -2364,7 +2365,9 @@ def _redact_dedup(candidates: list[dict], name_tokens: set[str], existing_exact:
     return accepted, dedup_stats, redactor
 
 
-def _select_rows(accepted: list[dict], plan: dict, _args, rng) -> tuple[list[dict], dict[str, dict]]:
+def _select_rows(
+    accepted: list[dict], plan: dict, _args, rng
+) -> tuple[list[dict], dict[str, dict]]:
     """Phase 3: distribution-constrained selection. Inputs: accepted slots,
     the distribution plan, parsed args and the seeded rng. Output:
     `(rows, provenance)`.

@@ -783,6 +783,398 @@ mod tests {
 }
 
 #[cfg(test)]
+mod reply_envelope_tests {
+    use super::*;
+    use crate::config::Settings;
+    use crate::types::{Draft, Job, Source, Stub};
+
+    fn stub(account: &str) -> Stub {
+        Stub {
+            account: account.into(),
+            provider_id: "provider-1".into(),
+            thread_id: "thread-1".into(),
+            source: Source::Gmail,
+        }
+    }
+
+    /// Builds one sendable job whose original message and draft are internally
+    /// consistent with the job identity.
+    fn job_with(account: &str, body: &str) -> Job {
+        let stub = stub(account);
+        let mut job = Job::new(stub.clone(), Utc::now());
+        let mut email =
+            crate::ollama::sample_email("Offer update", "We have decided not to move forward.");
+        email.stub = stub;
+        email.from = "Recruitment <hr@example.invalid>".into();
+        email.message_id = "<abc@example.invalid>".into();
+        job.email = Some(email);
+        job.draft = Some(Draft {
+            body: body.into(),
+            origin: "model".into(),
+        });
+        job
+    }
+
+    fn sent_settings() -> Settings {
+        Settings {
+            sending_enabled: true,
+            signature: "Test Applicant".into(),
+            ..Settings::default()
+        }
+    }
+
+    /// Why: `raw_reply` is the exact bytes handed to the provider; every header
+    /// is a delivery or loop-suppression contract, and the base64 body must
+    /// round-trip to the draft with CRLF line endings regardless of the draft's
+    /// own line endings. A drifting header breaks threading; a leaked raw body
+    /// or wrong transfer encoding breaks privacy and rendering.
+    #[test]
+    fn raw_reply_renders_the_full_delivery_safe_rfc2822_envelope() {
+        let mut job = job_with("me@example.com", "First line\nSecond line");
+        job.email.as_mut().unwrap().references = vec![
+            "<bad".into(),
+            "<r1@e.invalid>".into(),
+            "<r2@e.invalid>".into(),
+        ];
+        let now = Utc::now();
+        let encoded = raw_reply(&job, &sent_settings(), "me@example.com", now).unwrap();
+        let raw = String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+
+        assert!(
+            raw.starts_with("From: me@example.com\r\nTo: hr@example.invalid\r\n"),
+            "unexpected envelope head: {raw}"
+        );
+        assert!(raw.contains(&format!("Subject: {}\r\n", encoded_subject("Offer update"))));
+        assert!(raw.contains("Date: "));
+        assert!(raw.contains(&now.to_rfc2822()));
+        assert!(raw.contains(&format!("Message-ID: {}\r\n", outgoing_id(&job))));
+        assert!(raw.contains("In-Reply-To: <abc@example.invalid>\r\n"));
+        assert!(
+            raw.contains(
+                "References: <r1@e.invalid>\r\n <r2@e.invalid>\r\n <abc@example.invalid>\r\n"
+            ),
+            "invalid references must be dropped and the original id appended last: {raw}"
+        );
+        assert!(raw.contains("Auto-Submitted: auto-replied\r\n"));
+        assert!(raw.contains("X-Auto-Response-Suppress: All\r\n"));
+        assert!(raw.contains(&format!(
+            "X-Rejection-Rejector: {}\r\n",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(raw.contains("MIME-Version: 1.0\r\n"));
+        assert!(raw.contains("Content-Type: text/plain; charset=UTF-8\r\n"));
+        assert!(raw.contains("Content-Transfer-Encoding: base64\r\n"));
+
+        let wrapped = raw.split("\r\n\r\n").nth(1).unwrap().trim_end();
+        for chunk in wrapped.split("\r\n") {
+            assert!(chunk.len() <= 76, "base64 line exceeds the 76-char limit");
+        }
+        let body = wrapped.split("\r\n").collect::<String>();
+        assert_eq!(
+            STANDARD.decode(body).unwrap(),
+            b"First line\r\nSecond line".to_vec(),
+            "the body must be the draft with CRLF line endings"
+        );
+    }
+
+    /// Why: `References` is capped at the eight most recent ancestors in
+    /// original order; the original Message-ID must never be duplicated when it
+    /// is already among them, or threading breaks in strict clients.
+    #[test]
+    fn raw_reply_caps_references_at_eight_and_never_duplicates_the_message_id() {
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        let email = job.email.as_mut().unwrap();
+        email.references = (0..10).map(|i| format!("<r{i}@e.invalid>")).collect();
+        email.message_id = "<r9@e.invalid>".into();
+        let raw = String::from_utf8(
+            URL_SAFE_NO_PAD
+                .decode(raw_reply(&job, &sent_settings(), "me@example.com", Utc::now()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let expected: String = (2..10)
+            .map(|i| format!("<r{i}@e.invalid>"))
+            .collect::<Vec<_>>()
+            .join("\r\n ");
+        assert!(
+            raw.contains(&format!("References: {expected}\r\n")),
+            "expected exactly the eight newest ancestors: {raw}"
+        );
+        assert_eq!(
+            raw.matches("<r9@e.invalid>").count(),
+            2,
+            "message id appears once in References and once in In-Reply-To"
+        );
+    }
+
+    /// Why: every `raw_reply` precondition must fail closed before any message
+    /// is produced; each error names its own cause so the operator can tell a
+    /// half-built job from a safety refusal or disabled sending.
+    #[test]
+    fn raw_reply_fail_closed_errors_name_their_own_cause() {
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email = None;
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Original email is missing"
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.draft = None;
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Reply is missing"
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email.as_mut().unwrap().stub.source = Source::Demo;
+        job.stub.source = Source::Demo;
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Mailbox safety checks failed"
+        );
+
+        let job = job_with("me@example.com", "Thank you for your time.");
+        let disabled = Settings {
+            sending_enabled: false,
+            ..sent_settings()
+        };
+        assert_eq!(
+            raw_reply(&job, &disabled, "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Sending is disabled or account is invalid"
+        );
+
+        // An account string that does not round-trip through mailbox
+        // normalization must be refused even with sending armed.
+        let job = job_with("HR <me@example.com>", "Thank you for your time.");
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "HR <me@example.com>", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Sending is disabled or account is invalid"
+        );
+
+        let mut job = job_with("me@example.com", "short");
+        job.draft.as_mut().unwrap().body = "too short".into();
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Reply must be 20..6000 bytes and at most 400 words"
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email.as_mut().unwrap().stub.thread_id = "thread-2".into();
+        assert_eq!(
+            raw_reply(&job, &sent_settings(), "me@example.com", Utc::now())
+                .unwrap_err()
+                .to_string(),
+            "Queue, message or conversation identity mismatch; reload before replying"
+        );
+    }
+
+    /// Why: the job identity is the anti-substitution guard for sends; every
+    /// field that could let a queued job's draft be sent against a different
+    /// message must be checked, and the stable refusal message must survive so
+    /// callers can key on it.
+    #[test]
+    fn validate_job_identity_detects_every_field_mismatch() {
+        const MISMATCH: &str =
+            "Queue, message or conversation identity mismatch; reload before replying";
+        let job = job_with("me@example.com", "Thank you for your time.");
+        validate_job_identity(&job).unwrap();
+
+        let mut job = job.clone();
+        job.id = "other".into();
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            MISMATCH
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.stub.account = "other@example.com".into();
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            MISMATCH
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email.as_mut().unwrap().stub.provider_id = "provider-2".into();
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            MISMATCH
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.stub.thread_id = "thread-9".into();
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            MISMATCH
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email.as_mut().unwrap().stub.source = Source::Demo;
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            MISMATCH
+        );
+
+        let mut job = job_with("me@example.com", "Thank you for your time.");
+        job.email = None;
+        assert_eq!(
+            validate_job_identity(&job).unwrap_err().to_string(),
+            "Original email is missing"
+        );
+    }
+
+    /// Why: mailbox normalization is the anti-injection boundary for the To
+    /// header; each malformed shape must be refused with its own reason so a
+    /// regression in one guard cannot hide behind another.
+    #[test]
+    fn mailbox_refuses_each_malformed_shape_with_its_own_reason() {
+        let long = format!("{}@b.com", "a".repeat(513));
+        for (input, reason) in [
+            (long.as_str(), "Invalid mailbox characters"),
+            ("a@b.com\u{7}", "Invalid mailbox characters"),
+            ("a@b.com,c@d.com", "Exactly one mailbox is required"),
+            ("team: a@b.com;", "Mailbox groups are not supported"),
+            (".a@b.com", "Invalid mailbox local part"),
+            ("a.@b.com", "Invalid mailbox local part"),
+            ("a..b@c.com", "Invalid mailbox local part"),
+            (
+                format!("{}@b.com", "a".repeat(65)).as_str(),
+                "Invalid mailbox local part",
+            ),
+            ("a*b@c.com", "Unsupported mailbox local part"),
+            ("a@b..com", "Invalid mailbox domain"),
+            ("a@-bad.com", "Invalid mailbox domain"),
+            ("a@bad-.com", "Invalid mailbox domain"),
+            ("a@b_c.com", "Invalid mailbox domain"),
+            (
+                format!("a@{}.com", "b".repeat(64)).as_str(),
+                "Invalid mailbox domain",
+            ),
+            (
+                format!("a@{}", "b".repeat(254)).as_str(),
+                "Invalid mailbox domain",
+            ),
+        ] {
+            let error = mailbox(input).expect_err(input);
+            assert_eq!(error.to_string(), reason, "for input {input}");
+        }
+    }
+
+    /// Why: `valid_message_id` guards the threading headers; the bracket and
+    /// length bounds are exact, and any non-graphic or angle-bracket byte
+    /// inside the id would allow header injection through threading fields.
+    #[test]
+    fn valid_message_id_bounds_and_inner_bytes_are_exact() {
+        let max = format!("<{}@b>", "a".repeat(246));
+        assert_eq!(max.len(), 250);
+        assert!(valid_message_id("<a@b>"));
+        assert!(valid_message_id(&max));
+        assert!(
+            !valid_message_id(&format!("{max}a>")),
+            "251 bytes must be refused"
+        );
+        assert!(
+            !valid_message_id("<a b@c>"),
+            "inner spaces are not graphic-safe"
+        );
+        assert!(!valid_message_id("<a\t@b>"), "inner tabs must be refused");
+        assert!(!valid_message_id("<a<b@c>"), "inner '<' must be refused");
+        assert!(!valid_message_id("<a>b@c>"), "inner '>' must be refused");
+        assert!(
+            !valid_message_id("<abc>"),
+            "an id without '@' is not a message id"
+        );
+    }
+
+    /// Why: draft validation bounds both size and word count exactly at the
+    /// documented limits and rejects control/bidi characters that could hide
+    /// text direction changes from the reviewer.
+    #[test]
+    fn draft_limits_are_exact_and_unsafe_controls_are_refused() {
+        validate_draft(&"a".repeat(20)).unwrap();
+        validate_draft(&"a".repeat(6000)).unwrap();
+        assert_eq!(
+            validate_draft(&"a".repeat(19)).unwrap_err().to_string(),
+            "Reply must be 20..6000 bytes and at most 400 words"
+        );
+        assert_eq!(
+            validate_draft(&"a".repeat(6001)).unwrap_err().to_string(),
+            "Reply must be 20..6000 bytes and at most 400 words"
+        );
+        let wordy = vec!["word"; 401].join(" ");
+        assert_eq!(
+            validate_draft(&wordy).unwrap_err().to_string(),
+            "Reply must be 20..6000 bytes and at most 400 words"
+        );
+        validate_draft("line one\nline two\tend").unwrap();
+        for control in ['\u{7}', '\u{202e}', '\u{2066}', '\u{2069}'] {
+            assert_eq!(
+                validate_draft(&format!("sufficiently long text{control}"))
+                    .unwrap_err()
+                    .to_string(),
+                "Reply contains unsafe control characters",
+                "control {control:?} must be refused"
+            );
+        }
+    }
+
+    /// Why: `current_text` strips the quoted history so old decisions never
+    /// drive a new reply; every structural marker in the supported languages
+    /// must cut the body at that line, including the English markers and the
+    /// accent variants of the Greek ones.
+    #[test]
+    fn every_supported_quote_marker_hides_the_history_below_it() {
+        for marker in [
+            "-----original message-----",
+            "---------- forwarded message ----------",
+            "begin forwarded message",
+            "on tuesday, alice wrote:",
+            "am 25. september schrieb alice:",
+            "le 25 septembre alice a écrit :",
+            "op dinsdag schreef alice:",
+            "oorspronkelijk bericht",
+            "αρχικό μήνυμα",
+            "αρχικο μηνυμα",
+            "προωθημενο μηνυμα",
+        ] {
+            let body = format!("Current text\n{marker}\nOld rejection");
+            assert_eq!(
+                current_text(&body),
+                "Current text",
+                "marker {marker:?} must hide the quoted history"
+            );
+        }
+    }
+
+    /// Why: the unattended gate also reads the subject line, so a rejection
+    /// announced only in the subject must still count; quoted history in the
+    /// body must never count.
+    #[test]
+    fn clear_rejection_language_reads_the_subject_but_never_the_quoted_history() {
+        assert!(clear_rejection_language(
+            "Your application was unsuccessful",
+            "Kind regards"
+        ));
+        assert!(!clear_rejection_language(
+            "Application update",
+            "> We have decided not to move forward with your application."
+        ));
+    }
+}
+
+#[cfg(test)]
 mod hard_block_failure_tests {
     use super::*;
     use crate::ollama::sample_email;
@@ -855,6 +1247,153 @@ mod hard_block_failure_tests {
         assert_eq!(
             hard_blocks(&filed, "me@example.com"),
             vec!["Message is sent, draft, trashed or spam"]
+        );
+    }
+
+    /// Why: ambiguous duplicated envelope headers can route a reply to a
+    /// different sender than the one reviewed, so each guarded header name must
+    /// block on duplication alone with a reason naming the header.
+    #[test]
+    fn duplicate_guarded_headers_each_block_sending() {
+        for name in [
+            "from",
+            "reply-to",
+            "message-id",
+            "subject",
+            "auto-submitted",
+        ] {
+            let mut duplicate = deliverable();
+            // A duplicated `auto-submitted` header must block on the ambiguity
+            // alone, so its values are explicitly non-looping here.
+            let values = if name == "auto-submitted" {
+                vec!["no".into(), "no".into()]
+            } else {
+                vec!["one@x.invalid".into(), "two@x.invalid".into()]
+            };
+            duplicate.headers.insert(name.into(), values);
+            assert_eq!(
+                hard_blocks(&duplicate, "me@example.com"),
+                vec![format!("Ambiguous duplicate {name} header")],
+                "duplicated {name} must block"
+            );
+        }
+    }
+
+    /// Why: replies must never be addressed to no-reply mailboxes or back to
+    /// the connected account itself, and an unparseable recipient must block
+    /// rather than default to anything.
+    #[test]
+    fn recipient_defects_each_block_sending() {
+        let mut noreply = deliverable();
+        noreply.from = "Do-Not-Reply@example.invalid".into();
+        assert_eq!(
+            hard_blocks(&noreply, "me@example.com"),
+            vec!["Recipient does not accept replies"]
+        );
+
+        let mut daemon = deliverable();
+        daemon.from = "MAILER-DAEMON@example.invalid".into();
+        assert_eq!(
+            hard_blocks(&daemon, "me@example.com"),
+            vec!["Recipient does not accept replies"]
+        );
+
+        let mut self_reply = deliverable();
+        self_reply.from = "me@example.com".into();
+        assert_eq!(
+            hard_blocks(&self_reply, "me@example.com"),
+            vec!["Self-reply blocked"]
+        );
+
+        let mut broken = deliverable();
+        broken.from = "a@b.com,c@d.com".into();
+        assert_eq!(
+            hard_blocks(&broken, "me@example.com"),
+            vec!["Recipient is not a single valid mailbox"]
+        );
+    }
+
+    /// Why: `Auto-Submitted` values other than the two explicit non-loop
+    /// literals mean the sender is an automatic responder; replying would loop
+    /// forever. The literal `no` and `auto-generated` markers must not block.
+    #[test]
+    fn auto_submitted_values_block_unless_explicitly_not_a_loop() {
+        for value in ["auto-replied", "Auto-Generated!", "vacation"] {
+            let mut looping = deliverable();
+            looping
+                .headers
+                .insert("auto-submitted".into(), vec![value.into()]);
+            assert_eq!(
+                hard_blocks(&looping, "me@example.com"),
+                vec!["Automatic reply loop prevented"],
+                "auto-submitted: {value} must block"
+            );
+        }
+        for value in ["no", "auto-generated", "NO"] {
+            let mut fine = deliverable();
+            fine.headers
+                .insert("auto-submitted".into(), vec![value.into()]);
+            assert!(
+                hard_blocks(&fine, "me@example.com").is_empty(),
+                "auto-submitted: {value} is explicitly not a loop"
+            );
+        }
+    }
+
+    /// Why: when several defects coexist the reasons are triaged in a fixed
+    /// order that tooling and operators rely on; each layer of the defense
+    /// (provenance, envelope, recipient, loop, self-marking, folders) appends
+    /// its own reason after the earlier layers.
+    #[test]
+    fn combined_defects_report_every_reason_in_the_documented_order() {
+        let mut broken = deliverable();
+        broken.stub.source = Source::Demo;
+        broken.stub.account = "them@example.com".into();
+        broken.message_id = "not-a-message-id".into();
+        broken.from = "noreply@example.invalid".into();
+        broken.headers.insert(
+            "from".into(),
+            vec!["one@x.invalid".into(), "two@x.invalid".into()],
+        );
+        broken
+            .headers
+            .insert("auto-submitted".into(), vec!["auto-replied".into()]);
+        broken
+            .headers
+            .insert("x-rejection-rejector".into(), vec!["1".into()]);
+        broken.labels.push("SPAM".into());
+        assert_eq!(
+            hard_blocks(&broken, "me@example.com"),
+            vec![
+                "Demo messages can never be sent",
+                "Connected account does not match",
+                "Missing or invalid original Message-ID",
+                "Ambiguous duplicate from header",
+                "Recipient does not accept replies",
+                "Automatic reply loop prevented",
+                "Own agent message",
+                "Message is sent, draft, trashed or spam",
+            ]
+        );
+    }
+
+    /// Why: the outgoing Message-ID is deterministic from the job id and its
+    /// reserved invalid domain must never resolve; a drifting format silently
+    /// breaks reply de-duplication keyed on it.
+    #[test]
+    fn outgoing_id_is_deterministic_per_job() {
+        let job = crate::types::Job::new(
+            crate::types::Stub {
+                account: "me@example.com".into(),
+                provider_id: "p1".into(),
+                thread_id: "t1".into(),
+                source: Source::Gmail,
+            },
+            Utc::now(),
+        );
+        assert_eq!(
+            outgoing_id(&job),
+            format!("<rr.{}@rejection-rejector.invalid>", job.id)
         );
     }
 }

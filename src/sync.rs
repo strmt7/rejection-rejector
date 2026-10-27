@@ -250,7 +250,8 @@ fn full_sync<P: Provider>(
 mod tests {
     use super::*;
     use crate::{
-        gmail::{HistoryPage, MessageRef},
+        gmail::{Added, HistoryPage, HistoryRecord, MessageRef},
+        types::{JobState, Stub},
         vault::Vault,
     };
     struct Fake {
@@ -373,6 +374,431 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|event| matches!(event.kind.as_str(), "sync.reconciled" | "sync.incremental"))
+        );
+    }
+
+    /// One scripted answer for the incremental history loop.
+    #[derive(Clone)]
+    enum HistoryStep {
+        Page {
+            added: Vec<(&'static str, &'static str)>,
+            next: Option<&'static str>,
+            history_id: &'static str,
+        },
+        Expired,
+        /// The provider call fails with a simulated outage.
+        Failure,
+    }
+
+    /// Provider serving a scripted sequence of history answers (the final
+    /// answer repeats), recording every continuation token it was called with.
+    struct Scripted {
+        account: &'static str,
+        list_id: &'static str,
+        steps: Vec<HistoryStep>,
+        pages: Vec<Option<String>>,
+        list_calls: usize,
+    }
+
+    impl Scripted {
+        fn new(steps: Vec<HistoryStep>) -> Self {
+            Self {
+                account: "me@example.com",
+                list_id: "full-1",
+                steps,
+                pages: Vec::new(),
+                list_calls: 0,
+            }
+        }
+    }
+
+    impl Provider for Scripted {
+        fn profile(&mut self) -> Result<Profile> {
+            Ok(Profile {
+                email_address: self.account.into(),
+                history_id: "20".into(),
+            })
+        }
+        fn list(&mut self, _: &str, _: Option<&str>) -> Result<MessagePage> {
+            self.list_calls += 1;
+            Ok(MessagePage {
+                messages: vec![MessageRef {
+                    id: self.list_id.into(),
+                    thread_id: "t".into(),
+                }],
+                next_page_token: None,
+            })
+        }
+        fn history(&mut self, _: &str, page: Option<&str>) -> Result<HistoryResult> {
+            self.pages.push(page.map(str::to_owned));
+            let step = if self.steps.len() > 1 {
+                self.steps.remove(0)
+            } else {
+                self.steps.first().cloned().unwrap_or(HistoryStep::Page {
+                    added: Vec::new(),
+                    next: None,
+                    history_id: "20",
+                })
+            };
+            Ok(match step {
+                HistoryStep::Expired => return Ok(HistoryResult::Expired),
+                HistoryStep::Failure => {
+                    return Err(anyhow::anyhow!("simulated history outage"));
+                }
+                HistoryStep::Page {
+                    added,
+                    next,
+                    history_id,
+                } => HistoryResult::Page(HistoryPage {
+                    history: added
+                        .into_iter()
+                        .map(|(id, thread)| HistoryRecord {
+                            messages_added: vec![Added {
+                                message: MessageRef {
+                                    id: id.into(),
+                                    thread_id: thread.into(),
+                                },
+                            }],
+                        })
+                        .collect(),
+                    next_page_token: next.map(str::to_owned),
+                    history_id: history_id.into(),
+                }),
+            })
+        }
+    }
+
+    /// Establish one stored cursor so the next poll runs the incremental loop.
+    fn established_cursor(db: &mut Store, stop: &AtomicBool, settings: &Settings) {
+        let mut seed = Scripted::new(Vec::new());
+        synchronize(&mut seed, db, settings, "me@example.com", Utc::now(), stop).unwrap();
+    }
+
+    /// Why: with a cursor established, an `Expired` history answer is the
+    /// "cursor no longer servable" signal and must fall back to a full resync
+    /// mid-stream; failing here stalls ingestion until manual intervention.
+    #[test]
+    fn expired_history_mid_stream_falls_back_to_full_sync() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let mut f = ExpiredHistory { list_calls: 0 };
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        // First pass only establishes the cursor (fresh state goes straight to
+        // full_sync); the second pass reaches the incremental Expired arm.
+        assert_eq!(
+            synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap(),
+            1
+        );
+        let before: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert!(
+            before.history_id.is_some(),
+            "the first pass must establish the incremental cursor"
+        );
+        assert_eq!(
+            synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap(),
+            0,
+            "the fallback resyncs but dedupe keeps the identity count at zero"
+        );
+        assert_eq!(f.list_calls, 2, "the fallback must relist the mailbox");
+        let after: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert!(after.history_id.is_some(), "a fresh cursor must be stored");
+
+        // The same fallback arm via the scripted provider: a cursor already
+        // exists, so the next poll goes incremental and hits Expired.
+        let mut scripted = Scripted::new(vec![HistoryStep::Expired]);
+        assert_eq!(
+            synchronize(
+                &mut scripted,
+                &mut db,
+                &s,
+                "me@example.com",
+                Utc::now(),
+                &stop
+            )
+            .unwrap(),
+            1,
+            "the fallback relists the mailbox and lands its identities"
+        );
+        assert_eq!(
+            scripted.pages,
+            vec![None],
+            "the incremental loop must consult history before falling back"
+        );
+        assert_eq!(
+            scripted.list_calls, 1,
+            "the fallback must relist the mailbox"
+        );
+    }
+
+    /// Why: the incremental loop must consume `messagesAdded` records across
+    /// continuation pages and land the cursor on the FINAL history id —
+    /// stopping at the first page loses messages, and not replaying the
+    /// continuation token skips the rest of the window.
+    #[test]
+    fn history_pagination_with_added_messages_advances_the_cursor() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        established_cursor(&mut db, &stop, &s);
+        let mut f = Scripted::new(vec![
+            HistoryStep::Page {
+                added: vec![("m1", "t1"), ("m2", "t2")],
+                next: Some("p2"),
+                history_id: "21",
+            },
+            HistoryStep::Page {
+                added: vec![("m3", "t3")],
+                next: None,
+                history_id: "30",
+            },
+        ]);
+        let inserted =
+            synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop).unwrap();
+        assert_eq!(inserted, 3, "all added messages across pages must land");
+        assert_eq!(
+            f.pages,
+            vec![None, Some("p2".to_owned())],
+            "the continuation token must be replayed exactly once"
+        );
+        assert_eq!(f.list_calls, 0, "a healthy incremental poll never relists");
+        let state: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert_eq!(
+            state.history_id.as_deref(),
+            Some("30"),
+            "the cursor must land on the final history id"
+        );
+        assert_eq!(db.counts("me@example.com").unwrap().stored, 4);
+    }
+
+    /// Why: a pagination token that never changes would spin the poll loop
+    /// forever against one window; the guard must abort with the exact
+    /// operator message and leave the stored cursor untouched.
+    #[test]
+    fn repeated_history_pagination_tokens_fail_closed() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        established_cursor(&mut db, &stop, &s);
+        let before: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        let mut f = Scripted::new(vec![HistoryStep::Page {
+            added: Vec::new(),
+            next: Some("same"),
+            history_id: "21",
+        }]);
+        let error = synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop)
+            .expect_err("a never-advancing pagination token must abort the poll");
+        assert_eq!(
+            format!("{error:#}"),
+            "Repeated Gmail pagination token; cursor retained"
+        );
+        let after: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert_eq!(after.history_id, before.history_id, "cursor retained");
+        assert_eq!(after.last_poll, before.last_poll, "cursor retained");
+    }
+
+    /// Why: the traversal-budget counters guard against a pathological
+    /// provider loop; their overflow arms must abort with the cursor-retained
+    /// contract instead of silently wrapping into a smaller budget.
+    #[test]
+    fn sync_budget_counter_overflow_is_fail_closed() {
+        let mut pages = usize::MAX;
+        let mut identities = 0usize;
+        let error = charge_sync_budget(&mut pages, &mut identities, 0).unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "Gmail pagination counter overflow; cursor retained"
+        );
+        let mut pages = 0usize;
+        let mut identities = usize::MAX;
+        let error = charge_sync_budget(&mut pages, &mut identities, 1).unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "Gmail identity counter overflow; cursor retained"
+        );
+    }
+
+    /// Why: a widened lookback must force a full resync and requeue work an
+    /// earlier tighter window parked (`email.requeued`), while a narrowing
+    /// resyncs WITHOUT waking — waking on shrink would replay items the new
+    /// window deliberately excludes.
+    #[test]
+    fn lookback_changes_resync_and_wake_parked_work_only_on_expansion() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let now = Utc::now();
+        let stub = Stub {
+            account: "me@example.com".into(),
+            provider_id: "a".into(),
+            thread_id: "t".into(),
+            source: crate::types::Source::Gmail,
+        };
+        let key = stub.id();
+        db.insert_stub(stub, now).unwrap();
+
+        let wide = Settings {
+            lookback_days: 7,
+            ..Settings::default()
+        };
+        let narrow = Settings {
+            lookback_days: 3,
+            ..Settings::default()
+        };
+
+        let mut f = Scripted::new(Vec::new());
+        synchronize(&mut f, &mut db, &wide, "me@example.com", now, &stop).unwrap();
+        // Park the job as an earlier tighter window would have.
+        let mut job = db.get(&key).unwrap();
+        job.state = JobState::Deferred;
+        db.save(&mut job, "test", "deferred").unwrap();
+
+        // Narrowing the window resyncs but must leave parked work parked.
+        synchronize(&mut f, &mut db, &narrow, "me@example.com", now, &stop).unwrap();
+        assert_eq!(
+            db.get(&key).unwrap().state,
+            JobState::Deferred,
+            "a narrowed lookback must not wake parked work"
+        );
+
+        // Expanding the window resyncs and requeues the parked job.
+        synchronize(&mut f, &mut db, &wide, "me@example.com", now, &stop).unwrap();
+        assert_eq!(
+            db.get(&key).unwrap().state,
+            JobState::Queued,
+            "an expanded lookback must requeue parked work"
+        );
+        assert!(
+            db.events(0, 200)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "email.requeued"),
+            "the wake must be recorded for the audit trail"
+        );
+    }
+
+    /// Why: the stored cursor belongs to exactly one mailbox; if the provider
+    /// reports a different account the sync must abort with the explicit
+    /// reconnect message instead of mixing two mailboxes under one cursor.
+    #[test]
+    fn synchronize_rejects_an_account_change() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let mut f = Scripted::new(Vec::new());
+        f.account = "other@example.com";
+        let error = synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a swapped account must abort the sync");
+        assert_eq!(
+            format!("{error:#}"),
+            "Gmail account changed; reconnect explicitly"
+        );
+    }
+
+    /// Why: provider identities are untrusted; a malformed identity in a
+    /// history record must fail the poll with the validation error and leave
+    /// the cursor untouched, or a poisoned page could skip real messages.
+    #[test]
+    fn poisoned_history_identities_fail_the_poll_without_advancing() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        established_cursor(&mut db, &stop, &s);
+        let before: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        let mut f = Scripted::new(vec![HistoryStep::Page {
+            added: vec![("bad id!", "t1")],
+            next: None,
+            history_id: "25",
+        }]);
+        let error = synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop)
+            .expect_err("a poisoned identity must abort the poll");
+        assert!(
+            format!("{error:#}").contains("Invalid provider ID"),
+            "unexpected error: {error:#}"
+        );
+        let after: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert_eq!(after.history_id, before.history_id, "cursor retained");
+    }
+
+    /// Why: a provider profile with a malformed mailbox address must abort
+    /// the sync at the identity check with the named validation error, never
+    /// be normalized into a different account's cursor.
+    #[test]
+    fn synchronize_rejects_a_malformed_profile_address() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let mut f = Scripted::new(Vec::new());
+        f.account = "bad\u{7}@example.com";
+        let error = synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a malformed profile address must abort the sync");
+        assert_eq!(format!("{error:#}"), "Invalid mailbox characters");
+    }
+
+    /// Why: a history-call failure must propagate untouched and leave the
+    /// stored cursor alone, so the next poll replays the window instead of
+    /// skipping messages it never saw.
+    #[test]
+    fn history_outages_propagate_without_advancing_the_cursor() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let s = Settings::default();
+        established_cursor(&mut db, &stop, &s);
+        let before: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        let mut f = Scripted::new(vec![HistoryStep::Failure]);
+        let error = synchronize(&mut f, &mut db, &s, "me@example.com", Utc::now(), &stop)
+            .expect_err("a provider outage must fail the poll");
+        assert_eq!(format!("{error:#}"), "simulated history outage");
+        let after: SyncState = db.meta("sync/me@example.com").unwrap().unwrap();
+        assert_eq!(after.history_id, before.history_id, "cursor retained");
+    }
+
+    /// Why: a malformed identity on a full-sync LIST page must abort the
+    /// resync before any cursor is stored — a partially poisoned page must
+    /// never mint a baseline that skips the poisoned messages' neighbours.
+    #[test]
+    fn poisoned_list_identities_abort_the_full_sync_without_a_baseline() {
+        let d = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
+        let stop = AtomicBool::new(false);
+        let mut f = Scripted::new(Vec::new());
+        f.list_id = "bad id!";
+        let error = synchronize(
+            &mut f,
+            &mut db,
+            &Settings::default(),
+            "me@example.com",
+            Utc::now(),
+            &stop,
+        )
+        .expect_err("a poisoned list identity must abort the full sync");
+        assert!(
+            format!("{error:#}").contains("Invalid provider ID"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            db.meta::<SyncState>("sync/me@example.com")
+                .unwrap()
+                .is_none(),
+            "no baseline may be minted from a poisoned page"
         );
     }
 }

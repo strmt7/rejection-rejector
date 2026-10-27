@@ -675,6 +675,154 @@ mod tests {
             );
         }
     }
+
+    /// Why: every invalid anchor field must be rejected with its own error so
+    /// a corrupted or forged anchor can be told apart from an unsupported
+    /// format; parsing is the first gate on the rollback trust root.
+    #[test]
+    fn anchor_parser_rejects_each_invalid_field_with_its_own_reason() {
+        let anchor = AuditAnchor {
+            format_version: 1,
+            application_version: "1.2.3".into(),
+            created_at: Utc::now(),
+            workspace_fingerprint: "a".repeat(64),
+            audit_sequence: 0,
+            audit_head: "b".repeat(64),
+        };
+        parse_anchor(&serde_json::to_vec(&anchor).unwrap()).unwrap();
+
+        let cases = [
+            (
+                AuditAnchor {
+                    format_version: 2,
+                    ..anchor.clone()
+                },
+                "Unsupported audit-anchor format",
+            ),
+            (
+                AuditAnchor {
+                    audit_sequence: -1,
+                    ..anchor.clone()
+                },
+                "Audit-anchor sequence must be non-negative",
+            ),
+            (
+                AuditAnchor {
+                    workspace_fingerprint: "zz".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor workspace fingerprint is invalid",
+            ),
+            (
+                AuditAnchor {
+                    audit_head: "nothex".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor journal hash is invalid",
+            ),
+            (
+                AuditAnchor {
+                    application_version: "  ".into(),
+                    ..anchor.clone()
+                },
+                "Audit-anchor application version is invalid",
+            ),
+            (
+                AuditAnchor {
+                    application_version: "x".repeat(129),
+                    ..anchor.clone()
+                },
+                "Audit-anchor application version is invalid",
+            ),
+        ];
+        for (invalid, reason) in cases {
+            let error = parse_anchor(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+            assert_eq!(error.to_string(), reason, "anchor: {invalid:?}");
+        }
+        assert_eq!(
+            parse_anchor(b"not json").unwrap_err().to_string(),
+            "Audit-anchor JSON is invalid"
+        );
+    }
+
+    /// Why: the workspace fingerprint is the binding between an anchor and its
+    /// workspace; it must hash the trimmed vault identifier exactly (whitespace
+    /// in the file is incidental) and refuse missing, non-UTF-8 or non-UUID
+    /// identifiers instead of fingerprinting garbage.
+    #[test]
+    fn workspace_fingerprint_binds_the_vault_identifier_and_rejects_bad_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = workspace_fingerprint(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("vault-id is missing"),
+            "unexpected error: {error}"
+        );
+
+        std::fs::write(dir.path().join("vault-id"), b"\xff\xfe").unwrap();
+        let error = workspace_fingerprint(dir.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("utf-8"),
+            "non-UTF-8 identifiers must be refused: {error}"
+        );
+
+        std::fs::write(dir.path().join("vault-id"), b"not-a-uuid").unwrap();
+        assert_eq!(
+            workspace_fingerprint(dir.path()).unwrap_err().to_string(),
+            "Workspace vault identifier is invalid"
+        );
+
+        let id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(dir.path().join("vault-id"), format!("  {id}\n")).unwrap();
+        assert_eq!(
+            workspace_fingerprint(dir.path()).unwrap(),
+            sha256_domain(b"rejection-rejector-workspace-v1\0", id.as_bytes())
+        );
+    }
+
+    /// Why: `anchor write` must be create-only — silently replacing an
+    /// existing anchor would destroy the trust root an operator pinned.
+    #[test]
+    fn write_anchor_never_overwrites_an_existing_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let path = root.path().join("anchor.json");
+        write_anchor(&store, &dir, &path).unwrap();
+        let pinned = std::fs::read(&path).unwrap();
+        let error = write_anchor(&store, &dir, &path).unwrap_err();
+        assert_eq!(error.to_string(), "Audit-anchor destination already exists");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            pinned,
+            "a refused write must leave the pinned anchor untouched"
+        );
+    }
+
+    /// Why: protected checkpoint failures must propagate through the wrapper
+    /// (a swallowed error would let the anchor silently go stale, defeating
+    /// rollback detection), and a passing gate short-circuits without touching
+    /// the OS store.
+    #[test]
+    fn checkpoint_gate_failures_propagate_through_the_wrapper() {
+        let root = tempfile::tempdir().unwrap();
+        let (store, dir) = workspace(root.path());
+        let failing: crate::test_support::Gate =
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("protected checkpoint unavailable")));
+        let error = crate::test_support::with_audit_gate(failing, || {
+            checkpoint_os_anchor_if_required(&store, &dir)
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "protected checkpoint unavailable");
+
+        let passing: crate::test_support::Gate = std::sync::Arc::new(|| Ok(()));
+        assert!(
+            crate::test_support::with_audit_gate(passing, || {
+                checkpoint_os_anchor_if_required(&store, &dir)
+            })
+            .unwrap()
+            .is_none(),
+            "a passing gate must short-circuit without checkpointing"
+        );
+    }
 }
 
 #[cfg(test)]

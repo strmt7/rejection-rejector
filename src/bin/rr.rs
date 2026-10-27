@@ -1799,4 +1799,402 @@ mod tests {
         .expect_err("a fatal workspace must end web serving");
         assert!(error.to_string().contains("workspace lost"));
     }
+
+    /// One live-workspace test fixture: holds the cross-test credential-store
+    /// One live-workspace test fixture: holds the cross-test credential-store
+    /// lock and deletes the workspace's OS vault credential on drop.
+    ///
+    /// Why: non-demo commands mint a Windows Credential Manager entry for the
+    /// workspace key; without the shared file lock two test binaries race the
+    /// credential store, and without the guard the store accumulates entries.
+    struct Workspace {
+        _lock: std::fs::File,
+        temp: tempfile::TempDir,
+    }
+
+    impl Workspace {
+        fn live() -> Self {
+            let path = std::env::temp_dir().join("rr-test-credential-store.lock");
+            let lock = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open credential-store test lock");
+            fs2::FileExt::lock_exclusive(&lock).expect("credential-store test lock");
+            Self {
+                _lock: lock,
+                temp: tempfile::tempdir().unwrap(),
+            }
+        }
+
+        fn dir(&self) -> &std::path::Path {
+            self.temp.path()
+        }
+
+        fn arg(&self) -> Option<PathBuf> {
+            Some(self.temp.path().to_path_buf())
+        }
+    }
+
+    impl Drop for Workspace {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            if let Ok(id) = std::fs::read_to_string(self.temp.path().join("vault-id"))
+                && let Ok(entry) = keyring::Entry::new("rejection-rejector.v1", id.trim())
+            {
+                let _ = entry.delete_credential();
+            }
+        }
+    }
+
+    /// The workspace override is honoured verbatim; without one the platform
+    /// data directory is used.
+    ///
+    /// Why: `--data-dir` is what fleet tooling pins workspaces to — a silently
+    /// substituted directory would run commands against the wrong workspace.
+    #[test]
+    fn resolve_dir_honours_the_explicit_override() {
+        let explicit = PathBuf::from("some-workspace");
+        assert_eq!(
+            resolve_dir(&Some(explicit.clone())).unwrap(),
+            explicit,
+            "an explicit --data-dir is used verbatim"
+        );
+        assert_eq!(
+            resolve_dir(&None).unwrap(),
+            config::data_dir().unwrap(),
+            "without an override the platform data directory is used"
+        );
+    }
+
+    /// Misgrouped subcommands still reach their handlers through the dispatch
+    /// fallbacks.
+    ///
+    /// Why: every dispatch group re-routes foreign commands through the
+    /// central router; a broken fallback would turn a valid invocation into a
+    /// silent no-op.
+    #[test]
+    fn misgrouped_subcommands_route_through_the_dispatch_fallbacks() {
+        let workspace = Workspace::live();
+
+        // Runtime group routes inspection commands on.
+        dispatch_runtime(Action::BuildInfo, &None).expect("BuildInfo prints");
+
+        // Info group routes demo reporting on.
+        dispatch_info(Action::Demo, &workspace.arg()).expect("Demo prints");
+
+        // Model-evaluation group routes metrics on.
+        dispatch_model_evaluation(Action::Metrics { openmetrics: false }, &workspace.arg())
+            .expect("metrics print");
+
+        // Model-operations group routes integrity on.
+        dispatch_model_operations(Action::Integrity, &workspace.arg()).expect("integrity passes");
+
+        // Configuration group routes the shadow audit on.
+        let shadow_out = workspace.dir().join("shadow.json");
+        dispatch_configuration(
+            Action::ShadowAutomatic {
+                out: shadow_out.clone(),
+            },
+            &workspace.arg(),
+        )
+        .expect("shadow audit writes");
+        assert!(shadow_out.is_file());
+
+        // Database group routes settings updates on.
+        dispatch_database(
+            Action::Configure {
+                lookback_days: Some(3),
+                poll_hours: None,
+                model: None,
+                signature: None,
+                api_enabled: None,
+                api_port: None,
+            },
+            &workspace.arg(),
+        )
+        .expect("configure applies");
+
+        // Backup group routes diagnostics on.
+        let diagnostics_out = workspace.dir().join("diagnostics.json");
+        dispatch_backup(
+            Action::Diagnostics {
+                out: diagnostics_out.clone(),
+            },
+            &workspace.arg(),
+        )
+        .expect("diagnostics write");
+        assert!(diagnostics_out.is_file());
+
+        // Recovery-key group routes compaction on.
+        dispatch_recovery_key(Action::Compact, &workspace.arg()).expect("compaction passes");
+
+        // Audit group routes backup creation on.
+        let backup_dir = workspace.dir().join("fallback-backup");
+        dispatch_audit(
+            Action::Backup {
+                out: backup_dir.clone(),
+            },
+            &workspace.arg(),
+        )
+        .expect("backup writes");
+        assert!(backup_dir.is_dir());
+    }
+
+    /// Status reports for demo and live workspaces are produced without
+    /// touching the mailbox.
+    ///
+    /// Why: `rr status` is the operator's health surface — it must work on a
+    /// fresh, unconnected workspace instead of erroring.
+    #[test]
+    fn status_reports_demo_and_live_workspaces() {
+        cmd_status(&Action::Demo, &None).expect("demo status prints");
+        let workspace = Workspace::live();
+        cmd_status(&Action::Status, &workspace.arg()).expect("live status prints");
+    }
+
+    /// Policy validation prints the parsed status for a real file and refuses
+    /// missing paths with the file error.
+    ///
+    /// Why: operators validate policy files before deploying them; a missing
+    /// file must fail loudly, never report a default-permitting status.
+    #[test]
+    fn validate_policy_reports_status_and_refuses_missing_files() {
+        let workspace = Workspace::live();
+        let path = workspace.dir().join("policy.json");
+        std::fs::write(
+            &path,
+            br#"{"version":2,"policy_id":"corp.test","revision":1}"#,
+        )
+        .unwrap();
+        cmd_validate_policy(path).expect("a valid policy file is summarized");
+
+        let error = cmd_validate_policy(workspace.dir().join("missing.json"))
+            .expect_err("missing policy files are refused");
+        #[cfg(windows)]
+        assert_eq!(
+            error.to_string(),
+            "The system cannot find the file specified. (os error 2)"
+        );
+        #[cfg(not(windows))]
+        assert_eq!(error.to_string(), "No such file or directory (os error 2)");
+    }
+
+    /// Policy status, JSON/OpenMetrics metrics and the doctor report all
+    /// print; `--require` fails closed with the exact unsatisfied gate.
+    ///
+    /// Why: readiness gates drive deployment automation — the failure text
+    /// names the gate the operator must satisfy.
+    #[test]
+    fn status_metrics_and_doctor_reports_print_and_gate() {
+        let workspace = Workspace::live();
+        cmd_policy_status(&workspace.arg()).expect("policy status prints");
+        cmd_metrics(false, &workspace.arg()).expect("JSON metrics print");
+        cmd_metrics(true, &workspace.arg()).expect("OpenMetrics prints");
+        cmd_doctor(None, &workspace.arg()).expect("the doctor report prints");
+
+        let error = cmd_doctor(Some(ReadinessRequirement::Mailbox), &workspace.arg())
+            .expect_err("an unsatisfied gate fails closed");
+        assert_eq!(
+            error.to_string(),
+            "Requested readiness level Mailbox is not satisfied"
+        );
+    }
+
+    /// The database, backup and drill commands round-trip on one workspace,
+    /// and restore demands its exact confirmation token.
+    ///
+    /// Why: `rr restore-backup` replaces the live workspace — the confirmation
+    /// token is the only thing standing between a mistyped command and data
+    /// loss, so its refusal text is part of the safety contract.
+    #[test]
+    fn database_backup_and_drill_commands_round_trip() {
+        let workspace = Workspace::live();
+        cmd_integrity(&workspace.arg()).expect("integrity passes");
+        cmd_compact(&workspace.arg()).expect("compaction passes");
+
+        let backup_dir = workspace.dir().join("backup");
+        cmd_backup(backup_dir.clone(), &workspace.arg()).expect("backup writes");
+        assert!(backup_dir.is_dir());
+        cmd_verify_backup(backup_dir.clone(), &workspace.arg()).expect("backup verifies");
+        cmd_recovery_drill(backup_dir.clone(), &workspace.arg()).expect("drill passes");
+        {
+            // The drill success is audited in the workspace journal.
+            let e = open_engine(workspace.arg().unwrap(), false, true).unwrap();
+            let events = e.db.events(0, 500).unwrap();
+            assert!(
+                events.iter().any(|ev| ev.kind == "backup.drill_passed"),
+                "the successful drill is audited"
+            );
+        }
+
+        let error = cmd_restore_backup(backup_dir, "restore".into(), &workspace.arg())
+            .expect_err("restore demands the exact token");
+        assert_eq!(error.to_string(), "Restore requires --confirm RESTORE");
+    }
+
+    /// Diagnostics, the shadow audit and audit-anchor export/verify run
+    /// read-only reports that land on disk.
+    ///
+    /// Why: these are the evidence surfaces an operator shares — they must be
+    /// produced from a fresh workspace without a mailbox or model runtime.
+    #[test]
+    fn diagnostics_shadow_and_audit_anchor_reports_write() {
+        let workspace = Workspace::live();
+
+        let diagnostics_out = workspace.dir().join("diagnostics.json");
+        cmd_diagnostics(diagnostics_out.clone(), &workspace.arg()).expect("diagnostics write");
+        assert!(diagnostics_out.is_file());
+
+        let shadow_out = workspace.dir().join("shadow.json");
+        cmd_shadow_automatic(shadow_out.clone(), &workspace.arg()).expect("shadow audit writes");
+        assert!(shadow_out.is_file());
+
+        let anchor_out = workspace.dir().join("anchor.json");
+        cmd_audit_anchor(anchor_out.clone(), &workspace.arg()).expect("anchor exports");
+        assert!(anchor_out.is_file());
+        cmd_verify_audit_anchor(anchor_out, &workspace.arg()).expect("anchor verifies");
+    }
+
+    /// Recovery-key commands enforce their confirmation tokens exactly.
+    ///
+    /// Why: `--confirm IMPORT` installs a key in the OS credential store —
+    /// the token is the destructive-operation guard and its refusal text is
+    /// pinned.
+    #[test]
+    fn recovery_key_import_demands_its_exact_confirmation_token() {
+        let workspace = Workspace::live();
+        let passphrase = workspace.dir().join("passphrase.txt");
+        std::fs::write(&passphrase, b"correct horse battery staple").unwrap();
+
+        let backup_dir = workspace.dir().join("key-backup");
+        cmd_backup(backup_dir.clone(), &workspace.arg()).expect("backup writes");
+
+        let envelope = workspace.dir().join("recovery.key");
+        cmd_export_recovery_key(envelope.clone(), passphrase.clone(), &workspace.arg())
+            .expect("the recovery key exports");
+        assert!(envelope.is_file());
+        cmd_verify_recovery_key(backup_dir.clone(), envelope.clone(), passphrase.clone())
+            .expect("the recovery key authenticates the backup");
+
+        let error = cmd_import_recovery_key(
+            backup_dir,
+            envelope,
+            passphrase,
+            "import".into(),
+            &workspace.arg(),
+        )
+        .expect_err("import demands the exact token");
+        assert_eq!(
+            error.to_string(),
+            "Recovery-key import requires --confirm IMPORT"
+        );
+    }
+
+    /// Configure applies exactly the requested fields and refuses invalid
+    /// values fail-closed without persisting them.
+    ///
+    /// Why: `rr configure` is scripted settings management — an out-of-range
+    /// value must not overwrite a working configuration.
+    #[test]
+    fn configure_applies_requested_fields_and_refuses_invalid_values() {
+        let workspace = Workspace::live();
+        cmd_configure(
+            Some(3),
+            Some(2),
+            None,
+            Some("Test Applicant".to_string()),
+            Some(true),
+            Some(9_001),
+            &workspace.arg(),
+        )
+        .expect("valid settings apply");
+        {
+            let e = open_engine(workspace.arg().unwrap(), false, true).unwrap();
+            assert_eq!(e.settings.lookback_days, 3, "the lookback override applies");
+            assert_eq!(e.settings.poll_hours, 2, "the poll override applies");
+            assert_eq!(e.settings.signature, "Test Applicant");
+            assert!(e.settings.api_enabled);
+            assert_eq!(e.settings.api_port, 9_001);
+        }
+
+        let error = cmd_configure(Some(5), None, None, None, None, None, &workspace.arg())
+            .expect_err("an out-of-window lookback is refused");
+        assert_eq!(error.to_string(), "Lookback must be 1, 3, 7, 14 or 28 days");
+        {
+            let e = open_engine(workspace.arg().unwrap(), false, true).unwrap();
+            assert_eq!(
+                e.settings.lookback_days, 3,
+                "the refused change left the previous value in place"
+            );
+        }
+    }
+
+    /// API token rotation succeeds repeatedly on one workspace.
+    ///
+    /// Why: rotation is the credential-recovery path — it must work on demand
+    /// without a mailbox, and repeated rotation must keep the workspace
+    /// consistent.
+    #[test]
+    fn rotate_api_token_rotates_the_local_api_credential() {
+        let workspace = Workspace::live();
+        cmd_rotate_api_token(&workspace.arg()).expect("first rotation prints a token");
+        cmd_rotate_api_token(&workspace.arg()).expect("second rotation prints a token");
+    }
+
+    /// Model-evidence commands fail closed when the runtime is unreachable and
+    /// never fabricate report files; comparison commands degrade to
+    /// skip-only reports.
+    ///
+    /// Why: a report written without a runtime would read like a model
+    /// qualification to operator tooling.
+    #[test]
+    fn model_commands_fail_closed_without_the_runtime() {
+        let workspace = Workspace::live();
+        {
+            // Pin the workspace at a closed loopback port so no live Ollama
+            // on this machine can satisfy the commands.
+            let mut e = open_engine(workspace.arg().unwrap(), false, true).unwrap();
+            e.settings.ollama_url = "http://127.0.0.1:9".into();
+            e.db.set_meta("settings", &e.settings).unwrap();
+        }
+
+        let evaluate_out = workspace.dir().join("evaluate.json");
+        cmd_evaluate(evaluate_out.clone(), &workspace.arg())
+            .expect_err("evaluation needs a reachable runtime");
+        assert!(!evaluate_out.exists(), "no evidence file is fabricated");
+
+        let decision_out = workspace.dir().join("decision.json");
+        cmd_evaluate_decision(
+            "nimble:9b-q8_0".into(),
+            decision_out.clone(),
+            &workspace.arg(),
+        )
+        .expect_err("decision evidence needs a reachable runtime");
+        assert!(!decision_out.exists(), "no evidence file is fabricated");
+
+        let profile_out = workspace.dir().join("profile.json");
+        cmd_profile_model(profile_out.clone(), &workspace.arg())
+            .expect_err("profiling needs a reachable runtime");
+        assert!(!profile_out.exists(), "no profile file is fabricated");
+
+        cmd_qualify(false, &workspace.arg()).expect_err("qualification needs a reachable runtime");
+
+        // Comparisons degrade to skip-only reports instead of inventing
+        // winners.
+        let compare_decision_out = workspace.dir().join("compare-decision.json");
+        cmd_compare_decision_models(compare_decision_out.clone(), &workspace.arg())
+            .expect("skip-only comparison succeeds");
+        assert!(compare_decision_out.is_file());
+
+        let compare_out = workspace.dir().join("compare.json");
+        cmd_compare_models(compare_out.clone(), &workspace.arg())
+            .expect("skip-only comparison succeeds");
+        assert!(compare_out.is_file());
+
+        // Synchronize without a connected mailbox fails closed.
+        cmd_sync(&workspace.arg()).expect_err("sync needs a connected mailbox");
+    }
 }

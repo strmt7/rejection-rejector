@@ -2064,4 +2064,127 @@ mod tests {
         let mut client = Gmail::with_endpoints(test_creds(false), dead_url, &fake.token_url);
         assert!(client.find_sent("<msg@example.com>").is_err());
     }
+
+    /// Why: a conversation that vanished upstream must surface the typed API
+    /// error, never a phantom empty thread — an empty thread would drive the
+    /// engine to treat the conversation as resolved.
+    #[test]
+    fn thread_fetch_surfaces_the_typed_error_for_vanished_threads() {
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(false);
+        let error = match client.thread("thread-1") {
+            Err(error) => error,
+            Ok(_) => panic!("a vanished thread must surface an error"),
+        };
+        assert!(
+            error.to_string().contains("HTTP 404"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: a payload the MIME parser cannot survive must classify as
+    /// `MalformedMessage` with the parse context, never as infrastructure —
+    /// infrastructure failures retry forever on a permanently bad message.
+    #[test]
+    fn parser_fatal_payloads_classify_as_malformed_messages() {
+        // 120 nested multipart wrappers exceed the mailparse recursion limit.
+        let mut mime = String::from("Content-Type: text/plain\r\n\r\nleaf");
+        for level in (0..120).rev() {
+            let boundary = format!("deep{level}end");
+            mime = format!(
+                "Content-Type: multipart/mixed; boundary={boundary}\r\n\r\n--{boundary}\r\n{mime}\r\n--{boundary}--\r\n"
+            );
+        }
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            (
+                "/messages/msg-1",
+                200,
+                "",
+                &raw_json("msg-1", "thread-1", "1700000000000", &mime),
+            ),
+        ]);
+        let mut client = fake.client(false);
+        let failure = match client.email(&queued_stub()) {
+            Err(failure) => failure,
+            Ok(_) => panic!("a parser-fatal payload must fail the fetch"),
+        };
+        assert_eq!(failure.kind, FetchFailureKind::MalformedMessage);
+        assert!(
+            failure
+                .message
+                .contains("Gmail message could not be parsed safely"),
+            "{}",
+            failure.message
+        );
+    }
+
+    /// Why: listed identities are untrusted provider data; an invalid id or
+    /// thread id must be refused at stub construction so it can never reach
+    /// request paths or provider-path interpolation.
+    #[test]
+    fn stub_construction_refuses_invalid_provider_identities() {
+        let error = crate::gmail::stub(
+            "me@example.com",
+            MessageRef {
+                id: "not a valid id!".into(),
+                thread_id: "t".into(),
+            },
+        )
+        .expect_err("an invalid provider id must be refused");
+        assert_eq!(error.to_string(), "Invalid provider ID");
+        let error = crate::gmail::stub(
+            "me@example.com",
+            MessageRef {
+                id: "m1".into(),
+                thread_id: "a/b".into(),
+            },
+        )
+        .expect_err("an invalid thread id must be refused");
+        assert_eq!(error.to_string(), "Invalid provider ID");
+    }
+
+    /// Why: a failed OAuth token refresh must surface the fixed reconnect
+    /// context — it is the operator's cue that consent expired, distinct from
+    /// any mailbox-level failure.
+    #[test]
+    fn token_refresh_failures_carry_the_reconnect_context() {
+        // Port 0 is eternally unconnectable: the refresh cannot reach a host.
+        let dead = "http://127.0.0.1:0";
+        let mut client = Gmail::with_endpoints(test_creds(false), dead, dead);
+        let error = match client.profile() {
+            Err(error) => error,
+            Ok(_) => panic!("an unreachable token endpoint must fail the refresh"),
+        };
+        assert!(
+            format!("{error:#}")
+                .contains("Google token refresh failed; reconnect if consent expired"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// Why: a non-404 history failure is a typed API error, not cursor
+    /// expiry — treating it as expiry would trigger a needless full resync on
+    /// every outage.
+    #[test]
+    fn history_outages_surface_the_typed_api_error_not_expiry() {
+        let fake = Fake::new(&[
+            ("/token", 200, "", TOKEN_OK),
+            ("/history", 500, "", r#"{"error":"boom"}"#),
+        ]);
+        let mut client = fake.client(false);
+        let error = match client.history("1", None) {
+            Err(error) => error,
+            Ok(_) => panic!("a 500 history response must fail the poll"),
+        };
+        assert_eq!(error.to_string(), "Gmail API returned HTTP 500");
+    }
+
+    /// Why: a corrupt body transfer encoding must fail the bounded MIME parse
+    /// closed — decoding garbage would feed invented text to classification.
+    #[test]
+    fn corrupt_body_transfer_encoding_fails_the_mime_parse() {
+        let raw = b"Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!not base64!!!";
+        assert!(parse_mime_text(raw).is_err());
+    }
 }

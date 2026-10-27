@@ -2633,4 +2633,40 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+
+    /// Why: these three misconfiguration contracts are what the operator sees
+    /// when the scheduled-backup surface is wired wrong — a disabled schedule,
+    /// a file standing in for the backup root and a file standing in for the
+    /// isolation destination must each fail with their exact named error
+    /// instead of a generic IO failure or a silent no-op.
+    #[test]
+    fn scheduled_backup_misconfiguration_errors_are_named() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, _id, _vault, mut store) = seeded_workspace(root.path(), "data");
+
+        let error = create_scheduled_backup(&mut store, &data, &Settings::default(), Utc::now())
+            .expect_err("a disabled schedule must refuse to back up");
+        assert_eq!(error.to_string(), "Scheduled backups are not enabled");
+
+        let plain_file = root.path().join("not-a-directory");
+        fs::write(&plain_file, b"x").unwrap();
+        let error = prune_verified_scheduled_backups(&store, &plain_file, 2)
+            .expect_err("a file root must be refused");
+        assert_eq!(
+            error.to_string(),
+            "Scheduled backup root is not a directory"
+        );
+
+        let settings = Settings {
+            scheduled_backup_enabled: true,
+            scheduled_backup_directory: plain_file.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let error = backup_isolation_status(&data, &settings)
+            .expect_err("a file destination must be refused");
+        assert_eq!(
+            error.to_string(),
+            "Scheduled backup destination must be a real directory"
+        );
+    }
 }
