@@ -18,16 +18,27 @@ const BACKUP_FIXED_MARGIN_BYTES: u64 = 128 * 1024 * 1024;
 /// and total bytes and the runtime and backup requirements.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct StorageHealth {
+    /// Schema version of the health record.
     pub schema_version: u32,
+    /// Database file size in bytes.
     pub database_bytes: u64,
+    /// Write-ahead log size in bytes.
     pub wal_bytes: u64,
+    /// Shared-memory file size in bytes.
     pub shm_bytes: u64,
+    /// Workspace database size in bytes.
     pub workspace_database_bytes: u64,
+    /// Free bytes on the workspace volume.
     pub available_bytes: u64,
+    /// Total bytes on the workspace volume.
     pub total_bytes: u64,
+    /// Bytes required for runtime operation.
     pub runtime_required_bytes: u64,
+    /// Bytes required to take a backup.
     pub backup_required_bytes: u64,
+    /// Whether runtime writes are safe at current headroom.
     pub runtime_write_safe: bool,
+    /// Whether a backup is safe at current headroom.
     pub backup_safe: bool,
 }
 

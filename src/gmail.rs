@@ -25,7 +25,9 @@ const ROOT: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
+    /// Mailbox address of the connected account.
     pub email_address: String,
+    /// Current history id of the mailbox.
     pub history_id: String,
 }
 /// Message identifier reference in a list or history response.
@@ -34,7 +36,9 @@ pub struct Profile {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRef {
+    /// Provider message id.
     pub id: String,
+    /// Provider thread id the message belongs to.
     pub thread_id: String,
 }
 /// Gmail `users.messages.list` response body.
@@ -44,8 +48,10 @@ pub struct MessageRef {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
+    /// Message references in this page.
     #[serde(default)]
     pub messages: Vec<MessageRef>,
+    /// Token for the next page, when more remain.
     pub next_page_token: Option<String>,
 }
 /// One `users.history.list` record.
@@ -55,6 +61,7 @@ pub struct MessagePage {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRecord {
+    /// Messages added to the mailbox in this history record.
     #[serde(default)]
     pub messages_added: Vec<Added>,
 }
@@ -63,6 +70,7 @@ pub struct HistoryRecord {
 /// Inputs: none (plain struct). Output: the added [`MessageRef`].
 #[derive(Deserialize)]
 pub struct Added {
+    /// The message reference added to the conversation.
     pub message: MessageRef,
 }
 /// Gmail `users.history.list` response body.
@@ -72,9 +80,12 @@ pub struct Added {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryPage {
+    /// History records returned for the queried window.
     #[serde(default)]
     pub history: Vec<HistoryRecord>,
+    /// Token for the next history page, when more remain.
     pub next_page_token: Option<String>,
+    /// History id the page ends at.
     pub history_id: String,
 }
 /// Outcome of one history-listing step.
@@ -83,6 +94,7 @@ pub struct HistoryPage {
 /// when the stored history id is no longer servable.
 pub enum HistoryResult {
     Page(HistoryPage),
+    /// The stored history token is expired; a full resync is required.
     Expired,
 }
 #[derive(Deserialize)]
@@ -102,8 +114,11 @@ struct RawMessage {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadMessage {
+    /// Provider message id.
     pub id: String,
+    /// Provider-internal timestamp of the message.
     pub internal_date: String,
+    /// Provider label ids on the message.
     #[serde(default)]
     pub label_ids: Vec<String>,
 }
@@ -112,6 +127,7 @@ pub struct ThreadMessage {
 /// Inputs: none (plain struct). Output: the thread's [`ThreadMessage`]s.
 #[derive(Deserialize)]
 pub struct Thread {
+    /// Messages in the conversation, in provider order.
     pub messages: Vec<ThreadMessage>,
 }
 /// Gmail `users.messages.send` response body.
@@ -119,6 +135,7 @@ pub struct Thread {
 /// Inputs: none (plain struct). Output: the id assigned to the sent reply.
 #[derive(Deserialize, Serialize)]
 pub struct Sent {
+    /// Provider id assigned to the sent message.
     pub id: String,
 }
 
@@ -213,7 +230,9 @@ fn gmail_json<T: serde::de::DeserializeOwned>(
 /// failure) or `MalformedMessage` (unusable payload).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FetchFailureKind {
+    /// A transient transport or provider failure.
     Infrastructure,
+    /// The provider returned a message that cannot be parsed.
     MalformedMessage,
 }
 /// Fetch failure with its operator-facing message.
@@ -222,7 +241,9 @@ pub enum FetchFailureKind {
 /// message shown in the queue.
 #[derive(Debug)]
 pub struct FetchFailure {
+    /// Failure class distinguishing transport faults from bad messages.
     pub kind: FetchFailureKind,
+    /// Operator-facing failure text.
     pub message: String,
 }
 impl std::fmt::Display for FetchFailure {
@@ -242,7 +263,9 @@ impl std::error::Error for FetchFailure {}
 /// driving the retry posture and operator reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendFailureKind {
+    /// The provider definitively rejected the send request.
     NotAccepted,
+    /// The provider outcome is unknown; delivery must be reconciled.
     Uncertain,
 }
 /// Send failure with its operator-facing message.
@@ -251,7 +274,9 @@ pub enum SendFailureKind {
 /// message shown in the queue.
 #[derive(Debug)]
 pub struct SendFailure {
+    /// Failure class distinguishing rejection from uncertain delivery.
     pub kind: SendFailureKind,
+    /// Operator-facing failure text.
     pub message: String,
 }
 impl std::fmt::Display for SendFailure {

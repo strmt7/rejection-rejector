@@ -29,11 +29,17 @@ const CURRENT_FILE: &str = "runtime.jsonl";
 /// through worker and API listener failures.
 #[derive(Clone, Copy, Debug)]
 pub enum RuntimeEvent {
+    /// The application process started.
     ProcessStarted,
+    /// The application process stopped.
     ProcessStopped,
+    /// The background worker failed to start.
     WorkerStartupFailed,
+    /// The background worker panicked.
     WorkerPanicked,
+    /// The local API listener started.
     ApiListenerStarted,
+    /// The local API listener failed to start or serve.
     ApiListenerFailed,
 }
 
@@ -103,13 +109,21 @@ impl RuntimeSignal {
 /// timed operation counts with mean and max durations and parse errors.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimePerformanceSummary {
+    /// Schema version of the summary record.
     pub schema_version: u32,
+    /// Operation records retained in the log.
     pub retained_operation_records: u64,
+    /// Operations recorded as succeeded.
     pub succeeded_operations: u64,
+    /// Operations recorded as failed.
     pub failed_operations: u64,
+    /// Operations recorded with duration data.
     pub timed_operations: u64,
+    /// Mean operation duration in milliseconds.
     pub mean_duration_ms: Option<u64>,
+    /// Maximum operation duration in milliseconds.
     pub max_duration_ms: Option<u64>,
+    /// Log lines that could not be parsed.
     pub parse_errors: u64,
 }
 
@@ -119,13 +133,21 @@ pub struct RuntimePerformanceSummary {
 /// archive count and the configured caps.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeLogStatus {
+    /// Schema version of the status record.
     pub schema_version: u32,
+    /// Whether runtime logging is available.
     pub available: bool,
+    /// Size of the current log file in bytes.
     pub current_bytes: u64,
+    /// Total size of archived logs in bytes.
     pub archive_bytes: u64,
+    /// Combined size of current and archived logs in bytes.
     pub total_bytes: u64,
+    /// Number of archived log files.
     pub archive_count: usize,
+    /// Rotation threshold for the current log in bytes.
     pub max_current_bytes: u64,
+    /// Maximum number of archived logs retained.
     pub max_archives: usize,
 }
 

@@ -380,6 +380,7 @@ def _default_ram_probe() -> tuple[int, int]:
 
     class MEMORYSTATUSEX(ctypes.Structure):
         """Win32 MEMORYSTATUSEX layout for GlobalMemoryStatusEx (ctypes)."""
+
         _fields_ = [
             ("dwLength", ctypes.c_ulong),
             ("dwMemoryLoad", ctypes.c_ulong),

@@ -164,6 +164,7 @@ struct SettingsPrereqs {
     automatic_prerequisites: bool,
 }
 
+/// Top-level desktop application state: worker handle, tabs, editor, settings and dialogs.
 pub struct App {
     worker: Worker,
     tab: Tab,
