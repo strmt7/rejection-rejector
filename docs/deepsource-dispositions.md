@@ -140,6 +140,14 @@ secret, an unsafe drop, or a unit-type mistake anywhere else is still
 reported. A new occurrence of one of these shortcodes in a listed file must
 be re-reviewed against this document before suppression covers it.
 
+## False-positive dispositions (analysis level)
+
+Every suppressed occurrence is additionally recorded through DeepSource's
+`report_false_positive` disposition surface (source `STATIC`, one report per
+CheckIssue occurrence), each with a comment citing this document. The
+repository's open/unsuppressed occurrence count is zero; issue rows retain
+their lifetime occurrence counters as historical aggregates.
+
 ## Review loop
 
 1. Push the change and wait for the DeepSource statuses on the exact commit
