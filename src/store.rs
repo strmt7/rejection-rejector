@@ -1584,6 +1584,7 @@ impl Store {
             "events" => "DROP TABLE events",
             "items" => "DROP TABLE items",
             "deliveries" => "DROP TABLE deliveries",
+            "meta" => "DROP TABLE meta",
             other => panic!("unsupported test table {other}"),
         };
         self.conn.execute_batch(statement).unwrap();
@@ -4234,11 +4235,11 @@ mod verification_gap_tests {
     /// Why: these seams execute raw SQL — an open-ended name would turn a test
     /// helper into a SQL injection surface.
     #[test]
-    #[should_panic(expected = "unsupported test table meta")]
+    #[should_panic(expected = "unsupported test table settings")]
     fn drop_table_seam_refuses_unlisted_tables() {
         let d = tempfile::tempdir().unwrap();
         let db = Store::open(&d.path().join("db"), Vault::random()).unwrap();
-        db.drop_table_for_tests("meta");
+        db.drop_table_for_tests("settings");
     }
 
     /// The transition-refusal seam accepts only `sent` and `uncertain`.
