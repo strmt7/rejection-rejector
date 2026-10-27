@@ -851,6 +851,7 @@ pub(crate) mod test_support {
     }
 
     /// Inputs: none. Output: `true` when the running test thread opted into    /// the live OS credential store.
+    #[cfg(any(windows, target_os = "macos"))]
     pub(crate) fn live_os_credential_store_active() -> bool {
         LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.get())
     }
@@ -859,6 +860,7 @@ pub(crate) mod test_support {
     ///
     /// Inputs: none. Output: `Zeroizing<String>` — the armed headless seam
     /// value when installed, else a fixed test passphrase of sufficient length.
+    #[cfg(any(windows, target_os = "macos"))]
     pub(crate) fn test_vault_passphrase() -> Zeroizing<String> {
         if let Some(pass) = HEADLESS_PASSPHRASE.get() {
             return Zeroizing::new(pass.clone());
