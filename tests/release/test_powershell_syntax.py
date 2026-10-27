@@ -49,6 +49,7 @@ def inline_powershell(path):
 
 class PowerShellSyntaxTests(unittest.TestCase):
     """PowerShell must parse without ever executing its bodies."""
+
     def test_release_workflow_blocks_are_discovered(self):
         """The release workflow exposes the expected number of pwsh blocks."""
         blocks = inline_powershell(ROOT / ".github/workflows/release.yml")

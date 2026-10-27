@@ -43,12 +43,26 @@ GATES = [
     ),
 ]
 
+# Transient network fetches must not flip the gate: per-gate retry budget.
+GATE_ATTEMPTS = {"cargo audit (advisories)": 3}
 
-def run(name: str, cmd: list[str], env: dict | None = None) -> bool:
-    """Run one gate. Input: display name + argv + optional env. Output: True when green."""
+
+def run(
+    name: str, cmd: list[str], env: dict | None = None, attempts: int = 1
+) -> bool:
+    """Run one gate. Inputs: display name, argv, optional env, and retry
+    attempts (for network-dependent steps whose transient fetch failures must
+    not flip the gate). Output: True when green on any attempt.
+    """
     print(f"== {name}: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, cwd=ROOT, env=env, check=False)
-    ok = proc.returncode == 0
+    ok = False
+    for attempt in range(1, attempts + 1):
+        proc = subprocess.run(cmd, cwd=ROOT, env=env, check=False)
+        ok = proc.returncode == 0
+        if ok:
+            break
+        if attempt < attempts:
+            print(f"== {name}: transient failure (exit {proc.returncode}); retrying")
     print(f"== {name}: {'GREEN' if ok else f'RED (exit {proc.returncode})'}")
     return ok
 
@@ -92,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     check_credential_store()
-    results = [run(name, cmd) for name, cmd in GATES]
+    results = [
+        run(name, cmd, attempts=GATE_ATTEMPTS.get(name, 1)) for name, cmd in GATES
+    ]
     # Rustdoc gate: deny warnings so doc-link regressions (e.g. public docs
     # linking a private item) fail here, not only in the deep-verification
     # workflow. Matches the CI command (RUSTDOCFLAGS=-D warnings cargo doc).

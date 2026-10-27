@@ -32,6 +32,7 @@ def good_run(workflow="ci.yml", **changes):
 
 class ReleaseEvidenceTests(unittest.TestCase):
     """Every evidence acceptance boundary, offline and synthetic."""
+
     @staticmethod
     def test_exact_green_run_passes():
         """A green exact-commit run passes validation."""
@@ -211,6 +212,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
 class GitHistoryIntegrationTests(unittest.TestCase):
     """Real Git history comparisons on a synthetic repository."""
+
     def test_real_git_diff_distinguishes_docs_and_changed_source(self):
         """Real diffs separate docs-only changes from source changes."""
         with tempfile.TemporaryDirectory() as directory:
@@ -246,6 +248,7 @@ class GitHistoryIntegrationTests(unittest.TestCase):
 
 class BinaryAuditTests(unittest.TestCase):
     """Per-executable audit semantics on synthetic binaries."""
+
     def setUp(self):
         """Create two synthetic release executables in a temp directory."""
         self.tmp = tempfile.TemporaryDirectory()

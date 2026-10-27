@@ -12,16 +12,27 @@ use serde::Serialize;
 /// health.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OperationalIndicators {
+    /// Age of the last mailbox sync in seconds.
     pub sync_age_seconds: Option<i64>,
+    /// Whether the last mailbox sync is fresh enough to serve.
     pub sync_fresh: bool,
+    /// Number of items waiting in the queue.
     pub queue_depth: u64,
+    /// Number of items awaiting review.
     pub review_depth: u64,
+    /// Number of deliveries awaiting reconciliation.
     pub uncertain_deliveries: u64,
+    /// Age of the task qualification in seconds.
     pub task_qualification_age_seconds: Option<i64>,
+    /// Whether storage writes are currently safe.
     pub storage_write_safe: bool,
+    /// Whether the scheduled backup is overdue.
     pub scheduled_backup_overdue: bool,
+    /// Whether backups use a distinct failure domain, when measurable.
     pub backup_distinct_failure_domain: Option<bool>,
+    /// Whether readiness is degraded.
     pub degraded: bool,
+    /// Operator-facing reasons for degraded readiness.
     pub degradation_reasons: Vec<&'static str>,
 }
 
@@ -31,14 +42,23 @@ pub struct OperationalIndicators {
 /// flags the indicator summary is derived from.
 #[derive(Clone, Copy, Debug)]
 pub struct OperationalContext<'a> {
+    /// Current workspace settings.
     pub settings: &'a Settings,
+    /// Current item counts.
     pub counts: &'a Counts,
+    /// Timestamp of the last provider poll.
     pub last_poll: Option<DateTime<Utc>>,
+    /// Whether the last database integrity check passed.
     pub database_integrity_ok: bool,
+    /// Whether storage writes are currently safe.
     pub storage_write_safe: bool,
+    /// Whether the scheduled backup is overdue.
     pub scheduled_backup_overdue: bool,
+    /// Whether backups use a distinct failure domain, when measurable.
     pub backup_distinct_failure_domain: Option<bool>,
+    /// Whether the Google account is connected.
     pub connected: bool,
+    /// Reference timestamp the context was built at.
     pub now: DateTime<Utc>,
 }
 
@@ -117,11 +137,17 @@ pub fn operational_indicators(context: OperationalContext<'_>) -> OperationalInd
 /// per stage plus the reasons automatic dispatch is blocked.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RuntimeReadiness {
+    /// Whether the runtime is live and serving.
     pub live: bool,
+    /// Whether the workspace is ready.
     pub workspace_ready: bool,
+    /// Whether mailbox synchronization is ready.
     pub mailbox_sync_ready: bool,
+    /// Whether local analysis is ready.
     pub analysis_ready: bool,
+    /// Whether automatic dispatch is ready.
     pub automatic_dispatch_ready: bool,
+    /// Reasons automatic dispatch is currently blocked.
     pub automatic_block_reasons: Vec<&'static str>,
 }
 
@@ -131,13 +157,21 @@ pub struct RuntimeReadiness {
 /// readiness verdicts are derived from.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeReadinessContext<'a> {
+    /// Current workspace settings.
     pub settings: &'a Settings,
+    /// Whether the last database integrity check passed.
     pub database_integrity_ok: bool,
+    /// Whether storage writes are currently safe.
     pub storage_write_safe: bool,
+    /// Whether the Google account is connected.
     pub connected: bool,
+    /// Whether the send scope is granted.
     pub send_scope: bool,
+    /// Whether the worker is paused.
     pub paused: bool,
+    /// Whether the worker is stopping.
     pub stopping: bool,
+    /// Whether the emergency stop is active.
     pub emergency_stop_active: bool,
 }
 
