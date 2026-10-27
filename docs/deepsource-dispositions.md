@@ -87,28 +87,18 @@ validation replaced with explicit raises, `ls`-based discovery replaced with
 `find`, and the cyclomatic-complexity rule satisfied by decomposition in all but
 the functions below.
 
-### Deferred: `RS-R1000` cyclomatic complexity (14 functions)
+### `RS-R1000` cyclomatic complexity: resolved
 
-Decomposition of these functions is a compile-verified refactor on its own
-track; each is verified behavior-bearing code and was left intact rather than
-rushed:
-
-| Function | Complexity |
-|---|---|
-| `src/bin/rr.rs` `main` | 144 |
-| `src/worker.rs` `run` | 112 |
-| `src/gui.rs` `settings` | 90 |
-| `src/gui.rs` `local_ai` | 63 |
-| `src/engine.rs` `send_attempt` | 73 |
-| `src/engine.rs` `open` | 58 |
-| `src/store.rs` `verify_application_invariants_connection` | 51 |
-| `src/engine.rs` `automatic_policy` | 40 |
-| `src/worker.rs` `api_query_with_operation` | 39 |
-| `src/store.rs` `open` | 38 |
-| `src/worker.rs` `handle_api_write` | 37 |
-| `src/store.rs` `verify_backup_file` | 35 |
-| `src/worker.rs` `kind` | 34 |
-| `src/evaluation.rs` `evaluate` | 42 |
+All 14 functions previously over the threshold were decomposed into
+documented helpers with verbatim block moves; every function now scores at
+most 15 (`src/bin/rr.rs` `main` 144→1, `src/worker.rs` `run` 112→14,
+`src/gui.rs` `settings` 90→2, `src/engine.rs` `send_attempt` 73→13,
+`src/gui.rs` `local_ai` 63→7, `src/engine.rs` `open` 58→11,
+`src/store.rs` `verify_application_invariants_connection` 51→7,
+`src/evaluation.rs` `evaluate` 42→7, `src/engine.rs` `automatic_policy` 40→4,
+`src/worker.rs` `api_query_with_operation` 39→14,
+`src/store.rs` `open` 38→9, `src/worker.rs` `handle_api_write` 37→15,
+`src/store.rs` `verify_backup_file` 35→11, `src/worker.rs` `kind` 34→14).
 
 ## Review loop
 

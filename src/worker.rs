@@ -1,7 +1,7 @@
 use crate::mail_transport::AppPasswordCredentials;
 use crate::{
     api_auth,
-    config::{AutomaticArmGate, Mode, Settings},
+    config::{AutomaticArmGate, Mode, ReplyLanguage, Settings, Tone},
     engine::{Engine, automatic_policy},
     ollama::{self, ModelStatus, Ollama},
     retry::{CircuitTransition, RetryGate},
@@ -287,6 +287,22 @@ impl Command {
             Self::Connect { .. } | Self::ConnectAppPassword(_) => OperationKind::ConnectGmail,
             Self::Disconnect => OperationKind::DisconnectGmail,
             Self::Settings(_) => OperationKind::UpdateSettings,
+            Self::List { .. } => OperationKind::ListItems,
+            Self::Select(_) => OperationKind::SelectItem,
+            Self::Edit { .. } => OperationKind::EditDraft,
+            Self::Regenerate { .. } => OperationKind::RegenerateDraft,
+            Self::Dismiss { .. } => OperationKind::DismissItem,
+            Self::Send { .. } => OperationKind::SendReply,
+            Self::Reconcile(_) => OperationKind::ReconcileDelivery,
+            other => other.kind_model_ops(),
+        }
+    }
+    /// Map one local-model or store-maintenance command onto its operation kind.
+    ///
+    /// Inputs: `self` — command being executed. Output: `OperationKind` — the
+    /// kind recorded in the operation journal for this command.
+    fn kind_model_ops(&self) -> OperationKind {
+        match self {
             Self::InstallOllama => OperationKind::InstallOllama,
             Self::StartOllama => OperationKind::StartOllama,
             Self::PullModel | Self::PullVerifierModel => OperationKind::PullModel,
@@ -297,24 +313,28 @@ impl Command {
             Self::CompareModels => OperationKind::CompareModels,
             Self::IntegrityCheck => OperationKind::IntegrityCheck,
             Self::CompactDatabase => OperationKind::CompactDatabase,
+            other => other.kind_workspace_ops(),
+        }
+    }
+    /// Map one workspace, recovery or API command onto its operation kind.
+    ///
+    /// Inputs: `self` — command being executed. Output: `OperationKind` — the
+    /// kind recorded in the operation journal for this command.
+    #[allow(clippy::unreachable)]
+    fn kind_workspace_ops(&self) -> OperationKind {
+        match self {
             Self::Backup { .. } => OperationKind::Backup,
             Self::RecoveryDrill { .. } => OperationKind::RecoveryDrill,
             Self::ExportRecoveryKey { .. } => OperationKind::RecoveryKeyExport,
             Self::VerifyRecoveryKey { .. } => OperationKind::RecoveryKeyVerify,
             Self::Diagnostics { .. } => OperationKind::Diagnostics,
-            Self::List { .. } => OperationKind::ListItems,
-            Self::Select(_) => OperationKind::SelectItem,
-            Self::Edit { .. } => OperationKind::EditDraft,
-            Self::Regenerate { .. } => OperationKind::RegenerateDraft,
-            Self::Dismiss { .. } => OperationKind::DismissItem,
-            Self::Send { .. } => OperationKind::SendReply,
-            Self::Reconcile(_) => OperationKind::ReconcileDelivery,
             Self::Purge => OperationKind::PurgeRetention,
             Self::RevealApiToken => OperationKind::RevealApiToken,
             Self::HideApiToken => OperationKind::HideApiToken,
             Self::RotateApiToken => OperationKind::RotateApiToken,
             Self::Api { .. } | Self::OpenMetrics { .. } => OperationKind::ApiRequest,
             Self::ApiWrite { request, .. } => request.operation_kind(),
+            _ => unreachable!("every Command variant is mapped by kind"),
         }
     }
 }
@@ -892,152 +912,36 @@ fn handle_api_write(
     };
     match request {
         WriteRequest::EditDraft { id, revision, body } => {
-            let job = match e.owned(id) {
-                Ok(job) => job,
-                Err(_) => return WriteOutcome::error(&not_found()),
-            };
-            if let Err(error) = web::guard_edit(&job, *revision, body, e.settings.mode) {
-                return WriteOutcome::error(&error);
-            }
-            begin_operation(
-                context.shared,
-                context.pulse,
-                kind,
-                "Saving your edited reply…",
-            );
-            let result = e.edit(id, *revision, body.clone());
-            report_write(e, context, kind, result)
+            write_edit_draft(e, id, revision, body, kind, context, &not_found)
         }
         WriteRequest::Regenerate { id, revision } => {
-            let job = match e.owned(id) {
-                Ok(job) => job,
-                Err(_) => return WriteOutcome::error(&not_found()),
-            };
-            if let Err(error) = web::guard_regenerate(&job, *revision, e.settings.mode, e.demo) {
-                return WriteOutcome::error(&error);
-            }
-            begin_operation(
-                context.shared,
-                context.pulse,
-                kind,
-                "Requesting a fresh local analysis…",
-            );
-            let result = e.regenerate(id, *revision);
-            report_write(e, context, kind, result)
+            write_regenerate(e, id, revision, kind, context, &not_found)
         }
         WriteRequest::Dismiss { id, revision } => {
-            let job = match e.owned(id) {
-                Ok(job) => job,
-                Err(_) => return WriteOutcome::error(&not_found()),
-            };
-            if let Err(error) = web::guard_dismiss(&job, *revision) {
-                return WriteOutcome::error(&error);
-            }
-            begin_operation(
-                context.shared,
-                context.pulse,
-                kind,
-                "Dismissing the message…",
-            );
-            let result = e.dismiss(id, *revision);
-            report_write(e, context, kind, result)
+            write_dismiss(e, id, revision, kind, context, &not_found)
         }
         WriteRequest::Send {
             id,
             revision,
             confirm_reply,
-        } => {
-            let job = match e.owned(id) {
-                Ok(job) => job,
-                Err(_) => return WriteOutcome::error(&not_found()),
-            };
-            let blocks = crate::tui::hard_blocks_for(&job, &e.account);
-            let busy = context
-                .shared
-                .lock()
-                .map(|snapshot| {
-                    !snapshot.busy.is_empty() || snapshot.operation.state == OperationState::Running
-                })
-                .unwrap_or(false);
-            let runtime = web::SendRuntime {
-                hard_blocks: &blocks,
-                busy,
-                sending_enabled: e.settings.sending_enabled,
-                demo: e.demo,
-                paused: e.paused.load(Ordering::SeqCst),
-            };
-            let send = web::SendRequest {
-                id: id.as_str(),
-                revision: *revision,
-                confirm_reply: confirm_reply.as_str(),
-            };
-            if let Err(error) = web::guard_send(&job, &send, &runtime) {
-                return WriteOutcome::error(&error);
-            }
-            begin_operation(
-                context.shared,
-                context.pulse,
-                kind,
-                "Rechecking the conversation and sending your confirmed reply…",
-            );
-            let result = e.send(id, *revision, &hash(confirm_reply), false);
-            report_write(e, context, kind, result)
-        }
+        } => write_send(e, id, revision, confirm_reply, kind, context, &not_found),
         WriteRequest::UpdateSettings {
             mode,
             tone,
             reply_language,
             sending_enabled,
-        } => {
-            let candidate =
-                web::merge_settings(&e.settings, *mode, *tone, *reply_language, *sending_enabled);
-            if let Err(error) = web::guard_settings(&candidate) {
-                return WriteOutcome::error(&error);
-            }
-            begin_operation(context.shared, context.pulse, kind, "Updating settings…");
-            let result = e.update_settings(candidate);
-            let mut outcome = report_write(e, context, kind, result);
-            outcome.merge_payload(web::settings_view(&e.settings));
-            outcome
+        } => write_update_settings(
+            e,
+            mode,
+            tone,
+            reply_language,
+            sending_enabled,
+            kind,
+            context,
+        ),
+        WriteRequest::AutomaticArm { action } => {
+            write_automatic_arm(e, action, arm_gate, now, kind, context)
         }
-        WriteRequest::AutomaticArm { action } => match action {
-            web::AutomaticArmAction::Open => {
-                let gate = AutomaticArmGate::open(now);
-                *arm_gate = Some(gate);
-                WriteOutcome::accepted_with(json!({"arm": web::arm_gate_view(&gate, now)}))
-            }
-            web::AutomaticArmAction::Cancel => {
-                *arm_gate = None;
-                WriteOutcome::accepted_with(json!({"arm": Value::Null}))
-            }
-            web::AutomaticArmAction::Confirm => {
-                let view = match web::guard_arm_confirm(arm_gate.as_ref(), now) {
-                    Ok(view) => view,
-                    Err(error) => return WriteOutcome::error(&error),
-                };
-                let mut candidate = e.settings.clone();
-                candidate.mode = Mode::Automatic;
-                candidate.automatic_confirmed = true;
-                candidate.automatic_since = Some(now);
-                if let Err(error) = web::guard_settings(&candidate) {
-                    return WriteOutcome::error(&error);
-                }
-                begin_operation(
-                    context.shared,
-                    context.pulse,
-                    kind,
-                    "Enabling Automatic mode after the risk confirmation…",
-                );
-                let result = e.update_settings(candidate);
-                let mut outcome = report_write(e, context, kind, result);
-                if outcome.status < 400 {
-                    *arm_gate = None;
-                    outcome = WriteOutcome::accepted_with(json!({"arm": view}));
-                    outcome.merge_payload(web::settings_view(&e.settings));
-                }
-                outcome
-            }
-        },
         WriteRequest::CheckNow => {
             begin_operation(
                 context.shared,
@@ -1051,22 +955,7 @@ fn handle_api_write(
             outcome.merge_payload(json!({ "new_identities": inserted }));
             outcome
         }
-        WriteRequest::Qualify { verifier } => {
-            begin_operation(
-                context.shared,
-                context.pulse,
-                kind,
-                "Running a local model smoke test and checking GPU residency…",
-            );
-            let result = e.qualify().and_then(|()| {
-                if *verifier {
-                    e.qualify_verifier()
-                } else {
-                    Ok(())
-                }
-            });
-            report_write(e, context, kind, result)
-        }
+        WriteRequest::Qualify { verifier } => write_qualify(e, verifier, kind, context),
         WriteRequest::ConnectAppPassword { creds } => {
             begin_operation(
                 context.shared,
@@ -1130,6 +1019,264 @@ fn handle_api_write(
             report_write(e, context, kind, result)
         }
     }
+}
+
+/// Execute one validated draft edit write.
+///
+/// Inputs: `e` — engine owning the workspace; `id` — message id; `revision` —
+/// revision the editor was loaded for; `body` — new reply text; `kind` —
+/// operation kind; `context` — worker bookkeeping and list view; `not_found` —
+/// typed 404 rejection factory. Output: [`WriteOutcome`] for the HTTP
+/// response.
+#[allow(clippy::ptr_arg)]
+fn write_edit_draft(
+    e: &mut Engine,
+    id: &str,
+    revision: &u64,
+    body: &String,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+    not_found: &dyn Fn() -> web::WriteError,
+) -> WriteOutcome {
+    let job = match e.owned(id) {
+        Ok(job) => job,
+        Err(_) => return WriteOutcome::error(&not_found()),
+    };
+    if let Err(error) = web::guard_edit(&job, *revision, body, e.settings.mode) {
+        return WriteOutcome::error(&error);
+    }
+    begin_operation(
+        context.shared,
+        context.pulse,
+        kind,
+        "Saving your edited reply…",
+    );
+    let result = e.edit(id, *revision, body.clone());
+    report_write(e, context, kind, result)
+}
+
+/// Execute one validated draft regeneration write.
+///
+/// Inputs: `e` — engine owning the workspace; `id` — message id; `revision` —
+/// revision the editor was loaded for; `kind` — operation kind; `context` —
+/// worker bookkeeping and list view; `not_found` — typed 404 rejection
+/// factory. Output: [`WriteOutcome`] for the HTTP response.
+fn write_regenerate(
+    e: &mut Engine,
+    id: &str,
+    revision: &u64,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+    not_found: &dyn Fn() -> web::WriteError,
+) -> WriteOutcome {
+    let job = match e.owned(id) {
+        Ok(job) => job,
+        Err(_) => return WriteOutcome::error(&not_found()),
+    };
+    if let Err(error) = web::guard_regenerate(&job, *revision, e.settings.mode, e.demo) {
+        return WriteOutcome::error(&error);
+    }
+    begin_operation(
+        context.shared,
+        context.pulse,
+        kind,
+        "Requesting a fresh local analysis…",
+    );
+    let result = e.regenerate(id, *revision);
+    report_write(e, context, kind, result)
+}
+
+/// Execute one validated dismissal write.
+///
+/// Inputs: `e` — engine owning the workspace; `id` — message id; `revision` —
+/// revision the editor was loaded for; `kind` — operation kind; `context` —
+/// worker bookkeeping and list view; `not_found` — typed 404 rejection
+/// factory. Output: [`WriteOutcome`] for the HTTP response.
+fn write_dismiss(
+    e: &mut Engine,
+    id: &str,
+    revision: &u64,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+    not_found: &dyn Fn() -> web::WriteError,
+) -> WriteOutcome {
+    let job = match e.owned(id) {
+        Ok(job) => job,
+        Err(_) => return WriteOutcome::error(&not_found()),
+    };
+    if let Err(error) = web::guard_dismiss(&job, *revision) {
+        return WriteOutcome::error(&error);
+    }
+    begin_operation(
+        context.shared,
+        context.pulse,
+        kind,
+        "Dismissing the message…",
+    );
+    let result = e.dismiss(id, *revision);
+    report_write(e, context, kind, result)
+}
+
+/// Execute one validated confirmed send write.
+///
+/// Inputs: `e` — engine owning the workspace; `id` — message id; `revision` —
+/// revision the approval was given for; `confirm_reply` — exact reply text the
+/// operator confirmed; `kind` — operation kind; `context` — worker
+/// bookkeeping and list view; `not_found` — typed 404 rejection factory.
+/// Output: [`WriteOutcome`] for the HTTP response.
+#[allow(clippy::ptr_arg)]
+fn write_send(
+    e: &mut Engine,
+    id: &String,
+    revision: &u64,
+    confirm_reply: &String,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+    not_found: &dyn Fn() -> web::WriteError,
+) -> WriteOutcome {
+    let job = match e.owned(id) {
+        Ok(job) => job,
+        Err(_) => return WriteOutcome::error(&not_found()),
+    };
+    let blocks = crate::tui::hard_blocks_for(&job, &e.account);
+    let busy = context
+        .shared
+        .lock()
+        .map(|snapshot| {
+            !snapshot.busy.is_empty() || snapshot.operation.state == OperationState::Running
+        })
+        .unwrap_or(false);
+    let runtime = web::SendRuntime {
+        hard_blocks: &blocks,
+        busy,
+        sending_enabled: e.settings.sending_enabled,
+        demo: e.demo,
+        paused: e.paused.load(Ordering::SeqCst),
+    };
+    let send = web::SendRequest {
+        id: id.as_str(),
+        revision: *revision,
+        confirm_reply: confirm_reply.as_str(),
+    };
+    if let Err(error) = web::guard_send(&job, &send, &runtime) {
+        return WriteOutcome::error(&error);
+    }
+    begin_operation(
+        context.shared,
+        context.pulse,
+        kind,
+        "Rechecking the conversation and sending your confirmed reply…",
+    );
+    let result = e.send(id, *revision, &hash(confirm_reply), false);
+    report_write(e, context, kind, result)
+}
+
+/// Execute one validated settings update write.
+///
+/// Inputs: `e` — engine owning the workspace; `mode`/`tone`/
+/// `reply_language`/`sending_enabled` — merged settings candidates; `kind` —
+/// operation kind; `context` — worker bookkeeping and list view. Output:
+/// [`WriteOutcome`] for the HTTP response.
+fn write_update_settings(
+    e: &mut Engine,
+    mode: &Option<Mode>,
+    tone: &Option<Tone>,
+    reply_language: &Option<ReplyLanguage>,
+    sending_enabled: &Option<bool>,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+) -> WriteOutcome {
+    let candidate =
+        web::merge_settings(&e.settings, *mode, *tone, *reply_language, *sending_enabled);
+    if let Err(error) = web::guard_settings(&candidate) {
+        return WriteOutcome::error(&error);
+    }
+    begin_operation(context.shared, context.pulse, kind, "Updating settings…");
+    let result = e.update_settings(candidate);
+    let mut outcome = report_write(e, context, kind, result);
+    outcome.merge_payload(web::settings_view(&e.settings));
+    outcome
+}
+
+/// Execute one Automatic-arm cooldown gate step.
+///
+/// Inputs: `e` — engine owning the workspace; `action` — arm step to perform;
+/// `arm_gate` — server-side Automatic-arm cooldown state mutated in place;
+/// `now` — request time; `kind` — operation kind; `context` — worker
+/// bookkeeping and list view. Output: [`WriteOutcome`] for the HTTP response.
+fn write_automatic_arm(
+    e: &mut Engine,
+    action: &web::AutomaticArmAction,
+    arm_gate: &mut Option<AutomaticArmGate>,
+    now: DateTime<Utc>,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+) -> WriteOutcome {
+    match action {
+        web::AutomaticArmAction::Open => {
+            let gate = AutomaticArmGate::open(now);
+            *arm_gate = Some(gate);
+            WriteOutcome::accepted_with(json!({"arm": web::arm_gate_view(&gate, now)}))
+        }
+        web::AutomaticArmAction::Cancel => {
+            *arm_gate = None;
+            WriteOutcome::accepted_with(json!({"arm": Value::Null}))
+        }
+        web::AutomaticArmAction::Confirm => {
+            let view = match web::guard_arm_confirm(arm_gate.as_ref(), now) {
+                Ok(view) => view,
+                Err(error) => return WriteOutcome::error(&error),
+            };
+            let mut candidate = e.settings.clone();
+            candidate.mode = Mode::Automatic;
+            candidate.automatic_confirmed = true;
+            candidate.automatic_since = Some(now);
+            if let Err(error) = web::guard_settings(&candidate) {
+                return WriteOutcome::error(&error);
+            }
+            begin_operation(
+                context.shared,
+                context.pulse,
+                kind,
+                "Enabling Automatic mode after the risk confirmation…",
+            );
+            let result = e.update_settings(candidate);
+            let mut outcome = report_write(e, context, kind, result);
+            if outcome.status < 400 {
+                *arm_gate = None;
+                outcome = WriteOutcome::accepted_with(json!({"arm": view}));
+                outcome.merge_payload(web::settings_view(&e.settings));
+            }
+            outcome
+        }
+    }
+}
+
+/// Execute one validated model qualification write.
+///
+/// Inputs: `e` — engine owning the workspace; `verifier` — whether to qualify
+/// the independent verifier too; `kind` — operation kind; `context` — worker
+/// bookkeeping and list view. Output: [`WriteOutcome`] for the HTTP response.
+fn write_qualify(
+    e: &mut Engine,
+    verifier: &bool,
+    kind: OperationKind,
+    context: &WriteContext<'_>,
+) -> WriteOutcome {
+    begin_operation(
+        context.shared,
+        context.pulse,
+        kind,
+        "Running a local model smoke test and checking GPU residency…",
+    );
+    let result = e.qualify().and_then(|()| {
+        if *verifier {
+            e.qualify_verifier()
+        } else {
+            Ok(())
+        }
+    });
+    report_write(e, context, kind, result)
 }
 
 /// Map a result onto its operation state.
@@ -1249,41 +1396,7 @@ fn run(
     let mut arm_gate: Option<AutomaticArmGate> = None;
     refresh(&e, &shared, None, review, page)?;
     let api_disabled = Arc::new(AtomicBool::new(false));
-    if e.settings.api_enabled && !e.demo {
-        let material = api_auth::load_or_create(&mut e.db)?;
-        if let Some(token) = material.plaintext_once
-            && let Ok(mut snapshot) = shared.lock()
-        {
-            snapshot.api_token = Some(token);
-            snapshot.api_token_expires =
-                Some(Instant::now() + worker_interval(Duration::from_secs(60)));
-        }
-        match crate::api::start_with_verifier(
-            e.settings.api_port,
-            material.verifier,
-            sender,
-            e.stop.clone(),
-            api_disabled.clone(),
-            pulse.clone(),
-        ) {
-            Ok(_) => {
-                if let Some(journal) = &journal {
-                    let _ = journal.record_event(RuntimeEvent::ApiListenerStarted);
-                }
-                if let Ok(mut s) = shared.lock() {
-                    s.api_listening = true;
-                }
-            }
-            Err(error) => {
-                if let Some(journal) = &journal {
-                    let _ = journal.record_event(RuntimeEvent::ApiListenerFailed);
-                }
-                if let Ok(mut s) = shared.lock() {
-                    s.error = format!("Integration API did not start: {error}");
-                }
-            }
-        }
-    }
+    start_api_listener(&mut e, sender, &api_disabled, &pulse, &journal, &shared)?;
     let now_instant = Instant::now();
     let mut gmail_gate = RetryGate::new(
         now_instant,
@@ -1331,175 +1444,493 @@ fn run(
                 let outcome = handle_api_write(&mut e, &request, &mut arm_gate, &context);
                 let _ = reply.try_send(outcome);
             }
-            Ok(Command::OpenMetrics { reply }) => {
-                let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
-                    let runtime = crate::runtime_log::performance_summary(&e.directory)?;
-                    Ok(
-                        crate::metrics::render_openmetrics_with_runtime_and_emergency(
-                            &snapshot,
-                            &runtime,
-                            crate::emergency::status_fail_closed().active,
-                        ),
-                    )
-                });
-                if let Ok(text) = data {
-                    let _ = reply.try_send(text);
+            Ok(Command::OpenMetrics { reply }) => handle_open_metrics(&e, &reply),
+            Ok(command) => {
+                let (selected_out, review_out, page_out, scheduled_backup_due_out) =
+                    handle_worker_command(
+                        command,
+                        &mut e,
+                        &shared,
+                        &pulse,
+                        &journal,
+                        &api_disabled,
+                        &mut gmail_gate,
+                        selected,
+                        review,
+                        page,
+                        scheduled_backup_due,
+                    )?;
+                selected = selected_out;
+                review = review_out;
+                page = page_out;
+                scheduled_backup_due = scheduled_backup_due_out;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+        }
+        expire_api_token(&shared);
+        run_maintenance_operations(
+            &mut e,
+            &shared,
+            &pulse,
+            &journal,
+            &api_disabled,
+            &mut policy_failures,
+            &mut policy_due,
+            &mut retention_failures,
+            &mut retention_due,
+            &mut scheduled_backup_failures,
+            &mut scheduled_backup_due,
+            &selected,
+            review,
+            page,
+        )?;
+        if worker_scheduling_paused(&e) {
+            continue;
+        }
+        run_ai_operations(
+            &mut e,
+            &shared,
+            &pulse,
+            &journal,
+            &selected,
+            review,
+            page,
+            &mut gmail_gate,
+            &mut local_ai_gate,
+            &mut automatic_failures,
+            &mut auto_due,
+        )?;
+    }
+    record_process_stopped(&journal);
+    Ok(())
+}
+
+/// Start the integration API listener when settings enable it.
+///
+/// Inputs: `e` — engine; `sender` — command channel handle for API requests;
+/// `api_disabled` — flag that disables the API under enterprise policy;
+/// `pulse` — worker pulse; `journal` — runtime journal, when enabled;
+/// `shared` — shared snapshot. Output: `Result<()>` — `Ok` once the listener
+/// state is published; error when API credential material cannot be created.
+fn start_api_listener(
+    e: &mut Engine,
+    sender: Sender<Command>,
+    api_disabled: &Arc<AtomicBool>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    shared: &Arc<Mutex<Snapshot>>,
+) -> Result<()> {
+    if e.settings.api_enabled && !e.demo {
+        let material = api_auth::load_or_create(&mut e.db)?;
+        if let Some(token) = material.plaintext_once
+            && let Ok(mut snapshot) = shared.lock()
+        {
+            snapshot.api_token = Some(token);
+            snapshot.api_token_expires =
+                Some(Instant::now() + worker_interval(Duration::from_secs(60)));
+        }
+        match crate::api::start_with_verifier(
+            e.settings.api_port,
+            material.verifier,
+            sender,
+            e.stop.clone(),
+            api_disabled.clone(),
+            pulse.clone(),
+        ) {
+            Ok(_) => {
+                if let Some(journal) = &journal {
+                    let _ = journal.record_event(RuntimeEvent::ApiListenerStarted);
+                }
+                if let Ok(mut s) = shared.lock() {
+                    s.api_listening = true;
                 }
             }
-            Ok(command) => {
-                let operation = command.kind();
-                begin_operation(&shared, &pulse, operation, "Working locally…");
-                record_current_operation(&journal, &shared);
-                let mut settings_changed = false;
-                let operation_result: Result<()> = match command {
-                    Command::Refresh => Ok(()),
-                    Command::CheckNow => {
-                        busy(&shared, &pulse, "Checking Gmail for missing messages…");
-                        let result = e.synchronize().map(|_| ());
-                        if result.is_ok() {
-                            let transition = gmail_gate.success(Instant::now());
-                            record_circuit_transition(
-                                &journal,
-                                transition,
-                                RuntimeSignal::GmailCircuitOpened,
-                                RuntimeSignal::GmailCircuitClosed,
-                            );
-                        }
-                        result
-                    }
-                    Command::Connect { path, send } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Complete Google sign-in in your browser. This expires after five minutes.",
-                        );
-                        let r = e.connect(&path, send);
-                        settings_changed = r.is_ok();
-                        r
-                    }
-                    Command::ConnectAppPassword(creds) => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Connecting over IMAP/SMTP with your app password…",
-                        );
-                        let r = e.connect_app_password(creds);
-                        settings_changed = r.is_ok();
-                        r
-                    }
-                    Command::Disconnect => {
-                        selected = None;
-                        settings_changed = true;
-                        e.disconnect()
-                    }
-                    Command::Settings(s) => {
-                        let r = e.update_settings(*s);
-                        settings_changed = r.is_ok();
-                        r
-                    }
-                    Command::InstallOllama => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Running the Ollama installer. Approve its Windows prompts.",
-                        );
-                        install_ollama()
-                    }
-                    Command::StartOllama => Ollama::new(&e.settings).and_then(|o| o.start()),
-                    Command::PullModel => {
-                        busy(&shared, &pulse, "Downloading the selected local model…");
-                        Ollama::new(&e.settings)
-                            .and_then(|o| o.pull(&e.stop, |p| busy(&shared, &pulse, &p)))
-                    }
-                    Command::PullVerifierModel => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Downloading the independent verifier model…",
-                        );
-                        Ollama::new(&e.settings)
-                            .and_then(|o| o.pull_verifier(&e.stop, |p| busy(&shared, &pulse, &p)))
-                    }
-                    Command::InspectModel => {
-                        busy(&shared, &pulse, "Refreshing local model status…");
-                        e.inspect_model_status()
-                    }
-                    Command::InspectVerifierModel => {
-                        busy(&shared, &pulse, "Refreshing independent verifier status…");
-                        e.inspect_verifier_model_status()
-                    }
-                    Command::QualifyModel => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Running a local model smoke test and checking GPU residency…",
-                        );
-                        let r = e.qualify();
-                        settings_changed = r.is_ok();
-                        r
-                    }
-                    Command::QualifyVerifierModel => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Qualifying the independent verifier and checking sequential GPU residency…",
-                        );
-                        let r = e.qualify_verifier();
-                        settings_changed = r.is_ok();
-                        r
-                    }
-                    Command::EvaluateModel => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Running the full task-specific local model evaluation…",
-                        );
-                        e.evaluate_model().map(|_| ())
-                    }
-                    Command::ProfileModel => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Profiling cold, warm-repeat and near-context local model behavior…",
-                        );
-                        e.profile_model_runtime().map(|_| ())
-                    }
-                    Command::CompareModels => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Comparing installed candidate models on the recruiting-email pipeline…",
-                        );
-                        e.compare_models().map(|_| ())
-                    }
-                    Command::IntegrityCheck => {
-                        busy(&shared, &pulse, "Checking encrypted database integrity…");
-                        e.db.integrity_check()
-                    }
-                    Command::CompactDatabase => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Checkpointing, compacting and verifying encrypted SQLite state…",
-                        );
-                        e.compact_database().map(|_| ())
-                    }
-                    Command::Backup { out } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Creating and verifying encrypted same-vault backup…",
-                        );
-                        crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
-                    }
-                    Command::RecoveryDrill { backup } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Restoring backup in an isolated temporary workspace and deeply verifying it…",
-                        );
-                        let report = crate::recovery::recovery_drill(&e.directory, &backup)?;
-                        e.db.log(
+            Err(error) => {
+                if let Some(journal) = &journal {
+                    let _ = journal.record_event(RuntimeEvent::ApiListenerFailed);
+                }
+                if let Ok(mut s) = shared.lock() {
+                    s.error = format!("Integration API did not start: {error}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Answer one OpenMetrics scrape from the worker loop.
+///
+/// Inputs: `e` — engine; `reply` — reply channel for the rendered exposition.
+/// Output: none — the reply is sent only when collection succeeds.
+#[allow(clippy::needless_borrow)]
+fn handle_open_metrics(e: &Engine, reply: &Sender<String>) {
+    let data = crate::metrics::collect(&e, Utc::now()).and_then(|snapshot| {
+        let runtime = crate::runtime_log::performance_summary(&e.directory)?;
+        Ok(
+            crate::metrics::render_openmetrics_with_runtime_and_emergency(
+                &snapshot,
+                &runtime,
+                crate::emergency::status_fail_closed().active,
+            ),
+        )
+    });
+    if let Ok(text) = data {
+        let _ = reply.try_send(text);
+    }
+}
+
+/// The reported outcome and list view after one worker command dispatch.
+///
+/// Inputs: none (plain struct). Output: `result` — the operation outcome
+/// reported to the snapshot; `settings_changed` — whether settings must bump
+/// their revision; `selected`/`review`/`page` — the possibly updated list view.
+struct CommandOutcome {
+    result: Result<()>,
+    settings_changed: bool,
+    selected: Option<String>,
+    review: bool,
+    page: u32,
+}
+
+/// Execute one queued worker command and publish its outcome.
+///
+/// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
+/// snapshot; `pulse` — worker pulse; `journal` — runtime journal, when
+/// enabled; `api_disabled` — API disable flag; `gmail_gate` — Gmail retry
+/// gate; `selected`/`review`/`page` — current list view; `scheduled_backup_due`
+/// — next scheduled-backup due time. Output: `Result<(Option<String>, bool,
+/// u32, Instant)>` — the possibly updated list view and scheduled-backup due
+/// time.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn handle_worker_command(
+    command: Command,
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    api_disabled: &Arc<AtomicBool>,
+    gmail_gate: &mut RetryGate,
+    selected: Option<String>,
+    review: bool,
+    page: u32,
+    mut scheduled_backup_due: Instant,
+) -> Result<(Option<String>, bool, u32, Instant)> {
+    let operation = command.kind();
+    begin_operation(&shared, &pulse, operation, "Working locally…");
+    record_current_operation(&journal, &shared);
+    let CommandOutcome {
+        result: operation_result,
+        settings_changed,
+        selected,
+        review,
+        page,
+    } = execute_command(
+        command,
+        e,
+        shared,
+        pulse,
+        journal,
+        api_disabled,
+        gmail_gate,
+        selected,
+        review,
+        page,
+    )?;
+    let result = protect_audit_boundary(&e, operation_result);
+    if settings_changed {
+        scheduled_backup_due = Instant::now();
+        if let Ok(mut s) = shared.lock() {
+            s.settings_revision += 1;
+        }
+    }
+    report(&shared, &pulse, operation, &result);
+    record_current_operation(&journal, &shared);
+    refresh(&e, &shared, selected.as_deref(), review, page)?;
+    Ok((selected, review, page, scheduled_backup_due))
+}
+
+/// Execute the view, account and qualification worker commands.
+///
+/// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
+/// snapshot; `pulse` — worker pulse; `journal` — runtime journal, when
+/// enabled; `api_disabled` — API disable flag; `gmail_gate` — Gmail retry
+/// gate; `selected`/`review`/`page` — current list view. Output:
+/// `Result<CommandOutcome>` — the operation outcome and possibly updated list
+/// view.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn execute_command(
+    command: Command,
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    api_disabled: &Arc<AtomicBool>,
+    gmail_gate: &mut RetryGate,
+    mut selected: Option<String>,
+    mut review: bool,
+    mut page: u32,
+) -> Result<CommandOutcome> {
+    let mut settings_changed = false;
+    let result = match command {
+        Command::Refresh => Ok(()),
+        Command::CheckNow => {
+            busy(&shared, &pulse, "Checking Gmail for missing messages…");
+            let result = e.synchronize().map(|_| ());
+            if result.is_ok() {
+                let transition = gmail_gate.success(Instant::now());
+                record_circuit_transition(
+                    &journal,
+                    transition,
+                    RuntimeSignal::GmailCircuitOpened,
+                    RuntimeSignal::GmailCircuitClosed,
+                );
+            }
+            result
+        }
+        Command::Connect { path, send } => {
+            busy(
+                &shared,
+                &pulse,
+                "Complete Google sign-in in your browser. This expires after five minutes.",
+            );
+            let r = e.connect(&path, send);
+            settings_changed = r.is_ok();
+            r
+        }
+        Command::ConnectAppPassword(creds) => {
+            busy(
+                &shared,
+                &pulse,
+                "Connecting over IMAP/SMTP with your app password…",
+            );
+            let r = e.connect_app_password(creds);
+            settings_changed = r.is_ok();
+            r
+        }
+        Command::Disconnect => {
+            selected = None;
+            settings_changed = true;
+            e.disconnect()
+        }
+        Command::Settings(s) => {
+            let r = e.update_settings(*s);
+            settings_changed = r.is_ok();
+            r
+        }
+        Command::QualifyModel => {
+            busy(
+                &shared,
+                &pulse,
+                "Running a local model smoke test and checking GPU residency…",
+            );
+            let r = e.qualify();
+            settings_changed = r.is_ok();
+            r
+        }
+        Command::QualifyVerifierModel => {
+            busy(
+                &shared,
+                &pulse,
+                "Qualifying the independent verifier and checking sequential GPU residency…",
+            );
+            let r = e.qualify_verifier();
+            settings_changed = r.is_ok();
+            r
+        }
+        Command::List { review: r, page: p } => {
+            review = r;
+            page = p;
+            Ok(())
+        }
+        Command::Select(id) => {
+            selected = Some(id);
+            Ok(())
+        }
+        other => execute_item_ops(other, e, shared, pulse, api_disabled)?,
+    };
+    Ok(CommandOutcome {
+        result,
+        settings_changed,
+        selected,
+        review,
+        page,
+    })
+}
+
+/// Execute the item-lifecycle and API-token worker commands.
+///
+/// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
+/// snapshot; `pulse` — worker pulse; `api_disabled` — API disable flag.
+/// Output: `Result<Result<()>>` — the outer `Result` carries the fatal
+/// dispatch escapes that bypass the operation report exactly like the
+/// original `?` sites; the inner `Result<()>` is the operation outcome
+/// reported to the snapshot.
+#[allow(clippy::needless_borrow)]
+fn execute_item_ops(
+    command: Command,
+    mut e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    api_disabled: &Arc<AtomicBool>,
+) -> Result<Result<()>> {
+    Ok(match command {
+        Command::Edit { id, revision, body } => e.edit(&id, revision, body),
+        Command::Regenerate { id, revision } => e.regenerate(&id, revision),
+        Command::Dismiss { id, revision } => e.dismiss(&id, revision),
+        Command::Send {
+            id,
+            revision,
+            body_hash,
+        } => {
+            busy(
+                &shared,
+                &pulse,
+                "Rechecking the conversation and sending your confirmed reply…",
+            );
+            e.send(&id, revision, &body_hash, false)
+        }
+        Command::Reconcile(id) => e.reconcile(&id),
+        Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
+        // A rejected reveal is a typed operation failure, never a
+        // reason to tear down the whole background worker.
+        Command::RevealApiToken => Err(anyhow::anyhow!(
+            "Existing API credentials are intentionally non-recoverable. Rotate the API token to receive a new plaintext credential once."
+        )),
+        Command::HideApiToken => {
+            if let Ok(mut s) = shared.lock() {
+                s.api_token = None;
+                s.api_token_expires = None;
+            }
+            Ok(())
+        }
+        Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
+        other => execute_model_ops(other, e, shared, pulse)?,
+    })
+}
+
+/// Execute the local-model and workspace-maintenance worker commands.
+///
+/// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
+/// snapshot; `pulse` — worker pulse. Output: `Result<Result<()>>` — the outer
+/// `Result` carries the fatal dispatch escapes that bypass the operation
+/// report exactly like the original `?` sites; the inner `Result<()>` is the
+/// operation outcome reported to the snapshot.
+#[allow(clippy::needless_borrow)]
+fn execute_model_ops(
+    command: Command,
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+) -> Result<Result<()>> {
+    Ok(match command {
+        Command::InstallOllama => {
+            busy(
+                &shared,
+                &pulse,
+                "Running the Ollama installer. Approve its Windows prompts.",
+            );
+            install_ollama()
+        }
+        Command::StartOllama => Ollama::new(&e.settings).and_then(|o| o.start()),
+        Command::PullModel => {
+            busy(&shared, &pulse, "Downloading the selected local model…");
+            Ollama::new(&e.settings).and_then(|o| o.pull(&e.stop, |p| busy(&shared, &pulse, &p)))
+        }
+        Command::PullVerifierModel => {
+            busy(
+                &shared,
+                &pulse,
+                "Downloading the independent verifier model…",
+            );
+            Ollama::new(&e.settings)
+                .and_then(|o| o.pull_verifier(&e.stop, |p| busy(&shared, &pulse, &p)))
+        }
+        Command::InspectModel => {
+            busy(&shared, &pulse, "Refreshing local model status…");
+            e.inspect_model_status()
+        }
+        Command::InspectVerifierModel => {
+            busy(&shared, &pulse, "Refreshing independent verifier status…");
+            e.inspect_verifier_model_status()
+        }
+        Command::EvaluateModel => {
+            busy(
+                &shared,
+                &pulse,
+                "Running the full task-specific local model evaluation…",
+            );
+            e.evaluate_model().map(|_| ())
+        }
+        Command::ProfileModel => {
+            busy(
+                &shared,
+                &pulse,
+                "Profiling cold, warm-repeat and near-context local model behavior…",
+            );
+            e.profile_model_runtime().map(|_| ())
+        }
+        Command::CompareModels => {
+            busy(
+                &shared,
+                &pulse,
+                "Comparing installed candidate models on the recruiting-email pipeline…",
+            );
+            e.compare_models().map(|_| ())
+        }
+        Command::IntegrityCheck => {
+            busy(&shared, &pulse, "Checking encrypted database integrity…");
+            e.db.integrity_check()
+        }
+        Command::Diagnostics { out } => {
+            busy(&shared, &pulse, "Writing privacy-safe diagnostics locally…");
+            crate::diagnostics::write_report(&e, &out)
+        }
+        other => execute_vault_ops(other, e, shared, pulse)?,
+    })
+}
+
+/// Execute the retention, backup and recovery worker commands.
+///
+/// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
+/// snapshot; `pulse` — worker pulse. Output: `Result<Result<()>>` — the outer
+/// `Result` carries the fatal dispatch escapes that bypass the operation
+/// report exactly like the original `?` sites; the inner `Result<()>` is the
+/// operation outcome reported to the snapshot.
+#[allow(clippy::needless_borrow, clippy::unreachable)]
+fn execute_vault_ops(
+    command: Command,
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+) -> Result<Result<()>> {
+    Ok(match command {
+        Command::CompactDatabase => {
+            busy(
+                &shared,
+                &pulse,
+                "Checkpointing, compacting and verifying encrypted SQLite state…",
+            );
+            e.compact_database().map(|_| ())
+        }
+        Command::Backup { out } => {
+            busy(
+                &shared,
+                &pulse,
+                "Creating and verifying encrypted same-vault backup…",
+            );
+            crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
+        }
+        Command::RecoveryDrill { backup } => {
+            busy(
+                &shared,
+                &pulse,
+                "Restoring backup in an isolated temporary workspace and deeply verifying it…",
+            );
+            let report = crate::recovery::recovery_drill(&e.directory, &backup)?;
+            e.db.log(
                             "backup.drill_passed",
                             None,
                             &format!(
@@ -1511,363 +1942,571 @@ fn run(
                                 report.delivery_records
                             ),
                         )
-                    }
-                    Command::ExportRecoveryKey { out, passphrase } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Wrapping the vault key for offline disaster recovery…",
-                        );
-                        let result = crate::recovery::export_recovery_key(
-                            &e.directory,
-                            passphrase.as_bytes(),
-                            &out,
-                        )
-                        .map(|_| ());
-                        if result.is_ok() {
-                            let logged = e.db.log(
-                                "recovery.key_exported",
-                                None,
-                                "Passphrase-wrapped recovery key exported",
-                            );
-                            logged?;
-                        }
-                        result
-                    }
-                    Command::VerifyRecoveryKey {
-                        backup,
-                        recovery_key,
-                        passphrase,
-                    } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Authenticating the recovery key against the selected encrypted backup…",
-                        );
-                        let result = crate::recovery::verify_recovery_key_for_backup(
-                            &backup,
-                            &recovery_key,
-                            passphrase.as_bytes(),
-                        )
-                        .map(|_| ());
-                        if result.is_ok() {
-                            let logged = e.db.log(
-                                "recovery.key_verified",
-                                None,
-                                "Recovery key authenticated against an encrypted backup",
-                            );
-                            logged?;
-                        }
-                        result
-                    }
-                    Command::Diagnostics { out } => {
-                        busy(&shared, &pulse, "Writing privacy-safe diagnostics locally…");
-                        crate::diagnostics::write_report(&e, &out)
-                    }
-                    Command::List { review: r, page: p } => {
-                        review = r;
-                        page = p;
-                        Ok(())
-                    }
-                    Command::Select(id) => {
-                        selected = Some(id);
-                        Ok(())
-                    }
-                    Command::Edit { id, revision, body } => e.edit(&id, revision, body),
-                    Command::Regenerate { id, revision } => e.regenerate(&id, revision),
-                    Command::Dismiss { id, revision } => e.dismiss(&id, revision),
-                    Command::Send {
-                        id,
-                        revision,
-                        body_hash,
-                    } => {
-                        busy(
-                            &shared,
-                            &pulse,
-                            "Rechecking the conversation and sending your confirmed reply…",
-                        );
-                        e.send(&id, revision, &body_hash, false)
-                    }
-                    Command::Reconcile(id) => e.reconcile(&id),
-                    Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
-                    // A rejected reveal is a typed operation failure, never a
-                    // reason to tear down the whole background worker.
-                    Command::RevealApiToken => Err(anyhow::anyhow!(
-                        "Existing API credentials are intentionally non-recoverable. Rotate the API token to receive a new plaintext credential once."
-                    )),
-                    Command::HideApiToken => {
-                        if let Ok(mut s) = shared.lock() {
-                            s.api_token = None;
-                            s.api_token_expires = None;
-                        }
-                        Ok(())
-                    }
-                    Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
-                    Command::Api { .. }
-                    | Command::OpenMetrics { .. }
-                    | Command::ApiWrite { .. } => Err(anyhow::anyhow!(
-                        "Internal API command reached the wrong dispatcher"
-                    )),
-                };
-                let result = protect_audit_boundary(&e, operation_result);
-                if settings_changed {
-                    scheduled_backup_due = Instant::now();
-                    if let Ok(mut s) = shared.lock() {
-                        s.settings_revision += 1;
-                    }
-                }
-                report(&shared, &pulse, operation, &result);
-                record_current_operation(&journal, &shared);
-                refresh(&e, &shared, selected.as_deref(), review, page)?;
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
-        if let Ok(mut snapshot) = shared.lock()
-            && snapshot
-                .api_token_expires
-                .is_some_and(|until| Instant::now() >= until)
-        {
-            snapshot.api_token = None;
-            snapshot.api_token_expires = None;
-        }
-        if !e.demo && Instant::now() >= policy_due {
-            begin_operation(
+        Command::ExportRecoveryKey { out, passphrase } => {
+            busy(
                 &shared,
                 &pulse,
-                OperationKind::EnterprisePolicyReload,
-                "Checking administrator enterprise policy…",
+                "Wrapping the vault key for offline disaster recovery…",
             );
-            record_current_operation(&journal, &shared);
-            let operation_result = e.reload_enterprise_policy();
-            let result = protect_audit_boundary(&e, operation_result);
-            match result {
-                Ok(changed) => {
-                    policy_failures = 0;
-                    policy_due = Instant::now() + worker_interval(Duration::from_secs(60));
-                    if changed {
-                        let completed: Result<()> = Ok(());
-                        report(
-                            &shared,
-                            &pulse,
-                            OperationKind::EnterprisePolicyReload,
-                            &completed,
-                        );
-                        record_current_operation(&journal, &shared);
-                        if e.enterprise_policy_status().prohibit_integration_api
-                            && !api_disabled.swap(true, Ordering::SeqCst)
-                            && let Ok(mut snapshot) = shared.lock()
-                        {
-                            snapshot.api_listening = false;
-                        }
-                        if let Ok(mut snapshot) = shared.lock() {
-                            snapshot.settings_revision =
-                                snapshot.settings_revision.saturating_add(1);
-                        }
-                        refresh(&e, &shared, selected.as_deref(), review, page)?;
-                    } else {
-                        report_silent_success(
-                            &shared,
-                            &pulse,
-                            OperationKind::EnterprisePolicyReload,
-                            "Enterprise policy unchanged",
-                        );
-                        record_current_operation(&journal, &shared);
-                    }
-                }
-                Err(error) => {
-                    policy_failures = policy_failures.saturating_add(1);
-                    policy_due = Instant::now()
-                        + worker_interval(bounded_backoff(15, policy_failures, 5 * 60));
-                    e.paused.store(true, Ordering::SeqCst);
-                    let failed: Result<()> = Err(error);
+            let result =
+                crate::recovery::export_recovery_key(&e.directory, passphrase.as_bytes(), &out)
+                    .map(|_| ());
+            if result.is_ok() {
+                let logged = e.db.log(
+                    "recovery.key_exported",
+                    None,
+                    "Passphrase-wrapped recovery key exported",
+                );
+                logged?;
+            }
+            result
+        }
+        Command::VerifyRecoveryKey {
+            backup,
+            recovery_key,
+            passphrase,
+        } => {
+            busy(
+                &shared,
+                &pulse,
+                "Authenticating the recovery key against the selected encrypted backup…",
+            );
+            let result = crate::recovery::verify_recovery_key_for_backup(
+                &backup,
+                &recovery_key,
+                passphrase.as_bytes(),
+            )
+            .map(|_| ());
+            if result.is_ok() {
+                let logged = e.db.log(
+                    "recovery.key_verified",
+                    None,
+                    "Recovery key authenticated against an encrypted backup",
+                );
+                logged?;
+            }
+            result
+        }
+        Command::Api { .. } | Command::OpenMetrics { .. } | Command::ApiWrite { .. } => Err(
+            anyhow::anyhow!("Internal API command reached the wrong dispatcher"),
+        ),
+        _ => unreachable!("every Command variant is dispatched in execute_command"),
+    })
+}
+
+/// Expire the one-time API token in the shared snapshot when due.
+///
+/// Inputs: `shared` — shared snapshot. Output: none — the exposed token is
+/// cleared once its one-time window closes.
+fn expire_api_token(shared: &Arc<Mutex<Snapshot>>) {
+    if let Ok(mut snapshot) = shared.lock()
+        && snapshot
+            .api_token_expires
+            .is_some_and(|until| Instant::now() >= until)
+    {
+        snapshot.api_token = None;
+        snapshot.api_token_expires = None;
+    }
+}
+
+/// Whether scheduled model work must wait this loop iteration.
+///
+/// Inputs: `e` — engine. Output: `bool` — `true` while the worker is paused,
+/// demonstrating, or disconnected.
+fn worker_scheduling_paused(e: &Engine) -> bool {
+    e.paused.load(Ordering::SeqCst) || e.demo || !e.connected()
+}
+
+/// Record the worker process-stopped event in the runtime journal.
+///
+/// Inputs: `journal` — runtime journal, when enabled. Output: none — the
+/// record is best-effort.
+fn record_process_stopped(journal: &Option<RuntimeJournal>) {
+    if let Some(journal) = &journal {
+        let _ = journal.record_event(RuntimeEvent::ProcessStopped);
+    }
+}
+
+/// Run one due enterprise-policy reload with its failure backoff.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `api_disabled` — API disable
+/// flag; `selected`/`review`/`page` — current list view; `policy_failures` —
+/// consecutive policy-reload failures; `policy_due` — next policy-reload due
+/// time. Output: `Result<(u32, Instant)>` — the updated failure count and due
+/// time.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_policy_reload(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    api_disabled: &Arc<AtomicBool>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    mut policy_failures: u32,
+    mut policy_due: Instant,
+) -> Result<(u32, Instant)> {
+    if !e.demo && Instant::now() >= policy_due {
+        begin_operation(
+            &shared,
+            &pulse,
+            OperationKind::EnterprisePolicyReload,
+            "Checking administrator enterprise policy…",
+        );
+        record_current_operation(&journal, &shared);
+        let operation_result = e.reload_enterprise_policy();
+        let result = protect_audit_boundary(&e, operation_result);
+        match result {
+            Ok(changed) => {
+                policy_failures = 0;
+                policy_due = Instant::now() + worker_interval(Duration::from_secs(60));
+                if changed {
+                    let completed: Result<()> = Ok(());
                     report(
                         &shared,
                         &pulse,
                         OperationKind::EnterprisePolicyReload,
-                        &failed,
+                        &completed,
+                    );
+                    record_current_operation(&journal, &shared);
+                    if e.enterprise_policy_status().prohibit_integration_api
+                        && !api_disabled.swap(true, Ordering::SeqCst)
+                        && let Ok(mut snapshot) = shared.lock()
+                    {
+                        snapshot.api_listening = false;
+                    }
+                    if let Ok(mut snapshot) = shared.lock() {
+                        snapshot.settings_revision = snapshot.settings_revision.saturating_add(1);
+                    }
+                    refresh(&e, &shared, selected.as_deref(), review, page)?;
+                } else {
+                    report_silent_success(
+                        &shared,
+                        &pulse,
+                        OperationKind::EnterprisePolicyReload,
+                        "Enterprise policy unchanged",
                     );
                     record_current_operation(&journal, &shared);
                 }
             }
-        }
-
-        if !e.demo && Instant::now() >= retention_due {
-            begin_operation(
-                &shared,
-                &pulse,
-                OperationKind::PurgeRetention,
-                "Applying local retention policy to completed content…",
-            );
-            record_current_operation(&journal, &shared);
-            let operation_result = e.db.purge(e.settings.retention_days).map(|_| ());
-            let result = protect_audit_boundary(&e, operation_result);
-            report(&shared, &pulse, OperationKind::PurgeRetention, &result);
-            record_current_operation(&journal, &shared);
-            if result.is_ok() {
-                retention_failures = 0;
-                retention_due = Instant::now() + worker_interval(Duration::from_secs(24 * 60 * 60));
-            } else {
-                retention_failures = retention_failures.saturating_add(1);
-                retention_due =
-                    Instant::now() + bounded_backoff(15 * 60, retention_failures, 60 * 60);
-            }
-            refresh(&e, &shared, selected.as_deref(), review, page)?;
-        }
-        if !e.demo && Instant::now() >= scheduled_backup_due {
-            let status = crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
-            if status.overdue {
-                begin_operation(
-                    &shared,
-                    &pulse,
-                    OperationKind::Backup,
-                    "Creating scheduled encrypted backup…",
-                );
-                record_current_operation(&journal, &shared);
-                let settings = e.settings.clone();
-                let directory = e.directory.clone();
-                let operation_result = crate::recovery::create_scheduled_backup(
-                    &mut e.db,
-                    &directory,
-                    &settings,
-                    Utc::now(),
-                )
-                .map(|_| ());
-                let result = protect_audit_boundary(&e, operation_result);
-                report(&shared, &pulse, OperationKind::Backup, &result);
-                record_current_operation(&journal, &shared);
-                if result.is_ok() {
-                    scheduled_backup_failures = 0;
-                    scheduled_backup_due =
-                        Instant::now() + worker_interval(Duration::from_secs(60 * 60));
-                } else {
-                    scheduled_backup_failures = scheduled_backup_failures.saturating_add(1);
-                    scheduled_backup_due = Instant::now()
-                        + bounded_backoff(15 * 60, scheduled_backup_failures, 2 * 60 * 60);
-                }
-                refresh(&e, &shared, selected.as_deref(), review, page)?;
-            } else {
-                scheduled_backup_failures = 0;
-                scheduled_backup_due =
-                    Instant::now() + worker_interval(Duration::from_secs(60 * 60));
-            }
-        } else if !e.settings.scheduled_backup_enabled {
-            scheduled_backup_due = Instant::now() + worker_interval(Duration::from_secs(60));
-        }
-
-        if e.paused.load(Ordering::SeqCst) || e.demo || !e.connected() {
-            continue;
-        }
-        let now = Utc::now();
-        if gmail_gate.ready(Instant::now())
-            && e.last_poll()?.is_none_or(|t| {
-                now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
-            })
-        {
-            begin_operation(
-                &shared,
-                &pulse,
-                OperationKind::SyncMailbox,
-                "Scheduled Gmail check: fetching only missing identities…",
-            );
-            record_current_operation(&journal, &shared);
-            let operation_result = e.synchronize().map(|_| ());
-            let retry_after = operation_result
-                .as_ref()
-                .err()
-                .and_then(crate::gmail::retry_after_hint);
-            let result = protect_audit_boundary(&e, operation_result);
-            let transition = if result.is_ok() {
-                gmail_gate.success(Instant::now())
-            } else {
-                gmail_gate.failure(Instant::now(), retry_after).1
-            };
-            record_circuit_transition(
-                &journal,
-                transition,
-                RuntimeSignal::GmailCircuitOpened,
-                RuntimeSignal::GmailCircuitClosed,
-            );
-            report(&shared, &pulse, OperationKind::SyncMailbox, &result);
-            record_current_operation(&journal, &shared);
-            refresh(&e, &shared, selected.as_deref(), review, page)?;
-        }
-        if local_ai_gate.ready(Instant::now())
-            && e.settings.model_digest.is_some()
-            && e.db.next_queued(&e.account, Utc::now())?.is_some()
-        {
-            begin_operation(
-                &shared,
-                &pulse,
-                OperationKind::AnalyzeQueuedMail,
-                "Local AI: classifying, drafting and checking one new email…",
-            );
-            record_current_operation(&journal, &shared);
-            let operation_result = e.process_one().map(|_| ());
-            let result = protect_audit_boundary(&e, operation_result);
-            report(&shared, &pulse, OperationKind::AnalyzeQueuedMail, &result);
-            record_current_operation(&journal, &shared);
-            let transition = if result.is_ok() {
-                local_ai_gate.success(Instant::now())
-            } else {
-                local_ai_gate.failure(Instant::now(), None).1
-            };
-            record_circuit_transition(
-                &journal,
-                transition,
-                RuntimeSignal::LocalAiCircuitOpened,
-                RuntimeSignal::LocalAiCircuitClosed,
-            );
-            refresh(&e, &shared, selected.as_deref(), review, page)?;
-        }
-        if Instant::now() >= auto_due {
-            begin_operation(
-                &shared,
-                &pulse,
-                OperationKind::AutomaticDispatch,
-                "Evaluating automatic dispatch policy…",
-            );
-            record_current_operation(&journal, &shared);
-            let operation_result = e.automatic_tick();
-            let result = protect_audit_boundary(&e, operation_result);
-            match &result {
-                Ok(_) => {
-                    automatic_failures = 0;
-                    auto_due = Instant::now() + worker_interval(Duration::from_secs(30));
-                }
-                Err(_) => {
-                    automatic_failures = automatic_failures.saturating_add(1);
-                    auto_due = Instant::now()
-                        + worker_interval(bounded_backoff(30, automatic_failures, 10 * 60));
-                }
-            }
-            let refresh_after_tick = !matches!(result, Ok(false));
-            let automatic_state = operation_state_for_result(&result);
-            if matches!(result, Ok(false)) {
-                report_silent_success(
-                    &shared,
-                    &pulse,
-                    OperationKind::AutomaticDispatch,
-                    "No eligible automatic reply",
-                );
-            } else {
+            Err(error) => {
+                policy_failures = policy_failures.saturating_add(1);
+                policy_due =
+                    Instant::now() + worker_interval(bounded_backoff(15, policy_failures, 5 * 60));
+                e.paused.store(true, Ordering::SeqCst);
+                let failed: Result<()> = Err(error);
                 report(
                     &shared,
                     &pulse,
-                    OperationKind::AutomaticDispatch,
-                    &result.map(|_| ()),
+                    OperationKind::EnterprisePolicyReload,
+                    &failed,
                 );
-            }
-            let _ = automatic_state;
-            record_current_operation(&journal, &shared);
-            if refresh_after_tick {
-                refresh(&e, &shared, selected.as_deref(), review, page)?;
+                record_current_operation(&journal, &shared);
             }
         }
     }
-    if let Some(journal) = &journal {
-        let _ = journal.record_event(RuntimeEvent::ProcessStopped);
+    Ok((policy_failures, policy_due))
+}
+
+/// Run one due retention purge with its failure backoff.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `retention_failures` — consecutive retention failures;
+/// `retention_due` — next retention due time. Output: `Result<(u32, Instant)>`
+/// — the updated failure count and due time.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_retention(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    mut retention_failures: u32,
+    mut retention_due: Instant,
+) -> Result<(u32, Instant)> {
+    if !e.demo && Instant::now() >= retention_due {
+        begin_operation(
+            &shared,
+            &pulse,
+            OperationKind::PurgeRetention,
+            "Applying local retention policy to completed content…",
+        );
+        record_current_operation(&journal, &shared);
+        let operation_result = e.db.purge(e.settings.retention_days).map(|_| ());
+        let result = protect_audit_boundary(&e, operation_result);
+        report(&shared, &pulse, OperationKind::PurgeRetention, &result);
+        record_current_operation(&journal, &shared);
+        if result.is_ok() {
+            retention_failures = 0;
+            retention_due = Instant::now() + worker_interval(Duration::from_secs(24 * 60 * 60));
+        } else {
+            retention_failures = retention_failures.saturating_add(1);
+            retention_due = Instant::now() + bounded_backoff(15 * 60, retention_failures, 60 * 60);
+        }
+        refresh(&e, &shared, selected.as_deref(), review, page)?;
     }
+    Ok((retention_failures, retention_due))
+}
+
+/// Run one due scheduled verified backup with its failure backoff.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `scheduled_backup_failures` — consecutive backup
+/// failures; `scheduled_backup_due` — next backup due time. Output:
+/// `Result<(u32, Instant)>` — the updated failure count and due time.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_scheduled_backup(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    mut scheduled_backup_failures: u32,
+    mut scheduled_backup_due: Instant,
+) -> Result<(u32, Instant)> {
+    if !e.demo && Instant::now() >= scheduled_backup_due {
+        let status = crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
+        if status.overdue {
+            begin_operation(
+                &shared,
+                &pulse,
+                OperationKind::Backup,
+                "Creating scheduled encrypted backup…",
+            );
+            record_current_operation(&journal, &shared);
+            let settings = e.settings.clone();
+            let directory = e.directory.clone();
+            let operation_result = crate::recovery::create_scheduled_backup(
+                &mut e.db,
+                &directory,
+                &settings,
+                Utc::now(),
+            )
+            .map(|_| ());
+            let result = protect_audit_boundary(&e, operation_result);
+            report(&shared, &pulse, OperationKind::Backup, &result);
+            record_current_operation(&journal, &shared);
+            if result.is_ok() {
+                scheduled_backup_failures = 0;
+                scheduled_backup_due =
+                    Instant::now() + worker_interval(Duration::from_secs(60 * 60));
+            } else {
+                scheduled_backup_failures = scheduled_backup_failures.saturating_add(1);
+                scheduled_backup_due = Instant::now()
+                    + bounded_backoff(15 * 60, scheduled_backup_failures, 2 * 60 * 60);
+            }
+            refresh(&e, &shared, selected.as_deref(), review, page)?;
+        } else {
+            scheduled_backup_failures = 0;
+            scheduled_backup_due = Instant::now() + worker_interval(Duration::from_secs(60 * 60));
+        }
+    } else if !e.settings.scheduled_backup_enabled {
+        scheduled_backup_due = Instant::now() + worker_interval(Duration::from_secs(60));
+    }
+    Ok((scheduled_backup_failures, scheduled_backup_due))
+}
+
+/// Run one due scheduled Gmail poll under the retry gate.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `gmail_gate` — Gmail retry gate. Output: `Result<()>` —
+/// `Ok` after the poll ran or its gate held it back.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_gmail_poll(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    gmail_gate: &mut RetryGate,
+) -> Result<()> {
+    let now = Utc::now();
+    if gmail_gate.ready(Instant::now())
+        && e.last_poll()?.is_none_or(|t| {
+            now.signed_duration_since(t).num_seconds() >= e.settings.interval_seconds()
+        })
+    {
+        begin_operation(
+            &shared,
+            &pulse,
+            OperationKind::SyncMailbox,
+            "Scheduled Gmail check: fetching only missing identities…",
+        );
+        record_current_operation(&journal, &shared);
+        let operation_result = e.synchronize().map(|_| ());
+        let retry_after = operation_result
+            .as_ref()
+            .err()
+            .and_then(crate::gmail::retry_after_hint);
+        let result = protect_audit_boundary(&e, operation_result);
+        let transition = if result.is_ok() {
+            gmail_gate.success(Instant::now())
+        } else {
+            gmail_gate.failure(Instant::now(), retry_after).1
+        };
+        record_circuit_transition(
+            &journal,
+            transition,
+            RuntimeSignal::GmailCircuitOpened,
+            RuntimeSignal::GmailCircuitClosed,
+        );
+        report(&shared, &pulse, OperationKind::SyncMailbox, &result);
+        record_current_operation(&journal, &shared);
+        refresh(&e, &shared, selected.as_deref(), review, page)?;
+    }
+    Ok(())
+}
+
+/// Run one due local-AI analysis tick under the retry gate.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `local_ai_gate` — local-AI retry gate. Output:
+/// `Result<()>` — `Ok` after the tick ran or its gate held it back.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_local_ai(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    local_ai_gate: &mut RetryGate,
+) -> Result<()> {
+    if local_ai_gate.ready(Instant::now())
+        && e.settings.model_digest.is_some()
+        && e.db.next_queued(&e.account, Utc::now())?.is_some()
+    {
+        begin_operation(
+            &shared,
+            &pulse,
+            OperationKind::AnalyzeQueuedMail,
+            "Local AI: classifying, drafting and checking one new email…",
+        );
+        record_current_operation(&journal, &shared);
+        let operation_result = e.process_one().map(|_| ());
+        let result = protect_audit_boundary(&e, operation_result);
+        report(&shared, &pulse, OperationKind::AnalyzeQueuedMail, &result);
+        record_current_operation(&journal, &shared);
+        let transition = if result.is_ok() {
+            local_ai_gate.success(Instant::now())
+        } else {
+            local_ai_gate.failure(Instant::now(), None).1
+        };
+        record_circuit_transition(
+            &journal,
+            transition,
+            RuntimeSignal::LocalAiCircuitOpened,
+            RuntimeSignal::LocalAiCircuitClosed,
+        );
+        refresh(&e, &shared, selected.as_deref(), review, page)?;
+    }
+    Ok(())
+}
+
+/// Run one due automatic-dispatch tick with its failure backoff.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `automatic_failures` — consecutive dispatch failures;
+/// `auto_due` — next dispatch due time. Output: `Result<(u32, Instant)>` — the
+/// updated failure count and due time.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_borrow)]
+fn run_automatic_dispatch(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    mut automatic_failures: u32,
+    mut auto_due: Instant,
+) -> Result<(u32, Instant)> {
+    if Instant::now() >= auto_due {
+        begin_operation(
+            &shared,
+            &pulse,
+            OperationKind::AutomaticDispatch,
+            "Evaluating automatic dispatch policy…",
+        );
+        record_current_operation(&journal, &shared);
+        let operation_result = e.automatic_tick();
+        let result = protect_audit_boundary(&e, operation_result);
+        match &result {
+            Ok(_) => {
+                automatic_failures = 0;
+                auto_due = Instant::now() + worker_interval(Duration::from_secs(30));
+            }
+            Err(_) => {
+                automatic_failures = automatic_failures.saturating_add(1);
+                auto_due = Instant::now()
+                    + worker_interval(bounded_backoff(30, automatic_failures, 10 * 60));
+            }
+        }
+        let refresh_after_tick = !matches!(result, Ok(false));
+        let automatic_state = operation_state_for_result(&result);
+        if matches!(result, Ok(false)) {
+            report_silent_success(
+                &shared,
+                &pulse,
+                OperationKind::AutomaticDispatch,
+                "No eligible automatic reply",
+            );
+        } else {
+            report(
+                &shared,
+                &pulse,
+                OperationKind::AutomaticDispatch,
+                &result.map(|_| ()),
+            );
+        }
+        let _ = automatic_state;
+        record_current_operation(&journal, &shared);
+        if refresh_after_tick {
+            refresh(&e, &shared, selected.as_deref(), review, page)?;
+        }
+    }
+    Ok((automatic_failures, auto_due))
+}
+
+/// Run each due scheduled maintenance operation exactly once.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `api_disabled` — API disable
+/// flag; `policy_failures`/`policy_due` — policy-reload schedule;
+/// `retention_failures`/`retention_due` — retention schedule;
+/// `scheduled_backup_failures`/`scheduled_backup_due` — backup schedule;
+/// `selected`/`review`/`page` — current list view. Output: `Result<()>` —
+/// `Ok` once every due maintenance operation ran; error on a fatal worker
+/// failure.
+#[allow(clippy::too_many_arguments)]
+fn run_maintenance_operations(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    api_disabled: &Arc<AtomicBool>,
+    policy_failures: &mut u32,
+    policy_due: &mut Instant,
+    retention_failures: &mut u32,
+    retention_due: &mut Instant,
+    scheduled_backup_failures: &mut u32,
+    scheduled_backup_due: &mut Instant,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+) -> Result<()> {
+    let (policy_failures_next, policy_due_next) = run_policy_reload(
+        e,
+        shared,
+        pulse,
+        journal,
+        api_disabled,
+        selected,
+        review,
+        page,
+        *policy_failures,
+        *policy_due,
+    )?;
+    *policy_failures = policy_failures_next;
+    *policy_due = policy_due_next;
+    let (retention_failures_next, retention_due_next) = run_retention(
+        e,
+        shared,
+        pulse,
+        journal,
+        selected,
+        review,
+        page,
+        *retention_failures,
+        *retention_due,
+    )?;
+    *retention_failures = retention_failures_next;
+    *retention_due = retention_due_next;
+    let (scheduled_backup_failures_next, scheduled_backup_due_next) = run_scheduled_backup(
+        e,
+        shared,
+        pulse,
+        journal,
+        selected,
+        review,
+        page,
+        *scheduled_backup_failures,
+        *scheduled_backup_due,
+    )?;
+    *scheduled_backup_failures = scheduled_backup_failures_next;
+    *scheduled_backup_due = scheduled_backup_due_next;
+    Ok(())
+}
+
+/// Run each due scheduled model operation exactly once.
+///
+/// Inputs: `e` — engine; `shared` — shared snapshot; `pulse` — worker pulse;
+/// `journal` — runtime journal, when enabled; `selected`/`review`/`page` —
+/// current list view; `gmail_gate` — Gmail retry gate; `local_ai_gate` —
+/// local-AI retry gate; `automatic_failures`/`auto_due` — automatic-dispatch
+/// schedule. Output: `Result<()>` — `Ok` once every due model operation ran;
+/// error on a fatal worker failure.
+#[allow(clippy::too_many_arguments)]
+fn run_ai_operations(
+    e: &mut Engine,
+    shared: &Arc<Mutex<Snapshot>>,
+    pulse: &WorkerPulse,
+    journal: &Option<RuntimeJournal>,
+    selected: &Option<String>,
+    review: bool,
+    page: u32,
+    gmail_gate: &mut RetryGate,
+    local_ai_gate: &mut RetryGate,
+    automatic_failures: &mut u32,
+    auto_due: &mut Instant,
+) -> Result<()> {
+    run_gmail_poll(
+        e, shared, pulse, journal, selected, review, page, gmail_gate,
+    )?;
+    run_local_ai(
+        e,
+        shared,
+        pulse,
+        journal,
+        selected,
+        review,
+        page,
+        local_ai_gate,
+    )?;
+    let (automatic_failures_next, auto_due_next) = run_automatic_dispatch(
+        e,
+        shared,
+        pulse,
+        journal,
+        selected,
+        review,
+        page,
+        *automatic_failures,
+        *auto_due,
+    )?;
+    *automatic_failures = automatic_failures_next;
+    *auto_due = auto_due_next;
     Ok(())
 }
 /// Parse a URL query string, refusing duplicate parameters.
@@ -1959,251 +2598,330 @@ fn api_query_with_operation(
     );
     let query = unique_query(&u)?;
     match u.path() {
-        "/v1/capabilities" => {
-            ensure!(
-                query.is_empty(),
-                "Capabilities endpoint takes no query parameters"
-            );
-            Ok(json!({
-                "api_version": crate::api::API_VERSION,
-                "api_contract_sha256": crate::api::openapi_sha256(),
-                "application_version": env!("CARGO_PKG_VERSION"),
-                "build": crate::build_info::current(),
-                "settings_format_version": crate::config::SETTINGS_FORMAT_VERSION,
-                "read_only": true,
-                "mail_provider": "gmail",
-                "modes": ["human_review", "automatic"],
-                "features": {
-                    "encrypted_local_store": true,
-                    "incremental_sync": true,
-                    "local_ollama": true,
-                    "review_queue": true,
-                    "automatic_policy": true,
-                    "automatic_policy_reason_codes": true,
-                    "delivery_reconciliation": true,
-                    "events": true,
-                    "openapi_3_1": true,
-                    "direct_liveness": true,
-                    "database_integrity": true,
-                    "storage_pressure_guard": true,
-                    "tamper_evident_audit_chain": true,
-                    "external_audit_anchor": true,
-                    "os_protected_audit_anchor": true,
-                    "verified_backup_bundle": true,
-                    "scheduled_verified_backups": true,
-                    "portable_recovery_key_envelope": true,
-                    "task_model_bakeoff": true,
-                    "typed_operation_status": true,
-                    "typed_audit_events": true,
-                    "privacy_safe_metrics": true,
-                    "openmetrics_1_0": true,
-                    "api_rate_limit_burst": crate::api::API_RATE_LIMIT_BURST,
-                    "api_rate_limit_per_second": crate::api::API_RATE_LIMIT_PER_SECOND,
-                    "privacy_minimal_runtime_journal": true,
-                    "snapshot_cursor_item_feed": true,
-                    "enterprise_policy": true,
-                    "enterprise_policy_digest_pin": true,
-                    "enterprise_policy_ed25519_signature": true,
-                    "enterprise_emergency_stop": true
-                },
-                "poll_hours": crate::config::POLL_HOURS,
-                "lookback_days": crate::config::LOOKBACK_DAYS
-            }))
-        }
-        "/v1/health" => {
-            ensure!(
-                query.is_empty(),
-                "Health endpoint takes no query parameters"
-            );
-            let integrity_ok = e.db.integrity_check().is_ok();
-            let storage = crate::storage::inspect(&e.directory)?;
-            let scheduled_backup =
-                crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
-            let backup_isolation =
-                crate::recovery::backup_isolation_status(&e.directory, &e.settings)?;
-            let paused = e.paused.load(Ordering::SeqCst);
-            let stopping = e.stop.load(Ordering::SeqCst);
-            let emergency_stop = crate::emergency::status_fail_closed();
-            let readiness =
-                crate::readiness::assess_context(crate::readiness::RuntimeReadinessContext {
-                    settings: &e.settings,
-                    database_integrity_ok: integrity_ok,
-                    storage_write_safe: storage.runtime_write_safe,
-                    connected: e.connected(),
-                    send_scope: e.send_scope(),
-                    paused,
-                    stopping,
-                    emergency_stop_active: emergency_stop.active,
-                });
-            let counts = e.db.counts(&e.account)?;
-            let policy_status = e.enterprise_policy_status();
-            let external_audit_anchor_configured =
-                std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
-            let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
-            let independent_audit_anchor_configured =
-                external_audit_anchor_configured || os_protected_audit_anchor_required;
-            let operational =
-                crate::readiness::operational_indicators(crate::readiness::OperationalContext {
-                    settings: &e.settings,
-                    counts: &counts,
-                    last_poll: e.last_poll()?,
-                    database_integrity_ok: integrity_ok,
-                    storage_write_safe: storage.runtime_write_safe,
-                    scheduled_backup_overdue: scheduled_backup.overdue,
-                    backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
-                    connected: e.connected(),
-                    now: Utc::now(),
-                });
-            Ok(json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "settings_format_version": e.settings.settings_format_version,
-                "healthy": readiness.workspace_ready,
-                "readiness": readiness,
-                "operational": operational,
-                "storage": storage,
-                "scheduled_backup": scheduled_backup,
-                "backup_isolation": backup_isolation,
-                "database": {
-                    "integrity_ok": integrity_ok,
-                    "schema_version": e.db.schema_version()?,
-                    "audit_head": e.db.audit_head()?
-                },
-                "runtime_log": crate::runtime_log::status(&e.directory).ok(),
-                "gmail": {
-                    "connected": e.connected(),
-                    "send_scope": e.send_scope()
-                },
-                "worker": {
-                    "paused": paused,
-                    "stopping": stopping,
-                    "operation": operation
-                },
-                "emergency_stop": emergency_stop,
-                "enterprise_policy": policy_status,
-                "audit_protection": {
-                    "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
-                    "external_file_anchor_configured": external_audit_anchor_configured,
-                    "os_protected_anchor_required": os_protected_audit_anchor_required,
-                    "independent_anchor_configured": independent_audit_anchor_configured
-                },
-                "mode": e.settings.mode,
-                "sending_enabled": e.settings.sending_enabled,
-                "model": {
-                    "configured": e.settings.model,
-                    "digest_pinned": e.settings.model_digest.is_some()
-                },
-                "counts": counts,
-                "last_poll": e.last_poll()?
-            }))
-        }
-        "/v1/audit/anchor" => {
-            ensure!(
-                query.is_empty(),
-                "Audit anchor endpoint takes no query parameters"
-            );
-            let anchor = crate::audit_anchor::current(&e.db, &e.directory)?;
-            Ok(json!({
-                "algorithm": "sha256-chain-v1",
-                "head": anchor.audit_head,
-                "sequence": anchor.audit_sequence,
-                "workspace_fingerprint": anchor.workspace_fingerprint,
-                "verified": true,
-                "anchor": anchor
-            }))
-        }
-        "/v1/audit/contains" => {
-            ensure!(
-                query.keys().all(|key| key == "head"),
-                "Audit contains endpoint accepts only head"
-            );
-            let head = query
-                .get("head")
-                .context("Audit contains endpoint requires head")?;
-            Ok(json!({
-                "head": head,
-                "known": e.db.contains_audit_anchor(head)?
-            }))
-        }
-        "/v1/metrics" => {
-            ensure!(
-                query.is_empty(),
-                "Metrics endpoint takes no query parameters"
-            );
-            let collected = crate::metrics::collect(e, Utc::now());
-            let collected = collected?;
-            Ok(serde_json::to_value(collected)?)
-        }
-        "/v1/settings" => {
-            ensure!(
-                query.is_empty(),
-                "Settings endpoint takes no query parameters"
-            );
-            Ok(crate::web::settings_view(&e.settings))
-        }
-        "/v1/status" => {
-            ensure!(
-                query.is_empty(),
-                "Status endpoint takes no query parameters"
-            );
-            Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"settings_format_version":e.settings.settings_format_version,"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
-            )
-        }
-        "/v1/item-feed" => {
-            ensure!(
-                query
-                    .keys()
-                    .all(|key| matches!(key.as_str(), "cursor" | "limit")),
-                "Item-feed endpoint accepts only cursor and limit"
-            );
-            let limit = query
-                .get("limit")
-                .map(|value| value.parse::<u32>())
-                .transpose()?
-                .unwrap_or(25);
-            ensure!((1..=100).contains(&limit), "Item-feed limit must be 1..100");
-            let cursor = query
-                .get("cursor")
-                .map(|value| decode_item_cursor(value))
-                .transpose()?;
-            let page =
-                e.db.list_cursor(&e.account, false, cursor.as_ref(), limit)?;
-            let next_cursor = page
-                .next_cursor
-                .as_ref()
-                .map(encode_item_cursor)
-                .transpose()?;
-            Ok(json!({
-                "schema_version": 1,
-                "items": page.items,
-                "next_cursor": next_cursor
-            }))
-        }
-        "/v1/items" => {
-            ensure!(
-                query.keys().all(|key| key == "page"),
-                "Items endpoint accepts only page"
-            );
-            let page = query
-                .get("page")
-                .map(|v| v.parse::<u32>())
-                .transpose()?
-                .unwrap_or(0);
-            ensure!(page <= 1_000_000, "Page is outside supported range");
-            Ok(json!({"page":page,"page_size":25,"items":e.db.list(&e.account,false,page,25)?}))
-        }
-        "/v1/events" => {
-            ensure!(
-                query.keys().all(|key| key == "after"),
-                "Events endpoint accepts only after"
-            );
-            let after = query
-                .get("after")
-                .map(|v| v.parse::<i64>())
-                .transpose()?
-                .unwrap_or(0);
-            Ok(json!({"events":e.db.events(after.max(0),100)?}))
-        }
+        "/v1/capabilities" => api_capabilities(&query),
+        "/v1/health" => api_health(e, &query, operation),
+        "/v1/audit/anchor" => api_audit_anchor(e, &query),
+        "/v1/audit/contains" => api_audit_contains(e, &query),
+        "/v1/metrics" => api_metrics(e, &query),
+        "/v1/settings" => api_settings(e, &query),
+        "/v1/status" => api_status(e, &query, operation),
+        "/v1/item-feed" => api_item_feed(e, &query),
+        "/v1/items" => api_items(e, &query),
+        "/v1/events" => api_events(e, &query),
+        path => api_item_routes(e, path, &query),
+    }
+}
+
+/// Answer the read-only capabilities route.
+///
+/// Inputs: `query` — validated request query parameters. Output: `Result<Value>` — the JSON capabilities document.
+fn api_capabilities(query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Capabilities endpoint takes no query parameters"
+    );
+    Ok(json!({
+        "api_version": crate::api::API_VERSION,
+        "api_contract_sha256": crate::api::openapi_sha256(),
+        "application_version": env!("CARGO_PKG_VERSION"),
+        "build": crate::build_info::current(),
+        "settings_format_version": crate::config::SETTINGS_FORMAT_VERSION,
+        "read_only": true,
+        "mail_provider": "gmail",
+        "modes": ["human_review", "automatic"],
+        "features": {
+            "encrypted_local_store": true,
+            "incremental_sync": true,
+            "local_ollama": true,
+            "review_queue": true,
+            "automatic_policy": true,
+            "automatic_policy_reason_codes": true,
+            "delivery_reconciliation": true,
+            "events": true,
+            "openapi_3_1": true,
+            "direct_liveness": true,
+            "database_integrity": true,
+            "storage_pressure_guard": true,
+            "tamper_evident_audit_chain": true,
+            "external_audit_anchor": true,
+            "os_protected_audit_anchor": true,
+            "verified_backup_bundle": true,
+            "scheduled_verified_backups": true,
+            "portable_recovery_key_envelope": true,
+            "task_model_bakeoff": true,
+            "typed_operation_status": true,
+            "typed_audit_events": true,
+            "privacy_safe_metrics": true,
+            "openmetrics_1_0": true,
+            "api_rate_limit_burst": crate::api::API_RATE_LIMIT_BURST,
+            "api_rate_limit_per_second": crate::api::API_RATE_LIMIT_PER_SECOND,
+            "privacy_minimal_runtime_journal": true,
+            "snapshot_cursor_item_feed": true,
+            "enterprise_policy": true,
+            "enterprise_policy_digest_pin": true,
+            "enterprise_policy_ed25519_signature": true,
+            "enterprise_emergency_stop": true
+        },
+        "poll_hours": crate::config::POLL_HOURS,
+        "lookback_days": crate::config::LOOKBACK_DAYS
+    }))
+}
+
+/// Answer the workspace health route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters; `operation` — current operation status to include, if any. Output: `Result<Value>` — the JSON health document.
+fn api_health(
+    e: &Engine,
+    query: &std::collections::BTreeMap<String, String>,
+    operation: Option<&OperationStatus>,
+) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Health endpoint takes no query parameters"
+    );
+    let integrity_ok = e.db.integrity_check().is_ok();
+    let storage = crate::storage::inspect(&e.directory)?;
+    let scheduled_backup =
+        crate::recovery::scheduled_backup_status(&e.db, &e.settings, Utc::now())?;
+    let backup_isolation = crate::recovery::backup_isolation_status(&e.directory, &e.settings)?;
+    let paused = e.paused.load(Ordering::SeqCst);
+    let stopping = e.stop.load(Ordering::SeqCst);
+    let emergency_stop = crate::emergency::status_fail_closed();
+    let readiness = crate::readiness::assess_context(crate::readiness::RuntimeReadinessContext {
+        settings: &e.settings,
+        database_integrity_ok: integrity_ok,
+        storage_write_safe: storage.runtime_write_safe,
+        connected: e.connected(),
+        send_scope: e.send_scope(),
+        paused,
+        stopping,
+        emergency_stop_active: emergency_stop.active,
+    });
+    let counts = e.db.counts(&e.account)?;
+    let policy_status = e.enterprise_policy_status();
+    let external_audit_anchor_configured =
+        std::env::var_os(crate::audit_anchor::AUDIT_ANCHOR_ENV).is_some();
+    let os_protected_audit_anchor_required = crate::audit_anchor::os_anchor_required()?;
+    let independent_audit_anchor_configured =
+        external_audit_anchor_configured || os_protected_audit_anchor_required;
+    let operational =
+        crate::readiness::operational_indicators(crate::readiness::OperationalContext {
+            settings: &e.settings,
+            counts: &counts,
+            last_poll: e.last_poll()?,
+            database_integrity_ok: integrity_ok,
+            storage_write_safe: storage.runtime_write_safe,
+            scheduled_backup_overdue: scheduled_backup.overdue,
+            backup_distinct_failure_domain: backup_isolation.distinct_failure_domain,
+            connected: e.connected(),
+            now: Utc::now(),
+        });
+    Ok(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "settings_format_version": e.settings.settings_format_version,
+        "healthy": readiness.workspace_ready,
+        "readiness": readiness,
+        "operational": operational,
+        "storage": storage,
+        "scheduled_backup": scheduled_backup,
+        "backup_isolation": backup_isolation,
+        "database": {
+            "integrity_ok": integrity_ok,
+            "schema_version": e.db.schema_version()?,
+            "audit_head": e.db.audit_head()?
+        },
+        "runtime_log": crate::runtime_log::status(&e.directory).ok(),
+        "gmail": {
+            "connected": e.connected(),
+            "send_scope": e.send_scope()
+        },
+        "worker": {
+            "paused": paused,
+            "stopping": stopping,
+            "operation": operation
+        },
+        "emergency_stop": emergency_stop,
+        "enterprise_policy": policy_status,
+        "audit_protection": {
+            "policy_requires_independent_anchor": policy_status.require_external_audit_anchor,
+            "external_file_anchor_configured": external_audit_anchor_configured,
+            "os_protected_anchor_required": os_protected_audit_anchor_required,
+            "independent_anchor_configured": independent_audit_anchor_configured
+        },
+        "mode": e.settings.mode,
+        "sending_enabled": e.settings.sending_enabled,
+        "model": {
+            "configured": e.settings.model,
+            "digest_pinned": e.settings.model_digest.is_some()
+        },
+        "counts": counts,
+        "last_poll": e.last_poll()?
+    }))
+}
+
+/// Answer the audit-anchor route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters. Output: `Result<Value>` — the JSON audit-anchor document.
+fn api_audit_anchor(
+    e: &Engine,
+    query: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Audit anchor endpoint takes no query parameters"
+    );
+    let anchor = crate::audit_anchor::current(&e.db, &e.directory)?;
+    Ok(json!({
+        "algorithm": "sha256-chain-v1",
+        "head": anchor.audit_head,
+        "sequence": anchor.audit_sequence,
+        "workspace_fingerprint": anchor.workspace_fingerprint,
+        "verified": true,
+        "anchor": anchor
+    }))
+}
+
+/// Answer the audit-anchor membership route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters. Output: `Result<Value>` — the JSON anchor-membership answer.
+fn api_audit_contains(
+    e: &Engine,
+    query: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    ensure!(
+        query.keys().all(|key| key == "head"),
+        "Audit contains endpoint accepts only head"
+    );
+    let head = query
+        .get("head")
+        .context("Audit contains endpoint requires head")?;
+    Ok(json!({
+        "head": head,
+        "known": e.db.contains_audit_anchor(head)?
+    }))
+}
+
+/// Answer the JSON metrics route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters.
+/// Output: `Result<Value>` — the JSON metrics snapshot.
+fn api_metrics(e: &Engine, query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Metrics endpoint takes no query parameters"
+    );
+    let collected = crate::metrics::collect(e, Utc::now());
+    let collected = collected?;
+    Ok(serde_json::to_value(collected)?)
+}
+
+/// Answer the settings view route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters.
+/// Output: `Result<Value>` — the JSON settings view.
+fn api_settings(e: &Engine, query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Settings endpoint takes no query parameters"
+    );
+    Ok(crate::web::settings_view(&e.settings))
+}
+
+/// Answer the compact status route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters; `operation` — current operation status to include, if any. Output: `Result<Value>` — the JSON status document.
+fn api_status(
+    e: &Engine,
+    query: &std::collections::BTreeMap<String, String>,
+    operation: Option<&OperationStatus>,
+) -> Result<Value> {
+    ensure!(
+        query.is_empty(),
+        "Status endpoint takes no query parameters"
+    );
+    Ok(
+        json!({"version":env!("CARGO_PKG_VERSION"),"settings_format_version":e.settings.settings_format_version,"account":e.account,"connected":e.connected(),"paused":e.paused.load(Ordering::SeqCst),"mode":e.settings.mode,"sending_enabled":e.settings.sending_enabled,"counts":e.db.counts(&e.account)?,"last_poll":e.last_poll()?,"operation":operation,"enterprise_policy":e.enterprise_policy_status()}),
+    )
+}
+
+/// Answer the cursor item-feed route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters. Output: `Result<Value>` — the JSON cursor item feed.
+fn api_item_feed(e: &Engine, query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query
+            .keys()
+            .all(|key| matches!(key.as_str(), "cursor" | "limit")),
+        "Item-feed endpoint accepts only cursor and limit"
+    );
+    let limit = query
+        .get("limit")
+        .map(|value| value.parse::<u32>())
+        .transpose()?
+        .unwrap_or(25);
+    ensure!((1..=100).contains(&limit), "Item-feed limit must be 1..100");
+    let cursor = query
+        .get("cursor")
+        .map(|value| decode_item_cursor(value))
+        .transpose()?;
+    let page =
+        e.db.list_cursor(&e.account, false, cursor.as_ref(), limit)?;
+    let next_cursor = page
+        .next_cursor
+        .as_ref()
+        .map(encode_item_cursor)
+        .transpose()?;
+    Ok(json!({
+        "schema_version": 1,
+        "items": page.items,
+        "next_cursor": next_cursor
+    }))
+}
+
+/// Answer the paged items route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters. Output: `Result<Value>` — the JSON paged item listing.
+fn api_items(e: &Engine, query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query.keys().all(|key| key == "page"),
+        "Items endpoint accepts only page"
+    );
+    let page = query
+        .get("page")
+        .map(|v| v.parse::<u32>())
+        .transpose()?
+        .unwrap_or(0);
+    ensure!(page <= 1_000_000, "Page is outside supported range");
+    Ok(json!({"page":page,"page_size":25,"items":e.db.list(&e.account,false,page,25)?}))
+}
+
+/// Answer the events route.
+///
+/// Inputs: `e` — engine; `query` — validated request query parameters. Output: `Result<Value>` — the JSON event listing.
+fn api_events(e: &Engine, query: &std::collections::BTreeMap<String, String>) -> Result<Value> {
+    ensure!(
+        query.keys().all(|key| key == "after"),
+        "Events endpoint accepts only after"
+    );
+    let after = query
+        .get("after")
+        .map(|v| v.parse::<i64>())
+        .transpose()?
+        .unwrap_or(0);
+    Ok(json!({"events":e.db.events(after.max(0),100)?}))
+}
+
+/// Route the per-item API paths onto their handlers.
+///
+/// Inputs: `e` — engine; `path` — request path; `query` — validated request
+/// query parameters. Output: `Result<Value>` — the JSON response body for the
+/// routed item path; error for an unknown route.
+fn api_item_routes(
+    e: &Engine,
+    path: &str,
+    query: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    match path {
         path if path.starts_with("/v1/items/") && path.ends_with("/automatic-policy") => {
             ensure!(
                 query.is_empty(),

@@ -1,8 +1,8 @@
 use crate::{
     config::{EVALUATION_CONTRACT_VERSION, MODEL_CANDIDATES, Settings, evaluation_suite_hash},
     mail,
-    ollama::{Ollama, sample_email},
-    types::Category,
+    ollama::{ModelStatus, Ollama, sample_email},
+    types::{Category, Draft},
     vault::write_new_private,
 };
 use anyhow::Result;
@@ -167,7 +167,16 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     pinned.model_digest = Some(qualified.digest.clone());
     let llm = Ollama::new(&pinned)?;
     let ollama_runtime_version = llm.runtime_version()?;
+    let stats = evaluate_cases(cases.clone(), &llm, &pinned)?;
+    build_evaluation_report(&cases, stats, &pinned, &qualified, ollama_runtime_version)
+}
 
+/// Score every fixture case against the pinned local pipeline.
+///
+/// Inputs: `cases` — fixture corpus; `llm` — local model handle; `pinned` —
+/// digest-pinned evaluation settings. Output: `Result<CaseStats>` — the
+/// per-case score aggregates the report summarizes.
+fn evaluate_cases(cases: Vec<Case>, llm: &Ollama, pinned: &Settings) -> Result<CaseStats> {
     let mut rows = Vec::new();
     let mut correct = 0usize;
     let mut rejection_tp = 0usize;
@@ -185,15 +194,11 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
     let mut tag_metrics = BTreeMap::<String, TagSummary>::new();
     let mut completed = 0usize;
     let mut total_seconds = 0.0f64;
-
     for case in &cases {
         expected_rejections += usize::from(case.expected == Category::Rejection);
-        let critical_negative = case.expected != Category::Rejection
-            && case.tags.iter().copied().any(CaseTag::critical_negative);
+        let critical_negative = critical_negative_case(case);
         critical_negative_cases += usize::from(critical_negative);
-        let deterministic_rejection_evidence =
-            mail::clear_rejection_language(&case.subject, &case.text)
-                && !mail::auto_language_conflict(&case.subject, &case.text);
+        let deterministic_rejection_evidence = has_deterministic_rejection_evidence(case);
         deterministic_rejection_evidence_hits +=
             usize::from(case.expected == Category::Rejection && deterministic_rejection_evidence);
         deterministic_rejection_evidence_false_positives +=
@@ -213,9 +218,7 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
                 let actual = analysis.verdict.category;
                 let matched = actual == case.expected;
                 correct += usize::from(matched);
-                rejection_tp += usize::from(
-                    actual == Category::Rejection && case.expected == Category::Rejection,
-                );
+                rejection_tp += usize::from(is_rejection_true_positive(actual, case));
                 rejection_fp += usize::from(
                     actual == Category::Rejection && case.expected != Category::Rejection,
                 );
@@ -225,32 +228,34 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
 
                 let verification_passed =
                     analysis.verification.as_ref().is_some_and(|v| v.passed());
-                let draft_safe = draft.as_ref().is_some_and(|d| {
-                    mail::validate_draft(&d.body).is_ok()
-                        && !mail::automatic_draft_conflict(&d.body, &pinned.signature)
-                });
-                let rejection_pipeline_passed = case.expected == Category::Rejection
-                    && actual == Category::Rejection
-                    && verification_passed
-                    && draft_safe
-                    && flags.is_empty();
+                let draft_safe = draft_is_safe(&draft, pinned);
+                let rejection_pipeline_passed = rejection_pipeline_passes(
+                    case,
+                    actual,
+                    verification_passed,
+                    draft_safe,
+                    &flags,
+                );
                 verified_pipeline += usize::from(rejection_pipeline_passed);
 
-                let non_rejection_draft = case.expected != Category::Rejection && draft.is_some();
+                let non_rejection_draft = is_non_rejection_draft(case, &draft);
                 unsafe_non_rejection_drafts += usize::from(non_rejection_draft);
-                let rejection_false_positive =
-                    case.expected != Category::Rejection && actual == Category::Rejection;
+                let rejection_false_positive = is_rejection_false_positive(case, actual);
                 critical_negative_rejection_false_positives +=
-                    usize::from(critical_negative && rejection_false_positive);
-                critical_negative_unsafe_drafts +=
-                    usize::from(critical_negative && non_rejection_draft);
+                    usize::from(is_critical_negative_false_positive(
+                        critical_negative,
+                        rejection_false_positive,
+                    ));
+                critical_negative_unsafe_drafts += usize::from(is_critical_negative_unsafe_draft(
+                    critical_negative,
+                    non_rejection_draft,
+                ));
                 for tag in &case.tags {
                     let metrics = tag_summary_mut(&mut tag_metrics, tag.as_str())?;
                     metrics.completed += 1;
                     metrics.correct += usize::from(matched);
-                    metrics.rejection_true_positives += usize::from(
-                        actual == Category::Rejection && case.expected == Category::Rejection,
-                    );
+                    metrics.rejection_true_positives +=
+                        usize::from(is_rejection_true_positive(actual, case));
                     metrics.rejection_false_positives += usize::from(rejection_false_positive);
                     metrics.rejection_false_negatives += usize::from(
                         actual != Category::Rejection && case.expected == Category::Rejection,
@@ -285,7 +290,84 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
             })),
         }
     }
+    Ok(CaseStats {
+        rows,
+        correct,
+        rejection_tp,
+        rejection_fp,
+        rejection_fn,
+        expected_rejections,
+        verified_pipeline,
+        unsafe_non_rejection_drafts,
+        critical_negative_cases,
+        critical_negative_completed,
+        critical_negative_rejection_false_positives,
+        critical_negative_unsafe_drafts,
+        deterministic_rejection_evidence_hits,
+        deterministic_rejection_evidence_false_positives,
+        tag_metrics,
+        completed,
+        total_seconds,
+    })
+}
 
+/// Per-case score aggregates for one evaluation run.
+///
+/// Inputs: none (plain struct). Output: the counters
+/// [`build_evaluation_report`] turns into ratios, eligibility gates and the
+/// typed summary.
+struct CaseStats {
+    rows: Vec<serde_json::Value>,
+    correct: usize,
+    rejection_tp: usize,
+    rejection_fp: usize,
+    rejection_fn: usize,
+    expected_rejections: usize,
+    verified_pipeline: usize,
+    unsafe_non_rejection_drafts: usize,
+    critical_negative_cases: usize,
+    critical_negative_completed: usize,
+    critical_negative_rejection_false_positives: usize,
+    critical_negative_unsafe_drafts: usize,
+    deterministic_rejection_evidence_hits: usize,
+    deterministic_rejection_evidence_false_positives: usize,
+    tag_metrics: BTreeMap<String, TagSummary>,
+    completed: usize,
+    total_seconds: f64,
+}
+
+/// Build the evaluation report document from one scored corpus.
+///
+/// Inputs: `cases` — fixture corpus; `stats` — per-case score aggregates;
+/// `pinned` — digest-pinned evaluation settings; `qualified` — model
+/// qualification report; `ollama_runtime_version` — local runtime version.
+/// Output: `Result<serde_json::Value>` — the evaluation report document.
+fn build_evaluation_report(
+    cases: &[Case],
+    stats: CaseStats,
+    pinned: &Settings,
+    qualified: &ModelStatus,
+    ollama_runtime_version: String,
+) -> Result<serde_json::Value> {
+    let CaseStats {
+        rows,
+        correct,
+        rejection_tp,
+        rejection_fp,
+        rejection_fn,
+        expected_rejections,
+        verified_pipeline,
+        unsafe_non_rejection_drafts,
+        critical_negative_cases,
+        critical_negative_completed,
+        critical_negative_rejection_false_positives,
+        critical_negative_unsafe_drafts,
+        deterministic_rejection_evidence_hits,
+        deterministic_rejection_evidence_false_positives,
+        tag_metrics,
+        completed,
+        total_seconds,
+    } = stats;
     let non_rejections = cases.len().saturating_sub(expected_rejections);
     let accuracy = ratio(correct, cases.len());
     let precision = ratio(rejection_tp, rejection_tp + rejection_fp);
@@ -380,6 +462,101 @@ fn evaluate(settings: &Settings) -> Result<serde_json::Value> {
         "results": rows,
         "limitations": "Synthetic task-specific regression suite. Useful for comparing installed candidates under the same local runtime, but not representative mailbox accuracy, physical GPU peak certification, or proof that Automatic mode is risk-free."
     }))
+}
+
+/// Whether one fixture case is a critical negative outcome.
+///
+/// Inputs: `case` — fixture case. Output: `bool` — `true` when the case is a
+/// non-rejection carrying critical-negative tags.
+fn critical_negative_case(case: &Case) -> bool {
+    case.expected != Category::Rejection
+        && case.tags.iter().copied().any(CaseTag::critical_negative)
+}
+
+/// Whether one fixture case carries deterministic rejection evidence.
+///
+/// Inputs: `case` — fixture case. Output: `bool` — `true` when the case text
+/// is deterministic rejection language without an auto-language conflict.
+fn has_deterministic_rejection_evidence(case: &Case) -> bool {
+    mail::clear_rejection_language(&case.subject, &case.text)
+        && !mail::auto_language_conflict(&case.subject, &case.text)
+}
+
+/// Whether one generated draft is safe to hold as a non-rejection.
+///
+/// Inputs: `draft` — draft generated for the case, if any; `pinned` —
+/// digest-pinned evaluation settings supplying the signature. Output: `bool`
+/// — `true` when the draft validates and holds no automatic-mode conflict.
+fn draft_is_safe(draft: &Option<Draft>, pinned: &Settings) -> bool {
+    draft.as_ref().is_some_and(|d| {
+        mail::validate_draft(&d.body).is_ok()
+            && !mail::automatic_draft_conflict(&d.body, &pinned.signature)
+    })
+}
+
+/// Whether one rejection case passed the full verified pipeline.
+///
+/// Inputs: `case` — fixture case; `actual` — category the model returned;
+/// `verification_passed` — verifier outcome; `draft_safe` — draft safety
+/// outcome; `flags` — analysis flags. Output: `bool` — `true` only when every
+/// pipeline stage passed.
+fn rejection_pipeline_passes(
+    case: &Case,
+    actual: Category,
+    verification_passed: bool,
+    draft_safe: bool,
+    flags: &[String],
+) -> bool {
+    case.expected == Category::Rejection
+        && actual == Category::Rejection
+        && verification_passed
+        && draft_safe
+        && flags.is_empty()
+}
+
+/// Whether one case produced a draft it never should have.
+///
+/// Inputs: `case` — fixture case; `draft` — draft generated for the case, if
+/// any. Output: `bool` — `true` for a drafted non-rejection.
+fn is_non_rejection_draft(case: &Case, draft: &Option<Draft>) -> bool {
+    case.expected != Category::Rejection && draft.is_some()
+}
+
+/// Whether one case scored as a rejection false positive.
+///
+/// Inputs: `case` — fixture case; `actual` — category the model returned.
+/// Output: `bool` — `true` when a non-rejection came back as a rejection.
+fn is_rejection_false_positive(case: &Case, actual: Category) -> bool {
+    case.expected != Category::Rejection && actual == Category::Rejection
+}
+
+/// Whether one critical-negative case also produced a rejection false positive.
+///
+/// Inputs: `critical_negative` — critical-negative case flag;
+/// `rejection_false_positive` — false-positive flag. Output: `bool` — `true`
+/// when both hold.
+fn is_critical_negative_false_positive(
+    critical_negative: bool,
+    rejection_false_positive: bool,
+) -> bool {
+    critical_negative && rejection_false_positive
+}
+
+/// Whether one critical-negative case also produced an unsafe draft.
+///
+/// Inputs: `critical_negative` — critical-negative case flag;
+/// `non_rejection_draft` — unsafe-draft flag. Output: `bool` — `true` when
+/// both hold.
+fn is_critical_negative_unsafe_draft(critical_negative: bool, non_rejection_draft: bool) -> bool {
+    critical_negative && non_rejection_draft
+}
+
+/// Whether one case scored as a rejection true positive.
+///
+/// Inputs: `actual` — category the model returned; `case` — fixture case.
+/// Output: `bool` — `true` when a rejection came back as a rejection.
+fn is_rejection_true_positive(actual: Category, case: &Case) -> bool {
+    actual == Category::Rejection && case.expected == Category::Rejection
 }
 
 /// Evaluate the configured local model and write the report.

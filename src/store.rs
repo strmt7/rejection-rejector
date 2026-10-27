@@ -412,12 +412,39 @@ fn verify_application_invariants_connection(
     conn: &Connection,
     vault: &Vault,
 ) -> Result<ApplicationIntegritySummary> {
-    let mut metadata_records = 0u64;
-    let mut item_records = 0u64;
-    let mut audit_event_records = 0u64;
-    let mut active_delivery_records = 0u64;
-    let mut sent_delivery_records = 0u64;
+    let metadata_records = count_verified_metadata(conn, vault)?;
+    let audit_event_records = count_verified_audit_events(conn, vault)?;
+    let (item_records, active_delivery_records, sent_delivery_records) =
+        scan_item_delivery_records(conn, vault)?;
 
+    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    verify_processing_failure_records(conn, vault, schema_version)?;
+
+    let delivery_records: u64 = conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| {
+        row_get_u64(row, 0)
+    })?;
+    ensure!(
+        delivery_records == active_delivery_records + sent_delivery_records,
+        "Delivery table contains records not represented by authenticated item state"
+    );
+
+    Ok(ApplicationIntegritySummary {
+        metadata_records,
+        item_records,
+        audit_event_records,
+        delivery_records,
+        active_delivery_records,
+        sent_delivery_records,
+    })
+}
+
+/// Authenticate and count every stored metadata record.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads. Output: `Result<u64>` — the authenticated metadata record
+/// count; error when a record cannot be authenticated.
+fn count_verified_metadata(conn: &Connection, vault: &Vault) -> Result<u64> {
+    let mut metadata_records = 0u64;
     {
         let mut metadata = conn.prepare("SELECT name,payload FROM meta ORDER BY name")?;
         let rows = metadata.query_map([], |row| {
@@ -429,7 +456,16 @@ fn verify_application_invariants_connection(
             metadata_records += 1;
         }
     }
+    Ok(metadata_records)
+}
 
+/// Authenticate and count every audit-journal event.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads. Output: `Result<u64>` — the authenticated event count;
+/// error when an event cannot be authenticated.
+fn count_verified_audit_events(conn: &Connection, vault: &Vault) -> Result<u64> {
+    let mut audit_event_records = 0u64;
     {
         let mut events = conn.prepare("SELECT event_id,payload FROM events ORDER BY seq")?;
         let rows = events.query_map([], |row| {
@@ -441,6 +477,18 @@ fn verify_application_invariants_connection(
             audit_event_records += 1;
         }
     }
+    Ok(audit_event_records)
+}
+
+/// Authenticate every item and reconcile it with its durable delivery record.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads. Output: `Result<(u64, u64, u64)>` — the item,
+/// active-delivery and sent-delivery record counts; error on any mismatch.
+fn scan_item_delivery_records(conn: &Connection, vault: &Vault) -> Result<(u64, u64, u64)> {
+    let mut item_records = 0u64;
+    let mut active_delivery_records = 0u64;
+    let mut sent_delivery_records = 0u64;
 
     let mut items = conn.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
     let rows = items.query_map([], |row| {
@@ -456,72 +504,124 @@ fn verify_application_invariants_connection(
         let (id, payload, revision, state) = row?;
         let job = decode(vault, &id, &payload, revision, &state)?;
         item_records += 1;
+        verify_item_delivery_record(
+            conn,
+            vault,
+            &id,
+            &job,
+            &mut sent_delivery_records,
+            &mut active_delivery_records,
+        )?;
+    }
+    Ok((item_records, active_delivery_records, sent_delivery_records))
+}
 
-        let delivery: Option<(String, String, i64, Option<Vec<u8>>)> = conn
-            .query_row(
-                "SELECT thread_key,status,attempt_at,provider_id FROM deliveries WHERE item_id=?1",
-                [&id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()?;
+/// Authenticate one item's delivery state against its durable delivery record.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads; `id` — authenticated item id; `job` — decoded job;
+/// `sent_delivery_records` — sent-delivery counter updated in place;
+/// `active_delivery_records` — active-delivery counter updated in place.
+/// Output: `Result<()>` — `Ok` when the delivery record matches the
+/// authenticated job state; error on any mismatch.
+fn verify_item_delivery_record(
+    conn: &Connection,
+    vault: &Vault,
+    id: &str,
+    job: &Job,
+    sent_delivery_records: &mut u64,
+    active_delivery_records: &mut u64,
+) -> Result<()> {
+    let delivery: Option<(String, String, i64, Option<Vec<u8>>)> = fetch_delivery_record(conn, id)?;
 
-        match job.state {
-            JobState::Sending | JobState::Uncertain | JobState::Sent => {
-                let (thread_key, status, attempt_at, provider_payload) = delivery
-                    .context("Delivery-state job is missing its durable delivery record")?;
-                ensure!(
-                    thread_key == job.stub.thread_key(),
-                    "Delivery thread key does not match authenticated job identity"
-                );
-                ensure!(attempt_at > 0, "Delivery attempt timestamp is invalid");
+    match job.state {
+        JobState::Sending | JobState::Uncertain | JobState::Sent => {
+            let (thread_key, status, attempt_at, provider_payload) =
+                delivery.context("Delivery-state job is missing its durable delivery record")?;
+            ensure!(
+                thread_key == job.stub.thread_key(),
+                "Delivery thread key does not match authenticated job identity"
+            );
+            ensure!(attempt_at > 0, "Delivery attempt timestamp is invalid");
 
-                let expected_status = match job.state {
-                    JobState::Sending => "reserved",
-                    JobState::Uncertain => "uncertain",
-                    // The outer match has already excluded every state that is
-                    // not a delivery state, so the rest is exactly `Sent`.
-                    _ => "sent",
-                };
-                ensure!(
-                    status == expected_status,
-                    "Delivery record state does not match authenticated job state"
-                );
+            let expected_status = match job.state {
+                JobState::Sending => "reserved",
+                JobState::Uncertain => "uncertain",
+                // The outer match has already excluded every state that is
+                // not a delivery state, so the rest is exactly `Sent`.
+                _ => "sent",
+            };
+            ensure!(
+                status == expected_status,
+                "Delivery record state does not match authenticated job state"
+            );
 
-                if let JobState::Sent = job.state {
-                    let provider_payload = provider_payload
-                        .context("Sent delivery is missing its encrypted provider identifier");
-                    let provider_payload = provider_payload?;
-                    let provider: String =
-                        vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
-                    ensure!(
-                        job.provider_sent_id.as_deref() == Some(provider.as_str()),
-                        "Sent provider identifier does not match authenticated job payload"
-                    );
-                    sent_delivery_records += 1;
-                } else {
-                    // The outer match has already excluded every state that is
-                    // not a delivery state, so the rest is Sending or Uncertain.
-                    ensure!(
-                        provider_payload.is_none() && job.provider_sent_id.is_none(),
-                        "Unresolved delivery unexpectedly contains a provider identifier"
-                    );
-                    active_delivery_records += 1;
-                }
-            }
-            _ => {
+            if let JobState::Sent = job.state {
+                let provider_payload = provider_payload
+                    .context("Sent delivery is missing its encrypted provider identifier");
+                let provider_payload = provider_payload?;
+                let provider: String =
+                    vault.open_value(&format!("delivery/{id}"), &provider_payload)?;
                 ensure!(
-                    delivery.is_none(),
-                    "Non-delivery job unexpectedly has a durable delivery record"
+                    job.provider_sent_id.as_deref() == Some(provider.as_str()),
+                    "Sent provider identifier does not match authenticated job payload"
                 );
+                *sent_delivery_records += 1;
+            } else {
+                // The outer match has already excluded every state that is
+                // not a delivery state, so the rest is Sending or Uncertain.
                 ensure!(
-                    job.provider_sent_id.is_none(),
-                    "Non-sent job unexpectedly contains a provider identifier"
+                    provider_payload.is_none() && job.provider_sent_id.is_none(),
+                    "Unresolved delivery unexpectedly contains a provider identifier"
                 );
+                *active_delivery_records += 1;
             }
         }
+        _ => {
+            ensure!(
+                delivery.is_none(),
+                "Non-delivery job unexpectedly has a durable delivery record"
+            );
+            ensure!(
+                job.provider_sent_id.is_none(),
+                "Non-sent job unexpectedly contains a provider identifier"
+            );
+        }
     }
+    Ok(())
+}
 
-    let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+/// Read one item's durable delivery record.
+///
+/// Inputs: `conn` — open database connection; `id` — authenticated item id.
+/// Output: `Result<Option<(String, String, i64, Option<Vec<u8>>)>>` — the raw
+/// delivery row, or `None` when no delivery was recorded for the item.
+#[allow(clippy::type_complexity)]
+fn fetch_delivery_record(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<(String, String, i64, Option<Vec<u8>>)>> {
+    let delivery: Option<(String, String, i64, Option<Vec<u8>>)> = conn
+        .query_row(
+            "SELECT thread_key,status,attempt_at,provider_id FROM deliveries WHERE item_id=?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    Ok(delivery)
+}
+
+/// Verify every processing-failure record against its authenticated payload.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads; `schema_version` — stored schema version. Output:
+/// `Result<()>` — `Ok` when every record authenticates and references an
+/// existing item; error on any mismatch.
+fn verify_processing_failure_records(
+    conn: &Connection,
+    vault: &Vault,
+    schema_version: i64,
+) -> Result<()> {
     if schema_version >= 5 {
         let failures = conn.prepare(
             "SELECT item_id,code,attempts,retry_exhausted,occurred_at,payload
@@ -540,50 +640,66 @@ fn verify_application_invariants_connection(
         })?;
         for row in rows {
             let (item_id, code, attempts, retry_exhausted, occurred_at, payload) = row?;
-            ensure!(
-                ProcessingFailureCode::from_db(&code).is_some(),
-                "Processing-failure record has an unknown stable code"
-            );
-            ensure!(attempts > 0, "Processing-failure attempt count is invalid");
-            ensure!(occurred_at > 0, "Processing-failure timestamp is invalid");
-            let record: ProcessingFailureRecord =
-                vault.open_value(&format!("processing_failure/{item_id}"), &payload)?;
-            ensure!(
-                record.code.as_str() == code
-                    && record.attempts == attempts
-                    && record.retry_exhausted == retry_exhausted
-                    && record.occurred_at.timestamp() == occurred_at,
-                "Processing-failure clear metadata does not match authenticated payload"
-            );
-            let item_exists = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
-                [&item_id],
-                |row| row.get(0),
-            );
-            let item_exists: bool = item_exists?;
-            ensure!(
-                item_exists,
-                "Processing-failure record references a missing item"
-            );
+            verify_processing_failure_row(
+                conn,
+                vault,
+                &item_id,
+                &code,
+                attempts,
+                retry_exhausted,
+                occurred_at,
+                &payload,
+            )?;
         }
     }
+    Ok(())
+}
 
-    let delivery_records: u64 = conn.query_row("SELECT COUNT(*) FROM deliveries", [], |row| {
-        row_get_u64(row, 0)
-    })?;
+/// Verify one processing-failure record against its authenticated payload.
+///
+/// Inputs: `conn` — open database connection; `vault` — vault used to decrypt
+/// record payloads; `item_id` — referenced item id; `code` — stable failure
+/// code; `attempts` — attempt count; `retry_exhausted` — retry-exhausted flag;
+/// `occurred_at` — occurrence timestamp (unix seconds); `payload` — sealed
+/// record payload. Output: `Result<()>` — `Ok` when the record authenticates
+/// and references an existing item; error on any mismatch.
+#[allow(clippy::too_many_arguments)]
+fn verify_processing_failure_row(
+    conn: &Connection,
+    vault: &Vault,
+    item_id: &str,
+    code: &str,
+    attempts: u32,
+    retry_exhausted: bool,
+    occurred_at: i64,
+    payload: &[u8],
+) -> Result<()> {
     ensure!(
-        delivery_records == active_delivery_records + sent_delivery_records,
-        "Delivery table contains records not represented by authenticated item state"
+        ProcessingFailureCode::from_db(code).is_some(),
+        "Processing-failure record has an unknown stable code"
     );
-
-    Ok(ApplicationIntegritySummary {
-        metadata_records,
-        item_records,
-        audit_event_records,
-        delivery_records,
-        active_delivery_records,
-        sent_delivery_records,
-    })
+    ensure!(attempts > 0, "Processing-failure attempt count is invalid");
+    ensure!(occurred_at > 0, "Processing-failure timestamp is invalid");
+    let record: ProcessingFailureRecord =
+        vault.open_value(&format!("processing_failure/{item_id}"), payload)?;
+    ensure!(
+        record.code.as_str() == code
+            && record.attempts == attempts
+            && record.retry_exhausted == retry_exhausted
+            && record.occurred_at.timestamp() == occurred_at,
+        "Processing-failure clear metadata does not match authenticated payload"
+    );
+    let item_exists = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM items WHERE id=?1)",
+        [&item_id],
+        |row| row.get(0),
+    );
+    let item_exists: bool = item_exists?;
+    ensure!(
+        item_exists,
+        "Processing-failure record references a missing item"
+    );
+    Ok(())
 }
 
 /// Count durable send attempts to one recipient since a cutoff.
@@ -628,54 +744,67 @@ fn recipient_attempts_since(
     Ok(count)
 }
 
-impl Store {
-    /// Open (or create) the encrypted workspace store.
-    ///
-    /// Inputs: `path` — database file path (created private and empty when absent;
-    /// symlinks refused); `vault` — vault sealing all stored payloads. Output:
-    /// `Result<Self>` — the migrated, ready store.
-    pub fn open(path: &Path, vault: Vault) -> Result<Self> {
-        if !path.exists() {
-            write_new_private(path, b"")?;
-        }
-        ensure!(
-            !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
-            "Database must not be a symlink"
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        let conn = Connection::open(path)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=67108864;")?;
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(
-            version <= DATABASE_SCHEMA_VERSION,
-            "Database belongs to a newer app version"
-        );
-        if version > 0 {
-            let existing_check: Option<Vec<u8>> = conn
-                .query_row(
-                    "SELECT payload FROM meta WHERE name='vault_check'",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let bytes = existing_check.context(
+/// Create-or-open the private database file and connect to it.
+///
+/// Inputs: `path` — database file path (created private and empty when absent;
+/// symlinks refused). Output: `Result<(Connection, i64)>` — the hardened
+/// connection and the stored schema version.
+fn open_store_connection(path: &Path) -> Result<(Connection, i64)> {
+    if !path.exists() {
+        write_new_private(path, b"")?;
+    }
+    ensure!(
+        !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
+        "Database must not be a symlink"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA secure_delete=ON; PRAGMA trusted_schema=OFF; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=67108864;")?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    Ok((conn, version))
+}
+
+/// Refuse foreign or future databases and authenticate an existing vault
+/// marker.
+///
+/// Inputs: `conn` — open connection; `vault` — vault sealing all stored
+/// payloads; `version` — stored schema version. Output: `Result<()>` — `Ok`
+/// when the database belongs to this vault; error otherwise.
+fn verify_open_vault_marker(conn: &Connection, vault: &Vault, version: i64) -> Result<()> {
+    ensure!(
+        version <= DATABASE_SCHEMA_VERSION,
+        "Database belongs to a newer app version"
+    );
+    if version > 0 {
+        let existing_check: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT payload FROM meta WHERE name='vault_check'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let bytes = existing_check.context(
                 "Existing database is missing its authenticated vault marker; refusing to migrate or adopt a new key",
             )?;
-            let check: String = vault.open_value("meta/vault_check", &bytes)?;
-            ensure!(check == "rejection-rejector:v1", "Wrong vault");
-        }
-        let pre_migration_backup = if version > 0 && version < DATABASE_SCHEMA_VERSION {
-            Some(create_pre_migration_backup(path, &conn, version)?)
-        } else {
-            None
-        };
-        if version == 0 {
-            conn.execute_batch("BEGIN IMMEDIATE;
+        let check: String = vault.open_value("meta/vault_check", &bytes)?;
+        ensure!(check == "rejection-rejector:v1", "Wrong vault");
+    }
+    Ok(())
+}
+
+/// Apply the schema migration for the database's stored version.
+///
+/// Inputs: `conn` — open connection; `vault` — vault sealing fresh markers;
+/// `version` — stored schema version before migration. Output: `Result<()>` —
+/// `Ok` once the database is at schema version 5.
+fn run_schema_migrations(conn: &Connection, vault: &Vault, version: i64) -> Result<()> {
+    if version == 0 {
+        conn.execute_batch("BEGIN IMMEDIATE;
                 CREATE TABLE meta(name TEXT PRIMARY KEY,payload BLOB NOT NULL);
                 CREATE TABLE items(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL,created_at INTEGER NOT NULL,received_at INTEGER,updated_at INTEGER NOT NULL,retry_at INTEGER NOT NULL,payload BLOB NOT NULL);
                 CREATE INDEX items_queue ON items(account_key,state,retry_at,created_at);
@@ -694,21 +823,21 @@ impl Store {
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,payload BLOB NOT NULL,prev_hash TEXT NOT NULL,event_hash TEXT NOT NULL);
                 CREATE UNIQUE INDEX events_hash ON events(event_hash);")?;
-            let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
-            let audit_head = vault.seal("meta/audit_head", &AUDIT_GENESIS)?;
-            let applied = conn.execute(
-                "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
-                [marker],
-            );
-            applied?;
-            let applied = conn.execute(
-                "INSERT INTO meta(name,payload) VALUES('audit_head',?1)",
-                [audit_head],
-            );
-            applied?;
-            conn.execute_batch("PRAGMA user_version=5; COMMIT;")?;
-        } else if version == 1 {
-            conn.execute_batch("BEGIN IMMEDIATE;
+        let marker = vault.seal("meta/vault_check", &"rejection-rejector:v1")?;
+        let audit_head = vault.seal("meta/audit_head", &AUDIT_GENESIS)?;
+        let applied = conn.execute(
+            "INSERT INTO meta(name,payload) VALUES('vault_check',?1)",
+            [marker],
+        );
+        applied?;
+        let applied = conn.execute(
+            "INSERT INTO meta(name,payload) VALUES('audit_head',?1)",
+            [audit_head],
+        );
+        applied?;
+        conn.execute_batch("PRAGMA user_version=5; COMMIT;")?;
+    } else if version == 1 {
+        conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE items ADD COLUMN received_at INTEGER;
                 CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
                 ALTER TABLE deliveries RENAME TO deliveries_v2;
@@ -719,8 +848,8 @@ impl Store {
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 PRAGMA user_version=3; COMMIT;")?;
-        } else if version == 2 {
-            conn.execute_batch("BEGIN IMMEDIATE;
+    } else if version == 2 {
+        conn.execute_batch("BEGIN IMMEDIATE;
                 ALTER TABLE deliveries RENAME TO deliveries_v2;
                 CREATE TABLE deliveries(item_id TEXT PRIMARY KEY,thread_key TEXT NOT NULL,attempt_at INTEGER NOT NULL,status TEXT NOT NULL,provider_id BLOB);
                 INSERT INTO deliveries(item_id,thread_key,attempt_at,status,provider_id)
@@ -729,43 +858,219 @@ impl Store {
                 CREATE INDEX deliveries_time ON deliveries(attempt_at);
                 CREATE INDEX deliveries_thread_state ON deliveries(thread_key,status);
                 PRAGMA user_version=3; COMMIT;")?;
-        } else {
-            let migrated = conn.execute_batch(
+    } else {
+        let migrated = conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS items_review_order ON items(account_key,state,received_at,created_at);
                  CREATE INDEX IF NOT EXISTS deliveries_thread_state ON deliveries(thread_key,status);",
             );
-            migrated?;
-        }
-        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if current_version == 3 {
-            migrate_audit_chain(&conn, &vault)?;
-        }
-        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if current_version == 4 {
-            migrate_processing_failures(&conn)?;
-        }
-        let mut db = Self { conn, vault };
-        let check = db
-            .meta::<String>("vault_check")?
-            .context("Database vault marker is missing after initialization")?;
-        ensure!(check == "rejection-rejector:v1", "Wrong vault");
-        db.verify_audit_chain()?;
-        if let Some(backup) = pre_migration_backup {
-            let name = backup
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("pre-migration.sqlite3");
-            let logged = db.log(
+        migrated?;
+    }
+    Ok(())
+}
+
+/// Apply the staged audit-chain and processing-failure migrations.
+///
+/// Inputs: `conn` — open connection; `vault` — vault used by the audit-chain
+/// migration. Output: `Result<()>` — `Ok` once version 3 and 4 databases are
+/// fully migrated.
+fn run_staged_migrations(conn: &Connection, vault: &Vault) -> Result<()> {
+    let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current_version == 3 {
+        migrate_audit_chain(conn, vault)?;
+    }
+    let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current_version == 4 {
+        migrate_processing_failures(conn)?;
+    }
+    Ok(())
+}
+
+/// Finalize the store open: vault marker, audit chain and migration log.
+///
+/// Inputs: `db` — freshly assembled store; `pre_migration_backup` — retained
+/// pre-migration image, when one was made; `version` — schema version before
+/// migration. Output: `Result<()>` — `Ok` once the store passes its own
+/// checks.
+fn finish_store_open(
+    db: &mut Store,
+    pre_migration_backup: Option<PathBuf>,
+    version: i64,
+) -> Result<()> {
+    let check = db
+        .meta::<String>("vault_check")?
+        .context("Database vault marker is missing after initialization")?;
+    ensure!(check == "rejection-rejector:v1", "Wrong vault");
+    db.verify_audit_chain()?;
+    if let Some(backup) = pre_migration_backup {
+        let name = backup
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("pre-migration.sqlite3");
+        let logged = db.log(
                 "database.migrated",
                 None,
                 &format!(
                     "Schema migrated from v{version} to v{DATABASE_SCHEMA_VERSION}; verified pre-migration image retained as {name}"
                 ),
             );
-            logged?;
+        logged?;
+    }
+    Ok(())
+}
+
+/// Open a backup database read-only and run the SQLite structural checks.
+///
+/// Inputs: `path` — backup database file (never modified). Output:
+/// `Result<Connection>` — the read-only connection; error when the file is
+/// missing, a symlink, or structurally corrupt.
+fn open_backup_connection(path: &Path) -> Result<Connection> {
+    ensure!(path.is_file(), "Backup database file is missing");
+    ensure!(
+        !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
+        "Backup database must not be a symlink"
+    );
+    let connection = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    );
+    let connection = connection?;
+    check_connection_integrity(&connection)?;
+    Ok(connection)
+}
+
+/// Authenticate every metadata record and the vault marker inside a backup.
+///
+/// Inputs: `vault` — vault expected to have sealed the backup; `connection` —
+/// read-only backup connection. Output: `Result<u64>` — the authenticated
+/// metadata record count; error when a record or the marker fails
+/// authentication.
+fn verify_backup_meta_records(vault: &Vault, connection: &Connection) -> Result<u64> {
+    let mut metadata_records = 0u64;
+    {
+        let mut statement = connection.prepare("SELECT name,payload FROM meta ORDER BY name")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (name, payload) = row?;
+            let _: serde_json::Value = vault.open_value(&format!("meta/{name}"), &payload)?;
+            metadata_records += 1;
         }
+    }
+
+    let encrypted: Vec<u8> = connection
+        .query_row(
+            "SELECT payload FROM meta WHERE name='vault_check'",
+            [],
+            |row| row.get(0),
+        )
+        .context("Backup vault marker is missing")?;
+    let marker: String = vault.open_value("meta/vault_check", &encrypted)?;
+    ensure!(
+        marker == "rejection-rejector:v1",
+        "Backup belongs to another vault"
+    );
+    Ok(metadata_records)
+}
+
+/// Authenticate every item payload inside a backup.
+///
+/// Inputs: `vault` — vault expected to have sealed the backup; `connection` —
+/// read-only backup connection. Output: `Result<u64>` — the authenticated item
+/// count; error when a payload fails authentication.
+fn verify_backup_item_records(vault: &Vault, connection: &Connection) -> Result<u64> {
+    let mut item_records = 0u64;
+    {
+        let mut statement =
+            connection.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row_get_u64(row, 2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, payload, revision, state) = row?;
+            decode(vault, &id, &payload, revision, &state)?;
+            item_records += 1;
+        }
+    }
+    Ok(item_records)
+}
+
+/// Authenticate every audit-journal event inside a backup.
+///
+/// Inputs: `vault` — vault expected to have sealed the backup; `connection` —
+/// read-only backup connection. Output: `Result<u64>` — the authenticated
+/// event count; error when an event fails authentication.
+fn verify_backup_event_records(vault: &Vault, connection: &Connection) -> Result<u64> {
+    let mut audit_events = 0u64;
+    {
+        let mut statement =
+            connection.prepare("SELECT event_id,payload FROM events ORDER BY seq")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        for row in rows {
+            let (event_id, payload) = row?;
+            let _: AuditEvent = vault.open_value(&format!("event/{event_id}"), &payload)?;
+            audit_events += 1;
+        }
+    }
+    Ok(audit_events)
+}
+
+/// Verify the backup audit chain and read its authenticated head.
+///
+/// Inputs: `vault` — vault expected to have sealed the backup; `connection` —
+/// read-only backup connection; `version` — backup schema version. Output:
+/// `Result<Option<String>>` — the authenticated audit head for version >= 4
+/// backups; `None` for older images.
+fn verify_backup_audit_head(
+    vault: &Vault,
+    connection: &Connection,
+    version: i64,
+) -> Result<Option<String>> {
+    let audit_head = if version >= 4 {
+        verify_audit_chain_connection(connection, vault)?;
+        let encrypted = connection.query_row(
+            "SELECT payload FROM meta WHERE name='audit_head'",
+            [],
+            |row| row.get(0),
+        );
+        let encrypted: Vec<u8> = encrypted?;
+        let head: String = vault.open_value("meta/audit_head", &encrypted)?;
+        ensure!(valid_audit_hash(&head), "Backup audit head is invalid");
+        Some(head)
+    } else {
+        None
+    };
+    Ok(audit_head)
+}
+
+impl Store {
+    /// Open (or create) the encrypted workspace store.
+    ///
+    /// Inputs: `path` — database file path (created private and empty when absent;
+    /// symlinks refused); `vault` — vault sealing all stored payloads. Output:
+    /// `Result<Self>` — the migrated, ready store.
+    pub fn open(path: &Path, vault: Vault) -> Result<Self> {
+        let (conn, version) = open_store_connection(path)?;
+        verify_open_vault_marker(&conn, &vault, version)?;
+        let pre_migration_backup = if version > 0 && version < DATABASE_SCHEMA_VERSION {
+            Some(create_pre_migration_backup(path, &conn, version)?)
+        } else {
+            None
+        };
+        run_schema_migrations(&conn, &vault, version)?;
+        run_staged_migrations(&conn, &vault)?;
+        let mut db = Self { conn, vault };
+        finish_store_open(&mut db, pre_migration_backup, version)?;
         Ok(db)
     }
+
     /// Read the database schema version.
     ///
     /// Inputs: none (`&self`). Output: `Result<i64>` — the stored `PRAGMA
@@ -1056,17 +1361,7 @@ impl Store {
     /// `Result<BackupVerificationSummary>` — the verification results; error when
     /// the file is missing, a symlink, or fails authentication.
     pub fn verify_backup_file(&self, path: &Path) -> Result<BackupVerificationSummary> {
-        ensure!(path.is_file(), "Backup database file is missing");
-        ensure!(
-            !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
-            "Backup database must not be a symlink"
-        );
-        let connection = Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        );
-        let connection = connection?;
-        check_connection_integrity(&connection)?;
+        let connection = open_backup_connection(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_version = self.schema_version()?;
         ensure!(
@@ -1074,68 +1369,9 @@ impl Store {
             "Backup schema version is not supported by this application"
         );
 
-        let mut metadata_records = 0u64;
-        {
-            let mut statement =
-                connection.prepare("SELECT name,payload FROM meta ORDER BY name")?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            for row in rows {
-                let (name, payload) = row?;
-                let _: serde_json::Value =
-                    self.vault.open_value(&format!("meta/{name}"), &payload)?;
-                metadata_records += 1;
-            }
-        }
-
-        let encrypted: Vec<u8> = connection
-            .query_row(
-                "SELECT payload FROM meta WHERE name='vault_check'",
-                [],
-                |row| row.get(0),
-            )
-            .context("Backup vault marker is missing")?;
-        let marker: String = self.vault.open_value("meta/vault_check", &encrypted)?;
-        ensure!(
-            marker == "rejection-rejector:v1",
-            "Backup belongs to another vault"
-        );
-
-        let mut item_records = 0u64;
-        {
-            let mut statement =
-                connection.prepare("SELECT id,payload,revision,state FROM items ORDER BY id")?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row_get_u64(row, 2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, payload, revision, state) = row?;
-                decode(&self.vault, &id, &payload, revision, &state)?;
-                item_records += 1;
-            }
-        }
-
-        let mut audit_events = 0u64;
-        {
-            let mut statement =
-                connection.prepare("SELECT event_id,payload FROM events ORDER BY seq")?;
-            let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            for row in rows {
-                let (event_id, payload) = row?;
-                let _: AuditEvent = self
-                    .vault
-                    .open_value(&format!("event/{event_id}"), &payload)?;
-                audit_events += 1;
-            }
-        }
+        let metadata_records = verify_backup_meta_records(&self.vault, &connection)?;
+        let item_records = verify_backup_item_records(&self.vault, &connection)?;
+        let audit_events = verify_backup_event_records(&self.vault, &connection)?;
 
         let application_integrity =
             verify_application_invariants_connection(&connection, &self.vault)?;
@@ -1147,20 +1383,7 @@ impl Store {
         );
         let delivery_records = application_integrity.delivery_records;
 
-        let audit_head = if version >= 4 {
-            verify_audit_chain_connection(&connection, &self.vault)?;
-            let encrypted = connection.query_row(
-                "SELECT payload FROM meta WHERE name='audit_head'",
-                [],
-                |row| row.get(0),
-            );
-            let encrypted: Vec<u8> = encrypted?;
-            let head: String = self.vault.open_value("meta/audit_head", &encrypted)?;
-            ensure!(valid_audit_hash(&head), "Backup audit head is invalid");
-            Some(head)
-        } else {
-            None
-        };
+        let audit_head = verify_backup_audit_head(&self.vault, &connection, version)?;
 
         Ok(BackupVerificationSummary {
             schema_version: version,
