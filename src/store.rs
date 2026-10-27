@@ -50,11 +50,17 @@ pub const DATABASE_SCHEMA_VERSION: i64 = 5;
 /// per-table record totals observed inside the backup.
 #[derive(Clone, Debug, Serialize)]
 pub struct BackupVerificationSummary {
+    /// Schema version of the verification record.
     pub schema_version: i64,
+    /// Audit head verified against the backup.
     pub audit_head: Option<String>,
+    /// Metadata record count verified.
     pub metadata_records: u64,
+    /// Item record count verified.
     pub item_records: u64,
+    /// Audit event count verified.
     pub audit_events: u64,
+    /// Delivery record count verified.
     pub delivery_records: u64,
 }
 
@@ -64,11 +70,17 @@ pub struct BackupVerificationSummary {
 /// delivery record counts, split by active and sent deliveries.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ApplicationIntegritySummary {
+    /// Metadata record count.
     pub metadata_records: u64,
+    /// Item record count.
     pub item_records: u64,
+    /// Audit event record count.
     pub audit_event_records: u64,
+    /// Delivery record count.
     pub delivery_records: u64,
+    /// Delivery records not yet resolved.
     pub active_delivery_records: u64,
+    /// Delivery records confirmed as sent.
     pub sent_delivery_records: u64,
 }
 /// One stored processing failure with its retry posture.
@@ -78,9 +90,13 @@ pub struct ApplicationIntegritySummary {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessingFailureRecord {
+    /// Stable failure code grouping the record.
     pub code: ProcessingFailureCode,
+    /// Processing attempts made before failure.
     pub attempts: u32,
+    /// Whether the retry budget is exhausted.
     pub retry_exhausted: bool,
+    /// Timestamp of the recorded failure.
     pub occurred_at: DateTime<Utc>,
 }
 
@@ -90,8 +106,11 @@ pub struct ProcessingFailureRecord {
 /// record counts plus per-code totals.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct ProcessingFailureSummary {
+    /// Failure records still awaiting resolution.
     pub active_records: u64,
+    /// Number of records with an exhausted retry budget.
     pub retry_exhausted: u64,
+    /// Failure counts grouped by stable failure code.
     pub by_code: BTreeMap<String, u64>,
 }
 
@@ -101,11 +120,17 @@ pub struct ProcessingFailureSummary {
 /// freelist counts before and after, and the page size in bytes.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct DatabaseCompactionReport {
+    /// Schema version of the compaction report.
     pub schema_version: u32,
+    /// Database page count before compaction.
     pub before_page_count: u64,
+    /// Freelist page count before compaction.
     pub before_freelist_count: u64,
+    /// Database page count after compaction.
     pub after_page_count: u64,
+    /// Freelist page count after compaction.
     pub after_freelist_count: u64,
+    /// Database page size in bytes.
     pub page_size_bytes: u64,
 }
 
@@ -556,7 +581,7 @@ fn verify_item_delivery_record(
                 "Delivery record state does not match authenticated job state"
             );
 
-            if let JobState::Sent = job.state {
+            if matches!(job.state, JobState::Sent) {
                 let provider_payload = provider_payload
                     .context("Sent delivery is missing its encrypted provider identifier");
                 let provider_payload = provider_payload?;

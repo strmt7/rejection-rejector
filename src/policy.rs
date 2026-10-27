@@ -40,21 +40,37 @@ pub fn schema_sha256() -> String {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnterprisePolicy {
+    /// Policy document format version.
     pub version: u32,
+    /// Stable policy identifier.
     pub policy_id: Option<String>,
+    /// Monotonic policy revision.
     pub revision: Option<u64>,
+    /// Timestamp before which the policy is not valid.
     pub not_before: Option<DateTime<Utc>>,
+    /// Timestamp after which the policy expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Whether every reply must pass through human review.
     pub force_human_review: bool,
+    /// Whether sending is prohibited outright.
     pub prohibit_sending: bool,
+    /// Whether the integration API is prohibited.
     pub prohibit_integration_api: bool,
+    /// Whether recovery key export is prohibited.
     pub prohibit_recovery_key_export: bool,
+    /// Whether an external audit anchor is required.
     pub require_external_audit_anchor: bool,
+    /// Whether an independent verifier is required.
     pub require_independent_verifier: bool,
+    /// Maximum send attempts allowed per day.
     pub max_daily_send_limit: Option<u16>,
+    /// Minimum cooldown between sends, in minutes.
     pub min_cooldown_minutes: Option<u16>,
+    /// Minimum retention period for stored items, in days.
     pub min_retention_days: Option<u16>,
+    /// Model digests permitted for drafting.
     pub allowed_models: Vec<String>,
+    /// Model digests permitted for verification.
     pub allowed_verifier_models: Vec<String>,
 }
 
@@ -64,30 +80,55 @@ pub struct EnterprisePolicy {
 /// and signature verification results and the enforced restrictions.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct PolicyStatus {
+    /// Whether the enterprise policy is active.
     pub active: bool,
+    /// Policy document format version.
     pub version: Option<u32>,
+    /// Stable policy identifier.
     pub policy_id: Option<String>,
+    /// Monotonic policy revision.
     pub revision: Option<u64>,
+    /// Timestamp before which the policy is not valid.
     pub not_before: Option<DateTime<Utc>>,
+    /// Timestamp after which the policy expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// Digest of the loaded policy document.
     pub digest: Option<String>,
+    /// Whether the policy digest pin is enforced.
     pub digest_pin_enforced: bool,
+    /// Whether the loaded policy matches the pinned digest.
     pub digest_pin_matches: bool,
+    /// Whether a policy signature is required.
     pub signature_enforced: bool,
+    /// Whether the loaded policy signature verified.
     pub signature_verified: bool,
+    /// SHA-256 of the signer key that verified the policy.
     pub signer_key_sha256: Option<String>,
+    /// Whether every reply must pass through human review.
     pub force_human_review: bool,
+    /// Whether sending is prohibited outright.
     pub prohibit_sending: bool,
+    /// Whether the integration API is prohibited.
     pub prohibit_integration_api: bool,
+    /// Whether recovery key export is prohibited.
     pub prohibit_recovery_key_export: bool,
+    /// Whether an external audit anchor is required.
     pub require_external_audit_anchor: bool,
+    /// Whether an independent verifier is required.
     pub require_independent_verifier: bool,
+    /// Maximum send attempts allowed per day.
     pub max_daily_send_limit: Option<u16>,
+    /// Minimum cooldown between sends, in minutes.
     pub min_cooldown_minutes: Option<u16>,
+    /// Minimum retention period for stored items, in days.
     pub min_retention_days: Option<u16>,
+    /// Number of models permitted for drafting.
     pub allowed_model_count: usize,
+    /// Model digests permitted for drafting.
     pub allowed_models: Vec<String>,
+    /// Number of models permitted for verification.
     pub allowed_verifier_model_count: usize,
+    /// Model digests permitted for verification.
     pub allowed_verifier_models: Vec<String>,
 }
 
@@ -348,11 +389,17 @@ impl EnterprisePolicy {
 /// pinned digest if any, and the signature enforcement results.
 #[derive(Clone, Debug)]
 pub struct LoadedPolicy {
+    /// The parsed enterprise policy.
     pub policy: EnterprisePolicy,
+    /// Digest of the policy document being enforced.
     pub digest: String,
+    /// Expected policy digest recorded at load time.
     pub expected_digest: Option<String>,
+    /// Whether a policy signature is required.
     pub signature_enforced: bool,
+    /// Whether the loaded policy signature verified.
     pub signature_verified: bool,
+    /// SHA-256 of the signer key that verified the policy.
     pub signer_key_sha256: Option<String>,
 }
 
@@ -378,6 +425,7 @@ struct SignatureRequirement {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyRevisionFloor {
+    /// Per-policy minimum accepted revisions.
     pub policies: std::collections::BTreeMap<String, PolicyRevisionRecord>,
 }
 
@@ -388,7 +436,9 @@ pub struct PolicyRevisionFloor {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRevisionRecord {
+    /// Highest accepted revision for the policy.
     pub revision: u64,
+    /// Digest recorded with the accepted revision.
     pub digest: String,
 }
 

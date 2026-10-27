@@ -77,6 +77,7 @@ def fixture_files(signing="unsigned"):
 
 class PackageVerificationTests(unittest.TestCase):
     """Synthetic ZIP fixtures only; no executable is ever run."""
+
     def setUp(self):
         """Create an isolated package path and a valid fixture set."""
         self.tmp = tempfile.TemporaryDirectory()
@@ -452,6 +453,7 @@ class PackageVerificationTests(unittest.TestCase):
 
 class WorkflowIntegrationTests(unittest.TestCase):
     """The release workflow text pins the packaging gates."""
+
     def test_signature_status_is_fail_closed_and_digest_bound(self):
         """Signature checks are fail-closed and digest-bound in CI."""
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

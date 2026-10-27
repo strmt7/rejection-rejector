@@ -16,13 +16,21 @@ pub const TASK_NAME: &str = "Rejection Rejector Worker";
 /// state, installed-definition drift and the registered paths.
 #[derive(Clone, Debug, Serialize)]
 pub struct AutostartStatus {
+    /// Whether autostart is supported on this platform.
     pub supported: bool,
+    /// Whether an autostart entry is installed.
     pub installed: bool,
+    /// Whether the installed entry matches the expected definition, when known.
     pub definition_matches_expected: Option<bool>,
+    /// Name of the platform autostart task or entry.
     pub task_name: &'static str,
+    /// Autostart mode description reported by the platform.
     pub mode: &'static str,
+    /// Executable path recorded in the autostart entry.
     pub executable: PathBuf,
+    /// Data directory recorded in the autostart entry.
     pub data_dir: PathBuf,
+    /// Operator-facing note about the autostart state.
     pub note: String,
 }
 

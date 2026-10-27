@@ -31,34 +31,63 @@ use zeroize::Zeroizing;
 /// item list, audit events, and the one-time API-token exposure state.
 #[derive(Clone, Default)]
 pub struct Snapshot {
+    /// Whether the worker has published its first snapshot.
     pub initialized: bool,
+    /// Whether a fatal worker error has been recorded.
     pub fatal: bool,
+    /// Human-readable progress description; empty when idle.
     pub busy: String,
+    /// Operator-facing transient notice.
     pub notice: String,
+    /// Operator-facing error text.
     pub error: String,
+    /// Status of the current operation.
     pub operation: OperationStatus,
+    /// Current enterprise policy status.
     pub enterprise_policy: crate::policy::PolicyStatus,
+    /// Current workspace settings.
     pub settings: Settings,
+    /// Revision of the current settings.
     pub settings_revision: u64,
+    /// Workspace account key.
     pub account: String,
+    /// Whether the Google account is connected.
     pub connected: bool,
+    /// Whether the send scope is granted.
     pub send_scope: bool,
+    /// Whether the worker runs in demo mode.
     pub demo: bool,
+    /// Current item counts.
     pub counts: Counts,
+    /// Storage health snapshot, when measured.
     pub storage: Option<crate::storage::StorageHealth>,
+    /// Scheduled-backup status, when available.
     pub scheduled_backup: Option<crate::recovery::ScheduledBackupStatus>,
+    /// Backup isolation status, when available.
     pub backup_isolation: Option<crate::recovery::BackupIsolationStatus>,
+    /// Status of the primary local model.
     pub model: ModelStatus,
+    /// Status of the verifier local model.
     pub verifier_model: ModelStatus,
+    /// Timestamp of the last provider poll.
     pub last_poll: Option<DateTime<Utc>>,
+    /// Timestamp of the next scheduled poll.
     pub next_poll: Option<DateTime<Utc>>,
+    /// Items in the current review page.
     pub items: Vec<Job>,
+    /// Currently selected item.
     pub selected: Option<Job>,
+    /// Recent audit events.
     pub events: Vec<AuditEvent>,
+    /// Current review page number.
     pub page: u32,
+    /// Whether the worker is restricted to review-only operation.
     pub review_only: bool,
+    /// Revealed API token, when requested.
     pub api_token: Option<Zeroizing<String>>,
+    /// Instant the revealed token stops being shown.
     pub api_token_expires: Option<Instant>,
+    /// Whether the local API listener is running.
     pub api_listening: bool,
 }
 
@@ -189,27 +218,43 @@ impl Default for WorkerPulse {
 /// Inputs: none (plain enum). Output: the action the worker loop executes
 /// against the engine, mirroring the interactive and web surfaces.
 pub enum Command {
+    /// Recompute and publish the worker snapshot.
     Refresh,
+    /// Poll the provider immediately.
     CheckNow,
     Connect {
         path: PathBuf,
         send: bool,
     },
     ConnectAppPassword(AppPasswordCredentials),
+    /// Disconnect the Google account.
     Disconnect,
     Settings(Box<Settings>),
+    /// Install the local Ollama runtime.
     InstallOllama,
+    /// Start the local Ollama runtime.
     StartOllama,
+    /// Pull the primary local model.
     PullModel,
+    /// Inspect the primary local model.
     InspectModel,
+    /// Qualify the primary local model.
     QualifyModel,
+    /// Pull the verifier model.
     PullVerifierModel,
+    /// Inspect the verifier model.
     InspectVerifierModel,
+    /// Qualify the verifier model.
     QualifyVerifierModel,
+    /// Evaluate the active model.
     EvaluateModel,
+    /// Profile the active model.
     ProfileModel,
+    /// Compare model profiles.
     CompareModels,
+    /// Recheck stored evidence integrity.
     IntegrityCheck,
+    /// Compact the SQLite database.
     CompactDatabase,
     Backup {
         out: PathBuf,
@@ -253,9 +298,13 @@ pub enum Command {
         body_hash: String,
     },
     Reconcile(String),
+    /// Purge items past the retention window.
     Purge,
+    /// Reveal the local API token.
     RevealApiToken,
+    /// Hide the local API token.
     HideApiToken,
+    /// Rotate the local API token.
     RotateApiToken,
     Api {
         path: String,
@@ -381,10 +430,15 @@ fn report_unqueued_command(snapshot: &mut Snapshot, kind: OperationKind, disconn
 /// Inputs: none (plain struct). Output: the command channel, shared
 /// snapshot, pause/stop flags, liveness pulse and thread join handle.
 pub struct Worker {
+    /// Command queue handle for the worker thread.
     pub tx: Sender<Command>,
+    /// Shared latest worker snapshot.
     pub snapshot: Arc<Mutex<Snapshot>>,
+    /// Shared pause flag.
     pub paused: Arc<AtomicBool>,
+    /// Shared stop flag.
     pub stop: Arc<AtomicBool>,
+    /// Shared pulse handle for liveness reporting.
     pub pulse: WorkerPulse,
     join: Option<std::thread::JoinHandle<()>>,
 }

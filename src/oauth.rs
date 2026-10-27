@@ -41,9 +41,13 @@ pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 // Handle the return value of oauth::login() carefully as it contains sensitive credential material.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials {
+    /// OAuth client identifier.
     pub client_id: String,
+    /// OAuth client secret.
     pub client_secret: String,
+    /// OAuth refresh token.
     pub refresh_token: String,
+    /// Whether the granted scopes permit sending.
     pub can_send: bool,
 }
 impl Drop for Credentials {
@@ -79,9 +83,13 @@ impl Drop for Installed {
 /// rotated refresh token and the granted scope.
 #[derive(Deserialize)]
 pub struct Tokens {
+    /// OAuth access token.
     pub access_token: String,
+    /// Access-token lifetime in seconds.
     pub expires_in: u64,
+    /// OAuth refresh token.
     pub refresh_token: Option<String>,
+    /// Space-separated granted OAuth scopes.
     pub scope: Option<String>,
 }
 impl Zeroize for Tokens {

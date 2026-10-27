@@ -25,12 +25,19 @@ use std::{
 /// VRAM size, context window, GPU residency and an operator message.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelStatus {
+    /// Whether the model is installed locally.
     pub installed: bool,
+    /// Model digest reported by the runtime.
     pub digest: String,
+    /// Model size in bytes.
     pub size: u64,
+    /// Model bytes resident in VRAM.
     pub size_vram: u64,
+    /// Context window size reported for the model.
     pub context: u32,
+    /// Whether the model is GPU-resident.
     pub gpu_resident: bool,
+    /// Runtime-reported status message.
     pub message: String,
 }
 /// Timing and outcome profile of one inference pipeline run.
@@ -39,17 +46,29 @@ pub struct ModelStatus {
 /// counts, category, draft and verification outcomes and input completeness.
 #[derive(Clone, Debug, Serialize)]
 pub struct PipelineProfile {
+    /// Wall-clock duration of the profiled pipeline in milliseconds.
     pub elapsed_millis: u64,
+    /// Number of inference requests issued.
     pub request_count: u64,
+    /// Prompt tokens processed.
     pub prompt_tokens: u64,
+    /// Completion tokens generated.
     pub completion_tokens: u64,
+    /// Category assigned by the profiled pipeline.
     pub category: Category,
+    /// Whether the pipeline produced a draft.
     pub draft_generated: bool,
+    /// Whether verification passed.
     pub verification_passed: bool,
+    /// Whether the model saw the complete input.
     pub input_complete: bool,
+    /// Whether the model was GPU-resident during the run.
     pub gpu_resident: bool,
+    /// Model bytes resident in VRAM during the run.
     pub size_vram: u64,
+    /// Context size reported by the runtime during the run.
     pub reported_context: u32,
+    /// Pipeline flag strings collected during the run.
     pub flags: Vec<String>,
 }
 
@@ -59,21 +78,37 @@ pub struct PipelineProfile {
 /// version, model and digest, prompt version and the residency budget.
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelRuntimeProfile {
+    /// Schema version of the runtime profile.
     pub schema_version: u32,
+    /// Timestamp of profile generation.
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Application version that produced the profile.
     pub application_version: &'static str,
+    /// SHA-256 of the build identity that produced the profile.
     pub build_identity_sha256: String,
+    /// Ollama runtime version used for profiling.
     pub ollama_runtime_version: String,
+    /// Primary model status at profile time.
     pub model: String,
+    /// Digest of the profiled model.
     pub digest: String,
+    /// Prompt version used during profiling.
     pub prompt_version: &'static str,
+    /// Hash of the evaluation suite in use.
     pub evaluation_suite_hash: String,
+    /// Context size requested for the profiled runs.
     pub requested_context: u32,
+    /// Model size in bytes.
     pub model_size_bytes: u64,
+    /// First-run (cold) pipeline measurements.
     pub cold_pipeline: PipelineProfile,
+    /// Warm repeated-run pipeline measurements.
     pub warm_repeat_pipeline: PipelineProfile,
+    /// Pipeline measurements near the context limit.
     pub near_context_pipeline: PipelineProfile,
+    /// Whether the task qualification is current.
     pub task_qualification_current: bool,
+    /// Known limitations recorded with the profile.
     pub limitations: Vec<&'static str>,
 }
 #[derive(Deserialize)]

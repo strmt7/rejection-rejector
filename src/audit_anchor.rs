@@ -34,11 +34,17 @@ pub(crate) const OS_AUDIT_ANCHOR_SERVICE: &str = "rejection-rejector.audit-ancho
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditAnchor {
+    /// Schema version of the anchor record.
     pub format_version: u32,
+    /// Application version that wrote the anchor.
     pub application_version: String,
+    /// Timestamp of anchor creation.
     pub created_at: DateTime<Utc>,
+    /// Fingerprint of the workspace the anchor protects.
     pub workspace_fingerprint: String,
+    /// Audit sequence the anchor pins.
     pub audit_sequence: i64,
+    /// Audit head hash the anchor pins.
     pub audit_head: String,
 }
 

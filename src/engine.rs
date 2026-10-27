@@ -39,25 +39,45 @@ use std::{
 )]
 #[serde(rename_all = "snake_case")]
 pub enum AutomaticPolicyCode {
+    /// The queued item identity does not match the reserved send.
     QueueIdentityMismatch,
+    /// The workspace is not armed for automatic dispatch.
     AutomaticModeNotArmed,
+    /// The original message is no longer available.
     OriginalEmailMissing,
+    /// A mailbox-level sending block applies to the message.
     MailboxSafetyBlock,
+    /// No local analysis is stored for the message.
     LocalAnalysisMissing,
+    /// No draft exists for the message.
     DraftMissing,
+    /// The analysis is not a high-confidence rejection.
     NotHighConfidenceRejection,
+    /// Model verification or GPU residency requirements failed.
     ModelVerificationOrResidencyFailed,
+    /// The verified draft no longer matches the stored draft.
     DraftVerificationStale,
+    /// The stored analysis no longer matches the analyzed message.
     AnalysisIdentityStale,
+    /// The model task qualification is out of date.
     TaskQualificationStale,
+    /// The per-account send cooldown is still active.
     CooldownActive,
+    /// The message is outside the configured automatic age window.
     OutsideAgeWindow,
+    /// The message predates the automatic-dispatch enrollment.
     PredatesAutomaticEnrollment,
+    /// Deterministic rejection evidence is missing from the analysis.
     MissingDeterministicRejectionEvidence,
+    /// The draft language conflicts with the message language.
     ConflictingEmailLanguage,
+    /// The draft escalates the thread or contains a link.
     DraftEscalationOrLink,
+    /// Sending would create an automatic reply loop.
     AutomaticReplyLoop,
+    /// An automatic reply to this thread was already suppressed.
     AutomaticReplySuppressed,
+    /// The reply target does not match the authenticated thread.
     ReplyToMismatch,
 }
 
@@ -67,7 +87,9 @@ pub enum AutomaticPolicyCode {
 /// human-readable block message.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AutomaticPolicyBlock {
+    /// Stable policy code identifying the block.
     pub code: AutomaticPolicyCode,
+    /// Operator-facing explanation of the block.
     pub message: String,
 }
 
@@ -77,7 +99,9 @@ pub struct AutomaticPolicyBlock {
 /// [`AutomaticPolicyBlock`] explaining a refusal.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AutomaticPolicyDecision {
+    /// Whether automatic dispatch is eligible after applying policy.
     pub eligible: bool,
+    /// Blocks that prevent automatic dispatch.
     pub blocks: Vec<AutomaticPolicyBlock>,
 }
 
@@ -337,19 +361,29 @@ pub fn send_gate_eligible(job: &Job, ctx: &SendGateContext<'_>) -> bool {
 /// against — the database, mail transport, loaded enterprise policy and
 /// workspace directory.
 pub struct Engine {
+    /// Open workspace store.
     pub db: Store,
+    /// Current workspace settings.
     pub settings: Settings,
+    /// Workspace account key.
     pub account: String,
+    /// Status of the primary local model.
     pub model: ModelStatus,
+    /// Status of the verifier local model.
     pub verifier_model: ModelStatus,
+    /// Whether the engine runs in demo mode.
     pub demo: bool,
+    /// Shared pause flag honored by dispatch.
     pub paused: Arc<AtomicBool>,
+    /// Shared stop flag honored by dispatch.
     pub stop: Arc<AtomicBool>,
+    /// Currently loaded enterprise policy, when one is active.
     pub enterprise_policy: Option<LoadedPolicy>,
     mail: Option<Box<dyn MailTransport>>,
     _lock: InstanceLock,
     _session: SessionLease,
     _temporary: Option<tempfile::TempDir>,
+    /// Workspace directory backing the store and vault.
     pub directory: PathBuf,
 }
 /// Disarm delivery settings after an unclean shutdown.
@@ -1736,7 +1770,7 @@ impl Engine {
         if automatic {
             self.validate_automatic_preflight(&job)?;
         }
-        let gmail = self.mail.as_mut().ok_or_else(|| {
+        let gmail = self.mail.as_deref_mut().ok_or_else(|| {
             DispatchFailure::review_code(
                 "review_required_gmail_disconnected",
                 "Gmail is not connected",
@@ -2172,7 +2206,7 @@ impl Engine {
 /// Output: `Result<(), DispatchFailure>` — `Ok` when the transport may send and
 /// its profile matches the workspace account.
 fn preflight_gmail_account(
-    gmail: &mut Box<dyn MailTransport>,
+    gmail: &mut dyn MailTransport,
     account: &str,
 ) -> std::result::Result<(), DispatchFailure> {
     dispatch_require(
@@ -2201,7 +2235,7 @@ fn preflight_gmail_account(
 /// Output: `Result<Email, DispatchFailure>` — the fresh message copy; failure
 /// when the message vanished, changed, or became blocked.
 fn fetch_fresh_original(
-    gmail: &mut Box<dyn MailTransport>,
+    gmail: &mut dyn MailTransport,
     account: &str,
     job: &Job,
     original: &Email,
@@ -2229,7 +2263,7 @@ fn fetch_fresh_original(
 /// `Result<(), DispatchFailure>` — `Ok` while the thread contains the original
 /// and every other message predates it.
 fn verify_thread_state(
-    gmail: &mut Box<dyn MailTransport>,
+    gmail: &mut dyn MailTransport,
     job: &Job,
     original: &Email,
 ) -> std::result::Result<(), DispatchFailure> {

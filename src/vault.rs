@@ -24,16 +24,27 @@ const RECOVERY_MIN_PASSPHRASE_BYTES: usize = 20;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryKeyEnvelope {
+    /// Envelope format version.
     pub format_version: u32,
+    /// Application version that wrote the envelope.
     pub app_version: String,
+    /// Timestamp of envelope creation.
     pub created_at: DateTime<Utc>,
+    /// Vault identifier the envelope is bound to.
     pub vault_id: String,
+    /// Key-derivation function name.
     pub kdf: String,
+    /// KDF memory cost in KiB.
     pub memory_kib: u32,
+    /// KDF time cost.
     pub time_cost: u32,
+    /// KDF parallelism lanes.
     pub lanes: u32,
+    /// Base64 KDF salt.
     pub salt_b64: String,
+    /// Base64 AEAD nonce.
     pub nonce_b64: String,
+    /// Base64 wrapped vault key.
     pub wrapped_key_b64: String,
 }
 

@@ -15,33 +15,61 @@ use serde::Serialize;
 /// storage health, backup state, audit position and operational counters.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct MetricsSnapshot {
+    /// Schema version of the snapshot payload.
     pub schema_version: u32,
+    /// Timestamp of snapshot generation.
     pub generated_at: DateTime<Utc>,
+    /// Service name the snapshot describes.
     pub service_name: &'static str,
+    /// Application version that generated the snapshot.
     pub application_version: &'static str,
+    /// Database schema version in use.
     pub database_schema_version: i64,
+    /// Current database file size in bytes.
     pub database_bytes: Option<u64>,
+    /// Live storage health snapshot.
     pub storage: StorageHealth,
+    /// Scheduled-backup status snapshot.
     pub scheduled_backup: ScheduledBackupStatus,
+    /// Backup isolation status snapshot.
     pub backup_isolation: BackupIsolationStatus,
+    /// Current audit sequence.
     pub audit_sequence: i64,
+    /// Whether an audit head is recorded.
     pub audit_head_present: bool,
+    /// Number of stored items.
     pub stored_items: u64,
+    /// Number of queued items.
     pub queued_items: u64,
+    /// Number of items awaiting review.
     pub review_items: u64,
+    /// Number of sent items.
     pub sent_items: u64,
+    /// Number of deliveries awaiting reconciliation.
     pub uncertain_deliveries: u64,
+    /// Send attempts in the last 24 hours.
     pub send_attempts_24h: u64,
+    /// Whether the Google account is connected.
     pub gmail_connected: bool,
+    /// Whether the send scope is granted.
     pub gmail_send_scope: bool,
+    /// Whether the model digest is pinned.
     pub model_digest_pinned: bool,
+    /// Whether the task qualification is current.
     pub task_qualification_current: bool,
+    /// Whether an enterprise policy is active.
     pub enterprise_policy_active: bool,
+    /// Active enterprise policy revision, when one is active.
     pub enterprise_policy_revision: Option<u64>,
+    /// Whether policy requires an independent audit anchor.
     pub policy_requires_independent_audit_anchor: bool,
+    /// Whether an external audit anchor is configured.
     pub external_audit_anchor_configured: bool,
+    /// Whether the OS-protected audit anchor is required.
     pub os_protected_audit_anchor_required: bool,
+    /// Whether an independent audit anchor is configured.
     pub independent_audit_anchor_configured: bool,
+    /// Aggregate operational readiness indicators.
     pub operational: OperationalIndicators,
 }
 
