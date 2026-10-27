@@ -64,7 +64,7 @@ pub(super) fn request_target(headers: &[u8], port: u16) -> Result<&str> {
         "Invalid OAuth callback header block"
     );
     let text = std::str::from_utf8(headers).context("Invalid OAuth callback encoding")?;
-    let mut lines = text[..text.len() - 4].split("\r\n");
+    let mut lines = text[..text.len() - 4].lines();
     let first = lines
         .next()
         .context("OAuth callback request line is missing")?;

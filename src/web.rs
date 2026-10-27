@@ -1,7 +1,7 @@
 //! Local web interface (`rr web`) request handling and pure gate composition.
 //!
 //! The web surface is a thin presentation shell like the desktop and terminal
-//! interfaces: the embedded page ( [`WEB_PAGE_HTML`] ) is served by the
+//! interfaces: the embedded page ([`crate::web::WEB_PAGE_HTML`]) is served by the
 //! loopback API and drives the worker exclusively through the same `Command`
 //! channel. This module holds everything that is decidable without side
 //! effects — request payload validation, body-size caps, the write-gate
@@ -558,16 +558,36 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             "The request body exceeds the fixed local write limit",
         ));
     }
-    let invalid = || {
-        WriteError::reject(
-            400,
-            CODE_INVALID_REQUEST,
-            "The request body is not a valid payload for this command",
-        )
-    };
+    parse_write_payload(kind, body)
+}
+
+/// The standard rejection for a body that does not parse for its command.
+///
+/// Inputs: none. Output: [`WriteError`] — the 400 invalid-request rejection.
+fn invalid_write() -> WriteError {
+    WriteError::reject(
+        400,
+        CODE_INVALID_REQUEST,
+        "The request body is not a valid payload for this command",
+    )
+}
+
+/// Parse one command body as JSON, rejecting anything malformed.
+///
+/// Inputs: `body` — request body. Output: the parsed payload, or the
+/// standard 400 invalid-request rejection.
+fn parse_payload<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, WriteError> {
+    serde_json::from_slice(body).map_err(|_| invalid_write())
+}
+
+/// Parse and validate the body for one item-level route.
+///
+/// Inputs: `kind` — route class; `body` — request body. Output:
+/// `Result<WriteRequest, WriteError>` — the typed request, or a rejection.
+fn parse_write_payload(kind: WriteRoute, body: &[u8]) -> Result<WriteRequest, WriteError> {
     match kind {
         WriteRoute::EditDraft => {
-            let payload: EditDraftPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: EditDraftPayload = parse_payload(body)?;
             validate_item_id(&payload.id)?;
             Ok(WriteRequest::EditDraft {
                 id: payload.id,
@@ -576,7 +596,7 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             })
         }
         WriteRoute::Regenerate | WriteRoute::DismissRow => {
-            let payload: RevisionPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: RevisionPayload = parse_payload(body)?;
             validate_item_id(&payload.id)?;
             let (id, revision) = (payload.id, payload.revision);
             Ok(if kind == WriteRoute::Regenerate {
@@ -586,7 +606,7 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             })
         }
         WriteRoute::Send => {
-            let payload: SendPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: SendPayload = parse_payload(body)?;
             validate_item_id(&payload.id)?;
             Ok(WriteRequest::Send {
                 id: payload.id,
@@ -595,8 +615,7 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             })
         }
         WriteRoute::UpdateSettings => {
-            let payload: UpdateSettingsPayload =
-                serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: UpdateSettingsPayload = parse_payload(body)?;
             Ok(WriteRequest::UpdateSettings {
                 mode: payload.mode,
                 tone: payload.tone,
@@ -605,28 +624,36 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             })
         }
         WriteRoute::AutomaticArm => {
-            let payload: AutomaticArmPayload =
-                serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: AutomaticArmPayload = parse_payload(body)?;
             Ok(WriteRequest::AutomaticArm {
                 action: payload.action,
             })
         }
+        WriteRoute::Qualify => {
+            let payload: QualifyPayload = parse_payload(body)?;
+            Ok(WriteRequest::Qualify {
+                verifier: payload.verifier.unwrap_or(false),
+            })
+        }
+        remaining => parse_maintenance_write(remaining, body),
+    }
+}
+
+/// Parse and validate the body for one maintenance route.
+///
+/// Inputs: `kind` — route class; `body` — request body. Output:
+/// `Result<WriteRequest, WriteError>` — the typed request, or a rejection.
+fn parse_maintenance_write(kind: WriteRoute, body: &[u8]) -> Result<WriteRequest, WriteError> {
+    match kind {
         WriteRoute::CheckNow => Ok(WriteRequest::CheckNow),
         WriteRoute::Disconnect => Ok(WriteRequest::Disconnect),
         WriteRoute::IntegrityCheck => Ok(WriteRequest::IntegrityCheck),
         WriteRoute::Compact => Ok(WriteRequest::Compact),
         WriteRoute::Purge => Ok(WriteRequest::Purge),
-        WriteRoute::Qualify => {
-            let payload: QualifyPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
-            Ok(WriteRequest::Qualify {
-                verifier: payload.verifier.unwrap_or(false),
-            })
-        }
         WriteRoute::ConnectAppPassword => {
-            let payload: ConnectAppPasswordPayload =
-                serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: ConnectAppPasswordPayload = parse_payload(body)?;
             if payload.email.trim().is_empty() || payload.app_password.trim().is_empty() {
-                return Err(invalid());
+                return Err(invalid_write());
             }
             Ok(WriteRequest::ConnectAppPassword {
                 creds: crate::mail_transport::AppPasswordCredentials::new(
@@ -636,14 +663,17 @@ pub fn parse_write_request(route: &str, body: &[u8]) -> Result<WriteRequest, Wri
             })
         }
         WriteRoute::Backup => {
-            let payload: BackupPayload = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let payload: BackupPayload = parse_payload(body)?;
             if payload.out.trim().is_empty() {
-                return Err(invalid());
+                return Err(invalid_write());
             }
             Ok(WriteRequest::Backup {
                 out: payload.out.trim().to_owned(),
             })
         }
+        // Unreachable for the kinds matched in [`parse_write_payload`]; kept
+        // so a new kind added without routing fails closed instead of panicking.
+        _ => Err(invalid_write()),
     }
 }
 
@@ -1373,11 +1403,11 @@ mod tests {
         assert_eq!(envelope["api_version"], crate::api::API_VERSION);
         assert_eq!(envelope["request_id"], "request-123");
         assert_eq!(envelope["error"]["code"], "confirm_reply_mismatch");
-        assert_eq!(envelope["error"]["retryable"], false);
+        assert!(!envelope["error"]["retryable"].as_bool().unwrap());
         assert!(envelope.get("accepted").is_none());
         let accepted = WriteOutcome::accepted_with(json!({"arm": {"remaining_seconds": 30}}));
         let envelope = response_envelope("request-456", &accepted);
-        assert_eq!(envelope["accepted"], true);
+        assert!(envelope["accepted"].as_bool().unwrap());
         assert_eq!(envelope["arm"]["remaining_seconds"], 30);
         assert!(envelope.get("error").is_none());
     }
@@ -1518,14 +1548,14 @@ mod tests {
     fn write_outcomes_merge_extras_only_into_success_bodies() {
         let accepted = WriteOutcome::accepted(&OperationStatus::default());
         assert_eq!(accepted.status, 200);
-        assert_eq!(accepted.body["accepted"], true);
+        assert!(accepted.body["accepted"].as_bool().unwrap());
         assert!(accepted.body.get("operation").is_some());
 
         let mut merged = WriteOutcome::accepted_with(json!({"operation": {"kind": "edit_draft"}}));
         assert_eq!(merged.status, 200);
         assert_eq!(merged.body["operation"]["kind"], "edit_draft");
         let scalar = WriteOutcome::accepted_with(json!("plain"));
-        assert_eq!(scalar.body["accepted"], true);
+        assert!(scalar.body["accepted"].as_bool().unwrap());
         assert_eq!(scalar.body.as_object().unwrap().len(), 1);
 
         merged.merge_payload(json!({"extra": 1}));
@@ -1550,7 +1580,7 @@ mod tests {
         let envelope = response_envelope("req-1", &ok);
         assert_eq!(envelope["api_version"], crate::api::API_VERSION);
         assert_eq!(envelope["request_id"], "req-1");
-        assert_eq!(envelope["accepted"], true);
+        assert!(envelope["accepted"].as_bool().unwrap());
         assert_eq!(envelope["operation"]["kind"], "send_reply");
         assert!(envelope.get("error").is_none());
 

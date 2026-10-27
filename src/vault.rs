@@ -17,19 +17,34 @@ const RECOVERY_TIME_COST: u32 = 3;
 const RECOVERY_LANES: u32 = 1;
 const RECOVERY_MIN_PASSPHRASE_BYTES: usize = 20;
 
+/// Wrapped workspace key document written for recovery.
+///
+/// Inputs: none (plain struct). Output: format and application versions,
+/// vault id, KDF parameters, salt and the key wrapped under the recovery key.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryKeyEnvelope {
+    /// Envelope format version.
     pub format_version: u32,
+    /// Application version that wrote the envelope.
     pub app_version: String,
+    /// Timestamp of envelope creation.
     pub created_at: DateTime<Utc>,
+    /// Vault identifier the envelope is bound to.
     pub vault_id: String,
+    /// Key-derivation function name.
     pub kdf: String,
+    /// KDF memory cost in KiB.
     pub memory_kib: u32,
+    /// KDF time cost.
     pub time_cost: u32,
+    /// KDF parallelism lanes.
     pub lanes: u32,
+    /// Base64 KDF salt.
     pub salt_b64: String,
+    /// Base64 AEAD nonce.
     pub nonce_b64: String,
+    /// Base64 wrapped vault key.
     pub wrapped_key_b64: String,
 }
 
@@ -187,9 +202,19 @@ fn linux_vault_passphrase() -> Result<Zeroizing<String>> {
     if let Some(pass) = test_support::HEADLESS_PASSPHRASE.get() {
         return Ok(Zeroizing::new(pass.clone()));
     }
-    Ok(Zeroizing::new(std::env::var("RR_VAULT_PASSPHRASE").context("On Linux, set RR_VAULT_PASSPHRASE to a strong passphrase (20+ characters). Windows uses Credential Manager automatically")?))
+    const VAULT_PASSPHRASE_ENV: &str = "RR_VAULT_PASSPHRASE";
+    Ok(Zeroizing::new(
+        std::env::var(VAULT_PASSPHRASE_ENV).context(format!(
+            "On Linux, set {VAULT_PASSPHRASE_ENV} to a strong passphrase (20+ characters). \
+         Windows uses Credential Manager automatically"
+        ))?,
+    ))
 }
 
+/// Authenticated-encryption vault for one workspace.
+///
+/// Inputs: none (plain struct). Output: the sealing and opening surface for
+/// values stored under the workspace key.
 #[derive(Clone)]
 pub struct Vault {
     key: Arc<Zeroizing<[u8; 32]>>,
@@ -233,6 +258,16 @@ impl Vault {
         );
         #[cfg(any(windows, target_os = "macos"))]
         {
+            // Test builds are hermetic by default: derive the key from the
+            // one-shot test passphrase instead of minting OS credential
+            // entries. Leaked entries accumulate until the store rejects new
+            // ones and flakes unrelated tests; tests asserting live OS-store
+            // behavior opt in with `test_support::LiveOsCredentialStore`.
+            #[cfg(test)]
+            if !test_support::live_os_credential_store_active() {
+                let pass = test_support::test_vault_passphrase();
+                return Self::from_passphrase(pass.as_str(), id.trim());
+            }
             let entry = keyring::Entry::new("rejection-rejector.v1", id.trim())?;
             let key = key_from_credential_store(entry.get_password(), is_new, |encoded| {
                 entry
@@ -245,17 +280,29 @@ impl Vault {
         {
             // Linux fallback is explicit and requires a user-supplied passphrase on every run.
             let pass = linux_vault_passphrase()?;
-            ensure!(
-                pass.len() >= 20,
-                "Vault passphrase must be at least 20 characters"
-            );
-            let salt = uuid::Uuid::parse_str(id.trim())?;
-            let mut key = Zeroizing::new([0u8; 32]);
-            argon2::Argon2::default()
-                .hash_password_into(pass.as_bytes(), salt.as_bytes(), key.as_mut())
-                .map_err(|_| anyhow::anyhow!("Key derivation failed"))?;
-            Ok(Self::from_zeroizing_key(key))
+            Self::from_passphrase(pass.as_str(), id.trim())
         }
+    }
+
+    /// Derive the vault master key from a passphrase (the Linux flow and the
+    /// hermetic test flow).
+    ///
+    /// Inputs: `pass` — 20+ character passphrase; `id` — vault identifier used
+    /// as the derivation salt. Output: `Result<Self>` — the deterministically
+    /// derived vault, or the fail-closed error for a short passphrase or a
+    /// derivation failure.
+    #[cfg(any(test, not(any(windows, target_os = "macos"))))]
+    fn from_passphrase(pass: &str, id: &str) -> Result<Self> {
+        ensure!(
+            pass.len() >= 20,
+            "Vault passphrase must be at least 20 characters"
+        );
+        let salt = uuid::Uuid::parse_str(id)?;
+        let mut key = Zeroizing::new([0u8; 32]);
+        argon2::Argon2::default()
+            .hash_password_into(pass.as_bytes(), salt.as_bytes(), key.as_mut())
+            .map_err(|_| anyhow::anyhow!("Key derivation failed"))?;
+        Ok(Self::from_zeroizing_key(key))
     }
     /// Wrap this vault's master key for offline disaster recovery.
     ///
@@ -498,6 +545,9 @@ pub fn write_new_private(path: &Path, data: &[u8]) -> Result<()> {
     f.sync_all()?;
     Ok(())
 }
+/// Exclusive process lock for one workspace directory.
+///
+/// Inputs: none (plain struct). Output: the held file lock, released on drop.
 pub struct InstanceLock {
     _file: fs::File,
 }
@@ -587,6 +637,7 @@ mod tests {
     fn existing_vault_id_without_credential_never_mints_a_replacement_key() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
@@ -630,21 +681,6 @@ mod tests {
         assert!(!root.path().join("vault-id").exists());
     }
 
-    /// Removes a test credential from the OS credential store even when an
-    /// assertion panics, so repeated test runs never collide with stale keys.
-    #[cfg(any(windows, target_os = "macos"))]
-    struct CredentialCleanup(String);
-    #[cfg(any(windows, target_os = "macos"))]
-    impl Drop for CredentialCleanup {
-        /// Delete the credential bound to this test's vault identifier.
-        /// Inputs: `self.0` holds the vault identifier used as account name.
-        /// Output: none; deletion errors are ignored during teardown.
-        fn drop(&mut self) {
-            let _ = keyring::Entry::new("rejection-rejector.v1", &self.0)
-                .and_then(|entry| entry.delete_credential());
-        }
-    }
-
     /// Why: the OS-credential path must mint exactly one key on first open and
     /// reuse that same key on every later open; a second mint would orphan all
     /// previously sealed records. Exercises the mint arm, the read arm and the
@@ -659,11 +695,11 @@ mod tests {
     fn vault_open_mints_and_reuses_the_os_credential_key() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let minted = Vault::open(root.path()).unwrap();
-        let id = vault_id(root.path()).unwrap();
-        let _cleanup = CredentialCleanup(id.clone());
+        let _cleanup = test_support::OsCredentialCleanup::for_workspace(root.path());
         let reopened = Vault::open(root.path()).unwrap();
         let sealed = minted.seal("job:1", &"payload").unwrap();
         assert_eq!(
@@ -692,11 +728,12 @@ mod tests {
     fn install_os_key_if_missing_installs_once_and_refuses_overwrite() {
         // Serialize OS credential-store access (see `test_support`).
         let _lock = lock_credential_store();
+        let _live = test_support::LiveOsCredentialStore::acquire();
         let root = tempfile::tempdir().unwrap();
         private_dir(root.path()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         write_new_private(&root.path().join("vault-id"), id.as_bytes()).unwrap();
-        let _cleanup = CredentialCleanup(id);
+        let _cleanup = test_support::OsCredentialCleanup::for_workspace(root.path());
         let recovered = Vault::random();
         recovered.install_os_key_if_missing(root.path()).unwrap();
         let overwrite = recovered
@@ -717,6 +754,349 @@ mod tests {
         private_dir(&unidentified).unwrap();
         assert!(recovered.install_os_key_if_missing(&unidentified).is_err());
     }
+
+    /// Extract the error text from a fail-closed result whose success type does
+    /// not implement `Debug` (e.g. `Vault`, `Argon2`, `InstanceLock`); a
+    /// successful call fails the test instead.
+    fn err<T>(result: Result<T>) -> String {
+        match result {
+            Ok(_) => panic!("expected a fail-closed error"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    /// Why: passphrase derivation is the Linux and hermetic-test key source; it
+    /// must be deterministic for one (passphrase, vault id) pair and reject a
+    /// short passphrase or unparsable vault id before deriving anything, so a
+    /// weak input can never silently produce a key.
+    #[test]
+    fn passphrase_derivation_is_deterministic_and_fail_closed() {
+        assert_eq!(
+            err(Vault::from_passphrase(
+                "short",
+                &uuid::Uuid::new_v4().to_string()
+            )),
+            "Vault passphrase must be at least 20 characters"
+        );
+        assert!(
+            Vault::from_passphrase(&"p".repeat(20), "not-a-uuid").is_err(),
+            "an unparsable vault id cannot serve as a derivation salt"
+        );
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = Vault::from_passphrase(&"p".repeat(20), &id).unwrap();
+        let second = Vault::from_passphrase(&"p".repeat(20), &id).unwrap();
+        let sealed = first.seal("ctx", &"value").unwrap();
+        assert_eq!(
+            second.open_value::<String>("ctx", &sealed).unwrap(),
+            "value",
+            "the same passphrase and vault id must derive the same key"
+        );
+        let other =
+            Vault::from_passphrase(&"p".repeat(20), &uuid::Uuid::new_v4().to_string()).unwrap();
+        assert!(
+            other.open_value::<String>("ctx", &sealed).is_err(),
+            "a different vault id must derive a different key"
+        );
+    }
+
+    /// Why: the recovery envelope is only useful while it binds the exact vault
+    /// id and a strong passphrase; each invalid input must be refused up front
+    /// with its own reason so operators can tell a typo from a damaged file.
+    #[test]
+    fn recovery_envelope_input_validation_names_each_defect() {
+        let vault = Vault::random();
+        let id = uuid::Uuid::new_v4().to_string();
+        let error = vault
+            .recovery_envelope("not-a-uuid", b"a strong enough passphrase")
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid vault identifier");
+        let error = vault
+            .recovery_envelope(&id, b"1234567890123456789")
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Recovery passphrase must be at least 20 bytes"
+        );
+    }
+
+    /// Why: a recovery envelope is an offline trust artifact; every malformed
+    /// field (format, KDF, ids, encodings, lengths, KDF bounds) must fail
+    /// closed with its own reason before any key material is unwrapped, and a
+    /// wrong passphrase must surface as an authentication failure, never as a
+    /// different error that could mask tampering.
+    #[test]
+    fn recovery_envelope_decoding_rejects_every_malformed_field() {
+        let vault = Vault::random();
+        let id = uuid::Uuid::new_v4().to_string();
+        let passphrase = b"correct horse battery staple";
+        let envelope = vault.recovery_envelope(&id, passphrase).unwrap();
+
+        let mut altered = envelope.clone();
+        altered.format_version = 2;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Unsupported recovery-key format"
+        );
+
+        let mut altered = envelope.clone();
+        altered.kdf = "argon2i".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Unsupported recovery-key KDF"
+        );
+
+        let mut altered = envelope.clone();
+        altered.vault_id = "not-a-uuid".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid vault identifier"
+        );
+
+        assert_eq!(
+            err(Vault::from_recovery_envelope(
+                &envelope,
+                b"1234567890123456789"
+            )),
+            "Recovery passphrase must be at least 20 bytes"
+        );
+
+        let mut altered = envelope.clone();
+        altered.salt_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery salt encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.nonce_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery nonce encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.wrapped_key_b64 = "!!!".into();
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid wrapped recovery key encoding"
+        );
+
+        let mut altered = envelope.clone();
+        altered.salt_b64 = STANDARD.encode([0u8; 8]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery salt length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.nonce_b64 = STANDARD.encode([0u8; 23]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid recovery nonce length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.wrapped_key_b64 = STANDARD.encode([0u8; 47]);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Invalid wrapped recovery key length"
+        );
+
+        let mut altered = envelope.clone();
+        altered.memory_kib = 1024 * 1024;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF memory cost is outside the supported safety range"
+        );
+
+        let mut altered = envelope.clone();
+        altered.time_cost = 11;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF time cost is outside the supported safety range"
+        );
+
+        let mut altered = envelope.clone();
+        altered.lanes = 9;
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            "Recovery KDF parallelism is outside the supported safety range"
+        );
+
+        const AUTH: &str =
+            "Recovery envelope authentication failed: wrong passphrase or damaged file";
+        assert_eq!(
+            err(Vault::from_recovery_envelope(
+                &envelope,
+                b"this passphrase is definitely wrong"
+            )),
+            AUTH
+        );
+
+        let mut altered = envelope.clone();
+        let mut wrapped = STANDARD.decode(&altered.wrapped_key_b64).unwrap();
+        wrapped[0] ^= 1;
+        altered.wrapped_key_b64 = STANDARD.encode(wrapped);
+        assert_eq!(
+            err(Vault::from_recovery_envelope(&altered, passphrase)),
+            AUTH,
+            "tampered ciphertext must surface as an authentication failure"
+        );
+    }
+
+    /// Why: the recovery KDF parameters are a resource-exhaustion boundary;
+    /// the documented bounds are exact (inclusive), so an attacker-controlled
+    /// envelope can neither freeze the machine with huge costs nor weaken
+    /// derivation with tiny ones.
+    #[test]
+    fn recovery_kdf_bounds_are_exact_and_inclusive() {
+        recovery_argon2(19 * 1024, 1, 1).unwrap();
+        recovery_argon2(512 * 1024, 10, 8).unwrap();
+        for (memory, reason) in [
+            (
+                19 * 1024 - 1,
+                "Recovery KDF memory cost is outside the supported safety range",
+            ),
+            (
+                512 * 1024 + 1,
+                "Recovery KDF memory cost is outside the supported safety range",
+            ),
+        ] {
+            assert_eq!(err(recovery_argon2(memory, 1, 1)), reason);
+        }
+        for time in [0, 11] {
+            assert_eq!(
+                err(recovery_argon2(19 * 1024, time, 1)),
+                "Recovery KDF time cost is outside the supported safety range"
+            );
+        }
+        for lanes in [0, 9] {
+            assert_eq!(
+                err(recovery_argon2(19 * 1024, 1, lanes)),
+                "Recovery KDF parallelism is outside the supported safety range"
+            );
+        }
+    }
+
+    /// Why: `open_value` is the decryption boundary; structurally broken
+    /// records must be refused as invalid, and a sealed value must only ever
+    /// open as the type it was sealed with — a silent coercion would corrupt
+    /// stored state.
+    #[test]
+    fn open_value_refuses_malformed_records_and_cross_type_reads() {
+        let vault = Vault::random();
+        assert_eq!(
+            vault
+                .open_value::<String>("ctx", b"short")
+                .unwrap_err()
+                .to_string(),
+            "Invalid encrypted record"
+        );
+        let mut wrong_version = vault.seal("ctx", &"payload").unwrap();
+        wrong_version[0] = 2;
+        assert_eq!(
+            vault
+                .open_value::<String>("ctx", &wrong_version)
+                .unwrap_err()
+                .to_string(),
+            "Invalid encrypted record"
+        );
+        let sealed = vault.seal("ctx", &"42").unwrap();
+        assert!(
+            vault.open_value::<u64>("ctx", &sealed).is_err(),
+            "a sealed string must not open as a number"
+        );
+    }
+
+    /// Why: the vault identifier is the credential-store account name and the
+    /// recovery salt; a missing file must fail with its own reason, an invalid
+    /// identifier must never reach the key layer, and incidental whitespace is
+    /// trimmed to the canonical id.
+    #[test]
+    fn vault_id_reads_trims_and_validates_the_workspace_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            vault_id(dir.path()).unwrap_err().to_string(),
+            "Vault identifier is missing"
+        );
+        write_new_private(&dir.path().join("vault-id"), b"not-a-uuid").unwrap();
+        assert_eq!(
+            vault_id(dir.path()).unwrap_err().to_string(),
+            "Invalid vault identifier"
+        );
+        let id = uuid::Uuid::new_v4().to_string();
+        fs::write(dir.path().join("vault-id"), format!("  {id}\n")).unwrap();
+        assert_eq!(vault_id(dir.path()).unwrap(), id);
+    }
+
+    /// Why: `write_new_private` is create-only so no code path can silently
+    /// clobber key material or a pinned vault identifier; an existing file
+    /// must be refused and left byte-identical.
+    #[test]
+    fn write_new_private_refuses_to_overwrite_and_leaves_data_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault-id");
+        write_new_private(&path, b"first").unwrap();
+        let error = write_new_private(&path, b"second").unwrap_err();
+        let io = error.downcast_ref::<std::io::Error>().expect("an io error");
+        assert_eq!(io.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+    }
+
+    /// Why: the instance lock is the single-writer guard for a workspace; it
+    /// must be free again after its holder drops, or a crashed run's lock
+    /// cleanup would leave the workspace permanently unusable.
+    #[test]
+    fn instance_lock_is_released_on_drop_and_reacquirable() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = InstanceLock::acquire(dir.path()).unwrap();
+        assert!(InstanceLock::acquire(dir.path()).is_err());
+        drop(first);
+        let _second = InstanceLock::acquire(dir.path()).unwrap();
+    }
+
+    /// Why: a symlinked lock file could redirect the single-writer guard to a
+    /// shared location and defeat mutual exclusion across workspaces; it must
+    /// be refused before any lock is taken.
+    #[cfg(windows)]
+    #[test]
+    fn instance_lock_refuses_a_symlinked_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.lock");
+        fs::write(&target, b"").unwrap();
+        if std::os::windows::fs::symlink_file(&target, dir.path().join("instance.lock")).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix symlink tests cover the same guard there.
+            return;
+        }
+        assert_eq!(
+            err(InstanceLock::acquire(dir.path())),
+            "Lock must not be a symlink"
+        );
+    }
+
+    /// Why: a symlinked data directory could redirect every secret in the
+    /// workspace to attacker-controlled storage; it must be refused before the
+    /// vault touches anything inside.
+    #[cfg(windows)]
+    #[test]
+    fn private_dir_refuses_a_symlinked_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real");
+        fs::create_dir_all(&target).unwrap();
+        if std::os::windows::fs::symlink_dir(&target, dir.path().join("linked")).is_err() {
+            // The platform forbids symlink creation without elevation; the
+            // unix symlink tests cover the same guard there.
+            return;
+        }
+        assert_eq!(
+            private_dir(&dir.path().join("linked"))
+                .unwrap_err()
+                .to_string(),
+            "Data directory must not be a symlink"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -724,15 +1104,46 @@ pub(crate) mod test_support {
     //! Test-only helpers shared by every module that exercises the OS
     //! credential store.
 
+    #[cfg(any(windows, target_os = "macos"))]
+    use zeroize::Zeroizing;
+
+    // Per-thread nesting depth for the credential-store lock: cleanup guards
+    // drop inside tests that already hold the lock, and re-acquiring the same
+    // OS file lock from the same thread would deadlock.
+    std::thread_local! {
+        static CREDENTIAL_LOCK_DEPTH: std::cell::Cell<u32> =
+            const { std::cell::Cell::new(0) };
+    }
+
+    /// RAII handle for one credential-store lock level on the calling thread.
+    /// Only the outermost handle owns the OS file lock.
+    pub(crate) struct CredentialStoreLock {
+        file: Option<std::fs::File>,
+    }
+
+    impl Drop for CredentialStoreLock {
+        /// Inputs: `self` — the handle. Output: none; releases the OS file
+        /// lock (when this level owns it) and lowers the nesting depth.
+        fn drop(&mut self) {
+            drop(self.file.take());
+            CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+
     /// Serializes OS credential-store access across tests: the store is one
     /// shared system resource and concurrent mint/read/delete sequences have
-    /// been observed to lose writes between parallel tests.
+    /// been observed to lose writes between parallel tests. Reentrant per
+    /// thread: a cleanup guard may drop inside an already-locked test without    /// deadlocking on the same thread.
     ///
     /// Acquire the credential-store serialization lock for the calling test.
-    /// Inputs: none. Output: a file handle holding an exclusive OS file lock
-    /// until drop. The lock is cross-process, so it also serializes nextest's
+    /// Inputs: none. Output: [`CredentialStoreLock`] held until drop. The
+    /// lock is cross-process, so it also serializes nextest's
     /// one-process-per-test execution of credential-store tests.
-    pub(crate) fn lock_credential_store() -> std::fs::File {
+    pub(crate) fn lock_credential_store() -> CredentialStoreLock {
+        if CREDENTIAL_LOCK_DEPTH.with(|depth| depth.get()) > 0 {
+            CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
+            return CredentialStoreLock { file: None };
+        }
         let path = std::env::temp_dir().join("rr-test-credential-store.lock");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -742,7 +1153,8 @@ pub(crate) mod test_support {
             .open(&path)
             .expect("open credential-store test lock");
         fs2::FileExt::lock_exclusive(&file).expect("credential-store test lock");
-        file
+        CREDENTIAL_LOCK_DEPTH.with(|depth| depth.set(1));
+        CredentialStoreLock { file: Some(file) }
     }
 
     /// One-shot in-process stand-in for the headless `RR_VAULT_PASSPHRASE`
@@ -753,16 +1165,152 @@ pub(crate) mod test_support {
     /// ones worker threads perform on their own threads — read it race-free.
     /// Windows and macOS never consult it: their `Vault::open` resolves the key
     /// from the OS credential store instead.
-    #[cfg(not(any(windows, target_os = "macos")))]
     pub(crate) static HEADLESS_PASSPHRASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
     /// Install the documented headless vault input for this test process.
     ///
     /// Inputs: none. Output: none; idempotent one-shot installation, so any
     /// number of tests and worker threads may call it.
-    #[cfg(not(any(windows, target_os = "macos")))]
     pub(crate) fn install_headless_passphrase() {
         let _ = HEADLESS_PASSPHRASE.set("rr-test-headless-vault-passphrase".to_owned());
+    }
+
+    // Thread-local live-OS-store opt-in: while held on the calling test
+    // thread, `Vault::open` drives the real OS credential store. Tests that
+    // assert live-store behavior must hold it; every other test derives the
+    // key hermetically and never touches the store.
+    std::thread_local! {
+        static LIVE_OS_CREDENTIAL_STORE: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
+    /// Guard that opts the calling test thread into the live OS credential
+    /// store for its duration.
+    pub(crate) struct LiveOsCredentialStore {
+        _private: (),
+    }
+
+    impl LiveOsCredentialStore {
+        /// Inputs: none. Output: `Self` — guard; the thread derives vault keys
+        /// from the live OS store until the guard drops.
+        pub(crate) fn acquire() -> Self {
+            LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.set(true));
+            Self { _private: () }
+        }
+    }
+
+    impl Drop for LiveOsCredentialStore {
+        fn drop(&mut self) {
+            LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.set(false));
+        }
+    }
+
+    /// Inputs: none. Output: `true` when the running test thread opted into    /// the live OS credential store.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) fn live_os_credential_store_active() -> bool {
+        LIVE_OS_CREDENTIAL_STORE.with(|flag| flag.get())
+    }
+
+    /// Deterministic passphrase for hermetic test vault derivation.
+    ///
+    /// Inputs: none. Output: `Zeroizing<String>` — the armed headless seam
+    /// value when installed, else a fixed test passphrase of sufficient length.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) fn test_vault_passphrase() -> Zeroizing<String> {
+        if let Some(pass) = HEADLESS_PASSPHRASE.get() {
+            return Zeroizing::new(pass.clone());
+        }
+        Zeroizing::new("rr-test-hermetic-vault-passphrase".to_owned())
+    }
+
+    /// Deletes a workspace's OS credentials on drop so tests never leak
+    /// Credential Manager entries. Leaked entries accumulate until `CredWrite`
+    /// fails with OS error 8 and flakes unrelated tests, so every test that
+    /// mints a workspace credential must hold one of these guards.
+    ///
+    /// Inputs: `dir` — workspace directory whose `vault-id` names the entries.
+    /// Output: guard that deletes the workspace vault key and audit-anchor
+    /// entries when dropped. A no-op on platforms without an OS store.
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) struct OsCredentialCleanup {
+        vault_id: Option<String>,
+        workspace: Option<std::path::PathBuf>,
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl OsCredentialCleanup {
+        /// Inputs: `dir` — workspace directory that will contain `vault-id`.
+        /// Output: `Self` — cleanup guard; the vault identity is resolved at
+        /// drop time, so the guard may be created before the workspace opens.
+        pub(crate) fn for_workspace(dir: &std::path::Path) -> Self {
+            Self {
+                vault_id: None,
+                workspace: Some(dir.to_path_buf()),
+            }
+        }
+
+        /// Inputs: `id` — vault identifier used as the credential account
+        /// name. Output: `Self` — cleanup guard bound to that identity.
+        pub(crate) fn from_vault_id(id: impl Into<String>) -> Self {
+            Self {
+                vault_id: Some(id.into()),
+                workspace: None,
+            }
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    impl Drop for OsCredentialCleanup {
+        fn drop(&mut self) {
+            let vault_id = match self.vault_id.take() {
+                Some(id) => id,
+                None => self
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| {
+                        std::fs::read_to_string(workspace.join("vault-id"))
+                            .unwrap_or_default()
+                            .trim()
+                            .to_owned()
+                    })
+                    .unwrap_or_default(),
+            };
+            if vault_id.is_empty() {
+                return;
+            }
+            // Serialize with the shared credential-store lock and remove both
+            // entries this workspace may have minted. Deleting an absent entry
+            // is harmless.
+            let _lock = lock_credential_store();
+            for service in [
+                "rejection-rejector.v1",
+                crate::audit_anchor::OS_AUDIT_ANCHOR_SERVICE,
+            ] {
+                let _ = keyring::Entry::new(service, &vault_id)
+                    .and_then(|entry| entry.delete_credential());
+            }
+        }
+    }
+
+    /// Cross-platform shape of [`OsCredentialCleanup`] on hosts without an OS
+    /// credential store: construction is cheap and dropping is a no-op, so
+    /// test code can hold the guard unconditionally.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub(crate) struct OsCredentialCleanup;
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    impl OsCredentialCleanup {
+        /// Inputs: `_dir` — workspace directory (unused without an OS store).
+        /// Output: `Self` — no-op guard.
+        pub(crate) fn for_workspace(_dir: &std::path::Path) -> Self {
+            Self
+        }
+
+        /// Inputs: `_id` — vault identifier (unused without an OS store).
+        /// Output: `Self` — no-op guard.
+        pub(crate) fn from_vault_id(_id: impl Into<String>) -> Self {
+            Self
+        }
     }
 }
 

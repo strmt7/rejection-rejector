@@ -27,6 +27,7 @@ foreach ($case in $cases) {
 
 
 def inline_powershell(path):
+    """Extract inline pwsh run blocks from one workflow YAML file."""
     shell = None
     block = None
     chunks = []
@@ -47,13 +48,17 @@ def inline_powershell(path):
 
 
 class PowerShellSyntaxTests(unittest.TestCase):
+    """PowerShell must parse without ever executing its bodies."""
+
     def test_release_workflow_blocks_are_discovered(self):
+        """The release workflow exposes the expected number of pwsh blocks."""
         blocks = inline_powershell(ROOT / ".github/workflows/release.yml")
         self.assertGreaterEqual(len(blocks), 10)
         self.assertTrue(any("Unsigned packaging requires NotSigned" in block for block in blocks))
 
     @unittest.skipUnless(PWSH, "PowerShell parser is exercised on the Windows CI runner")
     def test_operator_and_release_powershell_parse_without_execution(self):
+        """All operator scripts and workflow blocks pass the PS parser."""
         cases = [{"name": str(path.relative_to(ROOT)), "source": path.read_text(encoding="utf-8")}
                  for path in (ROOT / "scripts").glob("*.ps1")]
         for path in (ROOT / ".github/workflows").glob("*.yml"):

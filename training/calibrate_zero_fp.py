@@ -50,6 +50,51 @@ def load_scores(path: Path) -> list[dict]:
     return rows
 
 
+def counts_at(
+    negatives: list[dict], positives: list[dict], threshold: float
+) -> tuple[int, int]:
+    """Count FP/TP at one threshold.
+
+    Inputs: `negatives` — labeled negative scores; `positives` — labeled
+    positive scores; `threshold` — cutoff in [0, 1]. Output:
+    `(false_positives, true_positives)` as ints.
+    """
+    fp = sum(1 for r in negatives if r["rejection_probability"] >= threshold)
+    tp = sum(1 for r in positives if r["rejection_probability"] >= threshold)
+    return fp, tp
+
+
+def select_best(
+    negatives: list[dict], positives: list[dict], target_fp: int
+) -> tuple[dict, int]:
+    """Sweep thresholds and keep the FP-compliant one with maximal recall.
+
+    Inputs: `negatives`/`positives` — labeled scores; `target_fp` —
+    maximum acceptable observed false positives. Output: `(best, fp)` where
+    `best` is the winning candidate dict and `fp` is its int false-positive
+    count (kept typed apart from the float-valued report fields).
+    """
+    best: dict[str, float | int] | None = None
+    best_fp = 0
+    for threshold in [i / 1000 for i in range(0, 1001)]:
+        fp, tp = counts_at(negatives, positives, threshold)
+        if fp > target_fp:
+            continue
+        recall = tp / len(positives) if positives else 0.0
+        candidate = {
+            "threshold": threshold,
+            "true_positives": tp,
+            "false_positives": fp,
+            "recall": recall,
+        }
+        if best is None or candidate["recall"] > best["recall"]:
+            best = candidate
+            best_fp = fp
+    if best is None:
+        best = {"threshold": 1.01, "true_positives": 0, "false_positives": 0, "recall": 0.0}
+    return best, best_fp
+
+
 def calibrate(rows: list[dict], target_fp: int) -> dict:
     """Select the threshold meeting the FP target with maximal recall.
 
@@ -59,32 +104,28 @@ def calibrate(rows: list[dict], target_fp: int) -> dict:
     """
     positives = [r for r in rows if r["label"] == "rejection"]
     negatives = [r for r in rows if r["label"] != "rejection"]
-    best = None
-    for threshold in [i / 1000 for i in range(0, 1001)]:
-        fp = sum(1 for r in negatives if r["rejection_probability"] >= threshold)
-        tp = sum(1 for r in positives if r["rejection_probability"] >= threshold)
-        if fp > target_fp:
-            continue
-        recall = tp / len(positives) if positives else 0.0
-        candidate = {"threshold": threshold, "true_positives": tp, "false_positives": fp, "recall": recall}
-        if best is None or candidate["recall"] > best["recall"]:
-            best = candidate
-    if best is None:
-        best = {"threshold": 1.01, "true_positives": 0, "false_positives": 0, "recall": 0.0}
+    best, best_fp = select_best(negatives, positives, target_fp)
     best.update(
         {
             "positives": len(positives),
             "negatives": len(negatives),
             "target_false_positives": target_fp,
-            "false_positive_rate_upper_95": wilson_upper_bound(best["false_positives"], len(negatives)),
+            "false_positive_rate_upper_95": wilson_upper_bound(best_fp, len(negatives)),
         }
     )
     return best
 
 
 def main() -> int:
+    """Sweep thresholds on labeled scores and print the calibration report.
+
+    Inputs: argv (`--scores` JSONL, `--target-fp`, optional `--out`).
+    Output: exit status 0 on success, 2 when no score rows were read.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scores", type=Path, required=True, help="JSONL of label + rejection_probability")
+    parser.add_argument(
+        "--scores", type=Path, required=True, help="JSONL of label + rejection_probability"
+    )
     parser.add_argument("--target-fp", type=int, default=0)
     parser.add_argument("--out", type=Path, help="Optional report JSON output path")
     args = parser.parse_args()

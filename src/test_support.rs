@@ -63,7 +63,7 @@ impl MockServer {
                     continue;
                 };
                 let route = request.url().split('?').next().unwrap_or("").to_owned();
-                let mut raw = String::new();
+                let mut raw = String::default();
                 let _ = request.as_reader().read_to_string(&mut raw);
                 let body = if raw.is_empty() {
                     None
@@ -217,7 +217,7 @@ pub(crate) fn gmail_email_to(
         received_at: Utc::now(),
         message_id: format!("<{key}@example.invalid>"),
         references: vec![],
-        headers: Default::default(),
+        headers: std::collections::BTreeMap::default(),
         labels: vec![],
         body_complete: true,
     }
@@ -246,8 +246,8 @@ pub(crate) fn verified_analysis(settings: &Settings, email: &Email, body: &str) 
             confidence: 99,
             evidence: "We have decided not to move forward with your application.".into(),
             explanation: "Explicit negative hiring decision".into(),
-            company: String::new(),
-            position: String::new(),
+            company: String::default(),
+            position: String::default(),
             language: "en".into(),
         },
         verification: Some(Verification {
@@ -260,8 +260,8 @@ pub(crate) fn verified_analysis(settings: &Settings, email: &Email, body: &str) 
         }),
         model: settings.model.clone(),
         model_digest: settings.model_digest.clone().unwrap_or_default(),
-        verification_model: String::new(),
-        verification_model_digest: String::new(),
+        verification_model: String::default(),
+        verification_model_digest: String::default(),
         prompt_version: PROMPT_VERSION.into(),
         email_fingerprint: email.fingerprint(),
         verified_draft_hash: Some(hash(body)),
@@ -381,7 +381,6 @@ static HEADLESS_SEAM_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::At
 /// records the arming for test observation.
 pub(crate) fn headless_vault_seam() {
     HEADLESS_SEAM_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    #[cfg(not(any(windows, target_os = "macos")))]
     crate::vault::test_support::install_headless_passphrase();
 }
 
@@ -795,7 +794,7 @@ pub(crate) fn ollama_runtime(
     let digests: std::collections::HashMap<String, String> = models.iter().cloned().collect();
     let signature = signature.to_owned();
     MockServer::new(move |route, body| {
-        let body = body.unwrap_or(json!({}));
+        let body = body.unwrap_or_else(|| json!({}));
         let model = body["model"].as_str().unwrap_or("").to_owned();
         match route {
             "/api/version" => Some(version_ok()),
@@ -829,7 +828,7 @@ pub(crate) fn ollama_runtime(
                 *loaded.lock().unwrap() = Some(model);
                 let payload: Value =
                     serde_json::from_str(body["messages"][1]["content"].as_str().unwrap_or("{}"))
-                        .unwrap_or(json!({}));
+                        .unwrap_or_else(|_| json!({}));
                 let content = if payload.get("proposed_reply").is_some() {
                     verification_ok()
                 } else if payload.get("tone").is_some() {

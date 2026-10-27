@@ -57,7 +57,8 @@ def summarize(record: dict, now: float, stale_after: float = STALE_AFTER_SECONDS
         "rate_per_second": rate,
         "eta_seconds": eta,
         "age_seconds": age,
-        "stalled": age > stale_after or (status not in ("running", "complete") and age > stale_after),
+        "stalled": age > stale_after
+        or (status not in ("running", "complete") and age > stale_after),
     }
 
 
@@ -72,14 +73,22 @@ def load_heartbeat(path: Path) -> dict:
 
 
 def main() -> int:
+    """Run one probe or watch the heartbeat until interrupted.
+
+    Inputs: argv (command `probe` or `watch`, heartbeat path, watch
+    interval, staleness bound). Output: exit status 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("probe", "watch"))
     parser.add_argument("path", type=Path, help="heartbeat file written by the job")
-    parser.add_argument("--interval", type=float, default=10.0, help="watch polling interval in seconds")
+    parser.add_argument(
+        "--interval", type=float, default=10.0, help="watch polling interval in seconds"
+    )
     parser.add_argument("--stale-after", type=float, default=STALE_AFTER_SECONDS)
     args = parser.parse_args()
 
     def probe_once() -> dict:
+        """Load the heartbeat, print the merged view, and return it."""
         record = load_heartbeat(args.path)
         summary = summarize(record, time.time(), args.stale_after)
         view = {**record, **summary}

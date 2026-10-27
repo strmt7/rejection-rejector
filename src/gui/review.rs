@@ -37,54 +37,7 @@ impl App {
                 if !job.state.reviewable() {
                     ui.colored_label(AMBER, format!("This message is {}. Select another item.", job.state.label()));
                 }
-                let cards = ui.scope(|ui| { ui.columns(2, |cols| {
-                    Self::card(&mut cols[0], |ui| {
-                        ui.set_min_height(body_height + 125.0);
-                        ui.label(RichText::new("ORIGINAL EMAIL").small().color(MUTED));
-                        if let Some(email) = &job.email {
-                            ui.add(egui::Label::new(RichText::new(&email.subject).strong().size(18.0)).wrap());
-                            ui.add(egui::Label::new(RichText::new(&email.from).color(MUTED)).wrap());
-                            ui.label(RichText::new(email.received_at.with_timezone(&chrono::Local).format("%d %b %Y · %H:%M").to_string()).small().color(MUTED));
-                            ui.separator();
-                            egui::ScrollArea::vertical().id_salt("original_body").max_height(body_height).show(ui, |ui| {
-                                ui.add(egui::Label::new(&email.text).wrap().selectable(true));
-                            });
-                        } else {
-                            ui.label("The original has not been fetched. Regenerate to retry processing.");
-                        }
-                    });
-                    Self::card(&mut cols[1], |ui| {
-                        ui.set_min_height(body_height + 125.0);
-                        let response_label_id = ui.horizontal_wrapped(|ui| {
-                            let label =
-                                ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));
-                            if self.dirty {
-                                ui.colored_label(AMBER, "Unsaved");
-                            }
-                            label.id
-                        }).inner;
-                        ui.add(egui::Label::new(RichText::new("Assertive. Specific. Professional.").strong().size(18.0)).wrap());
-                        if let Some(email) = &job.email {
-                            ui.add(egui::Label::new(RichText::new(format!("To: {}", email.recipient().unwrap_or_else(|_| "Invalid recipient".into()))).color(MUTED)).wrap());
-                        }
-                        ui.separator();
-                        egui::ScrollArea::vertical().id_salt("reply_body").max_height(body_height).show(ui, |ui| {
-                            let response = ui
-                                .add_enabled(
-                                    available,
-                                    egui::TextEdit::multiline(&mut self.editor)
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(10)
-                                        .font(egui::TextStyle::Body),
-                                )
-                                .labelled_by(response_label_id);
-                            if response.changed() {
-                                self.dirty = true;
-                            }
-                        });
-                        ui.label(RichText::new(format!("{} words", self.editor.split_whitespace().count())).small().color(MUTED));
-                    });
-                }); }).response;
+            let cards = self.review_cards(ui, job, body_height, available);
                 if !bound {
                     ui.colored_label(AMBER, "The selected message changed while you were editing. Your text is retained, but cannot be saved or sent to this message.");
                 }
@@ -114,40 +67,7 @@ impl App {
                         format!("Sending blocked: {}", send_blocks.join("; ")),
                     );
                 }
-                let actions = ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(available && self.dirty, egui::Button::new("Save changes")).clicked() {
-                        match crate::mail::validate_draft(&self.editor) {
-                            Ok(()) => {
-                                self.local_error.clear();
-                                self.worker.command(Command::Edit { id: job.id.clone(), revision: job.revision, body: self.editor.clone() });
-                            },
-                            Err(error) => self.local_error = error.to_string(),
-                        }
-                    }
-                    if ui.add_enabled(available && !self.dirty && !s.demo, egui::Button::new("Regenerate with local AI")).clicked() {
-                        self.worker.command(Command::Regenerate { id: job.id.clone(), revision: job.revision });
-                    }
-                    if ui.add_enabled(available && !self.dirty, egui::Button::new("Dismiss")).clicked() {
-                        self.worker.command(Command::Dismiss { id: job.id.clone(), revision: job.revision });
-                    }
-                    let can_send = !self.modal_open()
-                        && send_gate_eligible(
-                            job,
-                            &crate::engine::SendGateContext {
-                                editor_text: &self.editor,
-                                editor_bound: bound,
-                                dirty: self.dirty,
-                                hard_blocks: &send_blocks,
-                                busy: !s.busy.is_empty(),
-                                sending_enabled: s.settings.sending_enabled,
-                                demo: s.demo,
-                                paused: self.worker.paused.load(Ordering::SeqCst),
-                            },
-                        );
-                    if ui.add_enabled(can_send, egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT)).clicked() {
-                        self.send_confirmation = Some(job.clone());
-                    }
-                }).response;
+            let actions = self.review_actions(ui, job, bound, &send_blocks, s, available);
                 if self.screenshot.is_some() && self.frames > 10 {
                     let geometry = (cards.rect, actions.rect, ui.clip_rect());
                     let detail = format!(
@@ -165,6 +85,196 @@ impl App {
             });
             });
         });
+    }
+
+    /// Draw the two review cards: original email and reply editor.
+    ///
+    /// Inputs: `ui` — egui ui to draw into; `job` — selected job; `body_height` — body viewport
+    /// height; `available` — whether editing is available. Output: `egui::Response` — the cards
+    /// scope response for geometry checks.
+    fn review_cards(
+        &mut self,
+        ui: &mut egui::Ui,
+        job: &Job,
+        body_height: f32,
+        available: bool,
+    ) -> egui::Response {
+        ui.scope(|ui| {
+            ui.columns(2, |cols| {
+                Self::card(&mut cols[0], |ui| {
+                    ui.set_min_height(body_height + 125.0);
+                    ui.label(RichText::new("ORIGINAL EMAIL").small().color(MUTED));
+                    if let Some(email) = &job.email {
+                        ui.add(
+                            egui::Label::new(RichText::new(&email.subject).strong().size(18.0))
+                                .wrap(),
+                        );
+                        ui.add(egui::Label::new(RichText::new(&email.from).color(MUTED)).wrap());
+                        ui.label(
+                            RichText::new(
+                                email
+                                    .received_at
+                                    .with_timezone(&chrono::Local)
+                                    .format("%d %b %Y · %H:%M")
+                                    .to_string(),
+                            )
+                            .small()
+                            .color(MUTED),
+                        );
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .id_salt("original_body")
+                            .max_height(body_height)
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(&email.text).wrap().selectable(true));
+                            });
+                    } else {
+                        ui.label(
+                            "The original has not been fetched. Regenerate to retry processing.",
+                        );
+                    }
+                });
+                Self::card(&mut cols[1], |ui| {
+                    ui.set_min_height(body_height + 125.0);
+                    let response_label_id = ui
+                        .horizontal_wrapped(|ui| {
+                            let label =
+                                ui.label(RichText::new("YOUR RESPONSE").small().color(MUTED));
+                            if self.dirty {
+                                ui.colored_label(AMBER, "Unsaved");
+                            }
+                            label.id
+                        })
+                        .inner;
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("Assertive. Specific. Professional.")
+                                .strong()
+                                .size(18.0),
+                        )
+                        .wrap(),
+                    );
+                    if let Some(email) = &job.email {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "To: {}",
+                                    email
+                                        .recipient()
+                                        .unwrap_or_else(|_| "Invalid recipient".into())
+                                ))
+                                .color(MUTED),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("reply_body")
+                        .max_height(body_height)
+                        .show(ui, |ui| {
+                            let response = ui
+                                .add_enabled(
+                                    available,
+                                    egui::TextEdit::multiline(&mut self.editor)
+                                        .desired_width(f32::INFINITY)
+                                        .desired_rows(10)
+                                        .font(egui::TextStyle::Body),
+                                )
+                                .labelled_by(response_label_id);
+                            if response.changed() {
+                                self.dirty = true;
+                            }
+                        });
+                    ui.label(
+                        RichText::new(format!("{} words", self.editor.split_whitespace().count()))
+                            .small()
+                            .color(MUTED),
+                    );
+                });
+            });
+        })
+        .response
+    }
+
+    /// Draw the review action row and its send gate.
+    ///
+    /// Inputs: `ui` — egui ui to draw into; `job` — selected job; `bound` — whether the editor is
+    /// bound to the job; `send_blocks` — mail-level sending blocks; `s` — worker snapshot;
+    /// `available` — whether actions are available. Output: `egui::Response` — the actions row
+    /// response for geometry checks.
+    fn review_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        job: &Job,
+        bound: bool,
+        send_blocks: &[String],
+        s: &Snapshot,
+        available: bool,
+    ) -> egui::Response {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(available && self.dirty, egui::Button::new("Save changes"))
+                .clicked()
+            {
+                match crate::mail::validate_draft(&self.editor) {
+                    Ok(()) => {
+                        self.local_error.clear();
+                        self.worker.command(Command::Edit {
+                            id: job.id.clone(),
+                            revision: job.revision,
+                            body: self.editor.clone(),
+                        });
+                    }
+                    Err(error) => self.local_error = error.to_string(),
+                }
+            }
+            if ui
+                .add_enabled(
+                    available && !self.dirty && !s.demo,
+                    egui::Button::new("Regenerate with local AI"),
+                )
+                .clicked()
+            {
+                self.worker.command(Command::Regenerate {
+                    id: job.id.clone(),
+                    revision: job.revision,
+                });
+            }
+            if ui
+                .add_enabled(available && !self.dirty, egui::Button::new("Dismiss"))
+                .clicked()
+            {
+                self.worker.command(Command::Dismiss {
+                    id: job.id.clone(),
+                    revision: job.revision,
+                });
+            }
+            let can_send = !self.modal_open()
+                && send_gate_eligible(
+                    job,
+                    &crate::engine::SendGateContext {
+                        editor_text: &self.editor,
+                        editor_bound: bound,
+                        dirty: self.dirty,
+                        hard_blocks: send_blocks,
+                        busy: !s.busy.is_empty(),
+                        sending_enabled: s.settings.sending_enabled,
+                        demo: s.demo,
+                        paused: self.worker.paused.load(Ordering::SeqCst),
+                    },
+                );
+            if ui
+                .add_enabled(
+                    can_send,
+                    egui::Button::new(RichText::new("Review & send").color(BG).strong()).fill(MINT),
+                )
+                .clicked()
+            {
+                self.send_confirmation = Some(job.clone());
+            }
+        })
+        .response
     }
 }
 

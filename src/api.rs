@@ -17,12 +17,35 @@ use std::{
 };
 use tiny_http::{Header, Method, Response, Server};
 
+/// Version of the v1 local API contract.
+///
+/// Inputs: none (constant). Output: `u32` — the version carried in every
+/// response envelope.
 pub const API_VERSION: u32 = 1;
+/// Bundled OpenAPI document for the v1 API.
+///
+/// Inputs: none (constant). Output: `&str` — the `docs/openapi-v1.json`
+/// contract text served with the API.
 pub const OPENAPI_DOCUMENT: &str = include_str!("../docs/openapi-v1.json");
+/// Media type for JSON API responses.
+///
+/// Inputs: none (constant). Output: `&str` — `application/json; charset=utf-8`.
 pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
+/// Media type for the OpenMetrics exposition.
+///
+/// Inputs: none (constant). Output: `&str` — the metrics content type served
+/// by the API.
 pub const OPENMETRICS_CONTENT_TYPE: &str =
     "application/openmetrics-text; version=1.0.0; charset=utf-8";
+/// Burst allowance of the API token-bucket rate limit.
+///
+/// Inputs: none (constant). Output: `u32` — requests admitted above the
+/// sustained rate.
 pub const API_RATE_LIMIT_BURST: u32 = 30;
+/// Sustained refill rate of the API rate limiter.
+///
+/// Inputs: none (constant). Output: `f64` — requests per second admitted per
+/// client.
 pub const API_RATE_LIMIT_PER_SECOND: f64 = 2.0;
 /// Deadline for one state-changing write to finish on the worker.
 ///
@@ -420,170 +443,11 @@ pub fn start_with_verifier(
                 Err(_) => break,
             };
             let request_id = uuid::Uuid::new_v4().to_string();
-            let auth = unique_header(request.headers(), "Authorization");
-            let host = unique_header(request.headers(), "Host");
-            let origin_present = request.headers().iter().any(|h| h.field.equiv("Origin"));
-            let origin = unique_header(request.headers(), "Origin");
-            let page = is_web_page(request.method(), request.url());
-            let write_route = crate::web::is_write_route(request.url());
-            let (status, body, content_type) = if !rate_limiter.allow(Instant::now()) {
-                (
-                    429,
-                    error_body(
-                        "rate_limited",
-                        "The local integration API request rate exceeded its bounded burst",
-                        true,
-                        &request_id,
-                    )
-                    .to_string(),
-                    JSON_CONTENT_TYPE,
-                )
-            } else if host != Some(format!("127.0.0.1:{port}").as_str())
-                || !origin_policy_allows(
-                    request.method(),
-                    request.url(),
-                    origin,
-                    origin_present,
-                    port,
-                )
-                || (!page && !authorized(auth, &verifier))
-            {
-                (
-                    401,
-                    error_body(
-                        "unauthorized",
-                        "Authentication, Host or Origin policy rejected the request",
-                        false,
-                        &request_id,
-                    )
-                    .to_string(),
-                    JSON_CONTENT_TYPE,
-                )
-            } else if page {
-                (
-                    200,
-                    crate::web::WEB_PAGE_HTML.to_string(),
-                    crate::web::WEB_PAGE_CONTENT_TYPE,
-                )
-            } else if write_route {
-                if request.method() == &Method::Post {
-                    let (status, body) = handle_write(&mut request, &request_id, &commands);
-                    (status, body, JSON_CONTENT_TYPE)
-                } else {
-                    (
-                        405,
-                        error_body(
-                            "method_not_allowed",
-                            "This state-changing endpoint accepts POST only",
-                            false,
-                            &request_id,
-                        )
-                        .to_string(),
-                        JSON_CONTENT_TYPE,
-                    )
-                }
-            } else if request.method() != &Method::Get {
-                (
-                    405,
-                    error_body(
-                        "method_not_allowed",
-                        "The integration API is read-only",
-                        false,
-                        &request_id,
-                    )
-                    .to_string(),
-                    JSON_CONTENT_TYPE,
-                )
-            } else if request.url().len() > 2000 || !request.url().starts_with("/v1/") {
-                (
-                    404,
-                    error_body("route_not_found", "Unknown API route", false, &request_id)
-                        .to_string(),
-                    JSON_CONTENT_TYPE,
-                )
-            } else if request.url() == "/v1/metrics/openmetrics" {
-                let (tx, rx) = bounded(1);
-                if commands
-                    .try_send(Command::OpenMetrics { reply: tx })
-                    .is_err()
-                {
-                    (
-                        503,
-                        error_body(
-                            "worker_busy",
-                            "The worker command queue is busy",
-                            true,
-                            &request_id,
-                        )
-                        .to_string(),
-                        JSON_CONTENT_TYPE,
-                    )
-                } else {
-                    match rx.recv_timeout(Duration::from_secs(3)) {
-                        Ok(text) => (200, text, OPENMETRICS_CONTENT_TYPE),
-                        Err(_) => (
-                            503,
-                            error_body(
-                                "worker_timeout",
-                                "The worker did not answer before the local API deadline",
-                                true,
-                                &request_id,
-                            )
-                            .to_string(),
-                            JSON_CONTENT_TYPE,
-                        ),
-                    }
-                }
-            } else if let Some(body) = direct_get(request.url(), &pulse) {
-                (200, body.to_string(), JSON_CONTENT_TYPE)
-            } else {
-                let (tx, rx) = bounded(1);
-                if commands
-                    .try_send(Command::Api {
-                        path: request.url().into(),
-                        reply: tx,
-                    })
-                    .is_err()
-                {
-                    (
-                        503,
-                        error_body(
-                            "worker_busy",
-                            "The worker command queue is busy",
-                            true,
-                            &request_id,
-                        )
-                        .to_string(),
-                        JSON_CONTENT_TYPE,
-                    )
-                } else {
-                    match rx.recv_timeout(Duration::from_secs(3)) {
-                        Ok(data) if data.get("error").is_some() => (
-                            400,
-                            error_body(
-                                "invalid_request",
-                                "The request was invalid or the requested resource is unavailable",
-                                false,
-                                &request_id,
-                            )
-                            .to_string(),
-                            JSON_CONTENT_TYPE,
-                        ),
-                        Ok(data) => (200, data.to_string(), JSON_CONTENT_TYPE),
-                        Err(_) => (
-                            503,
-                            error_body(
-                                "worker_timeout",
-                                "The worker did not answer before the local API deadline",
-                                true,
-                                &request_id,
-                            )
-                            .to_string(),
-                            JSON_CONTENT_TYPE,
-                        ),
-                    }
-                }
-            };
+            let (status, body, content_type) =
+                match guard_request(&request, &request_id, &mut rate_limiter, port, &verifier) {
+                    Some(rejection) => rejection,
+                    None => route_request(&mut request, &request_id, &commands, &pulse),
+                };
             let response = finalize_response(
                 body,
                 status,
@@ -598,6 +462,190 @@ pub fn start_with_verifier(
         }
     });
     Ok(port)
+}
+
+/// Compose one JSON rejection response.
+///
+/// Inputs: `status` — HTTP status; `code` — stable error code; `message` —
+/// operator-facing text; `retryable` — whether the client may retry;
+/// `request_id` — correlation id. Output: the wire response triple.
+fn json_error(
+    status: u16,
+    code: &str,
+    message: &str,
+    retryable: bool,
+    request_id: &str,
+) -> (u16, String, &'static str) {
+    (
+        status,
+        error_body(code, message, retryable, request_id).to_string(),
+        JSON_CONTENT_TYPE,
+    )
+}
+
+/// Apply the rate limit and the Host, Origin and authentication policies.
+///
+/// Inputs: `request` — received request; `request_id` — correlation id;
+/// `rate_limiter` — per-listener token bucket; `port` — the port the listener
+/// actually holds; `verifier` — API token verifier. Output: `Some` wire
+/// response when the request is refused, `None` when it may proceed.
+fn guard_request(
+    request: &tiny_http::Request,
+    request_id: &str,
+    rate_limiter: &mut RateLimiter,
+    port: u16,
+    verifier: &ApiTokenVerifier,
+) -> Option<(u16, String, &'static str)> {
+    let auth = unique_header(request.headers(), "Authorization");
+    let host = unique_header(request.headers(), "Host");
+    let origin_present = request.headers().iter().any(|h| h.field.equiv("Origin"));
+    let origin = unique_header(request.headers(), "Origin");
+    let page = is_web_page(request.method(), request.url());
+    if !rate_limiter.allow(Instant::now()) {
+        Some(json_error(
+            429,
+            "rate_limited",
+            "The local integration API request rate exceeded its bounded burst",
+            true,
+            request_id,
+        ))
+    } else if host != Some(format!("127.0.0.1:{port}").as_str())
+        || !origin_policy_allows(
+            request.method(),
+            request.url(),
+            origin,
+            origin_present,
+            port,
+        )
+        || (!page && !authorized(auth, verifier))
+    {
+        Some(json_error(
+            401,
+            "unauthorized",
+            "Authentication, Host or Origin policy rejected the request",
+            false,
+            request_id,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Route one admitted request to its page, write or read handler.
+///
+/// Inputs: `request` — admitted request; `request_id` — correlation id;
+/// `commands` — worker channel; `pulse` — worker pulse for direct reads.
+/// Output: the wire response triple.
+fn route_request(
+    request: &mut tiny_http::Request,
+    request_id: &str,
+    commands: &Sender<Command>,
+    pulse: &WorkerPulse,
+) -> (u16, String, &'static str) {
+    if is_web_page(request.method(), request.url()) {
+        return (
+            200,
+            crate::web::WEB_PAGE_HTML.to_string(),
+            crate::web::WEB_PAGE_CONTENT_TYPE,
+        );
+    }
+    if crate::web::is_write_route(request.url()) {
+        return if request.method() == &Method::Post {
+            let (status, body) = handle_write(request, request_id, commands);
+            (status, body, JSON_CONTENT_TYPE)
+        } else {
+            json_error(
+                405,
+                "method_not_allowed",
+                "This state-changing endpoint accepts POST only",
+                false,
+                request_id,
+            )
+        };
+    }
+    if request.method() != &Method::Get {
+        return json_error(
+            405,
+            "method_not_allowed",
+            "The integration API is read-only",
+            false,
+            request_id,
+        );
+    }
+    if request.url().len() > 2000 || !request.url().starts_with("/v1/") {
+        return json_error(
+            404,
+            "route_not_found",
+            "Unknown API route",
+            false,
+            request_id,
+        );
+    }
+    if request.url() == "/v1/metrics/openmetrics" {
+        return match worker_call(commands, |reply| Command::OpenMetrics { reply }, request_id) {
+            Ok(text) => (200, text, OPENMETRICS_CONTENT_TYPE),
+            Err((status, body)) => (status, body, JSON_CONTENT_TYPE),
+        };
+    }
+    if let Some(body) = direct_get(request.url(), pulse) {
+        return (200, body.to_string(), JSON_CONTENT_TYPE);
+    }
+    match worker_call(
+        commands,
+        |reply| Command::Api {
+            path: request.url().into(),
+            reply,
+        },
+        request_id,
+    ) {
+        Ok(data) if data.get("error").is_some() => json_error(
+            400,
+            "invalid_request",
+            "The request was invalid or the requested resource is unavailable",
+            false,
+            request_id,
+        ),
+        Ok(data) => (200, data.to_string(), JSON_CONTENT_TYPE),
+        Err((status, body)) => (status, body, JSON_CONTENT_TYPE),
+    }
+}
+
+/// Send one worker command and await its bounded reply.
+///
+/// Inputs: `commands` — worker channel; `build` — wraps the reply sender into
+/// the command; `request_id` — correlation id. Output: `Ok(T)` with the
+/// worker reply, or the `(status, body)` wire rejection for a busy queue or
+/// an expired deadline.
+fn worker_call<T: Send + 'static>(
+    commands: &Sender<Command>,
+    build: impl FnOnce(Sender<T>) -> Command,
+    request_id: &str,
+) -> Result<T, (u16, String)> {
+    let (tx, rx) = bounded(1);
+    if commands.try_send(build(tx)).is_err() {
+        return Err((
+            503,
+            error_body(
+                "worker_busy",
+                "The worker command queue is busy",
+                true,
+                request_id,
+            )
+            .to_string(),
+        ));
+    }
+    rx.recv_timeout(Duration::from_secs(3)).map_err(|_| {
+        (
+            503,
+            error_body(
+                "worker_timeout",
+                "The worker did not answer before the local API deadline",
+                true,
+                request_id,
+            )
+            .to_string(),
+        )
+    })
 }
 
 /// Backwards-compatible library entry point. The supplied plaintext token is
@@ -866,7 +914,7 @@ mod tests {
             assert_csp(&response);
             let body: serde_json::Value = response.json().unwrap();
             assert_eq!(body["error"]["code"], "unauthorized");
-            assert_eq!(body["error"]["retryable"], false);
+            assert!(!body["error"]["retryable"].as_bool().unwrap());
         }
         // why: the worker channel must still be empty — nothing was dispatched.
         assert!(receiver.try_recv().is_err());
@@ -941,7 +989,7 @@ mod tests {
             body["request_id"].as_str().unwrap().len(),
             "550e8400-e29b-41d4-a716-446655440000".len()
         );
-        assert_eq!(body["accepted"], true);
+        assert!(body["accepted"].as_bool().unwrap());
         assert_eq!(body["operation"]["kind"], "edit_draft");
         handle.join().unwrap();
         stop.store(true, Ordering::SeqCst);
@@ -982,7 +1030,7 @@ mod tests {
         assert_csp(&response);
         let body: serde_json::Value = response.json().unwrap();
         assert_eq!(body["error"]["code"], "confirm_reply_mismatch");
-        assert_eq!(body["error"]["retryable"], false);
+        assert!(!body["error"]["retryable"].as_bool().unwrap());
         handle.join().unwrap();
         stop.store(true, Ordering::SeqCst);
     }
@@ -1145,9 +1193,9 @@ mod tests {
     fn direct_liveness_and_openapi_routes_are_self_contained() {
         let pulse = WorkerPulse::new();
         let live = direct_get("/v1/live", &pulse).unwrap();
-        assert_eq!(live["live"], true);
-        assert_eq!(live["api_thread_live"], true);
-        assert_eq!(live["worker_responsive"], true);
+        assert!(live["live"].as_bool().unwrap());
+        assert!(live["api_thread_live"].as_bool().unwrap());
+        assert!(live["worker_responsive"].as_bool().unwrap());
         assert_eq!(live["worker"]["schema_version"], 1);
         assert_eq!(live["api_version"], API_VERSION);
         assert_eq!(live["api_contract_sha256"].as_str().unwrap().len(), 64);
@@ -1241,7 +1289,7 @@ mod tests {
         assert_eq!(body["api_version"], API_VERSION);
         assert_eq!(body["request_id"], "request-123");
         assert_eq!(body["error"]["code"], "worker_busy");
-        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["retryable"].as_bool().unwrap());
         assert_eq!(body["error"]["message"], "Synthetic");
     }
 
@@ -1292,7 +1340,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
-        let mut response = String::new();
+        let mut response = String::default();
         let _ = stream.read_to_string(&mut response);
         response
     }
@@ -1376,7 +1424,7 @@ mod tests {
         assert_csp(&response);
         let body: serde_json::Value = response.json().unwrap();
         assert_eq!(body["error"]["code"], "rate_limited");
-        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["retryable"].as_bool().unwrap());
         stop.store(true, Ordering::SeqCst);
     }
 
@@ -1399,7 +1447,7 @@ mod tests {
         assert_eq!(late.status().as_u16(), 503);
         let body: serde_json::Value = late.json().unwrap();
         assert_eq!(body["error"]["code"], "worker_timeout");
-        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["retryable"].as_bool().unwrap());
         // Queue full: writes must fail fast without waiting the write deadline.
         let write = client
             .post(format!("http://127.0.0.1:{port}/v1/commands/dismiss"))
@@ -1410,7 +1458,7 @@ mod tests {
         assert_eq!(write.status().as_u16(), 503);
         let body: serde_json::Value = write.json().unwrap();
         assert_eq!(body["error"]["code"], "worker_busy");
-        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["retryable"].as_bool().unwrap());
         // Metrics dispatches are bounded the same way.
         let metrics = client
             .get(format!("http://127.0.0.1:{port}/v1/metrics/openmetrics"))
@@ -1462,7 +1510,7 @@ mod tests {
         assert_eq!(response.status().as_u16(), 400);
         let body: serde_json::Value = response.json().unwrap();
         assert_eq!(body["error"]["code"], "invalid_request");
-        assert_eq!(body["error"]["retryable"], false);
+        assert!(!body["error"]["retryable"].as_bool().unwrap());
         handle.join().unwrap();
         stop.store(true, Ordering::SeqCst);
 
@@ -1657,7 +1705,7 @@ mod tests {
         assert_eq!(response.status().as_u16(), 503);
         let body: serde_json::Value = response.json().unwrap();
         assert_eq!(body["error"]["code"], "worker_timeout");
-        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["retryable"].as_bool().unwrap());
         stop.store(true, Ordering::SeqCst);
     }
 }
