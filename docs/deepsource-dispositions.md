@@ -119,6 +119,27 @@ most 15 (`src/bin/rr.rs` `main` 144→1, `src/worker.rs` `run` 112→14,
 `src/store.rs` `open` 38→9, `src/worker.rs` `handle_api_write` 37→15,
 `src/store.rs` `verify_backup_file` 35→11, `src/worker.rs` `kind` 34→14).
 
+## Dashboard suppression rules
+
+The dispositions above are also enforced on the DeepSource dashboard as
+scoped ignore rules (created through the official MCP `create_ignore_rule`
+tool with reasons citing this document), so the open-findings list stays
+honest without hiding anything else:
+
+| Scope | Shortcodes |
+|---|---|
+| `src/store.rs`, `src/oauth.rs`, `src/gmail.rs`, `docs/INTEGRATION.md` | `SCT-A000` (file-level) |
+| `src/recovery.rs`, `src/oauth.rs`, `src/recovery/restore.rs`, `tests/decision_protocol.rs` | `RS-E1011` (file-level) |
+| `src/worker.rs`, `src/bin/rr.rs`, `src/gmail.rs` | `RS-E1015` (file-level) |
+| `training/probe_llm_limits.py` | `BAN-B310` (file-level) |
+| `src/mail.rs` | `RS-W1217` (file-level) |
+| repository-wide | `RS-A1008` (`Default` delegating to `Self::new()` is the clippy-required idiom) |
+
+File-level scoping keeps every rule active for all other files: a real
+secret, an unsafe drop, or a unit-type mistake anywhere else is still
+reported. A new occurrence of one of these shortcodes in a listed file must
+be re-reviewed against this document before suppression covers it.
+
 ## Review loop
 
 1. Push the change and wait for the DeepSource statuses on the exact commit
