@@ -1008,7 +1008,7 @@ mod tests {
     /// double's inlined literals) together so values carrying spaces survive.
     fn split_command_tokens(args: &str) -> Vec<String> {
         let mut tokens = Vec::new();
-        let mut current = String::new();
+        let mut current = String::default();
         let mut quoted = false;
         for ch in args.chars() {
             match ch {
@@ -1138,6 +1138,111 @@ mod tests {
             Self::start_with_fault(messages, None)
         }
 
+        /// The injected protocol fault's canned reply for one tagged command.
+        ///
+        /// Inputs: `fault` - the scripted fault; `tag` - the command tag;
+        /// `upper` - the uppercased command text. Output: `Some(reply)` when
+        /// the fault applies to this command, `None` otherwise.
+        fn canned_fault_reply(fault: &Option<ImapFault>, tag: &str, upper: &str) -> Option<String> {
+            match fault {
+                Some(ImapFault::RefuseLogin) if upper.starts_with("LOGIN") => {
+                    Some(format!("{tag} NO [AUTHENTICATIONFAILED] login refused\r\n"))
+                }
+                Some(ImapFault::DenySelect) if upper.starts_with("SELECT") => {
+                    Some(format!("{tag} NO select refused\r\n"))
+                }
+                Some(ImapFault::BadSearch)
+                    if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") =>
+                {
+                    Some(format!("{tag} BAD search refused\r\n"))
+                }
+                Some(ImapFault::FailFetch)
+                    if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") =>
+                {
+                    Some(format!("{tag} NO fetch refused\r\n"))
+                }
+                _ => None,
+            }
+        }
+
+        /// Render one FETCH response for the scripted mailbox.
+        ///
+        /// Inputs: `messages` - the scripted (uid, body) mailbox; `tag` - the
+        /// command tag; `rest` - the command text after the tag. Output: the
+        /// exact response bytes (literal-framed bodies plus the tagged OK).
+        fn fetch_reply(messages: &[(u32, String)], tag: &str, rest: &str) -> Vec<u8> {
+            let args = rest
+                .strip_prefix("UID FETCH")
+                .or_else(|| rest.strip_prefix("FETCH"))
+                .unwrap_or(rest);
+            let spec = args.split_whitespace().next().unwrap_or("*");
+            let selected: Vec<_> = messages
+                .iter()
+                .filter(|(u, _)| uid_spec_matches(spec, *u))
+                .collect();
+            let mut out: Vec<u8> = Vec::new();
+            for (i, (uid, body)) in selected.into_iter().enumerate() {
+                out.extend_from_slice(
+                    format!(
+                        "* {} FETCH (UID {} BODY[] {{{}}}\r\n",
+                        i + 1,
+                        uid,
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+                out.extend_from_slice(body.as_bytes());
+                out.extend_from_slice(b")\r\n");
+            }
+            out.extend_from_slice(format!("{tag} OK FETCH done\r\n").as_bytes());
+            out
+        }
+
+        /// Write the tagged reply for one non-faulted IMAP command.
+        ///
+        /// Inputs: `sock` - the connection; `messages` - the scripted mailbox;
+        /// `tag`/`rest`/`upper` - the parsed command. Output: `true` to keep
+        /// reading commands, `false` when the session must end (LOGOUT, or a
+        /// FETCH write failure - the other arms ignore write errors exactly as
+        /// before).
+        fn write_reply(
+            sock: &mut std::net::TcpStream,
+            messages: &[(u32, String)],
+            tag: &str,
+            rest: &str,
+            upper: &str,
+        ) -> bool {
+            if upper.starts_with("LOGOUT") {
+                let _ = sock.write_all(format!("* BYE\r\n{tag} OK LOGOUT done\r\n").as_bytes());
+                return false;
+            }
+            if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") {
+                let out = Self::fetch_reply(messages, tag, rest);
+                return sock.write_all(&out).is_ok();
+            }
+            let reply = if upper.starts_with("LOGIN") {
+                format!("{tag} OK LOGIN done\r\n")
+            } else if upper.starts_with("SELECT") {
+                let next = messages.last().map(|m| m.0 + 1).unwrap_or(1);
+                format!(
+                    "* {count} EXISTS\r\n* OK [UIDVALIDITY 1]\r\n* OK [UIDNEXT {next}]\r\n* FLAGS (\\Seen)\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK [READ-WRITE] SELECT done\r\n",
+                    count = messages.len(),
+                )
+            } else if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") {
+                let ids = messages
+                    .iter()
+                    .filter(|(u, b)| search_matches(rest, *u, b))
+                    .map(|(u, _)| u.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("* SEARCH {ids}\r\n{tag} OK SEARCH done\r\n")
+            } else {
+                format!("{tag} OK done\r\n")
+            };
+            let _ = sock.write_all(reply.as_bytes());
+            true
+        }
+
         fn start_with_fault(messages: Vec<(u32, String)>, fault: Option<ImapFault>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake imap");
             let port = listener.local_addr().expect("addr").port();
@@ -1167,86 +1272,13 @@ mod tests {
                             None => (line.clone(), String::default()),
                         };
                         let upper = rest.to_uppercase();
-                        let fault_reply = match fault {
-                            Some(ImapFault::RefuseLogin) if upper.starts_with("LOGIN") => {
-                                Some(format!("{tag} NO [AUTHENTICATIONFAILED] login refused\r\n"))
-                            }
-                            Some(ImapFault::DenySelect) if upper.starts_with("SELECT") => {
-                                Some(format!("{tag} NO select refused\r\n"))
-                            }
-                            Some(ImapFault::BadSearch)
-                                if upper.starts_with("UID SEARCH")
-                                    || upper.starts_with("SEARCH") =>
-                            {
-                                Some(format!("{tag} BAD search refused\r\n"))
-                            }
-                            Some(ImapFault::FailFetch)
-                                if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") =>
-                            {
-                                Some(format!("{tag} NO fetch refused\r\n"))
-                            }
-                            _ => None,
-                        };
+                        let fault_reply = Self::canned_fault_reply(&fault, &tag, &upper);
                         if let Some(reply) = fault_reply {
                             let _ = sock.write_all(reply.as_bytes());
                             continue;
                         }
-                        if upper.starts_with("LOGOUT") {
-                            let _ = sock
-                                .write_all(format!("* BYE\r\n{tag} OK LOGOUT done\r\n").as_bytes());
+                        if !Self::write_reply(&mut sock, &messages, &tag, &rest, &upper) {
                             break;
-                        }
-                        if upper.starts_with("LOGIN") {
-                            let _ = sock.write_all(format!("{tag} OK LOGIN done\r\n").as_bytes());
-                        } else if upper.starts_with("SELECT") {
-                            let next = messages.last().map(|m| m.0 + 1).unwrap_or(1);
-                            let _ = sock.write_all(
-                                format!(
-                                    "* {count} EXISTS\r\n* OK [UIDVALIDITY 1]\r\n* OK [UIDNEXT {next}]\r\n* FLAGS (\\Seen)\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK [READ-WRITE] SELECT done\r\n",
-                                    count = messages.len(),
-                                )
-                                .as_bytes(),
-                            );
-                        } else if upper.starts_with("UID SEARCH") || upper.starts_with("SEARCH") {
-                            let ids = messages
-                                .iter()
-                                .filter(|(u, b)| search_matches(&rest, *u, b))
-                                .map(|(u, _)| u.to_string())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let _ = sock.write_all(
-                                format!("* SEARCH {ids}\r\n{tag} OK SEARCH done\r\n").as_bytes(),
-                            );
-                        } else if upper.starts_with("UID FETCH") || upper.starts_with("FETCH") {
-                            let args = rest
-                                .strip_prefix("UID FETCH")
-                                .or_else(|| rest.strip_prefix("FETCH"))
-                                .unwrap_or(&rest);
-                            let spec = args.split_whitespace().next().unwrap_or("*");
-                            let selected: Vec<_> = messages
-                                .iter()
-                                .filter(|(u, _)| uid_spec_matches(spec, *u))
-                                .collect();
-                            let mut out: Vec<u8> = Vec::new();
-                            for (i, (uid, body)) in selected.into_iter().enumerate() {
-                                out.extend_from_slice(
-                                    format!(
-                                        "* {} FETCH (UID {} BODY[] {{{}}}\r\n",
-                                        i + 1,
-                                        uid,
-                                        body.len()
-                                    )
-                                    .as_bytes(),
-                                );
-                                out.extend_from_slice(body.as_bytes());
-                                out.extend_from_slice(b")\r\n");
-                            }
-                            out.extend_from_slice(format!("{tag} OK FETCH done\r\n").as_bytes());
-                            if sock.write_all(&out).is_err() {
-                                break;
-                            }
-                        } else {
-                            let _ = sock.write_all(format!("{tag} OK done\r\n").as_bytes());
                         }
                     }
                 }

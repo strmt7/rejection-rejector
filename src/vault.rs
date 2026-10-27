@@ -1084,7 +1084,7 @@ mod tests {
     fn private_dir_refuses_a_symlinked_directory() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("real");
-        fs::create_dir(&target).unwrap();
+        fs::create_dir_all(&target).unwrap();
         if std::os::windows::fs::symlink_dir(&target, dir.path().join("linked")).is_err() {
             // The platform forbids symlink creation without elevation; the
             // unix symlink tests cover the same guard there.

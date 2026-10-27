@@ -6014,7 +6014,8 @@ mod orchestration_tests {
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let e = &mut live_engine(dir.path());
         e.settings.model_digest = Some("a".repeat(64));
-        e.settings.ollama_url = MockServer::new(|_, _| None).url.clone();
+        let mock = MockServer::new(|_, _| None);
+        e.settings.ollama_url.clone_from(&mock.url);
         let shared = poisoned_snapshot();
         let pulse = WorkerPulse::default();
         let journal = None;

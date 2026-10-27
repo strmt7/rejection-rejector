@@ -983,7 +983,7 @@ mod rotation_and_status_tests {
             state: OperationState::Failed,
             code: None,
             retryable: true,
-            message: String::new(),
+            message: String::default(),
             started_at: None,
             finished_at: None,
         };
