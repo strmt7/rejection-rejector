@@ -540,6 +540,35 @@ impl Worker {
             .unwrap_or_default()
     }
 
+    /// Wait until the worker snapshot satisfies `ready`, aborting early on
+    /// `abort`.
+    ///
+    /// Inputs: `ready` -- success predicate over the latest snapshot; `abort`
+    /// -- fail-fast predicate checked first each cycle; `timeout` -- upper
+    /// bound sized for heavily loaded hosts (a hung-worker guard only; the
+    /// superseded ad-hoc 10-second loops flaked under sibling build
+    /// saturation because the bound modeled latency instead of guarding it).
+    /// Output: `bool` -- `true` when `ready` held, `false` when `abort` held
+    /// or the deadline elapsed first.
+    pub fn wait_for(
+        &self,
+        ready: impl Fn(&Snapshot) -> bool,
+        abort: impl Fn(&Snapshot) -> bool,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snapshot = self.view();
+            if ready(&snapshot) {
+                return true;
+            }
+            if abort(&snapshot) || Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Request a graceful worker stop.
     ///
     /// Inputs: none. Output: none; the pause and stop flags are set.
@@ -2997,6 +3026,25 @@ fn api_item_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_for_resolves_predicates_and_expires_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let worker = Worker::spawn(dir.path().into(), true);
+        // The demo worker initializes promptly: the ready predicate resolves.
+        assert!(worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60)));
+        // An unreachable ready predicate must expire at the bound (bounded
+        // wait, not a hang), and the bound is honored from below.
+        let start = Instant::now();
+        assert!(!worker.wait_for(|_| false, |_| false, Duration::from_millis(200)));
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        // The abort predicate short-circuits the wait without waiting for
+        // ready or the deadline.
+        let start = Instant::now();
+        assert!(!worker.wait_for(|_| false, |s| s.initialized, Duration::from_secs(60)));
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
     #[test]
     fn openapi_contract_covers_every_public_v1_route() {
         let spec: serde_json::Value = serde_json::from_str(crate::api::OPENAPI_DOCUMENT).unwrap();
@@ -3894,15 +3942,11 @@ mod orchestration_tests {
     fn dispatch_loop_executes_every_command_arm() {
         let dir = tempfile::tempdir().unwrap();
         let mut worker = Worker::spawn(dir.path().into(), true);
-        let start = Instant::now();
-        while !worker.view().initialized {
-            assert!(!worker.view().fatal, "{}", worker.view().error);
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "worker did not initialize"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60),),
+            "worker did not initialize: {}",
+            worker.view().error
+        );
 
         let runtime = crate::test_support::MockServer::new(|route, _| match route {
             "/api/version" => Some(serde_json::json!({"version": "0.35.1"})),
@@ -4039,23 +4083,24 @@ mod orchestration_tests {
         crate::test_support::with_installer(no_install, || {
             let before = worker.view().operation.operation_id.clone();
             worker.command(Command::InstallOllama);
-            let start = Instant::now();
-            loop {
-                let snapshot = worker.view();
-                assert!(!snapshot.fatal, "{}", snapshot.error);
-                if snapshot.operation.operation_id != before
-                    && snapshot.operation.state != OperationState::Running
-                {
-                    assert!(
-                        snapshot.operation.state == OperationState::Failed,
-                        "unexpected install outcome: {:?}",
-                        snapshot.operation
-                    );
-                    break;
-                }
-                assert!(start.elapsed() < Duration::from_secs(10));
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            assert!(
+                worker.wait_for(
+                    |s| {
+                        s.operation.operation_id != before
+                            && s.operation.state != OperationState::Running
+                    },
+                    |s| s.fatal,
+                    Duration::from_secs(60),
+                ),
+                "install operation never settled"
+            );
+            let snapshot = worker.view();
+            assert!(!snapshot.fatal, "{}", snapshot.error);
+            assert!(
+                snapshot.operation.state == OperationState::Failed,
+                "unexpected install outcome: {:?}",
+                snapshot.operation
+            );
         });
         assert!(worker.shutdown(Duration::from_secs(5)));
     }
@@ -4091,19 +4136,11 @@ mod orchestration_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("vault-id"), b"not-a-uuid").unwrap();
         let mut worker = Worker::spawn(dir.path().into(), false);
-        let start = Instant::now();
-        loop {
-            let snapshot = worker.view();
-            if snapshot.fatal {
-                assert!(!snapshot.error.is_empty());
-                break;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "worker did not report the fatal startup failure"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            worker.wait_for(|s| s.fatal, |_| false, Duration::from_secs(60)),
+            "worker did not report the fatal startup failure"
+        );
+        assert!(!worker.view().error.is_empty());
         assert!(worker.shutdown(Duration::from_secs(2)));
     }
 
@@ -4160,25 +4197,18 @@ mod orchestration_tests {
             None,
             || {
                 let mut worker = Worker::spawn(dir.path().into(), false);
-                let start = Instant::now();
-                loop {
-                    let snapshot = worker.view();
-                    if snapshot.fatal {
-                        assert!(
-                            snapshot
-                                .error
-                                .contains("Background worker crashed unexpectedly"),
-                            "unexpected fatal state: {}",
-                            snapshot.error
-                        );
-                        break;
-                    }
-                    assert!(
-                        start.elapsed() < Duration::from_secs(10),
-                        "worker did not publish the crash state"
-                    );
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+                assert!(
+                    worker.wait_for(|s| s.fatal, |_| false, Duration::from_secs(60)),
+                    "worker did not publish the crash state"
+                );
+                let snapshot = worker.view();
+                assert!(
+                    snapshot
+                        .error
+                        .contains("Background worker crashed unexpectedly"),
+                    "unexpected fatal state: {}",
+                    snapshot.error
+                );
                 assert!(
                     worker.paused.load(Ordering::SeqCst),
                     "delivery must be latched paused after a worker panic"
@@ -4216,12 +4246,11 @@ mod orchestration_tests {
         crate::test_support::headless_vault_seam();
         let dir = tempfile::tempdir().unwrap();
         let mut worker = Worker::spawn(dir.path().into(), false);
-        let start = Instant::now();
-        while !worker.view().initialized {
-            assert!(!worker.view().fatal, "{}", worker.view().error);
-            assert!(start.elapsed() < Duration::from_secs(10), "no init");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60)),
+            "no init: {}",
+            worker.view().error
+        );
         let vault_id = crate::vault::vault_id(dir.path()).unwrap();
         let _cleanup = CredentialCleanup(vault_id);
 
@@ -6114,15 +6143,11 @@ mod orchestration_tests {
         crate::test_support::headless_vault_seam();
         let _credential_store = crate::vault::test_support::lock_credential_store();
         let worker = Worker::spawn(dir.path().into(), false);
-        let start = Instant::now();
-        while !worker.view().initialized {
-            assert!(!worker.view().fatal, "{}", worker.view().error);
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "worker did not initialize"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60),),
+            "worker did not initialize: {}",
+            worker.view().error
+        );
         worker.command(Command::RecoveryDrill {
             backup: dir.path().join("missing-backup-bundle"),
         });
@@ -6391,15 +6416,11 @@ mod orchestration_tests {
             None,
             || {
                 let mut worker = Worker::spawn(dir.path().into(), false);
-                let start = Instant::now();
-                while !worker.view().initialized {
-                    assert!(!worker.view().fatal, "{}", worker.view().error);
-                    assert!(
-                        start.elapsed() < Duration::from_secs(10),
-                        "worker did not initialize"
-                    );
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+                assert!(
+                    worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60),),
+                    "worker did not initialize: {}",
+                    worker.view().error
+                );
                 poison_lock(&worker.snapshot);
                 assert!(
                     wait_for(|| journaled_events(dir.path()).contains("worker_startup_failed")),
@@ -6446,15 +6467,11 @@ mod orchestration_tests {
             Some((mock.url.clone(), mock.url.clone())),
             || {
                 let mut worker = Worker::spawn(dir.path().into(), false);
-                let start = Instant::now();
-                while !worker.view().initialized {
-                    assert!(!worker.view().fatal, "{}", worker.view().error);
-                    assert!(
-                        start.elapsed() < Duration::from_secs(10),
-                        "worker did not initialize"
-                    );
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+                assert!(
+                    worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60),),
+                    "worker did not initialize: {}",
+                    worker.view().error
+                );
                 poison_lock(&worker.snapshot);
                 let mut stopped = false;
                 for _ in 0..240 {

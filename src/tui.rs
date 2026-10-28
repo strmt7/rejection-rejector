@@ -2290,14 +2290,15 @@ mod tests {
         // Dropping the worker's own sender disconnects the engine loop;
         // wait for its one startup refresh before taking over the view.
         worker.tx = tx;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !worker.view().initialized {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "worker never initialized"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        assert!(
+            worker.wait_for(
+                |s| s.initialized,
+                |s| s.fatal,
+                std::time::Duration::from_secs(60),
+            ),
+            "worker never initialized: {}",
+            worker.view().error
+        );
         *worker.snapshot.lock().expect("snapshot lock") = Snapshot::default();
         std::mem::forget(dir);
         (Tui::new(worker), rx)
