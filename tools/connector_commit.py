@@ -50,11 +50,22 @@ def gh_api(endpoint, method=None, payload=None):
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
+def normalize_text(content):
+    """Normalize text content to the repository's committed line endings.
+
+    Inputs: `content` -- decoded file text. Output: the text with CRLF and CR
+    line endings converted to LF. The repository policy (.gitattributes
+    `* text=auto eol=lf`) stores all text with LF; connector-created blobs
+    bypass git's clean filters, so this function reproduces them exactly.
+    """
+    return content.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def parse_set(spec):
     """Parse one --set PATH=FILE argument.
 
     Inputs: `spec` -- "path=file" string (file may be "-" for stdin).
-    Output: (path, content) tuple.
+    Output: (path, content) tuple with line endings normalized to LF.
     """
     if "=" not in spec:
         raise ValueError(f"--set expects PATH=FILE, got {spec!r}")
@@ -62,9 +73,9 @@ def parse_set(spec):
     if not path:
         raise ValueError(f"--set path is empty in {spec!r}")
     if source == "-":
-        return path, sys.stdin.read()
+        return path, normalize_text(sys.stdin.read())
     with open(source, "r", encoding="utf-8", newline="") as handle:
-        return path, handle.read()
+        return path, normalize_text(handle.read())
 
 
 def build_entries(sets, deletes, blobs):

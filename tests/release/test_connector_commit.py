@@ -32,6 +32,16 @@ class ParseSetTests(unittest.TestCase):
             path, content = connector_commit.parse_set("docs/x.md=-")
         self.assertEqual((path, content), ("docs/x.md", "from-stdin"))
 
+    def test_set_normalizes_line_endings_to_lf(self):
+        """Content is stored with LF per .gitattributes `* text=auto eol=lf`."""
+        with mock.patch("sys.stdin", io.StringIO("a\r\nb\rc\n")):
+            _path, content = connector_commit.parse_set("docs/x.md=-")
+        self.assertEqual(content, "a\nb\nc\n")
+
+    def test_normalize_text_is_idempotent(self):
+        """Normalizing LF text leaves it byte-identical."""
+        self.assertEqual(connector_commit.normalize_text("a\nb\n"), "a\nb\n")
+
     def test_set_rejects_missing_separator(self):
         """A spec without PATH=FILE shape is rejected."""
         with self.assertRaises(ValueError):
