@@ -42,7 +42,10 @@ def gh_api(endpoint, method=None, payload=None):
     if payload is not None:
         args += ["--input", "-"]
     result = subprocess.run(
-        args, capture_output=True, text=True,
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
         input=json.dumps(payload) if payload is not None else None,
     )
     if result.returncode != 0:
@@ -74,7 +77,7 @@ def parse_set(spec):
         raise ValueError(f"--set path is empty in {spec!r}")
     if source == "-":
         return path, normalize_text(sys.stdin.read())
-    with open(source, "r", encoding="utf-8", newline="") as handle:
+    with open(source, encoding="utf-8", newline="") as handle:
         return path, normalize_text(handle.read())
 
 
@@ -87,12 +90,14 @@ def build_entries(sets, deletes, blobs):
     """
     entries = []
     for path, _content in sets:
-        entries.append({
-            "path": path,
-            "mode": "100644",
-            "type": "blob",
-            "sha": blobs[path],
-        })
+        entries.append(
+            {
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blobs[path],
+            }
+        )
     for path in deletes:
         entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
     return entries
@@ -144,11 +149,15 @@ def main():
         blobs[path] = blob["sha"]
     entries = build_entries(sets, args.delete, blobs)
     tree = gh_api(f"{base}/git/trees", "POST", {"base_tree": parent["tree"]["sha"], "tree": entries})
-    commit = gh_api(f"{base}/git/commits", "POST", {
-        "message": args.message,
-        "tree": tree["sha"],
-        "parents": [head],
-    })
+    commit = gh_api(
+        f"{base}/git/commits",
+        "POST",
+        {
+            "message": args.message,
+            "tree": tree["sha"],
+            "parents": [head],
+        },
+    )
     gh_api(f"{base}/git/refs/heads/{args.branch}", "PATCH", {"sha": commit["sha"]})
     author_id, committer_id = verify_identity(commit)
     print(commit["sha"])
