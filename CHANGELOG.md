@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+- `rr live-selftest`: operator-invoked self-addressed send-path probe with
+  independent `find_sent` verification; fail-closed on demo workspaces,
+  missing transport, missing send scope and conversation-bound backends.
+- `Worker::wait_for`: one documented bounded-wait helper for test
+  synchronization against worker state (replaces nine ad-hoc wall-clock
+  polling loops that flaked under build saturation).
+- Execution-receipt contract under `tools/contract/` (validator, schemas,
+  synthetic examples, 48-test suite, hash-pinned package manifest) and the
+  S01 policy record (`engineering.toml`) with its read-only validator.
+- Python documentation contract enforced in lint (ruff D): every module,
+  class, function, `__init__` and magic method carries a docstring with
+  Inputs/Output documentation; 134 docstrings written across the tree.
+
+### Fixed
+- SMTP TLS pairing: the app-password send path paired lettre's implicit-TLS
+  `relay()` with the STARTTLS submission port, failing every live handshake
+  with a TLS-record error. TLS now follows IANA port semantics (465 implicit
+  TLS, otherwise STARTTLS) via the tested `smtp_tls_mode()`.
+- Load-flaky deadline tests: wall-clock waits sized for expected latency
+  rather than scheduler starvation now use a 60s hung-worker guard.
+- Python lint scope gaps: `training/` and `tools/` subdirectories were
+  unenforced in "All" lint mode (shallow globs); scope is now recursive and
+  pinned by test. 13 residual findings fixed at source, including
+  `zip(strict=True)` semantics and overlapping except unions.
+- Calibration decision boundaries (manual findings N03/N04): observed
+  decision boundaries replace the 0.001 grid; invalid rows fail closed with
+  line-numbered errors; reported counts reproduce at the reported threshold.
+
 Engineering-contract adoption (common standard S01/S03/S07/S15):
 
 - Adds `engineering.toml`, the S01 policy record (lifecycle, RS/PY profiles,

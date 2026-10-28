@@ -2,7 +2,9 @@
 
 Operational map for automated contributors. Read this first; do not re-derive
 the layout. The in-repo skill `.agents/skills/rr-engineering/SKILL.md` holds the
-full engineering discipline.
+full engineering discipline. `docs/HANDOVER.md` records the current verified
+state, open items and the exact operating recipes (commits, gate, DeepSource,
+manifest) - read it before non-trivial work.
 
 ## What this is
 

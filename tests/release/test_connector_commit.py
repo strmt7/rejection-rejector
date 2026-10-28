@@ -65,6 +65,11 @@ class IdentityPolicyTests(unittest.TestCase):
     """Contract tests for the connector identity policy check."""
 
     def _commit(self, author, committer):
+        """Build one commit identity-pair fixture.
+
+        Inputs: `author`/`committer` -- (name, email) tuples. Output: `dict` --
+        the commit payload shape consumed by the identity policy check.
+        """
         return {
             "author": {"name": author[0], "email": author[1]},
             "committer": {"name": committer[0], "email": committer[1]},

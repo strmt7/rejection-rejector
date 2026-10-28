@@ -248,6 +248,11 @@ def build():
     }
 
     def save(name, value):
+        """Write one example JSON document.
+
+        Inputs: `name` -- file name under the destination directory; `value` --
+        the JSON-serializable document. Output: none.
+        """
         (DEST / name).write_text(json.dumps(value, indent=2) + "\n")
 
     save("receipt-consistent-synthetic.json", receipt)

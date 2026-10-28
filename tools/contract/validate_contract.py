@@ -199,15 +199,33 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
     issues = []
 
     def issue(level, code, field, message):
+        """Record one finding.
+
+        Inputs: `level` -- finding level; `code` -- stable finding code;
+        `field` -- offending field; `message` -- operator text. Output: none
+        (appends to the collected findings).
+        """
         issues.append({"level": level, "code": code, "field": field, "message": message})
 
     def fail(code, field, message):
+        """Record one FAIL finding. Inputs: `code`/`field`/`message` -- as
+        [`issue`]. Output: none.
+        """
         issue("FAIL", code, field, message)
 
     def block(code, field, message):
+        """Record one BLOCKED finding. Inputs: `code`/`field`/`message` -- as
+        [`issue`]. Output: none.
+        """
         issue("BLOCKED", code, field, message)
 
     def output(synthetic=False):
+        """Build the final validation result.
+
+        Inputs: `synthetic` -- whether the receipt declares itself a synthetic
+        example. Output: `dict` -- consistency result, qualification and the
+        collected findings.
+        """
         consistency = "FAIL" if any(i["level"] == "FAIL" for i in issues) else "BLOCKED" if issues else "PASS"
         result = "BLOCKED" if synthetic and consistency == "PASS" else consistency
         return {
@@ -264,6 +282,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
         )
 
     def parsed_date(value, field):
+        """Parse one ISO calendar date, failing closed into a finding.
+
+        Inputs: `value` -- date text; `field` -- field name for findings.
+        Output: `date` -- the parsed date (a DATE finding is recorded on
+        failure).
+        """
         try:
             return date.fromisoformat(value)
         except ValueError:
@@ -280,6 +304,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
         block("EXPIRED_REVIEW", "review_due", "policy review has expired")
 
     def timestamp(value, field):
+        """Parse one strict UTC RFC 3339 timestamp, failing closed into a finding.
+
+        Inputs: `value` -- timestamp text; `field` -- field name for findings.
+        Output: `datetime` -- the parsed UTC instant (a TIMESTAMP finding is
+        recorded on failure).
+        """
         try:
             result = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if result.tzinfo is None or result.utcoffset().total_seconds() != 0:
@@ -294,6 +324,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
     created = timestamp(receipt["created_at"], "created_at")
 
     def index(records, field):
+        """Index records by id, rejecting duplicates.
+
+        Inputs: `records` -- record list; `field` -- field name for findings.
+        Output: `dict` -- id to record (a DUPLICATE_ID finding is recorded on
+        duplicates).
+        """
         ids = [r["id"] for r in records]
         if len(ids) != len(set(ids)):
             fail("DUPLICATE_ID", field, "record IDs must be unique within the collection")
@@ -381,6 +417,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
     valid_inputs = set()
 
     def verify_file(item, field, time_field, kind_field):
+        """Verify one referenced local file's identity bindings.
+
+        Inputs: `item` -- the evidence or artifact record; `field` -- field name
+        for findings; `time_field`/`kind_field` -- the record's time and kind
+        fields. Output: `bool` -- whether the file fully verified.
+        """
         good = True
         before = len(issues)
         for key, expected in [("source_sha", target_sha), ("profile_sha", profile_sha)]:
@@ -451,6 +493,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
             valid_artifacts.add(key)
 
     def references(ids, field, nonempty=False):
+        """Check one evidence-id reference list against verified evidence.
+
+        Inputs: `ids` -- referenced evidence ids; `field` -- field name for
+        findings; `nonempty` -- require at least one verified id. Output:
+        `bool` -- whether every reference resolves to verified evidence.
+        """
         if nonempty and not ids:
             fail("NO_EVIDENCE", field, "at least one verified local evidence record is required")
             return False
@@ -460,6 +508,12 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
         return bool(ids) and set(ids) <= valid_evidence
 
     def applicability(declared, actual, field):
+        """Validate one policy-exception applicability claim.
+
+        Inputs: `declared` -- the exception's claim; `actual` -- the computed
+        requirement status; `field` -- field name for findings. Output: none
+        (records findings).
+        """
         if not declared["reason"].strip():
             fail("APPLICABILITY_REASON", field, "policy needs a factual applicability reason")
         if not declared["applicable"]:
