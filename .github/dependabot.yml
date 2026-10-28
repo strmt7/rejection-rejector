@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # nom is a supply-chain soundness pin (Cargo.toml): imap-codec requires
+      # nom ^7, and the pin keeps the tree on sound nom 7 + minimal-lexical
+      # instead of nom 5's unsound lexical-core (RUSTSEC-2023-0086). A nom 8
+      # bump would add a second unused nom without moving imap-codec. Move
+      # the pin only when imap-codec ships a nom-8-compatible release.
+      - dependency-name: "nom"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

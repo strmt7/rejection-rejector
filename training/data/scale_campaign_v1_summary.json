@@ -1,0 +1,153 @@
+{
+  "seed": 20261027,
+  "corpus_size": 1032,
+  "expected_outcomes": {
+    "respond": 336,
+    "hold": 396,
+    "ignore": 300
+  },
+  "per_language": {
+    "en": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "es": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "zh": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "hi": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "fr": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "ar": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "bn": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "pt": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "ru": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "ja": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "de": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    },
+    "el": {
+      "strong_rejection": 28,
+      "total": 86,
+      "soft_rejection": 12,
+      "ambiguous": 12,
+      "non_rejection": 20,
+      "auto_reply": 4,
+      "auto_reply_rejection": 2,
+      "truncated": 2,
+      "quoted_history": 6
+    }
+  },
+  "gate_sync": {
+    "missing_clear_phrases": [],
+    "missing_conflict_phrases": []
+  },
+  "bank_overlaps": [
+    "el el.neg.adversarial.subject[0]: 'Η αίτησή σας απορρίφθηκε!' matches 'η αίτησή σας απορρίφθηκε'",
+    "el el.neg.adversarial.core[0]: 'Η αίτησή σας απορρίφθηκε! — πήρατε 2 στα 5 στο Interview Quest και η αίτησή σας μέσα στο παιχνίδι απορρίφθηκε. Δοκιμάζετε ξανά;' matches 'η αίτησή σας απορρίφθηκε'",
+    "el el.adv.subject[1]: 'Η αίτησή σας απορρίφθηκε!' matches 'η αίτησή σας απορρίφθηκε'",
+    "el el.adv.core[0][0]: 'Η αίτησή σας απορρίφθηκε! — πήρατε 2 στα 5 στο Interview Quest και η αίτησή σας μέσα στο παιχνίδι απορρίφθηκε. Δοκιμάζετε ξανά;' matches 'η αίτησή σας απορρίφθηκε'"
+  ]
+}
