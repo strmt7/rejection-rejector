@@ -119,7 +119,8 @@ fn is_quote_start(l: &str) -> bool {
 /// Whether one lowercased line is a localized reply-attribution marker.
 ///
 /// Inputs: `l` — trimmed, lowercased body line. Output: `true` for the
-/// German, French, Italian, Spanish, Portuguese and Dutch attributions.
+/// German, French, Italian, Spanish, Portuguese and Dutch attributions plus
+/// the Russian, Japanese, Chinese, Hindi, Arabic and Bengali ones.
 fn is_localized_attribution(l: &str) -> bool {
     (l.starts_with("am ") && l.contains("schrieb"))
         || (l.starts_with("le ") && l.contains("écrit"))
@@ -127,13 +128,21 @@ fn is_localized_attribution(l: &str) -> bool {
         || (l.starts_with("el ") && l.contains("escribió"))
         || (l.starts_with("em ") && l.contains("escreveu"))
         || (l.starts_with("op ") && l.contains("schreef"))
+        || (l.ends_with(':') && l.contains("написал"))
+        || l.ends_with("のメッセージ:")
+        || l.ends_with("写道：")
+        || l.ends_with("写道:")
+        || l.contains("ने लिखा")
+        || (l.ends_with(':') && l.contains("كتب"))
+        || l.contains("লিখেছেন")
         || is_forward_marker(l)
 }
 
 /// Whether one lowercased line is a forwarded-message heading.
 ///
 /// Inputs: `l` — trimmed, lowercased body line. Output: `true` for the
-/// Greek attributions and the localized "forwarded message" headings.
+/// Greek attributions and the localized "forwarded message" headings across
+/// the supported languages.
 fn is_forward_marker(l: &str) -> bool {
     (l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε")))
         || l.contains("oorspronkelijk bericht")
@@ -145,6 +154,25 @@ fn is_forward_marker(l: &str) -> bool {
         || l.contains("messaggio inoltrato")
         || l.contains("mensaje reenviado")
         || l.contains("mensagem encaminhada")
+        || l.contains("weitergeleitete nachricht")
+        || l.contains("ursprüngliche nachricht")
+        || l.contains("ursprungliche nachricht")
+        || l.contains("message transféré")
+        || l.contains("message d'origine")
+        || l.contains("пересылаемое сообщение")
+        || l.contains("исходное сообщение")
+        || l.contains("转发的邮件")
+        || l.contains("转发邮件")
+        || l.contains("原始邮件")
+        || l.contains("原始消息")
+        || l.contains("転送されたメッセージ")
+        || l.contains("元のメッセージ")
+        || l.contains("अग्रेषित संदेश")
+        || l.contains("मूल संदेश")
+        || l.contains("المعاد توجيهها")
+        || l.contains("الرسالة الأصلية")
+        || l.contains("ফরওয়ার্ড করা বার্তা")
+        || l.contains("মূল বার্তা")
 }
 
 /// Validate a draft reply against the reply envelope.
@@ -279,12 +307,30 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "not progressing your application",
         "not be taking your application forward",
         "unable to offer you the position",
+        "not be proceeding with your candidacy",
+        "move forward with another candidate",
+        "not be offering you the",
+        "must decline your application",
+        "not be making you an offer",
+        "passed on your candidacy",
+        "not advancing you",
+        "candidacy has been closed",
         // German
         "nicht weiter berücksichtigen",
         "nicht berücksichtigen",
         "für andere kandidaten entschieden",
         "für einen anderen kandidaten entschieden",
         "nicht in die engere auswahl",
+        "nicht ausgewaehlt",
+        "nicht ausgewählt",
+        "nicht weiter verfolgen",
+        "nicht weiterzugehen",
+        "nicht zur naechsten runde ein",
+        "nicht zur nächsten runde ein",
+        "diesmal nicht anbieten",
+        "ihre bewerbung ablehnen",
+        "kandidatur wurde geschlossen",
+        "status abgelehnt",
         // French
         "ne pas donner suite",
         "ne pouvons pas donner suite",
@@ -293,6 +339,16 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "n'a pas été retenu",
         "n’a pas été retenu",
         "candidature non retenue",
+        "ne donnerons pas de suite",
+        "decide de ne pas poursuivre",
+        "décidé de ne pas poursuivre",
+        "pas ete retenu",
+        "ne vous convions pas",
+        "poursuivre avec un autre candidat",
+        "ne pas pouvoir vous proposer le poste",
+        "decliner votre candidature",
+        "décliner votre candidature",
+        "a ete cloturee",
         // Italian
         "non dare seguito",
         "non possiamo procedere con la sua candidatura",
@@ -308,6 +364,15 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "no ha sido seleccionado",
         "no ha sido seleccionada",
         "hemos decidido continuar con otros candidatos",
+        "no seguiremos adelante con su candidatura",
+        "hemos decidido no avanzar con su solicitud",
+        "no le estamos convocando a la siguiente etapa",
+        "no seguiremos con su candidatura",
+        "hemos decidido continuar con otro",
+        "no le ofreceremos el puesto",
+        "debemos declinar su solicitud",
+        "no seleccionado",
+        "candidatura ha sido cerrada",
         // Portuguese
         "não daremos seguimento",
         "não podemos prosseguir com a sua candidatura",
@@ -316,6 +381,21 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "não foi selecionado",
         "não foi selecionada",
         "decidimos seguir com outros candidatos",
+        "nao seguiremos com a sua candidatura",
+        "não seguiremos com a sua candidatura",
+        "decidimos nao prosseguir",
+        "decidimos não prosseguir",
+        "nao foi selecionad",
+        "não foi selecionad",
+        "nao estaremos levando",
+        "não estaremos levando",
+        "nao daremos continuidade",
+        "não daremos continuidade",
+        "decidimos seguir com outro",
+        "nao poderemos oferecer a vaga",
+        "não poderemos oferecer a vaga",
+        "declinar sua candidatura",
+        "candidatura foi encerrada",
         // Dutch
         "niet verder met uw sollicitatie",
         "niet verder met je sollicitatie",
@@ -330,6 +410,76 @@ pub fn clear_rejection_language(subject: &str, text: &str) -> bool {
         "η αιτηση σας απορριφθηκε",
         "η υποψηφιότητά σας δεν επιλέχθηκε",
         "η υποψηφιοτητα σας δεν επιλεχθηκε",
+        "δεν θα προχωρήσουμε στην αίτησή σας",
+        "δεν επιλεχθήκατε",
+        "δεν σας προχωρούμε",
+        "δεν θα προχωρήσουμε στην υποψηφιότητα",
+        "να προχωρήσουμε με άλλον υποψήφιο",
+        "δεν μπορούμε να σας προσφέρουμε τη θέση",
+        "να απορρίψουμε την αίτησή σας",
+        "δεν επιλέχθηκε για περαιτέρω",
+        "μη επιλεγμένος",
+        "υποψηφιότητά σας έκλεισε",
+        // Chinese
+        "不会继续推进",
+        "决定不再推进",
+        "未被选中",
+        "不会向您发放录用通知",
+        "未进入下一环节",
+        "未录用",
+        "候选流程已关闭",
+        "无法为您提供",
+        "婉拒您的申请",
+        "已决定录用其他候选人",
+        // Hindi
+        "आगे नहीं बढ़ाएंगे",
+        "का निर्णय नहीं लिया",
+        "चयनित नहीं",
+        "शामिल नहीं कर रहे",
+        "उम्मीदवारी बंद कर दी गई",
+        "पेशकश नहीं कर पाएंगे",
+        "आवेदन अस्वीकार करना",
+        "आगे नहीं बढ़ा रहे हैं",
+        // Arabic
+        "لن نقوم بمتابعة",
+        "عدم المتابعة",
+        "لم يتم اختيارك",
+        "لن ننتقل بك",
+        "لم يتم اختيار طلبك",
+        "غير مختار",
+        "ملفك قد أُغلق",
+        "لن نتابع طلبك",
+        "لا نتمكن من تقديم",
+        "نرفض طلبك",
+        // Bengali
+        "এগিয়ে নেব না",
+        "সিদ্ধান্ত নিইনি",
+        "নির্বাচিত করা হয়নি",
+        "নিয়ে যাচ্ছি না",
+        "নির্বাচিত হয়নি",
+        "প্রার্থিতা বন্ধ করা হয়েছে",
+        "অফার করতে পারছি না",
+        "প্রত্যাখ্যান করতে হচ্ছে",
+        // Russian
+        "не будем продолжать",
+        "решили не продолжать",
+        "не были выбраны",
+        "не переводим вас на следующий этап",
+        "не выбран",
+        "закрытии вашей кандидатуры",
+        "не сможем предложить вам позицию",
+        "отклонить вашу заявку",
+        // Japanese
+        "前進させることはいたしません",
+        "選考を進めない決定",
+        "選考対象となりませんでした",
+        "ご案内はいたしかねます",
+        "次の選考には進みませんでした",
+        "不採用",
+        "選考はクローズされました",
+        "ご応募を進められないこととなりました",
+        "ご提案できかねます",
+        "ご応募をお断りする",
     ]
     .iter()
     .any(|phrase| lower.contains(phrase))
@@ -669,6 +819,93 @@ mod tests {
             current_text("Τρέχον μήνυμα\nΠροωθημένο μήνυμα\nΠαλιά απόρριψη"),
             "Τρέχον μήνυμα"
         );
+    }
+
+    /// Why: the affirmative-evidence gate must recognise the canonical
+    /// rejection phrasing of the product's own corpus banks in all twelve
+    /// languages, otherwise clear rejections outside the founding eight
+    /// languages can never become respond-eligible.
+    #[test]
+    fn clear_rejection_language_covers_the_twelve_bank_languages() {
+        for text in [
+            "We will not be moving forward with your application.",
+            "Wir werden Ihre Bewerbung nicht weiter verfolgen.",
+            "No seguiremos adelante con su candidatura.",
+            "Nous ne donnerons pas de suite a votre candidature.",
+            "Nao seguiremos com a sua candidatura.",
+            "Δεν θα προχωρήσουμε στην αίτησή σας.",
+            "我们不会继续推进您的申请。",
+            "हम आपके आवेदन को आगे नहीं बढ़ाएंगे।",
+            "لن نقوم بمتابعة طلبك.",
+            "আমরা আপনার আবেদন এগিয়ে নেব না।",
+            "Мы не будем продолжать работу с вашей заявкой.",
+            "今回は、ご応募を前進させることはいたしません。",
+        ] {
+            assert!(clear_rejection_language("", text), "{text}");
+        }
+    }
+
+    /// Why: quoted-history boundaries must hide old decisions in every
+    /// supported language, not just the founding ones — a leaked old rejection
+    /// makes a follow-up question or forward look like a fresh rejection.
+    #[test]
+    fn quoted_history_boundaries_hide_old_decisions_in_every_language() {
+        for (current, body) in [
+            (
+                "Current text",
+                "Current text\nAm 20. Mai 2025 schrieb Anna:\nWir werden Ihre Bewerbung nicht weiter verfolgen.",
+            ),
+            (
+                "Current text",
+                "Current text\n---------- Weitergeleitete Nachricht ----------\nWir werden Ihre Bewerbung nicht weiter verfolgen.",
+            ),
+            (
+                "Current text",
+                "Current text\n---------- Message transféré ----------\nNous ne donnerons pas de suite a votre candidature.",
+            ),
+            (
+                "Current text",
+                "Current text\n20 мая 2025 г. Анна написал(а):\nМы не будем продолжать работу с вашей заявкой.",
+            ),
+            (
+                "Current text",
+                "Current text\n---------- Пересылаемое сообщение ----------\nМы не будем продолжать работу с вашей заявкой.",
+            ),
+            (
+                "Current text",
+                "Current text\n2025年5月20日、山田 のメッセージ:\n今回は、ご応募を前進させることはいたしません。",
+            ),
+            (
+                "Current text",
+                "Current text\n---------- 転送されたメッセージ ----------\n今回は、ご応募を前進させることはいたしません。",
+            ),
+            (
+                "Current text",
+                "Current text\n在 2025年5月20日，张三 写道：\n我们不会继续推进您的申请。",
+            ),
+            (
+                "Current text",
+                "Current text\n20 मई 2025 को राम ने लिखा:\nहम आपके आवेदन को आगे नहीं बढ़ाएंगे।",
+            ),
+            (
+                "Current text",
+                "Current text\nفي 20 مايو 2025، أحمد كتب:\nلن نقوم بمتابعة طلبك.",
+            ),
+            (
+                "Current text",
+                "Current text\n২০ মে ২০২৫ রাম লিখেছেন:\nআমরা আপনার আবেদন এগিয়ে নেব না।",
+            ),
+            (
+                "Current text",
+                "Current text\n---------- ফরওয়ার্ড করা বার্তা ----------\nআমরা আপনার আবেদন এগিয়ে নেব না।",
+            ),
+        ] {
+            assert_eq!(current_text(body), current, "{body}");
+            assert!(
+                !clear_rejection_language("", body),
+                "quoted rejection leaked into the current message: {body}"
+            );
+        }
     }
 
     #[test]

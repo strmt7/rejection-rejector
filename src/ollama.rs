@@ -1003,9 +1003,16 @@ impl Ollama {
     /// budget.
     pub fn classify(&self, email: &Email) -> Result<(Verdict, bool)> {
         let current = mail::current_text(&email.text);
-        let (text, complete) = mail::bounded_text(&current, self.classify_text_budget());
-        let payload =
-            json!({"subject":mail::bounded_text(&email.subject,600).0,"untrusted_email":text});
+        let (text, mut complete) = mail::bounded_text(&current, self.classify_text_budget());
+        let subject = mail::bounded_text(&email.subject, 600).0;
+        let allowed_payload = (self.settings.num_ctx as usize).saturating_sub(
+            CLASSIFY_SYSTEM_PROMPT.len()
+                + self.structured_predict() as usize
+                + TEMPLATE_MARGIN_BYTES,
+        );
+        let (text, within_envelope) = envelope_bounded_text(subject, text, allowed_payload);
+        complete &= within_envelope;
+        let payload = json!({"subject":subject,"untrusted_email":text});
         let verdict:Verdict=self.chat(
             CLASSIFY_SYSTEM_PROMPT,payload,
             json!({"type":"object","additionalProperties":false,"required":["category","confidence","evidence","explanation","company","position","language"],"properties":{
@@ -1137,7 +1144,7 @@ impl Ollama {
         analysis_stage(AnalysisFailureStage::DraftGeneration, || {
             crate::language::ensure_reply_language(&output.body, &reply_language)?;
             mail::validate_draft(&output.body)?;
-            let generated_words = output.body.split_whitespace().count();
+            let generated_words = crate::language::word_count(&output.body);
             ensure!(
                 (40..=180).contains(&generated_words),
                 "Model draft length is outside the supported 40-180 word envelope"
@@ -1548,6 +1555,23 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
         body_complete: true,
     }
 }
+
+/// Bound the classification text so its serialized payload fits the request envelope.
+///
+/// Inputs: `subject` — bounded subject; `text` — bounded de-quoted body;
+/// `budget` — maximum serialized payload bytes. Output: `(&str, bool)` — the
+/// body prefix whose JSON payload fits the budget, plus `true` when the whole
+/// body fit; JSON string escaping inflates newlines and quotes past the raw
+/// byte count, so an oversized payload is re-bound exactly like
+/// [`mail::bounded_text`] and reported as truncated input.
+fn envelope_bounded_text<'a>(subject: &str, text: &'a str, budget: usize) -> (&'a str, bool) {
+    let payload = json!({"subject": subject, "untrusted_email": text}).to_string();
+    if payload.len() <= budget {
+        return (text, true);
+    }
+    let keep = text.len().saturating_sub(payload.len() - budget);
+    (mail::bounded_text(text, keep).0, false)
+}
 #[cfg(test)]
 mod tests {
     // Uncovered-by-design lines carry no product signal and are
@@ -1610,6 +1634,117 @@ mod tests {
             assert_eq!(local.draft_predict(), draft, "draft {num_ctx}");
             assert_eq!(local.classify_text_budget(), text, "text {num_ctx}");
         }
+    }
+
+    /// Why: `classify_text_budget` promises the classification payload stays
+    /// inside the `chat_once` envelope, so a maximum-budget body must reach the
+    /// runtime and classify instead of failing with "Input exceeds safe context
+    /// budget"; JSON string escaping (newlines, quotes) must not break that
+    /// promise either, and an envelope-bound body is a truncated input that
+    /// blocks only automatic sending.
+    #[test]
+    fn classify_reaches_the_runtime_at_maximum_budget_despite_json_escaping() {
+        for (name, body) in [
+            ("filler", "e".repeat(24_000)),
+            ("line-broken", "line of recruiting text\n".repeat(1_000)),
+            ("quoted", "\"quoted\" ".repeat(2_400)),
+        ] {
+            let runtime = crate::test_support::MockServer::new(|route, body| {
+                (route == "/api/chat").then(|| {
+                    let content = body.unwrap_or_default()["messages"][1]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned();
+                    let payload: serde_json::Value =
+                        serde_json::from_str(&content).unwrap_or_default();
+                    let text = payload["untrusted_email"].as_str().unwrap_or("");
+                    let quote: String = text.chars().take(40).collect();
+                    let answer = crate::test_support::verdict(&quote);
+                    json!({"model":"m","message":{"role":"assistant","content":answer.to_string()},
+                        "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100})
+                })
+            });
+            let llm = Ollama::new(&Settings {
+                ollama_url: runtime.url.clone(),
+                ..Settings::default()
+            })
+            .unwrap();
+            let email = sample_email("Status update", &body);
+            let (verdict, complete) = llm
+                .classify(&email)
+                .unwrap_or_else(|error| panic!("case {name}: {error}"));
+            assert_eq!(verdict.category, Category::Rejection, "case {name}");
+            assert!(runtime.routes().contains(&"/api/chat".to_owned()));
+            assert!(
+                !complete,
+                "case {name}: an envelope-bound body is truncated"
+            );
+        }
+    }
+
+    /// Why: the drafting envelope and the reply-language gate measure "words",
+    /// and a whitespace word count reads a whole Chinese or Japanese reply as
+    /// one word and fails it as too short; a correct CJK draft must clear the
+    /// full analyze pipeline (draft envelope, deterministic language gate,
+    /// draft validation and verification) unchanged.
+    #[test]
+    fn chinese_drafts_pass_the_draft_envelope_and_language_gate() {
+        let signature = "Test Applicant";
+        let zh_draft = format!(
+            "尊敬的招聘团队：\n\n关于此次未予通过的决定，我希望了解贵司依据招聘要求对我的申请作出评价的具体标准，以及各轮评估的具体反馈。恳请提供针对我个人情况的详细说明，以便我了解不足之处并在今后改进。期待您的回复。\n\n此致敬礼\n{signature}"
+        );
+        let runtime = crate::test_support::MockServer::new(move |route, body| {
+            let body = body.unwrap_or_else(|| json!({}));
+            match route {
+                "/api/version" => Some(crate::test_support::version_ok()),
+                "/api/tags" => Some(json!({"models": [{
+                    "name": crate::config::DEFAULT_MODEL, "digest": "a".repeat(64),
+                    "size": 7_200_000_000u64}]})),
+                "/api/show" => Some(crate::test_support::show_ok()),
+                "/api/generate" => {
+                    Some(json!({"done": true, "prompt_eval_count": 4, "eval_count": 1}))
+                }
+                "/api/ps" => Some(json!({"models": [{
+                    "name": crate::config::DEFAULT_MODEL, "digest": "a".repeat(64),
+                    "size": 7_200_000_000u64, "size_vram": 7_200_000_000u64,
+                    "context_length": 32768u32}]})),
+                "/api/chat" => {
+                    let payload: serde_json::Value = serde_json::from_str(
+                        body["messages"][1]["content"].as_str().unwrap_or("{}"),
+                    )
+                    .unwrap_or_default();
+                    let content = if payload.get("proposed_reply").is_some() {
+                        crate::test_support::verification_ok()
+                    } else if payload.get("tone").is_some() {
+                        json!({"body": zh_draft})
+                    } else {
+                        crate::test_support::verdict(
+                            payload["untrusted_email"].as_str().unwrap_or(""),
+                        )
+                    };
+                    Some(
+                        json!({"model":"m","message":{"role":"assistant","content":content.to_string()},
+                        "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100}),
+                    )
+                }
+                _ => None,
+            }
+        });
+        let settings = Settings {
+            signature: signature.into(),
+            model_digest: Some("a".repeat(64)),
+            ollama_url: runtime.url.clone(),
+            ..Settings::default()
+        };
+        let llm = Ollama::new(&settings).unwrap();
+        let email = sample_email(
+            "您的申请结果",
+            "尊敬的候选人，感谢您的申请。经过慎重评估，我们决定不继续推进您的申请。祝您求职顺利。",
+        );
+        let (analysis, draft, flags) = llm.analyze(&email).unwrap();
+        assert_eq!(analysis.verdict.category, Category::Rejection);
+        assert!(draft.is_some(), "the Chinese draft must survive every gate");
+        assert!(flags.is_empty(), "flags: {flags:?}");
     }
 
     /// Analysis through the independent verifier verifies with the verifier
