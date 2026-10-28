@@ -74,7 +74,7 @@ def pick_evidence(entry: dict, category: str) -> str:
     for sentence in sentences:
         if cues.search(sentence):
             return sentence.strip()[:200]
-    return (sentences[0].strip()[:200] if sentences else "")
+    return sentences[0].strip()[:200] if sentences else ""
 
 
 def build_record(entry: dict) -> dict:
@@ -116,9 +116,7 @@ def build_record(entry: dict) -> dict:
     }
 
 
-def stratified_split(
-    records: list[dict], holdout_fraction: float, seed: int
-) -> tuple[list[dict], list[dict]]:
+def stratified_split(records: list[dict], holdout_fraction: float, seed: int) -> tuple[list[dict], list[dict]]:
     """Split records into train and holdout sets stratified by category.
 
     Inputs: `records` — built SFT records; `holdout_fraction` — fraction per
@@ -183,11 +181,7 @@ def main() -> int:
 
     upweighted: list[dict] = []
     for rec in trainable:
-        repeats = (
-            args.hard_negative_upweight
-            if rec["meta"]["purpose"] == "training_hard_negative"
-            else 1
-        )
+        repeats = args.hard_negative_upweight if rec["meta"]["purpose"] == "training_hard_negative" else 1
         upweighted.extend([rec] * repeats)
 
     train, holdout = stratified_split(upweighted, args.holdout_fraction, args.seed)
@@ -215,9 +209,7 @@ def main() -> int:
         "holdout_by_category": counts(holdout),
         "seed": args.seed,
     }
-    (args.out_dir / "build_report.json").write_text(
-        json.dumps(report, indent=2) + "\n", encoding="utf-8"
-    )
+    (args.out_dir / "build_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
 

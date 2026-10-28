@@ -446,11 +446,7 @@ def _attribution_hi_ar_bn(lowered: str) -> bool:
     """Inputs: trimmed lowercased body line. Output: True for Hindi, Arabic or
     Bengali written-by attribution lines.
     """
-    return (
-        "ने लिखा" in lowered
-        or (lowered.endswith(":") and "كتب" in lowered)
-        or "লিখেছেন" in lowered
-    )
+    return "ने लिखा" in lowered or (lowered.endswith(":") and "كتب" in lowered) or "লিখেছেন" in lowered
 
 
 def is_quote_start(lowered: str) -> bool:
@@ -605,7 +601,10 @@ OOO_BODY = {
         "почте и отвечу после 2 июня 2025 года. По срочным вопросам, пожалуйста, свяжитесь с "
         "командой подбора."
     ),
-    "ja": "メッセージありがとうございます。現在オフィス外のためメールへのアクセスが限られており、2025年6月2日以降に返信いたします。緊急の場合は採用チームまでご連絡ください。",
+    "ja": (
+        "メッセージありがとうございます。現在オフィス外のためメールへのアクセスが限られており"
+        "、2025年6月2日以降に返信いたします。緊急の場合は採用チームまでご連絡ください。"
+    ),
     "de": (
         "Vielen Dank für Ihre Nachricht. Ich bin derzeit außerhalb des Büros mit begrenztem "
         "E-Mail-Zugang und antworte nach dem 2. Juni 2025. Bei dringenden Anliegen wenden Sie "
@@ -685,12 +684,7 @@ class Gates:
         the current message, no conflict language, complete input and no
         mailbox hard block.
         """
-        return (
-            self.clear
-            and not self.conflict
-            and self.complete_input
-            and not self.auto_reply_marker
-        )
+        return self.clear and not self.conflict and self.complete_input and not self.auto_reply_marker
 
 
 def tri_state(semantic_category: str, gates: Gates) -> str:
@@ -904,8 +898,7 @@ class CaseFactory:
         computed = tri_state(semantic, gates)
         if computed != expected:
             raise CaseError(
-                f"{case_id}: mirror computed {computed} but the corpus expects "
-                f"{expected} ({category}/{semantic})"
+                f"{case_id}: mirror computed {computed} but the corpus expects {expected} ({category}/{semantic})"
             )
         if INTENDED.get(category) and INTENDED[category] != (semantic, expected):
             raise CaseError(f"{case_id}: category contract drift {semantic}/{expected}")
@@ -1038,11 +1031,7 @@ def gen_soft(fx: CaseFactory, lang: str, soft: list[str], strong: list[str]) -> 
         """Inputs: closure state only. Output: none — one soft_rejection draw."""
         slots = make_slots(rng, lang)
         remaining = QUOTAS["soft_rejection"] - len(
-            [
-                r
-                for r in fx.records
-                if r["category"] == "soft_rejection" and r["language"] == lang
-            ]
+            [r for r in fx.records if r["category"] == "soft_rejection" and r["language"] == lang]
         )
         use_conflict = conflicts and remaining <= masked_quota
         if use_conflict:
@@ -1090,9 +1079,7 @@ def gen_ambiguous(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     def attempt() -> None:
         """Inputs: closure state only. Output: none — one ambiguous draw."""
         slots = make_slots(rng, lang)
-        made = len(
-            [r for r in fx.records if r["category"] == "ambiguous" and r["language"] == lang]
-        )
+        made = len([r for r in fx.records if r["category"] == "ambiguous" and r["language"] == lang])
         if made >= QUOTAS["ambiguous"] - injection_quota:
             core = [PROMPT_INJECTION, fmt(rng.choice(strong), slots)]
             subject = fmt(rng.choice(bank["subject_rej"]), slots)
@@ -1154,13 +1141,7 @@ def non_rejection_attempt(
     Output: none — one non_rejection draw (called via `CaseFactory.retried`).
     """
     slots = make_slots(rng, lang)
-    made = len(
-        [
-            r
-            for r in fx.records
-            if r["category"] == "non_rejection" and r["language"] == lang
-        ]
-    )
+    made = len([r for r in fx.records if r["category"] == "non_rejection" and r["language"] == lang])
     neg_type = available[made % len(available)]
     payload = bank["neg"][neg_type]
     core = [fmt(rng.choice(payload["core"]), slots)]
@@ -1169,11 +1150,7 @@ def non_rejection_attempt(
     if payload.get("extra") and rng.random() < 0.6:
         core.append(fmt(rng.choice(payload["extra"]), slots))
     subject = fmt(rng.choice(payload["subject"]), slots)
-    semantic = (
-        "opportunity"
-        if neg_type in ("offer_letter", "interview_invite", "scheduling_tool")
-        else "other"
-    )
+    semantic = "opportunity" if neg_type in ("offer_letter", "interview_invite", "scheduling_tool") else "other"
     body = decorate(rng, lang, slots, core, reopen=False)
     fx.add(
         lang,
@@ -1272,9 +1249,7 @@ def gen_truncated(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     def attempt() -> None:
         """Inputs: closure state only. Output: none — one truncated draw."""
         slots = make_slots(rng, lang)
-        made = len(
-            [r for r in fx.records if r["category"] == "truncated" and r["language"] == lang]
-        )
+        made = len([r for r in fx.records if r["category"] == "truncated" and r["language"] == lang])
         decision = fmt(rng.choice(strong), slots)
         subject = fmt(rng.choice(bank["subject_rej"]), slots)
         if made == 0:
@@ -1317,9 +1292,7 @@ def gen_quoted(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     def attempt() -> None:
         """Inputs: closure state only. Output: none — one quoted_history draw."""
         slots = make_slots(rng, lang)
-        made = len(
-            [r for r in fx.records if r["category"] == "quoted_history" and r["language"] == lang]
-        )
+        made = len([r for r in fx.records if r["category"] == "quoted_history" and r["language"] == lang])
         decision = fmt(rng.choice(strong), slots)
         attribution = fmt(QUOTE_ATTRIBUTION[lang], slots)
         heading = FORWARD_HEADING[lang]
@@ -1421,12 +1394,8 @@ def gate_sync_report() -> dict[str, list[str]]:
     """Inputs: none. Output: phrases this corpus relies on that the live Rust
     gate lists are missing (empty lists on a fixed source tree).
     """
-    missing_clear = [
-        p for p in CLEAR_PHRASES if p not in extract_rust_list("clear_rejection_language")
-    ]
-    missing_conflict = [
-        p for p in CONFLICT_PHRASES if p not in extract_rust_list("auto_language_conflict")
-    ]
+    missing_clear = [p for p in CLEAR_PHRASES if p not in extract_rust_list("clear_rejection_language")]
+    missing_conflict = [p for p in CONFLICT_PHRASES if p not in extract_rust_list("auto_language_conflict")]
     return {"missing_clear_phrases": missing_clear, "missing_conflict_phrases": missing_conflict}
 
 
@@ -1525,9 +1494,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     summary_path = Path(args.summary)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     print(f"corpus: {len(records)} cases -> {out_path}")
     print(f"expected outcomes: {expected_counts}")

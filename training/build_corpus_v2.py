@@ -101,49 +101,27 @@ EXPLANATION_NEGATIVE = {
     "application_ack": "Application acknowledgement only - no hiring decision has been made.",
     "interview_invite": "Interview invitation: a positive next step, not a rejection.",
     "offer_letter": "Offer letter: positive hiring decision, not a rejection.",
-    "job_alert": (
-        "Job alert / saved-search alert, not a "
-        "decision about the recipient's application."
-    ),
+    "job_alert": ("Job alert / saved-search alert, not a decision about the recipient's application."),
     "recruiter_spam": "Cold recruiter outreach unrelated to any decision on the recipient.",
-    "newsletter": (
-        "Newsletter discussing rejections in "
-        "general, not a decision about the recipient."
-    ),
+    "newsletter": ("Newsletter discussing rejections in general, not a decision about the recipient."),
     "marketing": "Marketing email with rejection-themed copy; no hiring decision here.",
     "account_security": "Account security notice; unrelated to the recipient's application.",
     "scheduling_tool": "Scheduling-tool notification about an interview, not a rejection.",
-    "ats_notification": (
-        "Recruiter-side ATS pipeline notification "
-        "about other candidates, not the recipient."
-    ),
+    "ats_notification": ("Recruiter-side ATS pipeline notification about other candidates, not the recipient."),
     "adversarial": (
         "Adversarial near-miss: rejection wording used in a "
         "non-rejection context; no negative decision about the recipient."
     ),
 }
 EXPLANATION_AMBIGUOUS = {
-    "keep_in_touch": (
-        "'Keep in touch' language with no definite "
-        "decision - failing closed as uncertain."
-    ),
-    "resume_on_file": (
-        "Only 'we will keep your resume on file' "
-        "- no confirmed rejection, failing closed."
-    ),
+    "keep_in_touch": ("'Keep in touch' language with no definite decision - failing closed as uncertain."),
+    "resume_on_file": ("Only 'we will keep your resume on file' - no confirmed rejection, failing closed."),
     "on_hold": "Role paused or on hold - no definite decision on the recipient; failing closed.",
     "forwarded_mixed": (
-        "Mixed/forwarded content about drafting someone "
-        "else's letter - no clear decision on the recipient."
+        "Mixed/forwarded content about drafting someone else's letter - no clear decision on the recipient."
     ),
-    "withdrawn": (
-        "Process suspended or withdrawn without a clear "
-        "decision on the recipient's own application."
-    ),
-    "assessment": (
-        "Assessment result without a definite hiring "
-        "decision - failing closed as uncertain."
-    ),
+    "withdrawn": ("Process suspended or withdrawn without a clear decision on the recipient's own application."),
+    "assessment": ("Assessment result without a definite hiring decision - failing closed as uncertain."),
 }
 
 QUOTAS = {
@@ -231,9 +209,7 @@ def inject_typos(text: str, rng: random.Random) -> str:
 def add_emoji(body: str, rng: random.Random) -> str:
     """Inputs: `body`; `rng`. Output: body with a rare emoji appended to a line."""
     line = pick(rng, body.splitlines())
-    return body.replace(
-        line, line + " " + pick(rng, ("\U0001f64f", "\U0001f60a", "\u263a\ufe0f")), 1
-    )
+    return body.replace(line, line + " " + pick(rng, ("\U0001f64f", "\U0001f60a", "\u263a\ufe0f")), 1)
 
 
 def maybe_quoted_thread(rng: random.Random, body: str, lang: str, slots: dict) -> str:
@@ -268,11 +244,7 @@ def apply_format(rng: random.Random, body: str, fmt_name: str, lang: str, slots:
         )
         return head + body
     if fmt_name == "ats_auto":
-        return (
-            body
-            + f"\n\nThis is an automated message from {slots['ats']}."
-            f" Please do not reply to this email."
-        )
+        return body + f"\n\nThis is an automated message from {slots['ats']}. Please do not reply to this email."
     if fmt_name == "recruiter_dm":
         return body + f"\n\n— sent from the {pick(rng, DM_SOURCES)} mobile app"
     return body
@@ -339,9 +311,7 @@ def _rejection_blocks(
     return blocks
 
 
-def assemble_rejection(
-    rng: random.Random, lang: str, style: str, fmt_name: str, slots: dict
-) -> dict:
+def assemble_rejection(rng: random.Random, lang: str, style: str, fmt_name: str, slots: dict) -> dict:
     """Inputs: `rng`, `lang`, `style` one of REJECTION_STYLES, `fmt_name`, `slots`.
     Output: dict with subject/body/evidence_hint for one stylistically varied
     rejection email about the recipient's own application.
@@ -366,9 +336,7 @@ def assemble_rejection(
     return {"subject": subject, "body": body, "evidence_hint": decisions[0]}
 
 
-def assemble_negative(
-    rng: random.Random, lang: str, neg_type: str, fmt_name: str, slots: dict
-) -> dict:
+def assemble_negative(rng: random.Random, lang: str, neg_type: str, fmt_name: str, slots: dict) -> dict:
     """Inputs: `rng`, `lang`, `neg_type` key of bank["neg"], `fmt_name`, `slots`.
     Output: dict with subject/body/evidence_hint for one hard-negative email.
     """
@@ -447,9 +415,7 @@ def assemble_adversarial(rng: random.Random, lang: str, fmt_name: str, slots: di
     return {"subject": subject, "body": body, "evidence_hint": core, "core_cat": core_cat}
 
 
-def assemble_ambiguous(
-    rng: random.Random, lang: str, amb_type: str, fmt_name: str, slots: dict
-) -> dict:
+def assemble_ambiguous(rng: random.Random, lang: str, amb_type: str, fmt_name: str, slots: dict) -> dict:
     """Inputs: `rng`, `lang`, `amb_type` key of bank["amb"], `fmt_name`, `slots`.
     Output: dict for one ambiguous email that must NOT be called a confirmed
     rejection (keep-in-touch / resume-on-file / on-hold / mixed / assessment).
@@ -639,9 +605,7 @@ def generate_records(rng: random.Random, quotas: dict) -> tuple[list[dict], dict
         }
         for kind, quota in quotas[lang].items():
             made = 0
-            while made < quota and stats["attempts"] < 60 * sum(
-                sum(q.values()) for q in quotas.values()
-            ):
+            while made < quota and stats["attempts"] < 60 * sum(sum(q.values()) for q in quotas.values()):
                 stats["attempts"] += 1
                 # cycle() is infinite; the explicit default documents the
                 # fallback and keeps the iterator unexhaustible by construction.
@@ -649,8 +613,8 @@ def generate_records(rng: random.Random, quotas: dict) -> tuple[list[dict], dict
                 slots = make_slots(rng, lang)
                 fmt_name = choose_format(rng, kind, subtype)
 
-                payload, category, label, purpose, confidence, explanation, neg_type = (
-                    _make_payload(rng, lang, kind, subtype, fmt_name, slots)
+                payload, category, label, purpose, confidence, explanation, neg_type = _make_payload(
+                    rng, lang, kind, subtype, fmt_name, slots
                 )
 
                 # rare realism: typos AFTER assembly, BEFORE evidence extraction
@@ -679,9 +643,7 @@ def generate_records(rng: random.Random, quotas: dict) -> tuple[list[dict], dict
                     near_src = near_src.replace(slots[slot_key], f"{{{slot_key}}}")
                 near_hash = hash_text(normalize_text(near_src))
 
-                evidence = pick_evidence(
-                    payload["body"], payload.get("evidence_hint", ""), category
-                )
+                evidence = pick_evidence(payload["body"], payload.get("evidence_hint", ""), category)
                 company = slots["company"] if slots["company"] in text else ""
                 position = slots["position"] if slots["position"] in text else ""
 
@@ -731,9 +693,7 @@ def jaccard(a: frozenset, b: frozenset) -> float:
     return inter / (len(a) + len(b) - inter)
 
 
-def split_records(
-    records: list[dict], fraction: float, seed: int
-) -> tuple[list[dict], list[dict], dict]:
+def split_records(records: list[dict], fraction: float, seed: int) -> tuple[list[dict], list[dict], dict]:
     """Inputs: `records` with private hash keys; `fraction`; `seed`.
     Output: `(train, holdout, stats)`. Rows are grouped by near-hash (slot-
     collapsed normalized hash) so rows differing only in names/companies land on
@@ -764,7 +724,7 @@ def split_records(
         target = max(1, round(total * fraction)) if total > 3 else 1
         glist.sort(key=lambda t: (len(t[1]), t[0]))
         held = 0
-        for gh, group in glist:
+        for _gh, group in glist:
             if held == 0 or held + len(group) <= target * 1.5:
                 holdout.extend(group)
                 held += len(group)
@@ -834,9 +794,7 @@ def verify_schema(rows: list[dict], reference: dict | None) -> dict:
             "language",
         }
     )
-    ref_meta = (
-        set(reference["meta"].keys()) if reference else {"id", "label", "category", "purpose"}
-    )
+    ref_meta = set(reference["meta"].keys()) if reference else {"id", "label", "category", "purpose"}
     ok_keys = ok_roles = ok_assistant = ok_meta = ok_user = ok_types = True
     for row in rows:
         ok_keys &= set(row.keys()) - {
@@ -879,11 +837,7 @@ def verify_leakage(train_path: Path, holdout_path: Path) -> dict:
 
     def load(path: Path) -> list[dict]:
         """Load written JSONL rows. Input: file path. Output: row list."""
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def rows_hashes(rows: list[dict]) -> tuple[set, set, list]:
         """Recompute hashes for rows. Input: rows. Output: (exact, near, sh)."""
@@ -893,9 +847,7 @@ def verify_leakage(train_path: Path, holdout_path: Path) -> dict:
         for row in rows:
             text = row["messages"][1]["content"]
             payload = json.loads(text)
-            exact.add(
-                hash_text(normalize_text(payload["subject"] + "\n" + payload["untrusted_email"]))
-            )
+            exact.add(hash_text(normalize_text(payload["subject"] + "\n" + payload["untrusted_email"])))
             sh.append(shingles(payload["subject"] + "\n" + payload["untrusted_email"]))
         return exact, near, sh
 
@@ -907,10 +859,10 @@ def verify_leakage(train_path: Path, holdout_path: Path) -> dict:
     # check instead: cross-split shingle Jaccard scan within (language, category)
     max_sim, pairs_over = 0.0, 0
     by_key: dict[tuple, list] = {}
-    for row, sh in zip(train, t_sh):
+    for row, sh in zip(train, t_sh, strict=True):
         key = (json.loads(row["messages"][2]["content"])["language"], row["meta"]["category"])
         by_key.setdefault(key, []).append(sh)
-    for row, sh in zip(holdout, h_sh):
+    for row, sh in zip(holdout, h_sh, strict=True):
         key = (json.loads(row["messages"][2]["content"])["language"], row["meta"]["category"])
         for other in by_key.get(key, []):
             sim = jaccard(sh, other)
@@ -932,11 +884,7 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
 
     def load(path: Path) -> list[dict]:
         """Load written JSONL rows. Input: file path. Output: row list."""
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def count_by(rows: list[dict], key_fn) -> dict:
         """Count rows by key. Inputs: rows, key function. Output: sorted counts."""
@@ -969,17 +917,11 @@ def verify_counts(train_path: Path, holdout_path: Path, report: dict, neg_type_b
         return neg_type_by_id.get(row["meta"]["id"], "")
 
     hard_neg_rows = [
-        r
-        for r in train + holdout
-        if r["meta"]["label"] == "not_rejection" and r["meta"]["category"] != "uncertain"
+        r for r in train + holdout if r["meta"]["label"] == "not_rejection" and r["meta"]["category"] != "uncertain"
     ]
-    checks["negative_type_counts_match"] = (
-        count_by(hard_neg_rows, neg_type) == report["by_negative_type"]
-    )
+    checks["negative_type_counts_match"] = count_by(hard_neg_rows, neg_type) == report["by_negative_type"]
     amb_rows = [r for r in train + holdout if r["meta"]["category"] == "uncertain"]
-    checks["ambiguous_type_counts_match"] = (
-        count_by(amb_rows, neg_type) == report["by_ambiguous_type"]
-    )
+    checks["ambiguous_type_counts_match"] = count_by(amb_rows, neg_type) == report["by_ambiguous_type"]
     return checks
 
 
@@ -1073,8 +1015,7 @@ def _build_report(
                     [
                         r
                         for r in records
-                        if r["meta"]["label"] == "not_rejection"
-                        and r["meta"]["category"] != "uncertain"
+                        if r["meta"]["label"] == "not_rejection" and r["meta"]["category"] != "uncertain"
                     ],
                     lambda r: r["_neg_type"],
                 ).items()
@@ -1116,9 +1057,7 @@ def main() -> int:
     --holdout-fraction). Output: exit status 0 only when every check
     passes; writes the corpus files and build_report_v2.json.
     """
-    parser = argparse.ArgumentParser(
-        description="Build the v2 rejection-classification SFT corpus."
-    )
+    parser = argparse.ArgumentParser(description="Build the v2 rejection-classification SFT corpus.")
     parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().parent / "data")
     parser.add_argument(
         "--reference-schema",
@@ -1162,9 +1101,7 @@ def main() -> int:
         reference = json.loads(first_line)
 
     schema = verify_schema(train_rows + holdout_rows, reference)
-    leakage = verify_leakage(
-        args.out_dir / "sft_train_v2.jsonl", args.out_dir / "sft_holdout_v2.jsonl"
-    )
+    leakage = verify_leakage(args.out_dir / "sft_train_v2.jsonl", args.out_dir / "sft_holdout_v2.jsonl")
     report["schema_conformance"] = schema
     report["holdout_separation"].update(
         {
@@ -1182,9 +1119,7 @@ def main() -> int:
     report["count_checks"] = counts_ok
 
     report_path = args.out_dir / "build_report_v2.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     print("build_report_v2.json written")
     print(

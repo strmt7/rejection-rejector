@@ -69,8 +69,13 @@ class TestLintScript(unittest.TestCase):
             self.assertNotIn(marker.lower(), lowered, f"forbidden marker: {marker}")
 
     def test_python_scope(self) -> None:
-        for pathspec in ("training/*.py", "tools/*.py", "tests/**/*.py"):
+        # 2026-10-28: scope flipped to recursive globs - the previous shallow
+        # forms (training/*.py, tools/*.py) left training/tests/ and
+        # tools/contract/ unenforced in "All" lint mode.
+        for pathspec in ("training/**/*.py", "tools/**/*.py", "tests/**/*.py"):
             self.assertIn(pathspec, self.text, f"python scope missing {pathspec}")
+        for shallow in ('"training/*.py"', '"tools/*.py"'):
+            self.assertNotIn(shallow, self.text, f"stale shallow scope present: {shallow}")
 
     def test_powershell_scope(self) -> None:
         for pathspec in (

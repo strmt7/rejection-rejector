@@ -67,9 +67,7 @@ class CloseScoreOptimum(unittest.TestCase):
         # The audited 0.001-grid returned threshold 0.501 / TP 0 here; the
         # feasible cutoff region under `>=` is (0.5001, 0.5002] and the
         # canonical reported cutoff is the positive score itself: 0.5002.
-        report = czf.calibrate(
-            [row("not_rejection", 0.5001), row("rejection", 0.5002)], 0
-        )
+        report = czf.calibrate([row("not_rejection", 0.5001), row("rejection", 0.5002)], 0)
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["true_positives"], 1)
         self.assertEqual(report["false_positives"], 0)
@@ -78,12 +76,8 @@ class CloseScoreOptimum(unittest.TestCase):
     def test_reported_counts_match_reported_threshold(self):
         rng = random.Random(7)
         for _ in range(20):
-            rows = [
-                row("not_rejection", round(rng.uniform(0.0, 1.0), 4))
-                for _ in range(rng.randint(1, 5))
-            ] + [
-                row("rejection", round(rng.uniform(0.0, 1.0), 4))
-                for _ in range(rng.randint(1, 5))
+            rows = [row("not_rejection", round(rng.uniform(0.0, 1.0), 4)) for _ in range(rng.randint(1, 5))] + [
+                row("rejection", round(rng.uniform(0.0, 1.0), 4)) for _ in range(rng.randint(1, 5))
             ]
             report = czf.calibrate(rows, rng.randint(0, 2))
             if report["status"] != "ok":
@@ -100,8 +94,7 @@ class CloseScoreOptimum(unittest.TestCase):
             pos_scores = [round(rng.uniform(0.0, 1.0), 4) for _ in range(rng.randint(1, 6))]
             target = rng.randint(0, 1)
             report = czf.calibrate(
-                [row("not_rejection", s) for s in neg_scores]
-                + [row("rejection", s) for s in pos_scores],
+                [row("not_rejection", s) for s in neg_scores] + [row("rejection", s) for s in pos_scores],
                 target,
             )
             expected_tp = ref_optimum(neg_scores, pos_scores, target)
@@ -114,9 +107,7 @@ class CloseScoreOptimum(unittest.TestCase):
             base = round(rng.uniform(0.2, 0.8), 4)
             neg_score = round(base + rng.uniform(-0.0005, 0.0), 4)
             pos_score = round(base + rng.uniform(0.0001, 0.0005), 4)
-            report = czf.calibrate(
-                [row("not_rejection", neg_score), row("rejection", pos_score)], 0
-            )
+            report = czf.calibrate([row("not_rejection", neg_score), row("rejection", pos_score)], 0)
             # The feasible optimum for a straddling pair is always TP 1 / FP 0.
             self.assertEqual(report["status"], "ok")
             self.assertEqual(report["true_positives"], 1)
@@ -136,16 +127,12 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
         self.assertEqual((loose["true_positives"], loose["false_positives"]), (1, 1))
 
     def test_score_endpoints(self):
-        report = czf.calibrate(
-            [row("not_rejection", 0.0), row("rejection", 1.0)], 0
-        )
+        report = czf.calibrate([row("not_rejection", 0.0), row("rejection", 1.0)], 0)
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["threshold"], 1.0)
         self.assertEqual(report["true_positives"], 1)
         # A positive at exactly 0.0 is captured at threshold 0.0 under >=.
-        report = czf.calibrate(
-            [row("not_rejection", 0.0), row("rejection", 0.0)], 0
-        )
+        report = czf.calibrate([row("not_rejection", 0.0), row("rejection", 0.0)], 0)
         self.assertEqual(report["status"], "abstain_all")
 
     def test_permitted_target_fp_counts(self):
@@ -163,9 +150,7 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
         self.assertEqual(loose["threshold"], 0.6)
 
     def test_abstain_all_is_explicit(self):
-        report = czf.calibrate(
-            [row("not_rejection", 0.9), row("rejection", 0.1)], 0
-        )
+        report = czf.calibrate([row("not_rejection", 0.9), row("rejection", 0.1)], 0)
         self.assertEqual(report["status"], "abstain_all")
         self.assertIsNone(report["threshold"])
         self.assertNotEqual(report.get("threshold"), 1.01)
@@ -197,9 +182,7 @@ class DiagnosticsAndValidation(unittest.TestCase):
         self.assertIn("false_positive_rate_upper_95", only_pos["metric_reasons"])
 
     def test_ambiguous_is_explicitly_negative(self):
-        report = czf.calibrate(
-            [row("ambiguous", 0.95), row("rejection", 0.9)], 0
-        )
+        report = czf.calibrate([row("ambiguous", 0.95), row("rejection", 0.9)], 0)
         self.assertEqual(report["status"], "abstain_all")
         self.assertEqual(report["ambiguous_in_negatives"], 1)
         self.assertEqual(report["negatives"], 1)
@@ -222,17 +205,15 @@ class DiagnosticsAndValidation(unittest.TestCase):
             "rejection",
         ]
         for bad in bad_rows:
-            with self.subTest(bad=bad):
-                with self.assertRaises(czf.ScoreRowError):
-                    czf.calibrate([bad], 0)
+            with self.subTest(bad=bad), self.assertRaises(czf.ScoreRowError):
+                czf.calibrate([bad], 0)
 
     def test_target_fp_validation_in_public_api(self):
         rows = [row("not_rejection", 0.1), row("rejection", 0.9)]
         bad_budgets: list = [-1, 1.5, "0", True]
         for budget in bad_budgets:
-            with self.subTest(budget=budget):
-                with self.assertRaises(ValueError):
-                    czf.calibrate(rows, budget)
+            with self.subTest(budget=budget), self.assertRaises(ValueError):
+                czf.calibrate(rows, budget)
 
     def test_load_scores_reports_line_numbers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,9 +241,11 @@ class CliContract(unittest.TestCase):
             path = Path(tmp) / "scores.jsonl"
             path.write_text(body, encoding="utf-8")
             return subprocess.run(
-                [sys.executable, str(TRAINING / "calibrate_zero_fp.py"),
-                 "--scores", str(path), *extra],
-                capture_output=True, text=True, timeout=60,
+                [sys.executable, str(TRAINING / "calibrate_zero_fp.py"), "--scores", str(path), *extra],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
             )
 
     def test_valid_input_reports_identity_and_status(self):
@@ -279,9 +262,7 @@ class CliContract(unittest.TestCase):
         self.assertEqual(report["input"]["rows"], 2)
 
     def test_invalid_input_exits_two_without_a_report(self):
-        done = self.run_cli(
-            '{"label": "not_rejection", "rejection_probability": 2.0}\n'
-        )
+        done = self.run_cli('{"label": "not_rejection", "rejection_probability": 2.0}\n')
         self.assertEqual(done.returncode, 2)
         self.assertEqual(done.stdout.strip(), "")
         self.assertIn("line 1", done.stderr)
@@ -290,7 +271,8 @@ class CliContract(unittest.TestCase):
         done = self.run_cli(
             '{"label": "rejection", "rejection_probability": 0.9}\n'
             '{"label": "not_rejection", "rejection_probability": 0.1}\n',
-            "--target-fp", "-1",
+            "--target-fp",
+            "-1",
         )
         self.assertEqual(done.returncode, 2)
 

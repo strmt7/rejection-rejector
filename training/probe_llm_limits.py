@@ -57,11 +57,9 @@ PRODUCT_PROMPT = (
 PRODUCT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["category", "confidence", "evidence", "explanation",
-                 "company", "position", "language"],
+    "required": ["category", "confidence", "evidence", "explanation", "company", "position", "language"],
     "properties": {
-        "category": {"type": "string",
-                     "enum": ["rejection", "opportunity", "other", "uncertain"]},
+        "category": {"type": "string", "enum": ["rejection", "opportunity", "other", "uncertain"]},
         "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
         "evidence": {"type": "string"},
         "explanation": {"type": "string"},
@@ -97,8 +95,9 @@ def load_stratified(path: Path, per_class: int) -> list[dict]:
     return rows
 
 
-def call_ollama(model: str, system: str, user: str, think, num_predict: int,
-                temperature: float, timeout_s: float = 300.0) -> dict:
+def call_ollama(
+    model: str, system: str, user: str, think, num_predict: int, temperature: float, timeout_s: float = 300.0
+) -> dict:
     """One chat call. Inputs: model tag, prompt parts, think control
     (bool|None), budget, temperature. Output: raw response dict with
     thinking/content/duration fields.
@@ -110,8 +109,7 @@ def call_ollama(model: str, system: str, user: str, think, num_predict: int,
             {"role": "user", "content": user},
         ],
         "stream": False,
-        "options": {"num_predict": num_predict, "temperature": temperature,
-                    "num_ctx": 32768},
+        "options": {"num_predict": num_predict, "temperature": temperature, "num_ctx": 32768},
         "format": PRODUCT_SCHEMA,
     }
     if think is not None:
@@ -124,9 +122,7 @@ def call_ollama(model: str, system: str, user: str, think, num_predict: int,
     # Remote endpoints must be https; plain http is allowed only for the
     # loopback Ollama endpoint (no network transit to protect locally).
     if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
-        raise ValueError(
-            f"urlopen is restricted to https (or http on loopback), got {parsed.scheme!r}"
-        )
+        raise ValueError(f"urlopen is restricted to https (or http on loopback), got {parsed.scheme!r}")
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         return json.load(resp)
 
@@ -164,13 +160,19 @@ def probe_one_row(
     t0 = time.time()
     try:
         resp = call_ollama(
-            model, PRODUCT_PROMPT, row["messages"][1]["content"],
-            think, num_predict, temperature,
+            model,
+            PRODUCT_PROMPT,
+            row["messages"][1]["content"],
+            think,
+            num_predict,
+            temperature,
         )
     except Exception as exc:  # transport failure = recorded, not fatal
         record = {
-            "id": row["meta"]["id"], "true": expected["category"],
-            "pred": "transport_failure", "error": repr(exc)[:200],
+            "id": row["meta"]["id"],
+            "true": expected["category"],
+            "pred": "transport_failure",
+            "error": repr(exc)[:200],
         }
         return record, None
     msg = resp.get("message", {})
@@ -178,7 +180,9 @@ def probe_one_row(
     latency = time.time() - t0
     pred = got.get("category") if got else "parse_failure"
     record = {
-        "id": row["meta"]["id"], "true": expected["category"], "pred": pred,
+        "id": row["meta"]["id"],
+        "true": expected["category"],
+        "pred": pred,
         "confidence": got.get("confidence") if got else None,
         "latency_s": round(latency, 2),
         "thinking_chars": len(msg.get("thinking") or ""),
@@ -197,8 +201,15 @@ def accuracy_of(results: list[dict]) -> float | None:
 
 
 def run_condition(
-    model: str, rows: list[dict], cond: str, think, num_predict: int,
-    temperature: float, report: dict, out_path: Path, progress_path: Path,
+    model: str,
+    rows: list[dict],
+    cond: str,
+    think,
+    num_predict: int,
+    temperature: float,
+    report: dict,
+    out_path: Path,
+    progress_path: Path,
     began: float,
 ) -> tuple[list[dict], dict[str, Counter]]:
     """Probe every row under one condition, writing progress incrementally.
@@ -214,11 +225,17 @@ def run_condition(
         results.append(record)
         if tally is not None:
             confusion[tally[0]][tally[1]] += 1
-        write_progress(progress_path, {
-            "job": "probe_llm_limits", "condition": cond,
-            "done": len(results), "total": len(rows),
-            "elapsed_seconds": round(time.time() - began, 1), "status": "running",
-        })
+        write_progress(
+            progress_path,
+            {
+                "job": "probe_llm_limits",
+                "condition": cond,
+                "done": len(results),
+                "total": len(rows),
+                "elapsed_seconds": round(time.time() - began, 1),
+                "status": "running",
+            },
+        )
         # Incremental durable write: a silent process death must never
         # lose completed rows (this exact flaw lost the first run).
         report["conditions"][cond] = {
@@ -305,20 +322,32 @@ def main() -> int:
     for cond in conds:
         think, num_predict, temperature = CONDITIONS[cond]
         results, confusion = run_condition(
-            args.model, rows, cond, think, num_predict, temperature,
-            report, args.out, progress_path, began,
+            args.model,
+            rows,
+            cond,
+            think,
+            num_predict,
+            temperature,
+            report,
+            args.out,
+            progress_path,
+            began,
         )
         block = summarize_condition(results, confusion)
         report["conditions"][cond] = block
-        print(f"condition {cond}: accuracy={block['accuracy']} "
-              f"false_accept={block['fail_closed']['false_acceptances']} "
-              f"parse_fail={block['parse_failures']}", flush=True)
+        print(
+            f"condition {cond}: accuracy={block['accuracy']} "
+            f"false_accept={block['fail_closed']['false_acceptances']} "
+            f"parse_fail={block['parse_failures']}",
+            flush=True,
+        )
 
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    write_progress(progress_path, {"job": "probe_llm_limits", "status": "complete",
-                                   "elapsed_seconds": round(time.time() - began, 1)})
-    summary = {c: {k: v for k, v in d.items() if k != "results"}
-               for c, d in report["conditions"].items()}
+    write_progress(
+        progress_path,
+        {"job": "probe_llm_limits", "status": "complete", "elapsed_seconds": round(time.time() - began, 1)},
+    )
+    summary = {c: {k: v for k, v in d.items() if k != "results"} for c, d in report["conditions"].items()}
     print(json.dumps(summary, indent=2), flush=True)
     return 0
 

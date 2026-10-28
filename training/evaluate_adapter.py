@@ -85,9 +85,7 @@ def build_prompt(row: dict, tokenizer) -> str:
         {"role": "system", "content": row["messages"][0]["content"]},
         {"role": "user", "content": row["messages"][1]["content"]},
     ]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
 def parse_answer(text: str) -> dict | None:
@@ -153,12 +151,8 @@ def fail_closed_split(results: list[dict]) -> dict[str, int]:
     """
     # Fail-closed analysis: predicted 'rejection' on a non-rejection is the
     # dangerous error class (could authorize a reply); the reverse is a miss.
-    false_rejection = sum(
-        1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection"
-    )
-    missed_rejection = sum(
-        1 for r in results if r["true"] == "rejection" and r["pred"] != "rejection"
-    )
+    false_rejection = sum(1 for r in results if r["true"] != "rejection" and r["pred"] == "rejection")
+    missed_rejection = sum(1 for r in results if r["true"] == "rejection" and r["pred"] != "rejection")
     return {
         "false_rejection_would_authorize": false_rejection,
         "missed_rejection_fails_closed": missed_rejection,
@@ -191,9 +185,7 @@ def main() -> int:
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
     quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.base_model, quantization_config=quant, device_map=device
-    )
+    model = AutoModelForCausalLM.from_pretrained(args.base_model, quantization_config=quant, device_map=device)
     model = PeftModel.from_pretrained(model, str(args.adapter))
     model.eval()
     try:
@@ -224,8 +216,13 @@ def main() -> int:
         )
         write_progress(
             progress_path,
-            {"job": "evaluate_adapter", "done": i + 1, "total": len(rows),
-             "elapsed_seconds": time.time() - began, "status": "running"},
+            {
+                "job": "evaluate_adapter",
+                "done": i + 1,
+                "total": len(rows),
+                "elapsed_seconds": time.time() - began,
+                "status": "running",
+            },
         )
         if (i + 1) % 25 == 0:
             print(f"{i + 1}/{len(rows)}", flush=True)
@@ -264,8 +261,7 @@ def main() -> int:
         },
     }
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    write_progress(progress_path, {"job": "evaluate_adapter", "status": "complete",
-                                   "done": total, "total": total})
+    write_progress(progress_path, {"job": "evaluate_adapter", "status": "complete", "done": total, "total": total})
     print(json.dumps({k: v for k, v in report.items() if k != "results"}, indent=2), flush=True)
     return 0
 

@@ -124,9 +124,7 @@ def has_topic(text: str) -> bool:
     """Inputs: `text`. Output: True when the message is about hiring/recruiting
     (topic vocabulary, or a position word next to job vocabulary).
     """
-    return bool(TOPIC_RE.search(text)) or bool(
-        POSITION_TOKEN_RE.search(text) and JOBISH_RE.search(text)
-    )
+    return bool(TOPIC_RE.search(text)) or bool(POSITION_TOKEN_RE.search(text) and JOBISH_RE.search(text))
 
 
 # A clear negative hiring decision (the phrase must sit in one sentence).
@@ -489,43 +487,24 @@ EXPLANATION_REJECTION = {
         "Real recruiter/employer message delivering a clear negative "
         "hiring decision about the recipient's own application."
     ),
-    "ats_status": (
-        "Real application-status update telling the "
-        "recipient the application was not selected."
-    ),
-    "position_filled": (
-        "Real message closing the recipient's candidacy "
-        "because the position went to someone else."
-    ),
-    "agency_rejection": (
-        "Real staffing/agency message relaying a "
-        "negative decision on the recipient's application."
-    ),
+    "ats_status": ("Real application-status update telling the recipient the application was not selected."),
+    "position_filled": ("Real message closing the recipient's candidacy because the position went to someone else."),
+    "agency_rejection": ("Real staffing/agency message relaying a negative decision on the recipient's application."),
 }
 EXPLANATION_UNCERTAIN = {
     "keep_on_file": (
-        "Real message keeping the recipient's application on "
-        "file with no definite decision - ambiguous, fail closed."
+        "Real message keeping the recipient's application on file with no definite decision - ambiguous, fail closed."
     ),
-    "resume_on_file": (
-        "Real message putting the application 'under "
-        "review' with no outcome - ambiguous, fail closed."
-    ),
+    "resume_on_file": ("Real message putting the application 'under review' with no outcome - ambiguous, fail closed."),
     "hiring_freeze": (
-        "Real message with no openings/on-hold language in "
-        "reply to an application - ambiguous, fail closed."
+        "Real message with no openings/on-hold language in reply to an application - ambiguous, fail closed."
     ),
     "withdrawn": (
-        "Real message about withdrawing an application - no "
-        "clear negative decision by the employer, fail closed."
+        "Real message about withdrawing an application - no clear negative decision by the employer, fail closed."
     ),
-    "assessment": (
-        "Real message about next steps/assessments "
-        "with no decision - ambiguous, fail closed."
-    ),
+    "assessment": ("Real message about next steps/assessments with no decision - ambiguous, fail closed."),
     "forwarded_mixed": (
-        "Real forwarded/mixed thread touching recruiting but "
-        "not a clean decision about the recipient - fail closed."
+        "Real forwarded/mixed thread touching recruiting but not a clean decision about the recipient - fail closed."
     ),
     "third_party_decision": (
         "Real message discussing a hiring decision about someone else - a "
@@ -536,12 +515,10 @@ EXPLANATION_UNCERTAIN = {
         "but no provable decision about the recipient, fail closed."
     ),
     "interview_scheduling_ambiguous": (
-        "Real interview-scheduling mail where a positive next "
-        "step for the recipient cannot be confirmed - fail closed."
+        "Real interview-scheduling mail where a positive next step for the recipient cannot be confirmed - fail closed."
     ),
     "soft_close": (
-        "Real message closing with job-search well-wishes but "
-        "no explicit hiring decision - ambiguous, fail closed."
+        "Real message closing with job-search well-wishes but no explicit hiring decision - ambiguous, fail closed."
     ),
     "non_job_application": (
         "Real message with a clear negative decision about the recipient's non-job application "
@@ -549,32 +526,22 @@ EXPLANATION_UNCERTAIN = {
     ),
 }
 EXPLANATION_OPPORTUNITY = {
-    "interview_invite": (
-        "Real interview invitation: a positive "
-        "next step for the recipient's application."
-    ),
+    "interview_invite": ("Real interview invitation: a positive next step for the recipient's application."),
     "offer_letter": "Real offer discussion: a positive hiring decision, not a rejection.",
 }
 EXPLANATION_OTHER = {
     "mailing_list": "Real mailing-list mail, not a decision about anyone's application.",
     "newsletter": "Real newsletter, not a decision about anyone's application.",
     "notification": "Real automated notification, not a hiring decision.",
-    "hr_announcement": (
-        "Real HR/company announcement, not a "
-        "decision about the recipient's application."
-    ),
+    "hr_announcement": ("Real HR/company announcement, not a decision about the recipient's application."),
     "scheduling": "Real scheduling/meeting mail, not a hiring decision.",
     "recruiter_spam": "Real cold recruiter outreach unrelated to any decision on the recipient.",
     "personal": "Real personal mail, unrelated to any job application.",
     "job_alert": "Real job alert, not a decision about the recipient's application.",
     "internal_hiring_discussion": (
-        "Real internal hiring discussion without a "
-        "decision about the recipient's own application."
+        "Real internal hiring discussion without a decision about the recipient's own application."
     ),
-    "business_other": (
-        "Real corporate mail that only brushes "
-        "recruiting vocabulary, no hiring decision."
-    ),
+    "business_other": ("Real corporate mail that only brushes recruiting vocabulary, no hiring decision."),
 }
 
 # --------------------------------------------------------------------------- #
@@ -849,9 +816,7 @@ ORG_CONTEXT_RE = re.compile(
 )
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 NAME_PAIR_RE = re.compile(r"\b([A-Z][a-zA-Z'\-]{1,20})\s+([A-Z][a-zA-Z'\-]{1,20})\b")
-TITLE_NAME_RE = re.compile(
-    r"(?:Mr|Mrs|Ms|Miss|Dr|Prof|Professor)\.?\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*)"
-)
+TITLE_NAME_RE = re.compile(r"(?:Mr|Mrs|Ms|Miss|Dr|Prof|Professor)\.?\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*)")
 GREETING_NAME_RE = re.compile(
     r"(?:Dear|Hi|Hello|Hey|Good "
     r"(?:morning|afternoon|evening))\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*)"
@@ -1229,9 +1194,7 @@ def harvest_name_tokens(*texts: str) -> set[str]:
             tokens.add(word_core(match.group(1)))
             tokens.add(word_core(match.group(2)))
         # overlapping pairs ("Also Mark Jones" must see "Mark Jones" too)
-        for match in re.finditer(
-            r"\b([A-Z][a-zA-Z'\-]{1,20})\s+(?=([A-Z][a-zA-Z'\-]{1,20})\b)", text
-        ):
+        for match in re.finditer(r"\b([A-Z][a-zA-Z'\-]{1,20})\s+(?=([A-Z][a-zA-Z'\-]{1,20})\b)", text):
             tokens.add(word_core(match.group(1)))
             tokens.add(word_core(match.group(2)))
         for pattern in (TITLE_NAME_RE, GREETING_NAME_RE, CLOSING_NAME_RE):
@@ -1306,9 +1269,7 @@ class Redactor:
         text = GREETING_NAME_RE.sub(self._sub_forced_name, text)
         text = CLOSING_NAME_RE.sub(self._sub_forced_name, text)
         segments = PLACEHOLDER_SPLIT_RE.split(text)
-        return "".join(
-            seg if i % 2 else TOKEN_RE.sub(self._sub_name, seg) for i, seg in enumerate(segments)
-        )
+        return "".join(seg if i % 2 else TOKEN_RE.sub(self._sub_name, seg) for i, seg in enumerate(segments))
 
     def _sub_url(self, match: re.Match) -> str:
         """Replace one URL match. Input: match. Output: [URL]."""
@@ -1423,8 +1384,7 @@ def redaction_sweep(text: str, name_tokens: set[str]) -> dict:
         "ssn_or_card_remaining": len(SSN_RE.findall(scan)) + len(CC_RE.findall(scan)),
         "street_addresses_remaining": len(STREET_ADDR_RE.findall(scan)),
         "floor_suite_remaining": len(FLOOR_SUITE_RE.findall(scan)),
-        "city_state_zip_remaining": len(CITY_STATE_ZIP_RE.findall(scan))
-        + len(ZIP4_RE.findall(scan)),
+        "city_state_zip_remaining": len(CITY_STATE_ZIP_RE.findall(scan)) + len(ZIP4_RE.findall(scan)),
         "urls_remaining": len(URL_RE.findall(scan)),
         "company_refs_remaining": (
             len(COMPANY_WORD_RE.findall(scan))
@@ -1450,9 +1410,7 @@ def redaction_sweep(text: str, name_tokens: set[str]) -> dict:
             )
         ),
         # malformed placeholder shapes ("[[NAME]", "[mailto:[EMAIL]") must be tidied
-        "malformed_placeholders_remaining": (
-            len(re.findall(r"\[\s*\[[A-Z]+\]|\[[A-Z]+\]\s*\]|\[\s*mailto:", text))
-        ),
+        "malformed_placeholders_remaining": (len(re.findall(r"\[\s*\[[A-Z]+\]|\[[A-Z]+\]\s*\]|\[\s*mailto:", text))),
     }
 
 
@@ -1521,9 +1479,7 @@ def _decision_gate(text: str, sentences: list[str], decision_sent: str) -> tuple
         about_recipient = bool(REJECTION_SUBJECT_RE.search(decision_sent))
         if hiring_scoped and about_recipient:
             window = " ".join(
-                sentences[
-                    max(0, sentences.index(decision_sent) - 1) : sentences.index(decision_sent) + 2
-                ]
+                sentences[max(0, sentences.index(decision_sent) - 1) : sentences.index(decision_sent) + 2]
             )
             window_non_job = bool(NON_JOB_SCOPE_RE.search(window))
             window_emp = bool(EMPLOYMENT_STRONG_RE.search(window))
@@ -1548,12 +1504,7 @@ def _rejection_subtype(lowered: str) -> str:
     """
     if "no longer" in lowered or "not selected" in lowered or "status" in lowered:
         return "ats_status"
-    if (
-        "filled" in lowered
-        or "offered" in lowered
-        or "another" in lowered
-        or "other candidate" in lowered
-    ):
+    if "filled" in lowered or "offered" in lowered or "another" in lowered or "other candidate" in lowered:
         return "position_filled"
     if "client" in lowered or "agency" in lowered or "staffing" in lowered:
         return "agency_rejection"
@@ -1595,9 +1546,7 @@ def _rule_opportunity(text: str, forwarded: bool, opp_sent: str) -> dict | None:
         and OPP_CONTEXT_RE.search(opp_sent)
     ):
         subtype = (
-            "offer_letter"
-            if re.search(r"\boffer\b|congratulations", opp_sent, re.IGNORECASE)
-            else "interview_invite"
+            "offer_letter" if re.search(r"\boffer\b|congratulations", opp_sent, re.IGNORECASE) else "interview_invite"
         )
         return {
             "category": "opportunity",
@@ -1623,11 +1572,7 @@ def _rule_forwarded(text: str, forwarded: bool, decision_sent: str, subject: str
 def _rule_ambiguous(text: str, sentences: list[str]) -> dict | None:
     """4) explicit ambiguity patterns (soft closes in pure acknowledgements stay `other`)."""
     amb_sent, amb_subtype = first_match(AMBIGUOUS_RES, sentences)
-    if (
-        has_topic(text)
-        and amb_subtype
-        and not (amb_subtype == "soft_close" and ACK_RE.search(text))
-    ):
+    if has_topic(text) and amb_subtype and not (amb_subtype == "soft_close" and ACK_RE.search(text)):
         return {
             "category": "uncertain",
             "subtype": amb_subtype,
@@ -1637,9 +1582,7 @@ def _rule_ambiguous(text: str, sentences: list[str]) -> dict | None:
     return None
 
 
-def _rule_uncertain_decision(
-    text: str, decision_sent: str, decision_scope: str, has_link: bool
-) -> dict | None:
+def _rule_uncertain_decision(text: str, decision_sent: str, decision_scope: str, has_link: bool) -> dict | None:
     """5) rejection wording without a provable recipient link or outside hiring
     scope: fail closed to `uncertain`.
     """
@@ -1748,9 +1691,7 @@ POSITION_RES = [
         r"\s+job\b|[\.,;:!?\n]|$)",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"\b([A-Za-z][A-Za-z0-9\-/'&+ ]{2,45}?)\s+(?:position|role|opening)\b", re.IGNORECASE
-    ),
+    re.compile(r"\b([A-Za-z][A-Za-z0-9\-/'&+ ]{2,45}?)\s+(?:position|role|opening)\b", re.IGNORECASE),
 ]
 PRONOUN_RE = re.compile(
     r"\b(?:we|you|your|i|our|us|they|their|this|that|with|have|has|been|will|would|the company)\b",
@@ -1891,9 +1832,7 @@ def build_record(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": json.dumps(
-                    {"subject": subject, "untrusted_email": body}, ensure_ascii=False
-                ),
+                "content": json.dumps({"subject": subject, "untrusted_email": body}, ensure_ascii=False),
             },
             {"role": "assistant", "content": json.dumps(assistant, ensure_ascii=False)},
         ],
@@ -1967,12 +1906,8 @@ def verify_schema(rows: list[dict], reference: dict | None) -> dict:
             "language",
         }
     )
-    ref_meta = (
-        set(reference["meta"].keys()) if reference else {"id", "label", "category", "purpose"}
-    )
-    ok_keys = ok_roles = ok_assistant = ok_meta = ok_user = ok_types = ok_prompt = ok_evidence = (
-        True
-    )
+    ref_meta = set(reference["meta"].keys()) if reference else {"id", "label", "category", "purpose"}
+    ok_keys = ok_roles = ok_assistant = ok_meta = ok_user = ok_types = ok_prompt = ok_evidence = True
     for row in rows:
         ok_keys &= set(row.keys()) == {"messages", "meta"}
         ok_roles &= [m["role"] for m in row["messages"]] == ["system", "user", "assistant"]
@@ -2012,9 +1947,7 @@ def verify_schema(rows: list[dict], reference: dict | None) -> dict:
         if assistant["category"] == "other":
             ok_evidence &= assistant["evidence"] == ""
         else:
-            ok_evidence &= (
-                bool(assistant["evidence"]) and assistant["evidence"] in user["untrusted_email"]
-            )
+            ok_evidence &= bool(assistant["evidence"]) and assistant["evidence"] in user["untrusted_email"]
     return {
         "top_level_keys_match": bool(ok_keys),
         "message_roles_match": bool(ok_roles),
@@ -2083,9 +2016,7 @@ def verify_counts(path: Path, report: dict) -> dict:
     where counts recomputed from the file itself match the report exactly and
     the class-share contract holds.
     """
-    rows = [
-        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
-    ]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def count_by(key_fn) -> dict:
         """Count rows by key. Input: key function. Output: sorted counts."""
@@ -2113,8 +2044,7 @@ def verify_counts(path: Path, report: dict) -> dict:
 
     checks = {
         "total_matches": len(rows) == report.get("total_rows"),
-        "by_category_match": count_by(category)
-        == dict(sorted(report.get("by_category", {}).items())),
+        "by_category_match": count_by(category) == dict(sorted(report.get("by_category", {}).items())),
         "by_label_match": count_by(label) == dict(sorted(report.get("by_label", {}).items())),
         "by_purpose_match": count_by(purpose) == dict(sorted(report.get("by_purpose", {}).items())),
         "by_language_match": count_by(lang) == dict(sorted(report.get("by_language", {}).items())),
@@ -2149,14 +2079,8 @@ def record_source_provenance(corpus: Path) -> dict:
                 hasher.update(chunk)
         digest = hasher.hexdigest()
     return {
-        "dataset": (
-            "Enron Email Dataset (CALO project; ~517k real "
-            "corporate e-mails, 150 custodian mailboxes)"
-        ),
-        "source_chosen": (
-            "CMU/MIT official distribution: "
-            "enron_mail_20150507.tar.gz (May 7, 2015 version)"
-        ),
+        "dataset": ("Enron Email Dataset (CALO project; ~517k real corporate e-mails, 150 custodian mailboxes)"),
+        "source_chosen": ("CMU/MIT official distribution: enron_mail_20150507.tar.gz (May 7, 2015 version)"),
         "source_url": "https://www.cs.cmu.edu/~enron/enron_mail_20150507.tar.gz",
         "source_file": corpus.name,
         "source_sha256": digest,
@@ -2240,11 +2164,7 @@ def _load_existing_hashes(existing_paths) -> set[str]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 payload = json.loads(json.loads(line)["messages"][1]["content"])
-                existing_exact.add(
-                    hash_text(
-                        normalize_text(payload["subject"] + "\n" + payload["untrusted_email"])
-                    )
-                )
+                existing_exact.add(hash_text(normalize_text(payload["subject"] + "\n" + payload["untrusted_email"])))
     return existing_exact
 
 
@@ -2275,10 +2195,7 @@ def _scan_candidates(args, rng) -> tuple[list[dict], dict[str, int], int, int]:
         if args.max_scan and scanned >= args.max_scan:
             break
         if scanned % 50000 == 0:
-            print(
-                f"  scanned {scanned} messages, kept "
-                f"{sum(len(v) for v in reservoirs.values())} candidates ..."
-            )
+            print(f"  scanned {scanned} messages, kept {sum(len(v) for v in reservoirs.values())} candidates ...")
         if not PREFILTER_BYTES_RE.search(raw):
             continue
         parsed = parse_message(raw)
@@ -2365,9 +2282,7 @@ def _redact_dedup(candidates: list[dict], name_tokens: set[str], existing_exact:
     return accepted, dedup_stats, redactor
 
 
-def _select_rows(
-    accepted: list[dict], plan: dict, _args, rng
-) -> tuple[list[dict], dict[str, dict]]:
+def _select_rows(accepted: list[dict], plan: dict, _args, rng) -> tuple[list[dict], dict[str, dict]]:
     """Phase 3: distribution-constrained selection. Inputs: accepted slots,
     the distribution plan, parsed args and the seeded rng. Output:
     `(rows, provenance)`.
@@ -2527,9 +2442,7 @@ def _distribution_status(rows, counts_ok, reservoir_seen, found) -> dict:
         "uncertain_share": {
             "status": "met" if counts_ok["uncertain_share_at_least_25_pct"] else "not_met",
             "actual_pct": round(
-                100
-                * sum(1 for r in rows if r["meta"]["category"] == "uncertain")
-                / max(1, len(rows)),
+                100 * sum(1 for r in rows if r["meta"]["category"] == "uncertain") / max(1, len(rows)),
                 1,
             ),
         },
@@ -2540,9 +2453,7 @@ def _distribution_status(rows, counts_ok, reservoir_seen, found) -> dict:
                 else "not_met_real_data_availability"
             ),
             "actual_pct": round(
-                100
-                * sum(1 for r in rows if r["meta"]["category"] == "rejection")
-                / max(1, len(rows)),
+                100 * sum(1 for r in rows if r["meta"]["category"] == "rejection") / max(1, len(rows)),
                 1,
             ),
             "note": (
@@ -2591,9 +2502,7 @@ def _verification_ok(schema_full, schema_sample, leakage, counts_ok, sweep_total
     Output: True only when the run is accepted.
     """
     # the aspirational rejection-share check is reported but never gates exit
-    gating_counts = {
-        k: v for k, v in counts_ok.items() if k != "rejection_share_within_25_35_pct_aspirational"
-    }
+    gating_counts = {k: v for k, v in counts_ok.items() if k != "rejection_share_within_25_35_pct_aspirational"}
     return (
         all(schema_full.values())
         and all(schema_sample.values())
@@ -2619,9 +2528,7 @@ def main() -> int:
     exit status 0 only when every verification check passes; writes
     enron_mined_v1.jsonl and enron_mined_report.json.
     """
-    parser = argparse.ArgumentParser(
-        description="Mine real generic-scenario recruiting rows from the Enron corpus."
-    )
+    parser = argparse.ArgumentParser(description="Mine real generic-scenario recruiting rows from the Enron corpus.")
     parser.add_argument(
         "--corpus",
         type=Path,
@@ -2655,9 +2562,7 @@ def main() -> int:
             print("FAIL: system prompt is not byte-identical to the reference corpus")
             return 1
 
-    existing_paths = (
-        args.existing if args.existing is not None else sorted(args.out_dir.glob("sft_*.jsonl"))
-    )
+    existing_paths = args.existing if args.existing is not None else sorted(args.out_dir.glob("sft_*.jsonl"))
     existing_exact = _load_existing_hashes(existing_paths)
 
     # ---- phase 1: stream the corpus, keep only bounded candidate reservoirs ----
@@ -2731,14 +2636,10 @@ def main() -> int:
     report["validation"]["counts_recomputed_from_file"] = verify_counts(out_path, report)
 
     counts_ok = report["validation"]["counts_recomputed_from_file"]
-    report["distribution_target_status"] = _distribution_status(
-        rows, counts_ok, reservoir_seen, found
-    )
+    report["distribution_target_status"] = _distribution_status(rows, counts_ok, reservoir_seen, found)
     report["spot_checks"] = _spot_checks(rows, provenance)
     report_path = args.out_dir / "enron_mined_report.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
     counts_ok = report["validation"]["counts_recomputed_from_file"]
     ok = _verification_ok(schema_full, schema_sample, leakage, counts_ok, sweep_totals, rows)

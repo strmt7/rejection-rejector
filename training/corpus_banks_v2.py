@@ -139,9 +139,7 @@ BANKS["en"] = {
             "The hiring team has passed on your candidacy for {position}.",
         ],
         "polite": [
-            "After careful consideration, we regret to inform you that we will not be proceeding "
-            "with your "
-            "candidacy.",
+            "After careful consideration, we regret to inform you that we will not be proceeding with your candidacy.",
             "We appreciate the time you invested in the process, but we have decided to move "
             "forward with another "
             "candidate.",
@@ -151,15 +149,11 @@ BANKS["en"] = {
             "It was a pleasure learning about your background. Regretfully, we must decline your "
             "application at this "
             "time.",
-            "We met many strong candidates and, after much deliberation, have chosen to proceed "
-            "with someone "
-            "else.",
+            "We met many strong candidates and, after much deliberation, have chosen to proceed with someone else.",
             "We are grateful for your interest in {company} and sorry to say that we will not be "
             "taking your application "
             "further.",
-            "While we were impressed with parts of your profile, we have decided not to move "
-            "forward at this "
-            "time.",
+            "While we were impressed with parts of your profile, we have decided not to move forward at this time.",
             "Thank you again for your patience during our process. We will not be extending an "
             "offer for the {position} "
             "role.",
@@ -215,43 +209,29 @@ BANKS["en"] = {
             "with more {skill} "
             "experience.",
             "Bad news on the {position} role: the client chose another candidate.",
-            "The end client has declined your profile and we will keep you in mind for future "
-            "briefs.",
+            "The end client has declined your profile and we will keep you in mind for future briefs.",
             "We heard back from the account team and they are not moving forward with you.",
             "The client feedback was that your background did not match the brief closely enough.",
         ],
         "internal": [
-            "I wanted to close the loop - the team decided not to move forward with you for the "
-            "{position} "
-            "role.",
+            "I wanted to close the loop - the team decided not to move forward with you for the {position} role.",
             "Just heard back from the hiring manager: they are passing on your application. Happy "
             "to keep you in mind for other "
             "teams.",
             "I am sorry to say the panel went with a different candidate. You came close.",
-            "Quick update from my side: the answer is no on this one, though I know the team liked "
-            "you.",
-            "Between us, the req got re-scoped and you are no longer in the running for "
-            "{position}.",
-            "I would rather you hear it from me directly: we are not moving forward with your "
-            "application.",
-            "The debrief is done and the decision is not to proceed. I am happy to share brief "
-            "feedback if "
-            "useful.",
+            "Quick update from my side: the answer is no on this one, though I know the team liked you.",
+            "Between us, the req got re-scoped and you are no longer in the running for {position}.",
+            "I would rather you hear it from me directly: we are not moving forward with your application.",
+            "The debrief is done and the decision is not to proceed. I am happy to share brief feedback if useful.",
         ],
         "ats": [
-            "Your application for {position} (ID {id}) has not been selected for further "
-            "consideration.",
+            "Your application for {position} (ID {id}) has not been selected for further consideration.",
             "Status update: Not Selected. Thank you for your interest in {company}.",
-            "Dear Applicant, this is an automated notification that your candidacy has been "
-            "closed.",
+            "Dear Applicant, this is an automated notification that your candidacy has been closed.",
             "Your profile has been moved to the 'Rejected' stage in our applicant tracking system.",
-            "Following an automated review, your application has been archived and will not "
-            "progress.",
-            "Your job application (ID {id}) has been marked as not selected by the recruiting "
-            "team.",
-            "This is an automated status change for the {position} requisition: Application closed "
-            "- not "
-            "selected.",
+            "Following an automated review, your application has been archived and will not progress.",
+            "Your job application (ID {id}) has been marked as not selected by the recruiting team.",
+            "This is an automated status change for the {position} requisition: Application closed - not selected.",
         ],
     },
     "context": [
@@ -310,12 +290,9 @@ BANKS["en"] = {
             ],
             "intro": ["Hi {first},", "Hello {first},", "Dear Applicant,"],
             "core": [
-                "Thanks for applying for the {position} role at {company} - we received your "
-                "application.",
+                "Thanks for applying for the {position} role at {company} - we received your application.",
                 "Your application for {position} (ID {id}) has been received and is now in review.",
-                "We have your application for the {position} opening and the recruiting team will "
-                "take a "
-                "look.",
+                "We have your application for the {position} opening and the recruiting team will take a look.",
             ],
             "extra": [
                 "You can check your status any time in our candidate portal.",
@@ -385,8 +362,7 @@ BANKS["en"] = {
             ],
             "intro": ["Hi {first},", "Hello {first},", "Hey {first},"],
             "core": [
-                "I came across your profile and wanted to reach out about roles in the {skill} "
-                "space.",
+                "I came across your profile and wanted to reach out about roles in the {skill} space.",
                 "We are hiring for several positions and your experience caught my eye.",
                 "Are you open to hearing about new opportunities this quarter?",
             ],
@@ -422,9 +398,7 @@ BANKS["en"] = {
             ],
             "intro": ["Hi {first},", "Hey {first},"],
             "core": [
-                "Our new course 'Crushing Rejections' shows you how to turn 47 rejection letters "
-                "into 3 "
-                "offers.",
+                "Our new course 'Crushing Rejections' shows you how to turn 47 rejection letters into 3 offers.",
                 "Book a free 20-minute career audit before Friday.",
                 "This week only: resume rewrites at half price.",
             ],
@@ -494,8 +468,7 @@ BANKS["en"] = {
             "subject": ["Keeping in touch", "Your profile at {company}", "Stay in touch"],
             "intro": ["Hi {first},", "Hello {first},"],
             "core": [
-                "We were impressed with your profile and will keep you in mind for future "
-                "openings.",
+                "We were impressed with your profile and will keep you in mind for future openings.",
                 "Let's stay in touch - the team may have needs again next quarter.",
                 "Nothing is decided on our side; we genuinely want to keep the conversation going.",
             ],
@@ -543,8 +516,7 @@ BANKS["en"] = {
             "intro": ["Hi {first},", "Hey,"],
             "core": [
                 "Fwd: candidate decision letter - is this wording fine from a legal standpoint?",
-                "Thoughts on this draft before I send it? The candidate is expecting news this "
-                "week.",
+                "Thoughts on this draft before I send it? The candidate is expecting news this week.",
                 "Forwarding the hiring manager's notes on the {position} search; nothing to "
                 "communicate externally "
                 "yet.",
@@ -579,9 +551,7 @@ BANKS["en"] = {
             ],
             "intro": ["Hi {first},", "Dear Applicant,"],
             "core": [
-                "Your assessment score was 62%; unfortunately you did not meet the threshold. You "
-                "may retake it "
-                "once.",
+                "Your assessment score was 62%; unfortunately you did not meet the threshold. You may retake it once.",
                 "We regret that your test result fell below the cutoff for the {position} process.",
                 "Assessment complete: 4 of 8. A recruiter will review the results shortly.",
             ],
@@ -672,9 +642,7 @@ BANKS["en"] = {
                 "opportunity",
             ),
             (
-                "Our survey on rejection letters closes Friday - unfortunately responses have been "
-                "slow this "
-                "year.",
+                "Our survey on rejection letters closes Friday - unfortunately responses have been slow this year.",
                 "other",
             ),
         ],
@@ -742,10 +710,8 @@ BANKS["es"] = {
             "No le estamos convocando a la siguiente etapa del proceso.",
         ],
         "polite": [
-            "Tras una cuidadosa consideracion, lamentamos informarle que no seguiremos con su "
-            "candidatura.",
-            "Agradecemos el tiempo que dedico al proceso, pero hemos decidido continuar con otro/a "
-            "candidato/a.",
+            "Tras una cuidadosa consideracion, lamentamos informarle que no seguiremos con su candidatura.",
+            "Agradecemos el tiempo que dedico al proceso, pero hemos decidido continuar con otro/a candidato/a.",
             "Lamentablemente no le ofreceremos el puesto de {position} en esta ocasion.",
             "Fue un placer conocer su trayectoria; lamentablemente debemos declinar su solicitud.",
         ],
@@ -768,12 +734,8 @@ BANKS["es"] = {
             "La presente carta confirma que su candidatura para la posicion mencionada ha sido "
             "concluida sin mas "
             "tramite.",
-            "La Sociedad ha completado su revision y no se realizara oferta de empleo; esta "
-            "decision es "
-            "definitiva.",
-            "Nada en esta comunicacion constituye contrato de empleo ni compromiso alguno de "
-            "consideracion "
-            "futura.",
+            "La Sociedad ha completado su revision y no se realizara oferta de empleo; esta decision es definitiva.",
+            "Nada en esta comunicacion constituye contrato de empleo ni compromiso alguno de consideracion futura.",
         ],
         "agency": [
             "Nuestro cliente ha decidido no continuar con su perfil para el puesto por contrato.",
@@ -784,23 +746,16 @@ BANKS["es"] = {
             "Malas noticias sobre el puesto de {position}: el cliente eligio a otro/a candidato/a.",
         ],
         "internal": [
-            "Queria ponerlo/a al dia: el equipo decidio no avanzar con usted para el puesto de "
-            "{position}.",
-            "Acabo de hablar con el responsable de contratacion: no siguen adelante con su "
-            "candidatura.",
+            "Queria ponerlo/a al dia: el equipo decidio no avanzar con usted para el puesto de {position}.",
+            "Acabo de hablar con el responsable de contratacion: no siguen adelante con su candidatura.",
             "Lamento decirle que el panel eligio a otro/a candidato/a.",
             "El proceso se redefinio y ya no sigue en la carrera por {position}.",
         ],
         "ats": [
-            "Su solicitud para el puesto de {position} (ID {id}) no ha sido seleccionada para "
-            "mayor "
-            "consideracion.",
+            "Su solicitud para el puesto de {position} (ID {id}) no ha sido seleccionada para mayor consideracion.",
             "Actualizacion de estado: No seleccionado/a. Gracias por su interes en {company}.",
-            "Estimado/a postulante: esta es una notificacion automatica de que su candidatura ha "
-            "sido "
-            "cerrada.",
-            "Su perfil ha sido movido al estado 'Rechazado' en nuestro sistema de seguimiento de "
-            "candidatos.",
+            "Estimado/a postulante: esta es una notificacion automatica de que su candidatura ha sido cerrada.",
+            "Su perfil ha sido movido al estado 'Rechazado' en nuestro sistema de seguimiento de candidatos.",
         ],
     },
     "context": [
@@ -835,10 +790,8 @@ BANKS["es"] = {
             "subject": ["Recibimos su solicitud", "Solicitud recibida - {position}"],
             "intro": ["Hola {first},", "Estimado/a postulante,"],
             "core": [
-                "Gracias por postular al puesto de {position} en {company}; hemos recibido su "
-                "solicitud.",
-                "Su solicitud para el puesto de {position} (ID {id}) ha sido recibida y esta en "
-                "revision.",
+                "Gracias por postular al puesto de {position} en {company}; hemos recibido su solicitud.",
+                "Su solicitud para el puesto de {position} (ID {id}) ha sido recibida y esta en revision.",
             ],
             "extra": [
                 "Puede consultar su estado en el portal de candidatos.",
@@ -849,8 +802,7 @@ BANKS["es"] = {
             "subject": ["Invitacion a entrevista - {position}", "Siguiente paso: hablemos"],
             "intro": ["Hola {first},", "Estimado/a {name},"],
             "core": [
-                "Nos gustaria invitarle a una entrevista de 45 minutos para el puesto de "
-                "{position}.",
+                "Nos gustaria invitarle a una entrevista de 45 minutos para el puesto de {position}.",
                 "Al equipo le gusto su candidatura y quisiera pasar a la siguiente etapa.",
             ],
             "extra": [
@@ -942,9 +894,7 @@ BANKS["es"] = {
                 "Lamentablemente no podemos ampliar la bonificacion de firma - pero nos complace "
                 "ofrecerle el puesto de "
                 "{position}!",
-                "Su banco rechazo el pago. Actualice su tarjeta para mantener su suscripcion "
-                "Premium de "
-                "{company}.",
+                "Su banco rechazo el pago. Actualice su tarjeta para mantener su suscripcion Premium de {company}.",
                 "Lastimosamente la vacante de {position} que guardo en {company} ya se cubrio; "
                 "aqui "
                 "van cinco vacantes "
@@ -962,8 +912,7 @@ BANKS["es"] = {
             "intro": ["Hola {first},", "Estimado/a {name},"],
             "core": [
                 "Su perfil nos parecio interesante y lo tendremos en cuenta para futuras vacantes.",
-                "Sigamos en contacto; el equipo puede volver a tener necesidades el proximo "
-                "trimestre.",
+                "Sigamos en contacto; el equipo puede volver a tener necesidades el proximo trimestre.",
             ],
             "extra": [
                 "No dude en escribirme cuando quiera.",
@@ -995,11 +944,8 @@ BANKS["es"] = {
             "subject": ["Resultados de su evaluacion", "Evaluacion completada"],
             "intro": ["Hola {first},", "Estimado/a postulante,"],
             "core": [
-                "Su puntuacion fue 62%; lamentablemente no alcanzo el umbral. Puede repetir la "
-                "prueba una "
-                "vez.",
-                "Lamentamos que su resultado haya quedado por debajo del corte del proceso para "
-                "{position}.",
+                "Su puntuacion fue 62%; lamentablemente no alcanzo el umbral. Puede repetir la prueba una vez.",
+                "Lamentamos que su resultado haya quedado por debajo del corte del proceso para {position}.",
             ],
             "extra": ["Los resultados estan disponibles en el portal de candidatos."],
         },
@@ -1327,22 +1273,15 @@ BANKS["hi"] = {
             "हम आपको अगले चरण में शामिल नहीं कर रहे हैं।",
         ],
         "polite": [
-            "सावधानीपूर्वक विचार करने के बाद, हमें यह बताते हुए खेद है कि हम आपकी उम्मीदवारी को "
-            "आगे "
-            "नहीं "
-            "बढ़ाएंगे।",
-            "आपने इस प्रक्रिया में जो समय दिया, उसके लिए धन्यवाद, लेकिन हमने किसी और उम्मीदवार के "
-            "साथ आगे बढ़ने का निर्णय लिया "
-            "है।",
+            "सावधानीपूर्वक विचार करने के बाद, हमें यह बताते हुए खेद है कि हम आपकी उम्मीदवारी को आगे नहीं बढ़ाएंगे।",
+            "आपने इस प्रक्रिया में जो समय दिया, उसके लिए धन्यवाद, लेकिन हमने किसी और उम्मीदवार के साथ आगे बढ़ने का निर्णय लिया है।",
             "हमें खेद है कि इस बार हम आपको {position} पद की पेशकश नहीं कर पाएंगे।",
-            "आपकी पृष्ठभूमि जानकर अच्छा लगा; दुर्भाग्य से हमें आपका आवेदन अस्वीकार करना पड़ रहा "
-            "है।",
+            "आपकी पृष्ठभूमि जानकर अच्छा लगा; दुर्भाग्य से हमें आपका आवेदन अस्वीकार करना पड़ रहा है।",
         ],
         "brutal": [
             "नहीं। इस भूमिका के लिए आपका अनुभव पर्याप्त नहीं है।",
             "आप इस नौकरी के लिए योग्य नहीं हैं। कृपया दोबारा आवेदन न करें।",
-            "हमने आपको अस्वीकार किया क्योंकि आपका पोर्टफोलियो कमज़ोर था और असाइनमेंट देर से जमा "
-            "हुआ।",
+            "हमने आपको अस्वीकार किया क्योंकि आपका पोर्टफोलियो कमज़ोर था और असाइनमेंट देर से जमा हुआ।",
             "हमने आपका आवेदन दो बार पढ़ा और दोनों बार जवाब नहीं था।",
         ],
         "vague": [
@@ -1352,29 +1291,19 @@ BANKS["hi"] = {
             "हमारी आवश्यकताएं बदल गई हैं और हम आपके आवेदन को जारी नहीं रखेंगे।",
         ],
         "legal": [
-            "सूचित किया जाता है कि {company} ने आपके आवेदन पर विचार समाप्त कर दिया है और रोजगार का "
-            "कोई प्रस्ताव नहीं "
-            "देगा।",
-            "यह पत्र पुष्टि करता है कि उक्त पद के लिए आपकी उम्मीदवारी बिना किसी अग्रिम कार्रवाई के "
-            "समाप्त कर दी गई "
-            "है।",
-            "कंपनी ने अपनी समीक्षा पूरी कर ली है और रोजगार का कोई प्रस्ताव नहीं दिया जाएगा; यह "
-            "निर्णय अंतिम "
-            "है।",
+            "सूचित किया जाता है कि {company} ने आपके आवेदन पर विचार समाप्त कर दिया है और रोजगार का कोई प्रस्ताव नहीं देगा।",
+            "यह पत्र पुष्टि करता है कि उक्त पद के लिए आपकी उम्मीदवारी बिना किसी अग्रिम कार्रवाई के समाप्त कर दी गई है।",
+            "कंपनी ने अपनी समीक्षा पूरी कर ली है और रोजगार का कोई प्रस्ताव नहीं दिया जाएगा; यह निर्णय अंतिम है।",
             "इस संचार में कुछ भी रोजगार अनुबंध या भविष्य के विचार की कोई प्रतिबद्धता नहीं बनाता।",
         ],
         "agency": [
-            "हमारे ग्राहक ने अनुबंध भूमिका के लिए आपकी प्रोफ़ाइल पर आगे बढ़ने का निर्णय नहीं लिया "
-            "है।",
+            "हमारे ग्राहक ने अनुबंध भूमिका के लिए आपकी प्रोफ़ाइल पर आगे बढ़ने का निर्णय नहीं लिया है।",
             "हायरिंग मैनेजर ने आपका आवेदन देखा और दुर्भाग्य से उन्होंने मना कर दिया।",
-            "हमने आपको {company} में भेजा था और उनका जवाब नकारात्मक था - उन्होंने {skill} में अधिक "
-            "अनुभव वाले व्यक्ति को "
-            "चुना।",
+            "हमने आपको {company} में भेजा था और उनका जवाब नकारात्मक था - उन्होंने {skill} में अधिक अनुभव वाले व्यक्ति को चुना।",
             "{position} पद पर बुरी खबर: ग्राहक ने किसी और उम्मीदवार को चुना।",
         ],
         "internal": [
-            "आपको बताना चाहता था - टीम ने {position} पद के लिए आपको आगे बढ़ाने का निर्णय नहीं लिया "
-            "है।",
+            "आपको बताना चाहता था - टीम ने {position} पद के लिए आपको आगे बढ़ाने का निर्णय नहीं लिया है।",
             "हायरिंग मैनेजर से अभी-अभी जवाब आया: वे आपके आवेदन को आगे नहीं बढ़ा रहे हैं।",
             "मुझे यह कहते हुए खेद है कि पैनल ने किसी और उम्मीदवार को चुना।",
             "पद की ज़रूरतें बदल गई हैं और अब आप {position} के लिए दौड़ में नहीं हैं।",
@@ -1413,9 +1342,7 @@ BANKS["hi"] = {
             "subject": ["हमें आपका आवेदन मिल गया है", "आवेदन प्राप्त - {position}"],
             "intro": ["नमस्ते {first},", "प्रिय आवेदक,"],
             "core": [
-                "{company} में {position} पद के लिए आवेदन करने के लिए धन्यवाद - हमें आपका आवेदन "
-                "मिल "
-                "गया।",
+                "{company} में {position} पद के लिए आवेदन करने के लिए धन्यवाद - हमें आपका आवेदन मिल गया।",
                 "{position} पद (आईडी {id}) के लिए आपका आवेदन प्राप्त हुआ है और समीक्षा में है।",
             ],
             "extra": [
@@ -1427,8 +1354,7 @@ BANKS["hi"] = {
             "subject": ["साक्षात्कार का निमंत्रण - {position}", "अगला कदम: बात करते हैं"],
             "intro": ["नमस्ते {first},", "प्रिय {name},"],
             "core": [
-                "हम {position} पद के लिए 45 मिनट के साक्षात्कार के लिए आपको आमंत्रित करना चाहते "
-                "हैं।",
+                "हम {position} पद के लिए 45 मिनट के साक्षात्कार के लिए आपको आमंत्रित करना चाहते हैं।",
                 "टीम को आपका आवेदन पसंद आया और वे अगले चरण पर जाना चाहते हैं।",
             ],
             "extra": [
@@ -1506,14 +1432,9 @@ BANKS["hi"] = {
                 "आपका आवेदन अस्वीकार हो गया! - Interview Quest में आपने 5 में से 2 अंक पाए और गेम "
                 "के भीतर आपका आवेदन अस्वीकार हुआ। फिर कोशिश "
                 "करेंगे?",
-                "दुर्भाग्य से साइनिंग बोनस पांच हज़ार से अधिक नहीं हो सकता - लेकिन हमें {position} "
-                "पद की पेशकश करते हुए खुशी हो रही "
-                "है!",
-                "आपके बैंक ने भुगतान अस्वीकार कर दिया। {company} की सदस्यता जारी रखने के लिए कार्ड "
-                "अपडेट "
-                "करें।",
-                "दुर्भाग्य से आपके द्वारा सहेजा गया {position} पद भर गया है - यहां पांच समान पद "
-                "हैं।",
+                "दुर्भाग्य से साइनिंग बोनस पांच हज़ार से अधिक नहीं हो सकता - लेकिन हमें {position} पद की पेशकश करते हुए खुशी हो रही है!",
+                "आपके बैंक ने भुगतान अस्वीकार कर दिया। {company} की सदस्यता जारी रखने के लिए कार्ड अपडेट करें।",
+                "दुर्भाग्य से आपके द्वारा सहेजा गया {position} पद भर गया है - यहां पांच समान पद हैं।",
             ],
             "extra": [
                 "इन सुझावों से बाहर निकलने के लिए उत्तर दें।",
@@ -1553,9 +1474,7 @@ BANKS["hi"] = {
             "subject": ["आपके मूल्यांकन के परिणाम", "मूल्यांकन पूर्ण"],
             "intro": ["नमस्ते {first},"],
             "core": [
-                "आपका स्कोर 62% रहा; दुर्भाग्य से आप कटऑफ तक नहीं पहुंचे। आप एक बार फिर प्रयास कर "
-                "सकते "
-                "हैं।",
+                "आपका स्कोर 62% रहा; दुर्भाग्य से आप कटऑफ तक नहीं पहुंचे। आप एक बार फिर प्रयास कर सकते हैं।",
                 "हमें खेद है कि आपका परिणाम {position} प्रक्रिया की कटऑफ से नीचे रहा।",
             ],
             "extra": ["परिणाम पोर्टल पर उपलब्ध हैं।"],
@@ -1577,27 +1496,19 @@ BANKS["hi"] = {
                 "other",
             ),
             (
-                "दुर्भाग्य से साइनिंग बोनस पांच हज़ार से अधिक नहीं हो सकता - लेकिन हमें {position} "
-                "पद की पेशकश करते हुए खुशी हो रही "
-                "है!",
+                "दुर्भाग्य से साइनिंग बोनस पांच हज़ार से अधिक नहीं हो सकता - लेकिन हमें {position} पद की पेशकश करते हुए खुशी हो रही है!",
                 "opportunity",
             ),
             (
-                "हमें सूचित करते हुए खेद है कि इस अंक में सामग्री कम है: संपादक पाठकों की "
-                "अस्वीकृति "
-                "कहानियां जमा करने में व्यस्त "
-                "थे।",
+                "हमें सूचित करते हुए खेद है कि इस अंक में सामग्री कम है: संपादक पाठकों की अस्वीकृति कहानियां जमा करने में व्यस्त थे।",
                 "other",
             ),
             (
-                "दुर्भाग्य से आपके द्वारा सहेजा गया {position} पद भर गया है - यहां पांच समान पद "
-                "हैं।",
+                "दुर्भाग्य से आपके द्वारा सहेजा गया {position} पद भर गया है - यहां पांच समान पद हैं।",
                 "other",
             ),
             (
-                "{company} में आपका साक्षात्कार मंगलवार 14:00 बजे तय है; पिछले शेड्यूलिंग टूल में "
-                "गड़बड़ी के लिए खेद "
-                "है।",
+                "{company} में आपका साक्षात्कार मंगलवार 14:00 बजे तय है; पिछले शेड्यूलिंग टूल में गड़बड़ी के लिए खेद है।",
                 "opportunity",
             ),
         ],
@@ -1663,14 +1574,12 @@ BANKS["fr"] = {
             "avec un autre "
             "candidat.",
             "Nous sommes au regret de ne pas pouvoir vous proposer le poste de {position}.",
-            "Ce fut un plaisir d'echanger avec vous ; malheureusement nous devons decliner votre "
-            "candidature.",
+            "Ce fut un plaisir d'echanger avec vous ; malheureusement nous devons decliner votre candidature.",
         ],
         "brutal": [
             "Non. Votre experience est tres loin de ce que ce poste exige.",
             "Vous n'etes pas qualifie/e pour ce poste. Merci de ne pas postuler a nouveau.",
-            "Nous vous avons refuse car votre portfolio etait faible et votre test est arrive en "
-            "retard.",
+            "Nous vous avons refuse car votre portfolio etait faible et votre test est arrive en retard.",
             "Nous avons lu votre candidature deux fois et deux fois la reponse a ete non.",
         ],
         "vague": [
@@ -1684,10 +1593,7 @@ BANKS["fr"] = {
             "formulera "
             "aucune offre "
             "d'emploi.",
-            "La presente lettre confirme que votre candidature au poste susmentionne est close "
-            "sans "
-            "autre "
-            "formalite.",
+            "La presente lettre confirme que votre candidature au poste susmentionne est close sans autre formalite.",
             "La Societe a termine son examen et aucune offre d'emploi ne sera formulee ; cette "
             "decision est "
             "definitive.",
@@ -1710,12 +1616,9 @@ BANKS["fr"] = {
             "Le poste a ete re-scoped et vous n'etes plus dans la course pour {position}.",
         ],
         "ats": [
-            "Votre candidature au poste de {position} (ID {id}) n'a pas ete retenue pour la suite "
-            "du "
-            "processus.",
+            "Votre candidature au poste de {position} (ID {id}) n'a pas ete retenue pour la suite du processus.",
             "Mise a jour du statut : Non retenu/e. Merci de l'interet que vous portez a {company}.",
-            "Madame, Monsieur, ceci est une notification automatique : votre candidature a ete "
-            "cloturee.",
+            "Madame, Monsieur, ceci est une notification automatique : votre candidature a ete cloturee.",
             "Votre profil est passe au statut Refuse dans notre systeme de suivi des candidatures.",
         ],
     },
@@ -1751,12 +1654,8 @@ BANKS["fr"] = {
             "subject": ["Nous avons recu votre candidature", "Candidature recue - {position}"],
             "intro": ["Bonjour {first},", "Madame, Monsieur,"],
             "core": [
-                "Merci d'avoir postule au poste de {position} chez {company} - nous avons bien "
-                "recu "
-                "votre "
-                "candidature.",
-                "Votre candidature au poste de {position} (ID {id}) a ete recue et est en cours "
-                "d'examen.",
+                "Merci d'avoir postule au poste de {position} chez {company} - nous avons bien recu votre candidature.",
+                "Votre candidature au poste de {position} (ID {id}) a ete recue et est en cours d'examen.",
             ],
             "extra": [
                 "Vous pouvez suivre votre statut a tout moment sur notre portail.",
@@ -1767,8 +1666,7 @@ BANKS["fr"] = {
             "subject": ["Invitation a un entretien - {position}", "Prochaine etape : parlons-en"],
             "intro": ["Bonjour {first},", "Cher/Chere {name},"],
             "core": [
-                "Nous souhaiterions vous inviter a un entretien de 45 minutes pour le poste de "
-                "{position}.",
+                "Nous souhaiterions vous inviter a un entretien de 45 minutes pour le poste de {position}.",
                 "L'equipe a apprecie votre candidature et souhaite passer a l'etape suivante.",
             ],
             "extra": [
@@ -1784,8 +1682,7 @@ BANKS["fr"] = {
             "intro": ["Cher/Chere {name},"],
             "core": [
                 "Nous avons le plaisir de vous proposer le poste de {position} chez {company}.",
-                "Apres un dernier tour d'entretien reussi, nous souhaitons vous accueillir dans "
-                "l'equipe.",
+                "Apres un dernier tour d'entretien reussi, nous souhaitons vous accueillir dans l'equipe.",
             ],
             "extra": [
                 "Les details de remuneration sont joints ; merci de signer avant le {date}.",
@@ -1808,8 +1705,7 @@ BANKS["fr"] = {
             "subject": ["Parlons de nouvelles opportunites", "Votre profil a retenu mon attention"],
             "intro": ["Bonjour {first},", "Salut {first},"],
             "core": [
-                "J'ai vu votre profil et j'aimerais vous parler d'opportunites dans le domaine de "
-                "{skill}.",
+                "J'ai vu votre profil et j'aimerais vous parler d'opportunites dans le domaine de {skill}.",
                 "Nous recrutons plusieurs postes et votre experience correspond bien.",
             ],
             "extra": [
@@ -1839,8 +1735,7 @@ BANKS["fr"] = {
             ],
             "intro": ["Bonjour {first},"],
             "core": [
-                "Nous avons detecte une nouvelle connexion a votre compte depuis un nouvel "
-                "appareil.",
+                "Nous avons detecte une nouvelle connexion a votre compte depuis un nouvel appareil.",
                 "Quelqu'un a demande la reinitialisation de votre mot de passe.",
             ],
             "extra": [
@@ -1881,10 +1776,8 @@ BANKS["fr"] = {
             "subject": ["Restons en contact", "Votre profil chez {company}"],
             "intro": ["Bonjour {first},", "Cher/Chere {name},"],
             "core": [
-                "Votre profil nous a interesses et nous garderons vos coordonnees pour de futures "
-                "ouvertures.",
-                "Restons en contact ; l'equipe pourrait de nouveau avoir des besons le prochain "
-                "trimestre.",
+                "Votre profil nous a interesses et nous garderons vos coordonnees pour de futures ouvertures.",
+                "Restons en contact ; l'equipe pourrait de nouveau avoir des besons le prochain trimestre.",
             ],
             "extra": ["N'hesitez pas a me recontacter quand vous le souhaitez."],
         },
@@ -1893,8 +1786,7 @@ BANKS["fr"] = {
             "intro": ["Cher/Chere {name},"],
             "core": [
                 "Votre CV a ete ajoute a notre vivier de talents.",
-                "Nous conserverons votre CV et vous contacterons si un poste correspondant "
-                "s'ouvre.",
+                "Nous conserverons votre CV et vous contacterons si un poste correspondant s'ouvre.",
             ],
             "extra": ["Aucune action de votre part n'est necessaire."],
         },
@@ -1914,9 +1806,7 @@ BANKS["fr"] = {
                 "Votre score est de 62 % ; malheureusement vous n'avez pas atteint le seuil. Vous "
                 "pouvez repasser le test une "
                 "fois.",
-                "Nous regrettons que votre resultat soit en dessous du seuil requis pour le "
-                "processus "
-                "{position}.",
+                "Nous regrettons que votre resultat soit en dessous du seuil requis pour le processus {position}.",
             ],
             "extra": ["Les resultats sont disponibles sur le portail candidat."],
         },
@@ -2160,9 +2050,7 @@ BANKS["ar"] = {
             "subject": ["تم رفض طلبك!", "تم رفض الدفعة", "Re: مقابلتك غداً"],
             "intro": ["مرحباً {first}،", "أهلاً {first}،"],
             "core": [
-                "تم رفض طلبك! - حصلت على 2 من 5 في لعبة Interview Quest وتم رفض طلبك داخل اللعبة. "
-                "جرّب "
-                "مجدداً؟",
+                "تم رفض طلبك! - حصلت على 2 من 5 في لعبة Interview Quest وتم رفض طلبك داخل اللعبة. جرّب مجدداً؟",
                 "للأسف لا يمكننا تجاوز مكافأة التوقيع - لكننا سعداء بعرض وظيفة {position} عليك!",
                 "رفضت بنكك الدفعة. حدّث بطاقتك للحفاظ على اشتراكك المميز لدى {company}.",
                 "للأسف لوظيفة {position} التي حفظتها لدى {company} شُغّلت؛ هذه خمس وظائف مشابهة.",
@@ -2218,9 +2106,7 @@ BANKS["ar"] = {
         "intro": ["مرحباً {first}،", "أهلاً {first}،"],
         "core": [
             (
-                "تم رفض طلبك! - حصلت على 2 من 5 في لعبة Interview Quest وتم رفض طلبك داخل اللعبة. "
-                "جرّب "
-                "مجدداً؟",
+                "تم رفض طلبك! - حصلت على 2 من 5 في لعبة Interview Quest وتم رفض طلبك داخل اللعبة. جرّب مجدداً؟",
                 "other",
             ),
             (
@@ -2233,8 +2119,7 @@ BANKS["ar"] = {
                 "other",
             ),
             (
-                "مؤكد موعد مقابلتك لوظيفة {position} يوم الثلاثاء 14:00؛ نأسف لعطل أداة الجدولة "
-                "السابقة.",
+                "مؤكد موعد مقابلتك لوظيفة {position} يوم الثلاثاء 14:00؛ نأسف لعطل أداة الجدولة السابقة.",
                 "opportunity",
             ),
         ],
@@ -2293,11 +2178,8 @@ BANKS["bn"] = {
             "আমরা আপনাকে পরবর্তী ধাপে নিয়ে যাচ্ছি না।",
         ],
         "polite": [
-            "যত্নসহকারে বিবেচনার পর, আমরা দুঃখের সাথে জানাচ্ছি যে আমরা আপনার প্রার্থিতা এগিয়ে নেব "
-            "না।",
-            "প্রক্রিয়ায় আপনার দেওয়া সময়ের জন্য ধন্যবাদ, তবে আমরা অন্য প্রার্থীর সাথে এগিয়ে "
-            "যাওয়ার সিদ্ধান্ত "
-            "নিয়েছি।",
+            "যত্নসহকারে বিবেচনার পর, আমরা দুঃখের সাথে জানাচ্ছি যে আমরা আপনার প্রার্থিতা এগিয়ে নেব না।",
+            "প্রক্রিয়ায় আপনার দেওয়া সময়ের জন্য ধন্যবাদ, তবে আমরা অন্য প্রার্থীর সাথে এগিয়ে যাওয়ার সিদ্ধান্ত নিয়েছি।",
             "দুঃখজনকভাবে এইবার আমরা আপনাকে {position} পদটি অফার করতে পারছি না।",
             "আপনার পটভূমি জেনে ভালো লাগল; দুর্ভাগ্যবশত আমাদের আপনার আবেদন প্রত্যাখ্যান করতে হচ্ছে।",
         ],
@@ -2314,29 +2196,19 @@ BANKS["bn"] = {
             "আমাদের চাহিদা পরিবর্তিত হয়েছে এবং আমরা আপনার আবেদন চালিয়ে যাব না।",
         ],
         "legal": [
-            "জানানো যাচ্ছে যে {company} আপনার আবেদনের বিবেচনা শেষ করেছে এবং কোনো নিয়োগ প্রস্তাব "
-            "দেবে "
-            "না।",
-            "এই চিঠি নিশ্চিত করে যে উক্ত পদের জন্য আপনার প্রার্থিতা কোনো অতিরিক্ত ব্যবস্থা ছাড়াই "
-            "শেষ "
-            "হয়েছে।",
-            "কোম্পানি তার পর্যালোচনা সম্পন্ন করেছে এবং কোনো নিয়োগ প্রস্তাব দেওয়া হবে না; এই "
-            "সিদ্ধান্ত "
-            "চূড়ান্ত।",
+            "জানানো যাচ্ছে যে {company} আপনার আবেদনের বিবেচনা শেষ করেছে এবং কোনো নিয়োগ প্রস্তাব দেবে না।",
+            "এই চিঠি নিশ্চিত করে যে উক্ত পদের জন্য আপনার প্রার্থিতা কোনো অতিরিক্ত ব্যবস্থা ছাড়াই শেষ হয়েছে।",
+            "কোম্পানি তার পর্যালোচনা সম্পন্ন করেছে এবং কোনো নিয়োগ প্রস্তাব দেওয়া হবে না; এই সিদ্ধান্ত চূড়ান্ত।",
             "এই যোগাযোগে কিছুই কর্মসংস্থান চুক্তি বা ভবিষ্যতের বিবেচনার কোনো প্রতিশ্রুতি নয়।",
         ],
         "agency": [
-            "আমাদের ক্লায়েন্ট চুক্তিভিত্তিক ভূমিকার জন্য আপনার প্রোফাইল এগিয়ে নেওয়ার সিদ্ধান্ত "
-            "নেয়নি।",
+            "আমাদের ক্লায়েন্ট চুক্তিভিত্তিক ভূমিকার জন্য আপনার প্রোফাইল এগিয়ে নেওয়ার সিদ্ধান্ত নেয়নি।",
             "হায়রিং ম্যানেজার আপনার আবেদন দেখেছেন এবং দুর্ভাগ্যবশত তিনি রাজি হননি।",
-            "আমরা আপনাকে {company}-এ পাঠিয়েছিলাম, তাদের উত্তর ছিল নেতিবাচক - তারা {skill} এ বেশি "
-            "অভিজ্ঞতাসম্পন্ন কেউকে বেছে "
-            "নিয়েছে।",
+            "আমরা আপনাকে {company}-এ পাঠিয়েছিলাম, তাদের উত্তর ছিল নেতিবাচক - তারা {skill} এ বেশি অভিজ্ঞতাসম্পন্ন কেউকে বেছে নিয়েছে।",
             "{position} পদ নিয়ে খারাপ খবর: ক্লায়েন্ট অন্য প্রার্থীকে বেছে নিয়েছে।",
         ],
         "internal": [
-            "আপনাকে জানাতে চেয়েছিলাম - দল {position} পদের জন্য আপনাকে এগিয়ে নেওয়ার সিদ্ধান্ত "
-            "নেয়নি।",
+            "আপনাকে জানাতে চেয়েছিলাম - দল {position} পদের জন্য আপনাকে এগিয়ে নেওয়ার সিদ্ধান্ত নেয়নি।",
             "হায়রিং ম্যানেজারের কাছ থেকে এইমাত্র উত্তর এল: তারা আপনার আবেদন এগিয়ে নেবে না।",
             "দুঃখের সাথে বলছি প্যানেল অন্য প্রার্থীকে বেছে নিয়েছে।",
             "পদের প্রয়োজন বদলে গেছে এবং আপনি আর {position} এর দৌড়ে নেই।",
@@ -2344,8 +2216,7 @@ BANKS["bn"] = {
         "ats": [
             "{position} পদের (আইডি {id}) জন্য আপনার আবেদন পরবর্তী বিবেচনার জন্য নির্বাচিত হয়নি।",
             "স্ট্যাটাস আপডেট: নির্বাচিত হননি। {company}-এ আপনার আগ্রহের জন্য ধন্যবাদ।",
-            "প্রিয় আবেদনকারী, এটি একটি স্বয়ংক্রিয় বিজ্ঞপ্তি যে আপনার প্রার্থিতা বন্ধ করা "
-            "হয়েছে।",
+            "প্রিয় আবেদনকারী, এটি একটি স্বয়ংক্রিয় বিজ্ঞপ্তি যে আপনার প্রার্থিতা বন্ধ করা হয়েছে।",
             "আপনার প্রোফাইল আমাদের ট্র্যাকিং সিস্টেমে প্রত্যাখ্যাত অবস্থায় সরানো হয়েছে।",
         ],
     },
@@ -2472,15 +2343,9 @@ BANKS["bn"] = {
                 "আপনার আবেদন প্রত্যাখ্যাত হয়েছে! - Interview Quest-এ আপনি ৫-এর মধ্যে ২ পেয়েছেন "
                 "এবং গেমের ভেতরে আপনার আবেদন প্রত্যাখ্যাত হয়েছে। আবার চেষ্টা "
                 "করবেন?",
-                "দুর্ভাগ্যবশত সাইনিং বোনাস পাঁচ হাজারের বেশি হতে পারবে না - কিন্তু আমরা আনন্দের "
-                "সাথে {position} পদের প্রস্তাব "
-                "দিচ্ছি!",
-                "আপনার ব্যাংক পেমেন্ট প্রত্যাখ্যান করেছে। {company}-এর সদস্যতা বজায় রাখতে কার্ড "
-                "আপডেট "
-                "করুন।",
-                "দুর্ভাগ্যবশত আপনি সংরক্ষিত {position} পদটি পূর্ণ হয়ে গেছে - এখানে পাঁচটি অনুরূপ "
-                "পদ "
-                "রইল।",
+                "দুর্ভাগ্যবশত সাইনিং বোনাস পাঁচ হাজারের বেশি হতে পারবে না - কিন্তু আমরা আনন্দের সাথে {position} পদের প্রস্তাব দিচ্ছি!",
+                "আপনার ব্যাংক পেমেন্ট প্রত্যাখ্যান করেছে। {company}-এর সদস্যতা বজায় রাখতে কার্ড আপডেট করুন।",
+                "দুর্ভাগ্যবশত আপনি সংরক্ষিত {position} পদটি পূর্ণ হয়ে গেছে - এখানে পাঁচটি অনুরূপ পদ রইল।",
             ],
             "extra": [
                 "এই পরামর্শ থেকে বের হতে উত্তর দিন।",
@@ -2520,9 +2385,7 @@ BANKS["bn"] = {
             "subject": ["আপনার মূল্যায়নের ফলাফল", "মূল্যায়ন সম্পন্ন"],
             "intro": ["প্রিয় {first},"],
             "core": [
-                "আপনার স্কোর ৬২%; দুর্ভাগ্যবশত আপনি কাটঅফ ছুঁতে পারেননি। আপনি একবার পুনরায় চেষ্টা "
-                "করতে "
-                "পারেন।",
+                "আপনার স্কোর ৬২%; দুর্ভাগ্যবশত আপনি কাটঅফ ছুঁতে পারেননি। আপনি একবার পুনরায় চেষ্টা করতে পারেন।",
                 "দুঃখজনকভাবে আপনার ফলাফল {position} প্রক্রিয়ার কাটঅফের নিচে রয়েছে।",
             ],
             "extra": ["ফলাফল পোর্টালে পাওয়া যাবে।"],
@@ -2544,27 +2407,19 @@ BANKS["bn"] = {
                 "other",
             ),
             (
-                "দুর্ভাগ্যবশত সাইনিং বোনাস পাঁচ হাজারের বেশি হতে পারবে না - কিন্তু আমরা আনন্দের "
-                "সাথে {position} পদের প্রস্তাব "
-                "দিচ্ছি!",
+                "দুর্ভাগ্যবশত সাইনিং বোনাস পাঁচ হাজারের বেশি হতে পারবে না - কিন্তু আমরা আনন্দের সাথে {position} পদের প্রস্তাব দিচ্ছি!",
                 "opportunity",
             ),
             (
-                "আমরা জানাতে দুখিত এই সংখ্যা ছোট হয়েছে: সম্পাদক পাঠকদের প্রত্যাখ্যান গল্প সংগ্রহে "
-                "ব্যস্ত "
-                "ছিলেন।",
+                "আমরা জানাতে দুখিত এই সংখ্যা ছোট হয়েছে: সম্পাদক পাঠকদের প্রত্যাখ্যান গল্প সংগ্রহে ব্যস্ত ছিলেন।",
                 "other",
             ),
             (
-                "দুর্ভাগ্যবশত আপনি সংরক্ষিত {position} পদটি পূর্ণ হয়ে গেছে - এখানে পাঁচটি অনুরূপ "
-                "পদ "
-                "রইল।",
+                "দুর্ভাগ্যবশত আপনি সংরক্ষিত {position} পদটি পূর্ণ হয়ে গেছে - এখানে পাঁচটি অনুরূপ পদ রইল।",
                 "other",
             ),
             (
-                "{company}-এ আপনার সাক্ষাৎকার মঙ্গলবার ১৪:০০ নিশ্চিত; আগের শিডিউলিং টুলের ত্রুটির "
-                "জন্য আমরা "
-                "দুখিত।",
+                "{company}-এ আপনার সাক্ষাৎকার মঙ্গলবার ১৪:০০ নিশ্চিত; আগের শিডিউলিং টুলের ত্রুটির জন্য আমরা দুখিত।",
                 "opportunity",
             ),
         ],
@@ -2623,12 +2478,10 @@ BANKS["pt"] = {
             "Nao estaremos levando voce a proxima etapa.",
         ],
         "polite": [
-            "Apos cuidadosa consideracao, lamentamos informar que nao daremos continuidade a sua "
-            "candidatura.",
+            "Apos cuidadosa consideracao, lamentamos informar que nao daremos continuidade a sua candidatura.",
             "Agradecemos o tempo dedicado ao processo, mas decidimos seguir com outro candidato.",
             "Lamentavelmente nao poderemos oferecer a vaga de {position} a voce nesta ocasiao.",
-            "Foi um prazer conhecer sua trajetoria; infelizmente precisamos declinar sua "
-            "candidatura.",
+            "Foi um prazer conhecer sua trajetoria; infelizmente precisamos declinar sua candidatura.",
         ],
         "brutal": [
             "Nao. Sua experiencia esta longe do que esta vaga exige.",
@@ -2646,13 +2499,9 @@ BANKS["pt"] = {
             "Ficamos em lhe informar que a {company} concluiu a analise da sua candidatura e nao "
             "emitira oferta de "
             "emprego.",
-            "Esta carta confirma que sua candidatura a posicao mencionada foi concluida sem mais "
-            "tramites.",
-            "A Sociedade concluiu sua analise e nenhuma oferta de emprego sera feita; esta decisao "
-            "e "
-            "final.",
-            "Nada nesta comunicacao constitui contrato de trabalho ou compromisso de analise "
-            "futura.",
+            "Esta carta confirma que sua candidatura a posicao mencionada foi concluida sem mais tramites.",
+            "A Sociedade concluiu sua analise e nenhuma oferta de emprego sera feita; esta decisao e final.",
+            "Nada nesta comunicacao constitui contrato de trabalho ou compromisso de analise futura.",
         ],
         "agency": [
             "Nosso cliente decidiu nao prosseguir com o seu perfil para a vaga por contrato.",
@@ -2664,17 +2513,14 @@ BANKS["pt"] = {
         ],
         "internal": [
             "Queria te atualizar: a equipe decidiu nao seguir com voce para a vaga de {position}.",
-            "Acabei de falar com o gerente de contratacao: eles nao vao avancar com a sua "
-            "candidatura.",
+            "Acabei de falar com o gerente de contratacao: eles nao vao avancar com a sua candidatura.",
             "Lamento dizer que o painel escolheu outro candidato.",
             "A vaga foi reescopada e voce nao esta mais na corrida por {position}.",
         ],
         "ats": [
-            "Sua candidatura para a vaga de {position} (ID {id}) nao foi selecionada para "
-            "prosseguimento.",
+            "Sua candidatura para a vaga de {position} (ID {id}) nao foi selecionada para prosseguimento.",
             "Atualizacao de status: Nao selecionado(a). Obrigado pelo seu interesse na {company}.",
-            "Prezado(a) candidato(a), esta e uma notificacao automatica de que sua candidatura foi "
-            "encerrada.",
+            "Prezado(a) candidato(a), esta e uma notificacao automatica de que sua candidatura foi encerrada.",
             "Seu perfil foi movido para o status Rejeitado no nosso sistema de acompanhamento.",
         ],
     },
@@ -2710,10 +2556,8 @@ BANKS["pt"] = {
             "subject": ["Recebemos sua candidatura", "Candidatura recebida - {position}"],
             "intro": ["Ola {first},", "Prezado(a) candidato(a),"],
             "core": [
-                "Obrigado por se candidatar a vaga de {position} na {company} - recebemos sua "
-                "candidatura.",
-                "Sua candidatura para a vaga de {position} (ID {id}) foi recebida e esta em "
-                "analise.",
+                "Obrigado por se candidatar a vaga de {position} na {company} - recebemos sua candidatura.",
+                "Sua candidatura para a vaga de {position} (ID {id}) foi recebida e esta em analise.",
             ],
             "extra": [
                 "Voce pode acompanhar seu status no portal de candidatos.",
@@ -2724,8 +2568,7 @@ BANKS["pt"] = {
             "subject": ["Convite para entrevista - {position}", "Proxima etapa: vamos conversar"],
             "intro": ["Ola {first},", "Prezado(a) {name},"],
             "core": [
-                "Gostaríamos de convida-lo(a) para uma entrevista de 45 minutos para a vaga de "
-                "{position}.",
+                "Gostaríamos de convida-lo(a) para uma entrevista de 45 minutos para a vaga de {position}.",
                 "A equipe gostou da sua candidatura e gostaria de avancar para a proxima etapa.",
             ],
             "extra": [
@@ -2807,9 +2650,7 @@ BANKS["pt"] = {
                 "Infelizmente nao podemos ultrapassar o bonus de assinatura - mas estamos felizes "
                 "em oferecer a vaga de "
                 "{position}!",
-                "Seu banco recusou o pagamento. Atualize seu cartao para manter a assinatura "
-                "Premium na "
-                "{company}.",
+                "Seu banco recusou o pagamento. Atualize seu cartao para manter a assinatura Premium na {company}.",
                 "Infelizmente a vaga de {position} que voce salvou na {company} foi preenchida; "
                 "veja cinco vagas "
                 "parecidas.",
@@ -2855,12 +2696,8 @@ BANKS["pt"] = {
             "subject": ["Seus resultados da avaliacao", "Avaliacao concluida"],
             "intro": ["Ola {first},"],
             "core": [
-                "Sua pontuacao foi de 62%; infelizmente voce nao atingiu o corte. Voce pode "
-                "refazer "
-                "o teste uma "
-                "vez.",
-                "Lamentamos que seu resultado tenha ficado abaixo do corte do processo para "
-                "{position}.",
+                "Sua pontuacao foi de 62%; infelizmente voce nao atingiu o corte. Voce pode refazer o teste uma vez.",
+                "Lamentamos que seu resultado tenha ficado abaixo do corte do processo para {position}.",
             ],
             "extra": ["Os resultados estao disponiveis no portal."],
         },
@@ -2963,11 +2800,9 @@ BANKS["ru"] = {
             "После тщательного рассмотрения мы с сожалением сообщаем, что не будем продолжать "
             "работу с вашей "
             "кандидатурой.",
-            "Благодарим вас за время, потраченное на процесс, но мы решили продолжить с другим "
-            "кандидатом.",
+            "Благодарим вас за время, потраченное на процесс, но мы решили продолжить с другим кандидатом.",
             "К сожалению, мы не сможем предложить вам позицию {position} в этот раз.",
-            "Было приятно познакомиться с вашим опытом; к сожалению, мы вынуждены отклонить вашу "
-            "заявку.",
+            "Было приятно познакомиться с вашим опытом; к сожалению, мы вынуждены отклонить вашу заявку.",
         ],
         "brutal": [
             "Нет. Ваш опыт далеко не соответствует требованиям этой роли.",
@@ -2982,18 +2817,14 @@ BANKS["ru"] = {
             "Наши потребности изменились, и мы не будем продолжать работу с вашей заявкой.",
         ],
         "legal": [
-            "Сообщаем вам, что {company} завершила рассмотрение вашей заявки и не будет делать "
-            "предложения о "
-            "работе.",
+            "Сообщаем вам, что {company} завершила рассмотрение вашей заявки и не будет делать предложения о работе.",
             "Настоящим письмом подтверждается, что ваша кандидатура на указанную должность "
             "завершена без дальнейших "
             "действий.",
             "Компания завершила проверку, предложение о работе сделано не будет; данное решение "
             "является "
             "окончательным.",
-            "Ничто в данном сообщении не является трудовым договором или обязательством "
-            "дальнейшего "
-            "рассмотрения.",
+            "Ничто в данном сообщении не является трудовым договором или обязательством дальнейшего рассмотрения.",
         ],
         "agency": [
             "Наш клиент решил не продолжать работу с вашим профилем по контрактной роли.",
@@ -3004,10 +2835,8 @@ BANKS["ru"] = {
             "Плохие новости по вакансии {position}: клиент выбрал другого кандидата.",
         ],
         "internal": [
-            "Хотел вас проинформировать: команда решила не продолжать с вами по позиции "
-            "{position}.",
-            "Только что получил ответ от менеджера по найму: они не продолжают работу с вашей "
-            "заявкой.",
+            "Хотел вас проинформировать: команда решила не продолжать с вами по позиции {position}.",
+            "Только что получил ответ от менеджера по найму: они не продолжают работу с вашей заявкой.",
             "К сожалению, панель выбрала другого кандидата.",
             "Требования к роли изменились, и вы больше не в борьбе за {position}.",
         ],
@@ -3060,9 +2889,7 @@ BANKS["ru"] = {
             ],
             "intro": ["Здравствуйте, {first}!", "{name}, добрый день!"],
             "core": [
-                "Мы хотели бы пригласить вас на собеседование продолжительностью 45 минут на "
-                "позицию "
-                "{position}.",
+                "Мы хотели бы пригласить вас на собеседование продолжительностью 45 минут на позицию {position}.",
                 "Команде понравилась ваша заявка, и мы хотели бы перейти к следующему этапу.",
             ],
             "extra": [
@@ -3148,11 +2975,8 @@ BANKS["ru"] = {
                 "внутри "
                 "игры была отклонена. Попробуете ещё "
                 "раз?",
-                "К сожалению, мы не можем увеличить подписной бонус — но мы рады предложить вам "
-                "позицию "
-                "{position}!",
-                "Ваш банк отклонил платёж. Обновите карту, чтобы сохранить Premium-подписку в "
-                "{company}.",
+                "К сожалению, мы не можем увеличить подписной бонус — но мы рады предложить вам позицию {position}!",
+                "Ваш банк отклонил платёж. Обновите карту, чтобы сохранить Premium-подписку в {company}.",
                 "К сожалению, вакансия {position}, которую вы сохранили в {company}, уже закрыта — "
                 "вот пять похожих "
                 "вакансий.",
@@ -3169,8 +2993,7 @@ BANKS["ru"] = {
             "intro": ["Здравствуйте, {first}!"],
             "core": [
                 "Ваш профиль нам понравился, и мы будем помнить о вас при будущих вакансиях.",
-                "Давайте останемся на связи; у команды снова могут быть потребности в следующем "
-                "квартале.",
+                "Давайте останемся на связи; у команды снова могут быть потребности в следующем квартале.",
             ],
             "extra": ["Пишите в любое время."],
         },
@@ -3196,9 +3019,7 @@ BANKS["ru"] = {
             "subject": ["Результаты вашей оценки", "Оценка завершена"],
             "intro": ["Здравствуйте, {first}!"],
             "core": [
-                "Ваш результат — 62%; к сожалению, вы не достигли порога. Вы можете пройти тест "
-                "ещё "
-                "раз.",
+                "Ваш результат — 62%; к сожалению, вы не достигли порога. Вы можете пройти тест ещё раз.",
                 "К сожалению, ваш результат оказался ниже порога процесса по {position}.",
             ],
             "extra": ["Результаты доступны в портале кандидата."],
@@ -3221,9 +3042,7 @@ BANKS["ru"] = {
                 "other",
             ),
             (
-                "К сожалению, мы не можем увеличить подписной бонус — но мы рады предложить вам "
-                "позицию "
-                "{position}!",
+                "К сожалению, мы не можем увеличить подписной бонус — но мы рады предложить вам позицию {position}!",
                 "opportunity",
             ),
             (
@@ -3460,10 +3279,14 @@ BANKS["ja"] = {
             ],
             "intro": ["{name} さん", "こんにちは {name} さん"],
             "core": [
-                "あなたの応募は却下されました！ - Interview Quest で5点満点中2点を獲得し、ゲーム内の応募が却下されました。再挑戦しますか？",
-                "申し訳ございませんが、サインインボーナスは5千ドルを超えることはできません - ただし、{position} 職をご提案できることを嬉しく思います！",
-                "お支払いが銀行により拒否されました。{company} のプレミアム会員を維持するにはカード情報を更新してください。",
-                "申し訳ございませんが、{company} で保存された {position} 職はすでに埋まりました。類似の求人を5件ご案内します。",
+                "あなたの応募は却下されました！ - Interview Quest で"
+                "5点満点中2点を獲得し、ゲーム内の応募が却下されました。再挑戦しますか？",
+                "申し訳ございませんが、サインインボーナスは5千ドルを超えることはできません"
+                " - ただし、{position} 職をご提案できることを嬉しく思います！",
+                "お支払いが銀行により拒否されました。{company} の"
+                "プレミアム会員を維持するにはカード情報を更新してください。",
+                "申し訳ございませんが、{company} で保存された {posi"
+                "tion} 職はすでに埋まりました。類似の求人を5件ご案内します。",
             ],
             "extra": ["停止と返信すると配信停止できます。", "実際の応募状況に変化はありません。"],
         },
@@ -3516,11 +3339,13 @@ BANKS["ja"] = {
         "intro": ["{name} さん", "こんにちは {name} さん"],
         "core": [
             (
-                "あなたの応募は却下されました！ - Interview Quest で5点満点中2点を獲得し、ゲーム内の応募が却下されました。再挑戦しますか？",
+                "あなたの応募は却下されました！ - Interview Quest で"
+                "5点満点中2点を獲得し、ゲーム内の応募が却下されました。再挑戦しますか？",
                 "other",
             ),
             (
-                "申し訳ございませんが、サインインボーナスは5千ドルを超えることはできません - ただし、{position} 職をご提案できることを嬉しく思います！",
+                "申し訳ございませんが、サインインボーナスは5千ドルを超えることはできません"
+                " - ただし、{position} 職をご提案できることを嬉しく思います！",
                 "opportunity",
             ),
             (
@@ -3528,7 +3353,8 @@ BANKS["ja"] = {
                 "other",
             ),
             (
-                "申し訳ございませんが、{company} で保存された {position} 職はすでに埋まりました。類似の求人を5件ご案内します。",
+                "申し訳ございませんが、{company} で保存された {posi"
+                "tion} 職はすでに埋まりました。類似の求人を5件ご案内します。",
                 "other",
             ),
             (
@@ -3599,8 +3425,7 @@ BANKS["de"] = {
             "einen anderen Kandidaten "
             "entschieden.",
             "Leider koennen wir Ihnen die Position {position} diesmal nicht anbieten.",
-            "Es war eine Freude, mit Ihnen zu sprechen; leider muessen wir Ihre Bewerbung "
-            "ablehnen.",
+            "Es war eine Freude, mit Ihnen zu sprechen; leider muessen wir Ihre Bewerbung ablehnen.",
         ],
         "brutal": [
             "Nein. Ihre Erfahrung kommt nicht annaehernd an das heran, was diese Rolle erfordert.",
@@ -3624,39 +3449,29 @@ BANKS["de"] = {
             "Die Gesellschaft hat ihre Pruefung abgeschlossen; es wird kein Arbeitsangebot "
             "unterbreitet. Diese Entscheidung ist "
             "endgueltig.",
-            "Nichts in dieser Mitteilung stellt einen Arbeitsvertrag oder eine Zusage kuenftiger "
-            "Pruefung "
-            "dar.",
+            "Nichts in dieser Mitteilung stellt einen Arbeitsvertrag oder eine Zusage kuenftiger Pruefung dar.",
         ],
         "agency": [
-            "Unser Kunde hat entschieden, Ihr Profil fuer die Vertragsstelle nicht "
-            "weiterzuverfolgen.",
+            "Unser Kunde hat entschieden, Ihr Profil fuer die Vertragsstelle nicht weiterzuverfolgen.",
             "Der Hiring Manager hat Ihre Unterlagen geprueft und leider abgelehnt.",
             "Wir haben Sie bei {company} vorgestellt; die Rueckmeldung war negativ - sie wählten "
             "jemanden mit mehr Erfahrung in "
             "{skill}.",
-            "Schlechte Nachrichten zur Position {position}: der Kunde hat einen anderen Kandidaten "
-            "gewaehlt.",
+            "Schlechte Nachrichten zur Position {position}: der Kunde hat einen anderen Kandidaten gewaehlt.",
         ],
         "internal": [
-            "Ich wollte Sie informieren: das Team hat entschieden, Sie fuer {position} nicht "
-            "weiterzuberuecksichtigen.",
-            "Ich habe gerade Rueckmeldung vom Hiring Manager: sie verfolgen Ihre Bewerbung nicht "
-            "weiter.",
+            "Ich wollte Sie informieren: das Team hat entschieden, Sie fuer {position} nicht weiterzuberuecksichtigen.",
+            "Ich habe gerade Rueckmeldung vom Hiring Manager: sie verfolgen Ihre Bewerbung nicht weiter.",
             "Es tut mir leid, das Panel hat einen anderen Kandidaten gewaehlt.",
-            "Die Anforderungen wurden neu definiert; Sie sind fuer {position} nicht mehr im "
-            "Rennen.",
+            "Die Anforderungen wurden neu definiert; Sie sind fuer {position} nicht mehr im Rennen.",
         ],
         "ats": [
-            "Ihre Bewerbung auf die Position {position} (ID {id}) wurde nicht fuer die naechste "
-            "Runde "
-            "ausgewaehlt.",
+            "Ihre Bewerbung auf die Position {position} (ID {id}) wurde nicht fuer die naechste Runde ausgewaehlt.",
             "Statusupdate: Nicht ausgewaehlt. Vielen Dank fuer Ihr Interesse an {company}.",
             "Sehr geehrte Bewerberin, sehr geehrter Bewerber, dies ist eine automatische "
             "Benachrichtigung: Ihre Kandidatur wurde "
             "geschlossen.",
-            "Ihr Profil wurde in unserem Bewerbermanagement-System auf den Status Abgelehnt "
-            "gesetzt.",
+            "Ihr Profil wurde in unserem Bewerbermanagement-System auf den Status Abgelehnt gesetzt.",
         ],
     },
     "context": [
@@ -3686,11 +3501,8 @@ BANKS["de"] = {
             "subject": ["Wir haben Ihre Bewerbung erhalten", "Bewerbung eingegangen - {position}"],
             "intro": ["Hallo {first},", "Sehr geehrte/r {first},"],
             "core": [
-                "Vielen Dank fuer Ihre Bewerbung auf die Position {position} bei {company} - wir "
-                "haben sie "
-                "erhalten.",
-                "Ihre Bewerbung auf die Position {position} (ID {id}) ist eingegangen und wird "
-                "geprueft.",
+                "Vielen Dank fuer Ihre Bewerbung auf die Position {position} bei {company} - wir haben sie erhalten.",
+                "Ihre Bewerbung auf die Position {position} (ID {id}) ist eingegangen und wird geprueft.",
             ],
             "extra": [
                 "Den Status koennen Sie jederzeit im Bewerberportal einsehen.",
@@ -3704,10 +3516,8 @@ BANKS["de"] = {
             ],
             "intro": ["Hallo {first},", "Hallo {name},"],
             "core": [
-                "Wir moechten Sie zu einem 45-minuetigen Interview fuer die Position {position} "
-                "einladen.",
-                "Das Team hat Ihre Bewerbung positiv bewertet und moechte in die naechste Runde "
-                "gehen.",
+                "Wir moechten Sie zu einem 45-minuetigen Interview fuer die Position {position} einladen.",
+                "Das Team hat Ihre Bewerbung positiv bewertet und moechte in die naechste Runde gehen.",
             ],
             "extra": [
                 "Waehlen Sie ueber den Link unten einen Termin.",
@@ -3748,8 +3558,7 @@ BANKS["de"] = {
             ],
             "intro": ["Hallo {first},", "Hey {first},"],
             "core": [
-                "Ich bin ueber Ihr Profil gestossen und moechte Ihnen Rollen im Bereich {skill} "
-                "vorstellen.",
+                "Ich bin ueber Ihr Profil gestossen und moechte Ihnen Rollen im Bereich {skill} vorstellen.",
                 "Wir stellen mehrere Positionen ein und Ihre Erfahrung passt gut.",
             ],
             "extra": [
@@ -3776,8 +3585,7 @@ BANKS["de"] = {
             ],
             "intro": ["Hallo {first},"],
             "core": [
-                "Wir haben eine neue Anmeldung bei Ihrem Konto von einem neuen Geraet "
-                "festgestellt.",
+                "Wir haben eine neue Anmeldung bei Ihrem Konto von einem neuen Geraet festgestellt.",
                 "Jemand hat ein Zuruecksetzen Ihres Passworts angefordert.",
             ],
             "extra": [
@@ -3818,8 +3626,7 @@ BANKS["de"] = {
             "intro": ["Hallo {first},", "Hallo {name},"],
             "core": [
                 "Ihr Profil hat uns interessiert; wir merken uns Sie fuer zukuenftige Stellen.",
-                "Bleiben wir in Kontakt; das Team koennte im naechsten Quartal wieder Bedarf "
-                "haben.",
+                "Bleiben wir in Kontakt; das Team koennte im naechsten Quartal wieder Bedarf haben.",
             ],
             "extra": ["Melden Sie sich jederzeit gern."],
         },
@@ -3828,8 +3635,7 @@ BANKS["de"] = {
             "intro": ["Hallo {name},"],
             "core": [
                 "Ihr Lebenslauf wurde unserem Talentpool hinzugefuegt.",
-                "Wir bewahren Ihre Unterlagen auf und melden uns, wenn eine passende Stelle offen "
-                "ist.",
+                "Wir bewahren Ihre Unterlagen auf und melden uns, wenn eine passende Stelle offen ist.",
             ],
             "extra": ["Sie muessen nichts weiter unternehmen."],
         },
@@ -3953,13 +3759,9 @@ BANKS["el"] = {
             "Μετά από προσεκτική εξέταση, λυπούμαστε να σας ενημερώσουμε ότι δεν θα προχωρήσουμε "
             "στην υποψηφιότητά "
             "σας.",
-            "Σας ευχαριστούμε για τον χρόνο που διαθέσατε, αλλά αποφασίσαμε να προχωρήσουμε με "
-            "άλλον "
-            "υποψήφιο.",
+            "Σας ευχαριστούμε για τον χρόνο που διαθέσατε, αλλά αποφασίσαμε να προχωρήσουμε με άλλον υποψήφιο.",
             "Δυστυχώς δεν μπορούμε να σας προσφέρουμε τη θέση {position} αυτή τη φορά.",
-            "Ήταν ευχάριστο να γνωρίσουμε το υπόβαθρό σας· δυστυχώς πρέπει να απορρίψουμε την "
-            "αίτησή "
-            "σας.",
+            "Ήταν ευχάριστο να γνωρίσουμε το υπόβαθρό σας· δυστυχώς πρέπει να απορρίψουμε την αίτησή σας.",
         ],
         "brutal": [
             "Όχι. Η εμπειρία σας είναι πολύ μακριά από ό,τι απαιτεί αυτός ο ρόλος.",
@@ -3980,11 +3782,8 @@ BANKS["el"] = {
             "Το παρόν επιστολικό έγγραφο επιβεβαιώνει ότι η υποψηφιότητά σας για την αναφερόμενη "
             "θέση έχει ολοκληρωθεί χωρίς περαιτέρω "
             "ενέργειες.",
-            "Η Εταιρεία ολοκλήρωσε τον έλεγχό της και δεν θα γίνει προσφορά εργασίας· η απόφαση "
-            "είναι "
-            "τελική.",
-            "Τίποτα στην παρούσα επικοινωνία δεν αποτελεί σύμβαση εργασίας ή δέσμευση μελλοντικής "
-            "εξέτασης.",
+            "Η Εταιρεία ολοκλήρωσε τον έλεγχό της και δεν θα γίνει προσφορά εργασίας· η απόφαση είναι τελική.",
+            "Τίποτα στην παρούσα επικοινωνία δεν αποτελεί σύμβαση εργασίας ή δέσμευση μελλοντικής εξέτασης.",
         ],
         "agency": [
             "Ο πελάτης μας αποφάσισε να μην προχωρήσει με το προφίλ σας για τη συμβατική θέση.",
@@ -3995,19 +3794,16 @@ BANKS["el"] = {
             "Κακά νέα για τη θέση {position}: ο πελάτης επέλεξε άλλον υποψήφιο.",
         ],
         "internal": [
-            "Θέλησα να σας ενημερώσω· η ομάδα αποφάσισε να μην προχωρήσει μαζί σας για τη θέση "
-            "{position}.",
+            "Θέλησα να σας ενημερώσω· η ομάδα αποφάσισε να μην προχωρήσει μαζί σας για τη θέση {position}.",
             "Μόλις ήρθε απάντηση από τον υπεύθυνο πρόσληψης· δεν προχωρούν στην αίτησή σας.",
             "Λυπάμαι να το πω· η επιτροπή επέλεξε άλλον υποψήφιο.",
             "Οι απαιτήσεις της θέσης άλλαξαν και δεν είστε πια στον διαγωνισμό για το {position}.",
         ],
         "ats": [
             "Η αίτησή σας για τη θέση {position} (ID {id}) δεν επιλέχθηκε για περαιτέρω εξέταση.",
-            "Ενημέρωση κατάστασης: Μη επιλεγμένος/η. Ευχαριστούμε για το ενδιαφέρον σας στην "
-            "{company}.",
+            "Ενημέρωση κατάστασης: Μη επιλεγμένος/η. Ευχαριστούμε για το ενδιαφέρον σας στην {company}.",
             "Αγαπητέ υποψήφιε, αυτή είναι αυτόματη ειδοποίηση ότι η υποψηφιότητά σας έκλεισε.",
-            "Το προφίλ σας μεταφέρθηκε στην κατάσταση Απορρίφθηκε στο σύστημα παρακολούθησης "
-            "υποψηφίων.",
+            "Το προφίλ σας μεταφέρθηκε στην κατάσταση Απορρίφθηκε στο σύστημα παρακολούθησης υποψηφίων.",
         ],
     },
     "context": [
@@ -4042,9 +3838,7 @@ BANKS["el"] = {
             "subject": ["Λάβαμε την αίτησή σας", "Η αίτηση ελήφθη - {position}"],
             "intro": ["Γεια σας {first},", "Αγαπητέ υποψήφιε,"],
             "core": [
-                "Ευχαριστούμε για την αίτηση για τη θέση {position} στην {company}· λάβαμε την "
-                "αίτησή "
-                "σας.",
+                "Ευχαριστούμε για την αίτηση για τη θέση {position} στην {company}· λάβαμε την αίτησή σας.",
                 "Η αίτησή σας για τη θέση {position} (ID {id}) ελήφθη και βρίσκεται υπό εξέταση.",
             ],
             "extra": [
@@ -4095,8 +3889,7 @@ BANKS["el"] = {
             "subject": ["Ας μιλήσουμε για νέες ευκαιρίες", "Το προφίλ σας τράβηξε την προσοχή μου"],
             "intro": ["Γεια σας {first},", "Γεια {first},"],
             "core": [
-                "Είδα το προφίλ σας και θα ήθελα να σας μιλήσω για ευκαιρίες στον τομέα του "
-                "{skill}.",
+                "Είδα το προφίλ σας και θα ήθελα να σας μιλήσω για ευκαιρίες στον τομέα του {skill}.",
                 "Προσλαμβάνουμε για αρκετές θέσεις και η εμπειρία σας ταιριάζει.",
             ],
             "extra": [
@@ -4148,9 +3941,7 @@ BANKS["el"] = {
                 "Η τράπεζά σας απέρριψε την πληρωμή. Ενημερώστε την κάρτα σας για να κρατήσετε τη "
                 "συνδρομή Premium στην "
                 "{company}.",
-                "Δυστυχώς η θέση {position} που αποθηκεύσατε στην {company} έκλεισε· δείτε πέντε "
-                "παρόμοιες "
-                "θέσεις.",
+                "Δυστυχώς η θέση {position} που αποθηκεύσατε στην {company} έκλεισε· δείτε πέντε παρόμοιες θέσεις.",
             ],
             "extra": [
                 "Απαντήστε ΣΤΟΠ για διαγραφή.",
@@ -4194,8 +3985,7 @@ BANKS["el"] = {
                 "τη "
                 "δοκιμασία μία "
                 "φορά.",
-                "Λυπούμαστε που το αποτέλεσμά σας ήταν κάτω από το όριο της διαδικασίας για "
-                "{position}.",
+                "Λυπούμαστε που το αποτέλεσμά σας ήταν κάτω από το όριο της διαδικασίας για {position}.",
             ],
             "extra": ["Τα αποτελέσματα είναι διαθέσιμα στην πύλη υποψηφίων."],
         },
@@ -4222,14 +4012,11 @@ BANKS["el"] = {
                 "opportunity",
             ),
             (
-                "Λυπούμαστε που το τεύχος είναι σύντομο· η σύνταξη μάζευε ιστορίες απορρίψεων των "
-                "αναγνωστών.",
+                "Λυπούμαστε που το τεύχος είναι σύντομο· η σύνταξη μάζευε ιστορίες απορρίψεων των αναγνωστών.",
                 "other",
             ),
             (
-                "Δυστυχώς η θέση {position} που αποθηκεύσατε στην {company} έκλεισε· δείτε πέντε "
-                "παρόμοιες "
-                "θέσεις.",
+                "Δυστυχώς η θέση {position} που αποθηκεύσατε στην {company} έκλεισε· δείτε πέντε παρόμοιες θέσεις.",
                 "other",
             ),
             (

@@ -57,8 +57,7 @@ def summarize(record: dict, now: float, stale_after: float = STALE_AFTER_SECONDS
         "rate_per_second": rate,
         "eta_seconds": eta,
         "age_seconds": age,
-        "stalled": age > stale_after
-        or (status not in ("running", "complete") and age > stale_after),
+        "stalled": age > stale_after or (status not in ("running", "complete") and age > stale_after),
     }
 
 
@@ -81,9 +80,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("probe", "watch"))
     parser.add_argument("path", type=Path, help="heartbeat file written by the job")
-    parser.add_argument(
-        "--interval", type=float, default=10.0, help="watch polling interval in seconds"
-    )
+    parser.add_argument("--interval", type=float, default=10.0, help="watch polling interval in seconds")
     parser.add_argument("--stale-after", type=float, default=STALE_AFTER_SECONDS)
     args = parser.parse_args()
 

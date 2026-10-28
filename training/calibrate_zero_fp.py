@@ -86,16 +86,12 @@ def validate_row(row: object, where: str) -> dict:
     if not isinstance(label, str):
         raise ScoreRowError(f"{where}: missing or non-string 'label'")
     if label not in VALID_LABELS:
-        raise ScoreRowError(
-            f"{where}: unknown label {label!r}; declared labels are {list(VALID_LABELS)}"
-        )
+        raise ScoreRowError(f"{where}: unknown label {label!r}; declared labels are {list(VALID_LABELS)}")
     if "rejection_probability" not in row:
         raise ScoreRowError(f"{where}: missing 'rejection_probability'")
     score = row["rejection_probability"]
     if isinstance(score, bool) or not isinstance(score, (int, float)):
-        raise ScoreRowError(
-            f"{where}: 'rejection_probability' must be a number, not {type(score).__name__}"
-        )
+        raise ScoreRowError(f"{where}: 'rejection_probability' must be a number, not {type(score).__name__}")
     score = float(score)
     if not math.isfinite(score):
         raise ScoreRowError(f"{where}: 'rejection_probability' must be finite, got {score!r}")
@@ -143,9 +139,7 @@ def is_positive(row: dict) -> bool:
     return row["label"] == "rejection"
 
 
-def counts_at(
-    negatives: list[dict], positives: list[dict], threshold: float
-) -> tuple[int, int]:
+def counts_at(negatives: list[dict], positives: list[dict], threshold: float) -> tuple[int, int]:
     """Count FP/TP at one threshold.
 
     Inputs: `negatives` — labeled negative scores; `positives` — labeled
@@ -157,9 +151,7 @@ def counts_at(
     return fp, tp
 
 
-def select_best(
-    negatives: list[dict], positives: list[dict], target_fp: int
-) -> dict | None:
+def select_best(negatives: list[dict], positives: list[dict], target_fp: int) -> dict | None:
     """Sweep the observed decision boundaries; keep the FP-compliant optimum.
 
     Inputs: `negatives`/`positives` — validated labeled scores; `target_fp` —
@@ -187,8 +179,7 @@ def select_best(
     if target_fp < 0:
         raise ValueError(f"target_fp must be >= 0, got {target_fp}")
     candidates = sorted(
-        {r["rejection_probability"] for r in negatives}
-        | {r["rejection_probability"] for r in positives}
+        {r["rejection_probability"] for r in negatives} | {r["rejection_probability"] for r in positives}
     )
     best: dict | None = None
     for threshold in candidates:
@@ -310,9 +301,7 @@ def main() -> int:
     input is empty or invalid (no report is produced for invalid input).
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--scores", type=Path, required=True, help="JSONL of label + rejection_probability"
-    )
+    parser.add_argument("--scores", type=Path, required=True, help="JSONL of label + rejection_probability")
     parser.add_argument(
         "--target-fp",
         type=int,

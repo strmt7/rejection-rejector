@@ -206,7 +206,7 @@ try {
 
     $pythonFiles = Get-LintTargetFile `
         -ChangedPath $changedFiles `
-        -AllPathspec @("training/*.py", "tools/*.py", "tests/**/*.py") `
+        -AllPathspec @("training/**/*.py", "tools/**/*.py", "tests/**/*.py") `
         -FilePattern @("^(training|tools|tests)/.*\.py$") `
         -ConfigPattern @("^\.ruff\.toml$") `
         -ForceAll:$lintAll

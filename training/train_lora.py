@@ -62,9 +62,7 @@ def discover_target_modules(model) -> list[str]:
     names = {name.rsplit(".", 1)[-1] for name, _ in model.named_modules()}
     found = [m for m in TARGET_MODULES if m in names]
     if not found:
-        raise SystemExit(
-            f"no known projection modules found; architecture exposes: {sorted(names)[:20]}"
-        )
+        raise SystemExit(f"no known projection modules found; architecture exposes: {sorted(names)[:20]}")
     return found
 
 
@@ -95,9 +93,7 @@ def make_causal_collator(tokenizer):
         ]
         batch = tokenizer.pad(inputs, padding=True, return_tensors="pt")
         width = batch["input_ids"].shape[1]
-        batch["labels"] = torch.tensor(
-            [label + [-100] * (width - len(label)) for label in labels]
-        )
+        batch["labels"] = torch.tensor([label + [-100] * (width - len(label)) for label in labels])
         return batch
 
     return collate
@@ -144,7 +140,7 @@ def tokenize_row(row: dict, tokenizer, pad_to_length: int, max_seq_len: int) -> 
             pad_id = tokenizer.eos_token_id
         attn = [1] * len(ids) + [0] * (n - len(ids))
         ids = ids + [pad_id] * (n - len(ids))
-        labels = [tok if keep else -100 for tok, keep in zip(ids, attn)]
+        labels = [tok if keep else -100 for tok, keep in zip(ids, attn, strict=True)]
         return {"input_ids": ids, "attention_mask": attn, "labels": labels}
     encoded = tokenizer(text, truncation=True, max_length=max_seq_len)
     encoded["labels"] = list(encoded["input_ids"])
@@ -230,8 +226,7 @@ def _make_progress_callback(callback_base):
                     self._probe_errors += 1
                     if self._probe_errors <= 3 or self._probe_errors % 50 == 0:
                         print(
-                            f"resource-guard: vram probe failed "
-                            f"({self._probe_errors}x): {exc!r}",
+                            f"resource-guard: vram probe failed ({self._probe_errors}x): {exc!r}",
                             file=sys.stderr,
                         )
             # Drain the async GPU queue every step: the known ROCm
@@ -378,9 +373,7 @@ def _make_paced_trainer(trainer_base):
             # taken on faith.
             self._step_index += 1
             try:
-                with self.progress_path.parent.joinpath("pace-log.jsonl").open(
-                    "a", encoding="utf-8"
-                ) as fh:
+                with self.progress_path.parent.joinpath("pace-log.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(
                         json.dumps(
                             {
@@ -427,7 +420,6 @@ def _load_model(args, device: str, pace_load: bool):
     Inputs: parsed CLI args, resolved device string, and whether paced GPU
     placement applies. Output: the loaded model on its target device.
     """
-    import time as _tl
 
     import torch
     from transformers import AutoModelForCausalLM, BitsAndBytesConfig
@@ -466,15 +458,9 @@ def _load_model(args, device: str, pace_load: bool):
         # This closes the placement gap the device assert below verifies.
         model.to("cuda")
         torch.cuda.synchronize()
-        leftovers = sorted(
-            {str(p.device) for p in model.parameters()}
-            | {str(b.device) for b in model.buffers()}
-        )
+        leftovers = sorted({str(p.device) for p in model.parameters()} | {str(b.device) for b in model.buffers()})
         if leftovers != ["cuda:0"]:
-            raise RuntimeError(
-                f"paced load must land every parameter/buffer on cuda:0; "
-                f"devices seen: {leftovers}"
-            )
+            raise RuntimeError(f"paced load must land every parameter/buffer on cuda:0; devices seen: {leftovers}")
     return model
 
 
@@ -503,11 +489,7 @@ def _prepare_kbit(model, args) -> None:
     # `model` (in place). Output: none.
     for _name, param in model.named_parameters():
         if param.dtype == torch.float32 and param.numel() > 10_000_000:
-            target = (
-                torch.bfloat16
-                if (args.bf16 or torch.cuda.is_bf16_supported())
-                else torch.float16
-            )
+            target = torch.bfloat16 if (args.bf16 or torch.cuda.is_bf16_supported()) else torch.float16
             param.data = param.data.to(target)
 
 
@@ -518,8 +500,7 @@ def stop_on_resource_breach(trainer, v) -> None:
     and the adapter checkpoint from the last completed step survives.
     """
     print(
-        f"resource-guard: stopping training: {v.resource}: "
-        f"{v.reason}: {v.detail}",
+        f"resource-guard: stopping training: {v.resource}: {v.reason}: {v.detail}",
         file=sys.stderr,
     )
     trainer.control.should_training_stop = True
@@ -545,8 +526,7 @@ def stall_watchdog(progress_path: Path) -> None:
         if age > 120.0 and not dumped:
             dumped = True
             print(
-                f"resource-guard: STALLED {age:.0f}s (heartbeat stale "
-                f"mid-run); dumping all thread stacks",
+                f"resource-guard: STALLED {age:.0f}s (heartbeat stale mid-run); dumping all thread stacks",
                 file=sys.stderr,
             )
             faulthandler.dump_traceback(file=sys.stderr)
@@ -599,17 +579,21 @@ def main() -> int:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "hip"), default="auto")
     parser.add_argument("--max-seq-len", type=int, default=2048)
     parser.add_argument(
-        "--pad-to-length", type=int, default=0,
+        "--pad-to-length",
+        type=int,
+        default=0,
         help="Fixed token length per row (0 = off): over-long rows keep "
-             "head+tail, short rows pad with label -100. Uniform lengths "
-             "give uniform GPU bursts, required by the utilization ceiling",
+        "head+tail, short rows pad with label -100. Uniform lengths "
+        "give uniform GPU bursts, required by the utilization ceiling",
     )
     parser.add_argument(
-        "--pace-load", action=argparse.BooleanOptionalAction, default=True,
+        "--pace-load",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Place the model onto the GPU leaf-module by leaf-module with "
-             "duty sleeps between moves (a direct device_map load produces "
-             "minutes of un-throttled bursts that breach the utilization "
-             "ceiling; verified live). Disable only for non-metered hosts",
+        "duty sleeps between moves (a direct device_map load produces "
+        "minutes of un-throttled bursts that breach the utilization "
+        "ceiling; verified live). Disable only for non-metered hosts",
     )
     parser.add_argument("--epochs", type=float, default=2.0)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -619,24 +603,28 @@ def main() -> int:
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--model-billions", type=float, default=9.0,
+        "--model-billions",
+        type=float,
+        default=9.0,
         help="Base model size in billions of parameters; used only by the "
-             "fail-closed resource guard to estimate peak VRAM before start",
+        "fail-closed resource guard to estimate peak VRAM before start",
     )
     parser.add_argument(
-        "--resume", type=Path, default=None,
+        "--resume",
+        type=Path,
+        default=None,
         help="Checkpoint directory to resume from (Trainer resume_from_checkpoint)",
     )
     parser.add_argument(
-        "--max-gpu-utilization", type=float, default=100.0,
+        "--max-gpu-utilization",
+        type=float,
+        default=100.0,
         help="GPU utilization ceiling in percent (20-100): enforced purely "
-             "by pacing this loop's own steps (duty-cycle sleeps), never via "
-             "driver/fan/clock/power controls. Seeded into duty.json when "
-             "absent; the monitor GUI tunes it live mid-run",
+        "by pacing this loop's own steps (duty-cycle sleeps), never via "
+        "driver/fan/clock/power controls. Seeded into duty.json when "
+        "absent; the monitor GUI tunes it live mid-run",
     )
-    parser.add_argument(
-        "--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it"
-    )
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 compute where the platform supports it")
     parser.add_argument(
         "--progress-file",
         type=Path,
@@ -651,8 +639,8 @@ def main() -> int:
     from transformers import (
         AutoTokenizer,
         Trainer,
-        TrainingArguments,
         TrainerCallback,
+        TrainingArguments,
     )
 
     # The callback contract: ProgressCallback subclasses TrainerCallback.
@@ -670,9 +658,7 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
     import resource_guard as rg
 
-    need = rg.estimate_training_vram(
-        param_billions=args.model_billions, seq_len=args.max_seq_len
-    )
+    need = rg.estimate_training_vram(param_billions=args.model_billions, seq_len=args.max_seq_len)
     gate = rg.preflight(
         limits=rg.Thresholds(min_free_vram=need, require_vram=device == "cuda"),
         disk_path=str(args.output_dir.parent),
@@ -680,8 +666,7 @@ def main() -> int:
     if not gate.ok:
         for violation in gate.violations:
             print(
-                f"resource-guard: {violation.resource}: "
-                f"{violation.reason}: {violation.detail}",
+                f"resource-guard: {violation.resource}: {violation.reason}: {violation.detail}",
                 file=sys.stderr,
             )
         print("resource-guard: refusing to start (fail-closed)", file=sys.stderr)
@@ -744,23 +729,23 @@ def main() -> int:
     # must SURVIVE a resume (the live value wins over the CLI default).
     duty_path = duty_cycle.control_path_for(progress_path)
     if duty_cycle.read_target(duty_path) is None:
-        duty_cycle.write_target(
-            duty_path, duty_cycle.validate_target_pct(args.max_gpu_utilization)
-        )
+        duty_cycle.write_target(duty_path, duty_cycle.validate_target_pct(args.max_gpu_utilization))
     trainer = PacedTrainer(
         model=model,
         args=train_args,
-        train_dataset=Dataset.from_list([
-            tokenize_row(row, tokenizer, args.pad_to_length, args.max_seq_len) for row in rows
-        ]),
+        train_dataset=Dataset.from_list(
+            [tokenize_row(row, tokenizer, args.pad_to_length, args.max_seq_len) for row in rows]
+        ),
         data_collator=make_causal_collator(tokenizer),
         duty_path=duty_path,
         seed_target=args.max_gpu_utilization,
         progress_path=progress_path,
-        callbacks=[ProgressCallback(
-            progress_path,
-            vram_probe=functools.partial(sample_vram, vram_state),
-        )],
+        callbacks=[
+            ProgressCallback(
+                progress_path,
+                vram_probe=functools.partial(sample_vram, vram_state),
+            )
+        ],
     )
 
     # Mid-step stall instrument: the trainer callback only runs between
@@ -769,9 +754,7 @@ def main() -> int:
     # it goes stale, then exits with code 97 so a wrapper loop can resume
     # from the latest checkpoint (a wedge costs one checkpoint interval).
     threading_mod = __import__("threading")
-    threading_mod.Thread(
-        target=functools.partial(stall_watchdog, progress_path), daemon=True
-    ).start()
+    threading_mod.Thread(target=functools.partial(stall_watchdog, progress_path), daemon=True).start()
 
     _warmup(model)
 
@@ -802,9 +785,7 @@ def main() -> int:
         "torch": torch.__version__,
         "seed": args.seed,
     }
-    (args_out / "train_report.json").write_text(
-        json.dumps(report, indent=2) + "\n", encoding="utf-8"
-    )
+    (args_out / "train_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
 
