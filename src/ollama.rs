@@ -19,6 +19,16 @@ use std::{
     time::Duration,
 };
 
+/// Sampling temperature for structured chat inference (the evaluation and
+/// decision lanes' declared sampling contract; reported by research outputs).
+pub const CHAT_TEMPERATURE: f64 = 0.15;
+
+/// Sampling seed for structured chat inference (deterministic sampling).
+pub const CHAT_SEED: i64 = 42;
+
+/// Sampling temperature for the preflight warm-up generation.
+pub const PRECHECK_TEMPERATURE: f64 = 0.0;
+
 /// One model's installed and residency state.
 ///
 /// Inputs: none (plain struct). Output: installation flag, digest, size and
@@ -655,8 +665,8 @@ impl Ollama {
                     "options": {
                         "num_ctx": self.settings.num_ctx,
                         "num_predict": predict,
-                        "temperature": 0.15,
-                        "seed": 42
+                        "temperature": CHAT_TEMPERATURE,
+                        "seed": CHAT_SEED
                     }
                 }))
                 .send()
@@ -973,8 +983,8 @@ impl Ollama {
                     "options": {
                         "num_ctx": self.settings.num_ctx,
                         "num_predict": 1,
-                        "temperature": 0.0,
-                        "seed": 42
+                        "temperature": PRECHECK_TEMPERATURE,
+                        "seed": CHAT_SEED
                     }
                 }))
                 .send()

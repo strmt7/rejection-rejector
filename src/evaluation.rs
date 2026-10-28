@@ -1,7 +1,8 @@
 use crate::{
+    build_info,
     config::{EVALUATION_CONTRACT_VERSION, MODEL_CANDIDATES, Settings, evaluation_suite_hash},
     mail,
-    ollama::{ModelStatus, Ollama, sample_email},
+    ollama::{CHAT_SEED, CHAT_TEMPERATURE, ModelStatus, Ollama, sample_email},
     types::{Category, Draft},
     vault::write_new_private,
 };
@@ -126,6 +127,8 @@ struct Summary {
     task_score: f64,
     recommendation_eligible: bool,
     tag_metrics: BTreeMap<String, TagSummary>,
+    /// Why each null metric is unavailable (empty when every metric resolved).
+    unavailable_metric_reasons: BTreeMap<String, String>,
 }
 
 /// Parse the evaluation case fixture set.
@@ -415,6 +418,55 @@ fn build_evaluation_report(
         && multilingual_verified_rejection_pipeline_rate.unwrap_or(0.0) >= 0.85
         && qualified.gpu_resident;
 
+    // Every null metric stays null and gains an explicit reason (research
+    // contract: unavailable metrics remain null with reasons, never a
+    // measured zero).
+    let mean_seconds = (completed != 0).then(|| total_seconds / completed as f64);
+    let mut unavailable_metric_reasons = BTreeMap::new();
+    for (name, value, reason) in [
+        ("accuracy", accuracy, "no fixture cases (denominator zero)"),
+        (
+            "rejection_precision",
+            precision,
+            "no predicted rejections (denominator zero)",
+        ),
+        (
+            "rejection_recall",
+            recall,
+            "no expected rejections (denominator zero)",
+        ),
+        (
+            "non_rejection_false_positive_avoidance",
+            fp_avoidance,
+            "no non-rejection cases (denominator zero)",
+        ),
+        (
+            "verified_rejection_pipeline_rate",
+            pipeline_rate,
+            "no expected rejections (denominator zero)",
+        ),
+        (
+            "deterministic_rejection_evidence_recall",
+            deterministic_rejection_evidence_recall,
+            "no expected rejections (denominator zero)",
+        ),
+        (
+            "multilingual_rejection_recall",
+            multilingual_rejection_recall,
+            "no multilingual rejection cases (denominator zero)",
+        ),
+        (
+            "multilingual_verified_rejection_pipeline_rate",
+            multilingual_verified_rejection_pipeline_rate,
+            "no multilingual expected rejections (denominator zero)",
+        ),
+        ("mean_seconds", mean_seconds, "no completed cases"),
+    ] {
+        if value.is_none() {
+            unavailable_metric_reasons.insert(name.to_string(), reason.to_string());
+        }
+    }
+
     let summary = Summary {
         fixture_count: cases.len(),
         completed,
@@ -439,10 +491,11 @@ fn build_evaluation_report(
         deterministic_rejection_evidence_recall,
         multilingual_rejection_recall,
         multilingual_verified_rejection_pipeline_rate,
-        mean_seconds: (completed != 0).then(|| total_seconds / completed as f64),
+        mean_seconds,
         task_score,
         recommendation_eligible,
         tag_metrics,
+        unavailable_metric_reasons,
     };
 
     Ok(serde_json::json!({
@@ -453,6 +506,11 @@ fn build_evaluation_report(
         "model": pinned.model,
         "digest": qualified.digest,
         "context": pinned.num_ctx,
+        "build": build_info::current(),
+        "sampling": {
+            "temperature": CHAT_TEMPERATURE,
+            "seed": CHAT_SEED
+        },
         "qualification": {
             "gpu_resident": qualified.gpu_resident,
             "size_vram": qualified.size_vram,

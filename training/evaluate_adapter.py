@@ -15,17 +15,54 @@ Inputs:
     --device      cuda|cpu (default: cuda when available)
 
 Output: a JSON report with counts, per-class precision/recall, confusion
-pairs, fail-closed analysis and a per-row results array. A progress marker
+pairs, fail-closed analysis, a per-row results array and an `identity` block
+(dataset/adapter digests, requested/resolved model identity, split role and
+the deterministic generation policy). A progress marker
 (`<out>.progress.json`) is written after every row so live probing works.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+
+
+def sha256_file(path: Path) -> str:
+    """Digest one file. Inputs: `path`. Output: lowercase hex SHA-256."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def path_identity(path: Path) -> dict:
+    """Content identity for a file or directory of files.
+
+    Inputs: `path` — a file, or a directory (e.g. a LoRA adapter). Output:
+    `{path, kind, sha256}` where a directory digest covers the sorted
+    per-file names and contents, so any changed member changes the digest.
+    """
+    if path.is_dir():
+        digest = hashlib.sha256()
+        for member in sorted(p for p in path.rglob("*") if p.is_file()):
+            digest.update(member.relative_to(path).as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(member.read_bytes())
+            digest.update(b"\0")
+        return {"path": str(path), "kind": "directory", "sha256": digest.hexdigest()}
+    return {"path": str(path), "kind": "file", "sha256": sha256_file(path)}
+
+
+def count_rows(path: Path) -> int:
+    """Count non-empty JSONL rows. Inputs: `path`. Output: `int`."""
+    with path.open(encoding="utf-8") as fh:
+        return sum(1 for line in fh if line.strip())
+
+
+# Deterministic generation policy for holdout scoring (greedy decoding is
+# seed-independent; recorded in the report as the sampling identity).
+GENERATION = {"do_sample": False, "max_new_tokens": 96}
 
 
 def load_rows(path: Path, limit: int | None) -> list[dict]:
@@ -85,7 +122,10 @@ def generate_answer(model, tokenizer, prompt: str) -> str:
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     with torch.no_grad():
         out = model.generate(
-            **inputs, max_new_tokens=96, do_sample=False, pad_token_id=tokenizer.eos_token_id
+            **inputs,
+            max_new_tokens=GENERATION["max_new_tokens"],
+            do_sample=GENERATION["do_sample"],
+            pad_token_id=tokenizer.eos_token_id,
         )
     return tokenizer.decode(out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
 
@@ -156,6 +196,10 @@ def main() -> int:
     )
     model = PeftModel.from_pretrained(model, str(args.adapter))
     model.eval()
+    try:
+        resolved_revision = getattr(model.get_base_model().config, "_commit_hash", None)
+    except Exception:  # noqa: BLE001 - provenance is best-effort, never fatal
+        resolved_revision = None
 
     results = []
     confusion: dict[str, Counter] = defaultdict(Counter)
@@ -199,6 +243,25 @@ def main() -> int:
         "results": results,
         "torch": torch.__version__,
         "device": device,
+        "identity": {
+            "split_role": "holdout_evaluation",
+            "holdout": {
+                **path_identity(args.holdout),
+                "rows_available": count_rows(args.holdout),
+                "rows_evaluated": total,
+                "limit": args.limit,
+            },
+            "adapter": path_identity(args.adapter),
+            "base_model_requested": args.base_model,
+            "base_model_resolved_revision": resolved_revision,
+            "base_model_resolved_note": (
+                None
+                if resolved_revision
+                else "provider-resolved revision unavailable from the loaded snapshot; identity stays unknown"
+            ),
+            "sampling": dict(GENERATION),
+            "sampling_note": "greedy decoding is seed-independent; scores are not calibrated probabilities",
+        },
     }
     args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     write_progress(progress_path, {"job": "evaluate_adapter", "status": "complete",

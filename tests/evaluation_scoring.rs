@@ -685,3 +685,52 @@ fn comparison_isolates_candidate_evaluation_failures() {
     }
     assert!(report.get("eligibility").is_some());
 }
+
+/// Guards the research-evidence contract on the report envelope: the report
+/// must identify the build (source commit and lock digest), the declared
+/// sampling policy (temperature/seed), and every unavailable metric must stay
+/// null with an explicit reason instead of reading as a measured zero.
+#[test]
+fn report_carries_research_identity_and_null_metric_reasons() {
+    let fake = Fake::new(&[DEFAULT_MODEL]);
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("report.json");
+    let report = evaluation::run(&fake.settings(), &out).unwrap();
+
+    // Build identity: source commit and lock digest bind the run to source.
+    let build = &report["build"];
+    assert!(build["source_commit"].as_str().unwrap().len() >= 7);
+    let lock = build["cargo_lock_sha256"].as_str().unwrap();
+    assert_eq!(lock.len(), 64);
+    assert!(lock.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert!(!build["identity_sha256"].as_str().unwrap().is_empty());
+
+    // Declared sampling policy (matches the Ollama request contract).
+    assert!((report["sampling"]["temperature"].as_f64().unwrap() - 0.15).abs() < 1e-9);
+    assert_eq!(report["sampling"]["seed"].as_i64().unwrap(), 42);
+
+    // Every null metric must carry a reason; no non-null metric may carry one.
+    let summary = &report["summary"];
+    let reasons = summary["unavailable_metric_reasons"].as_object().unwrap();
+    for name in [
+        "accuracy",
+        "rejection_precision",
+        "rejection_recall",
+        "non_rejection_false_positive_avoidance",
+        "verified_rejection_pipeline_rate",
+        "deterministic_rejection_evidence_recall",
+        "multilingual_rejection_recall",
+        "multilingual_verified_rejection_pipeline_rate",
+        "mean_seconds",
+    ] {
+        let is_null = summary[name].is_null();
+        assert_eq!(
+            is_null,
+            reasons.contains_key(name),
+            "{name}: null metrics need a reason and resolved metrics must not have one"
+        );
+        if let Some(reason) = reasons.get(name) {
+            assert!(!reason.as_str().unwrap().is_empty());
+        }
+    }
+}

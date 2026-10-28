@@ -5,6 +5,27 @@ reply-drafting pipeline at scale against the local Ollama runtime, measure detec
 response quality, and fix real code bugs found. Raw measurements:
 [`model-scale-raw.json`](model-scale-raw.json).
 
+## 0. Evidence identity (forward record added 2026-10-28)
+
+This header is an identity record added after the runs (research/AI-evaluation
+audit, manual §5 "Research and AI evaluation contract"). Every number below it
+is frozen historical evidence and was **not** edited. Fields that the runs did
+not record are `null` with a reason — never inferred.
+
+| Field | Value |
+| --- | --- |
+| source_commit | `null` — reason: the 2026-10-27/28 runs did not record the commit they executed at; the frozen artifacts landed in the scale-campaign commits, after which repository history was rewritten. This header was written at worktree commit `8732dd9` (plus uncommitted audit edits); that identity covers **this record**, not the runs. |
+| environment / lock digest | Host: Windows 11, git-bash; Ollama 0.40.11 at `127.0.0.1:11434` (runs). `Cargo.lock` SHA-256 at header time: `d927c66455791efb7490d91d7f325b7d6bc27509e96289d40af3d367ace5f7a7` (run-time lock not recorded → `null` with this reason). |
+| dataset / task identity | In-repo suite: `tests/fixtures/classification.json` (74 fixtures), contract `rr-eval-contract-v5`, suite hash `94239602e5fad6feab4476bf594f10c487a04be702a24bd5d4d0b66eb1070886` (pins fixtures + weights + eligibility). Scale sample: 156 rows from `training/data/sft_holdout_v2.jsonl` (880 held-out v2-corpus rows); exact realized sample pinned by `sample_ids` in `model-scale-raw.json`. |
+| lineage / split | Corpus banks from `training/corpus_banks_v2.py`; holdout produced by `build_sft_dataset.py::stratified_split` (category-stratified, deterministic) and kept out of training; scale sample a deterministic seeded subset (`sample_corpus.py`). Source/author group lineage: `null` — reason: corpus rows are synthetic banks, no document/author groups exist to split on. |
+| model identity | Requested `granite4.2:8b-q8_0`; resolved digest `62837636dd31c99a3aa0c43da450c9233f111aeddf0d1a5070e37ee4aeae02b4` (local Ollama = the resolved identity). Verifier: same-model verification (`independent_verifier_enabled: false`, the default). |
+| grader / prompt / config versions | Prompts `CLASSIFY_SYSTEM_PROMPT` / `DRAFT_SYSTEM_PROMPT` / `VERIFY_SYSTEM_PROMPT` with schema-constrained JSON via `/api/chat`; settings `Settings::default()` with delivery disarmed (`num_ctx` 32768); grader identity = the suite contract + hash above; reports generated before 2026-10-28 lack the newer `build`/`sampling` envelope fields (added post-run). |
+| attempt / failure counts | In-repo: 74 fixtures attempted, 64 completed, 10 model-error rows (all in the denominators, §2). Scale: 156/156 rows attempted, 123 attributed + 33 unattributed error rows (§3). No attempt was dropped from any denominator. |
+| seed | `null` — reason: the sampler is seeded but the seed value was not recorded in the frozen raw JSON; the realized sample is pinned exactly by `sample_ids` instead. Inference sampling: temperature 0.15 / seed 42 on the wire (now recorded by `rr evaluate` reports directly). |
+| denominators | Accuracy 83.8% over 64 completed fixtures (not 74); rejection metrics over 18 expected rejections; scale accuracy 73.98% over 123 attributed rows with 33 unattributed error rows counted separately (not silently dropped). |
+| unavailable metrics | Per-row latency: `null` — reason: the eval lane, scale workers and a probe shared one Ollama runtime, so per-row seconds include queueing (§1 concurrency note). Provider-resolved model snapshot beyond the local digest: not applicable — the Ollama digest *is* the resolved identity. |
+| qualification label | **Diagnostic evidence, not qualification**: one local model, one host, synthetic recruiting fixtures plus one sampled holdout slice. Not representative mailbox accuracy, not a production-readiness claim, and model-reported scores are **not calibrated probabilities**. |
+
 ## 1. Setup
 
 | Item | Value |

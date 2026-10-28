@@ -11,7 +11,9 @@ device is an argument, and the compute device is auto-detected.
 - Default paths resolve relative to this directory (`../tests/fixtures/
   rejection_corpus`, `training/data`).
 - `--device auto` selects CUDA when available; PyTorch ROCm builds expose the
-  same API, so AMD GPUs work through ROCm on Linux or WSL2 on Windows. CPU
+  same API, so AMD GPUs work through ROCm on bare-metal Linux and on native
+  Windows per the compatibility matrix below — **not** on WSL2 (see the
+  verified limitation under "Supported compute configurations"). CPU
   works for small models and for the calibration tools.
 - Any base model with LoRA-compatible projection names works (the trainer
   auto-discovers `q_proj`/`k_proj`/`v_proj`/`o_proj`/`gate_proj`/`up_proj`/
@@ -59,7 +61,19 @@ error class because it would fire an assertive reply at the wrong message.
 2. `train_lora.py` fine-tunes on that distribution.
 3. `calibrate_zero_fp.py` selects the operating threshold with maximal recall
    subject to the observed false-positive target, and reports the binomial
-   upper bound so "zero observed" is never mistaken for zero risk.
+   upper bound so "zero observed" is never mistaken for zero risk. The sweep
+   runs over the observed decision boundaries (`score >= threshold`, matching
+   the runtime gate), so the optimum is exact for the calibration set. Invalid
+   rows (booleans, NaN/infinity, out-of-range scores, unknown labels, missing
+   fields) fail before any report; `ambiguous` is explicitly negative for FP
+   purposes; `abstain_all` and `insufficient_data` are explicit statuses
+   instead of an out-of-range threshold. The deterministic tie policy is
+   stated in the tool: maximize TP, then minimize FP, then the highest
+   threshold; the reported cutoff is the smallest observed score achieving the
+   selected decision set (0.5002 for a 0.5001/0.5002 pair under `>=`).
+   Deterministic data tests live in
+   `training/tests/test_calibration_zero_fp.py`
+   (`python -m unittest discover -s training/tests -v`).
 
 ## Live progress probing
 
