@@ -84,7 +84,8 @@ keyring = { version = "3", features = ["apple-native"] }
 
 [package.metadata.cargo-machete]
 # Intentional resolver-only dependency: yoke-derive 0.8.3 is yanked while
-# yoke 0.8.3 accepts ^0.8.2. Keep 0.8.2 pinned until the upstream graph moves.
+# yoke-derive must track the yoke core's derive-macro minor line; the declared
+# requirement is the caret range 0.8.4 (no exact pin exists or is needed).
 ignored = ["yoke-derive", "nom"]
 
 [lints.rust]

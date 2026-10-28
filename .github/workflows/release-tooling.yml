@@ -38,3 +38,5 @@ jobs:
         run: python -m compileall -q tools scripts training
       - name: Run release-test suite
         run: python -m unittest discover -s tests/release -v
+      - name: Model-free calibration and data-contract tests
+        run: python -m unittest discover -s training/tests -v
