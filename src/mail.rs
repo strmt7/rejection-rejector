@@ -144,35 +144,144 @@ fn is_localized_attribution(l: &str) -> bool {
 /// Greek attributions and the localized "forwarded message" headings across
 /// the supported languages.
 fn is_forward_marker(l: &str) -> bool {
-    (l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε")))
-        || l.contains("oorspronkelijk bericht")
-        || l.contains("doorgestuurd bericht")
-        || l.contains("αρχικό μήνυμα")
-        || l.contains("αρχικο μηνυμα")
-        || l.contains("προωθημένο μήνυμα")
-        || l.contains("προωθημενο μηνυμα")
-        || l.contains("messaggio inoltrato")
-        || l.contains("mensaje reenviado")
-        || l.contains("mensagem encaminhada")
-        || l.contains("weitergeleitete nachricht")
-        || l.contains("ursprüngliche nachricht")
-        || l.contains("ursprungliche nachricht")
-        || l.contains("message transféré")
-        || l.contains("message d'origine")
-        || l.contains("пересылаемое сообщение")
-        || l.contains("исходное сообщение")
-        || l.contains("转发的邮件")
-        || l.contains("转发邮件")
-        || l.contains("原始邮件")
-        || l.contains("原始消息")
-        || l.contains("転送されたメッセージ")
-        || l.contains("元のメッセージ")
-        || l.contains("अग्रेषित संदेश")
-        || l.contains("मूल संदेश")
-        || l.contains("المعاد توجيهها")
-        || l.contains("الرسالة الأصلية")
-        || l.contains("ফরওয়ার্ড করা বার্তা")
-        || l.contains("মূল বার্তা")
+    greek_forward_marker(l)
+        || dutch_forward_marker(l)
+        || romance_forward_marker(l)
+        || german_forward_marker(l)
+        || cyrillic_forward_marker(l)
+        || cjk_forward_marker(l)
+        || indo_aryan_forward_marker(l)
+        || semitic_forward_marker(l)
+}
+
+/// Whether the line is a Greek forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for Greek
+/// attribution and forward/original headings in accented and unaccented
+/// spellings.
+fn greek_forward_marker(l: &str) -> bool {
+    for marker in [
+        "αρχικό μήνυμα",
+        "αρχικο μηνυμα",
+        "προωθημένο μήνυμα",
+        "προωθημενο μηνυμα",
+    ] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    l.starts_with("στις ") && (l.contains("έγραψε") || l.contains("εγραψε"))
+}
+
+/// Whether the line is a Dutch forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Dutch
+/// original/forwarded message headings.
+fn dutch_forward_marker(l: &str) -> bool {
+    for marker in ["oorspronkelijk bericht", "doorgestuurd bericht"] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is a Romance-language forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Italian,
+/// Spanish, Portuguese and French forward/original headings.
+fn romance_forward_marker(l: &str) -> bool {
+    for marker in [
+        "messaggio inoltrato",
+        "mensaje reenviado",
+        "mensagem encaminhada",
+        "message transféré",
+        "message d'origine",
+    ] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is a German forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the German
+/// forwarded/original message headings, accented or ASCII-folded.
+fn german_forward_marker(l: &str) -> bool {
+    for marker in [
+        "weitergeleitete nachricht",
+        "ursprüngliche nachricht",
+        "ursprungliche nachricht",
+    ] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is a Russian forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Russian
+/// forwarded/original message headings.
+fn cyrillic_forward_marker(l: &str) -> bool {
+    for marker in ["пересылаемое сообщение", "исходное сообщение"]
+    {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is a Chinese or Japanese forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Chinese
+/// forward/original mail headings and the Japanese forwarded/original
+/// message headings.
+fn cjk_forward_marker(l: &str) -> bool {
+    for marker in [
+        "转发的邮件",
+        "转发邮件",
+        "原始邮件",
+        "原始消息",
+        "転送されたメッセージ",
+        "元のメッセージ",
+    ] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is a Hindi or Bengali forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Hindi and
+/// Bengali forwarded/original message headings.
+fn indo_aryan_forward_marker(l: &str) -> bool {
+    for marker in ["अग्रेषित संदेश", "मूल संदेश", "ফরওয়ার্ড করা বার্তা", "মূল বার্তা"]
+    {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line is an Arabic forwarded-message heading.
+///
+/// Inputs: `l` - lowercased line. Output: `bool` - true for the Arabic
+/// forwarded/original message headings.
+fn semitic_forward_marker(l: &str) -> bool {
+    for marker in ["المعاد توجيهها", "الرسالة الأصلية"] {
+        if l.contains(marker) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Validate a draft reply against the reply envelope.

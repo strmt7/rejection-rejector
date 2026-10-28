@@ -95,8 +95,7 @@ pub fn dominant_language(text: &str) -> Option<String> {
 /// length and verifiability gate on the supported CJK languages.
 pub fn word_count(text: &str) -> usize {
     let cjk = text
-        .chars()
-        .filter(|c| {
+        .matches(|c: char| {
             matches!(
                 c,
                 '\u{3040}'..='\u{30ff}'

@@ -56,10 +56,10 @@ jobs:
       - name: Rust 1.99.0 with llvm-tools
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          toolchain: 1.99.0
+          toolchain: 1.99.1
           components: llvm-tools-preview
       - name: Install cargo-llvm-cov 0.9.1
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov@0.9.1
           checksum: true

@@ -184,6 +184,7 @@ pub struct App {
     app_password: String,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
+    screenshot_slot: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<egui::ColorImage>>>>,
     frames: u32,
     local_error: String,
     started: Instant,
@@ -225,6 +226,7 @@ impl App {
             app_password: String::default(),
             screenshot,
             screenshot_requested: false,
+            screenshot_slot: std::sync::Arc::new(std::sync::Mutex::new(None)),
             frames: 0,
             local_error: String::default(),
             started: Instant::now(),
@@ -2265,7 +2267,16 @@ impl App {
                 && !self.screenshot_requested
             {
                 eprintln!("GUI_QA requesting native screenshot");
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                let slot = self.screenshot_slot.clone();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                    egui::ScreenshotCallback::new(move |image| {
+                        // A poisoned slot loses this capture rather than
+                        // panicking, matching the crate's lock contract.
+                        if let Ok(mut slot) = slot.lock() {
+                            *slot = Some(image);
+                        }
+                    }),
+                ));
                 self.screenshot_requested = true;
             }
             if s.fatal || self.started.elapsed() > Duration::from_secs(25) {
@@ -2277,15 +2288,10 @@ impl App {
                 );
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            let images = ctx.input(|i| {
-                i.events
-                    .iter()
-                    .filter_map(|event| match event {
-                        egui::Event::Screenshot { image, .. } => Some(image.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            });
+            let images: Vec<std::sync::Arc<egui::ColorImage>> = match self.screenshot_slot.lock() {
+                Ok(mut slot) => slot.take().into_iter().collect(),
+                Err(_) => Vec::new(),
+            };
             for img in images {
                 let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
                 if let Some(parent) = path.parent() {
@@ -4810,14 +4816,8 @@ mod shell_tests {
             [2, 2],
             vec![egui::Color32::WHITE; 4],
         ));
-        h.frame(
-            &s,
-            vec![egui::Event::Screenshot {
-                viewport_id: egui::ViewportId::ROOT,
-                user_data: Default::default(),
-                image,
-            }],
-        );
+        *h.app.screenshot_slot.lock().expect("screenshot slot") = Some(image);
+        h.frame(&s, Vec::new());
         assert!(dir.join("shot.png").is_file(), "screenshot persisted");
         assert!(h.app.local_error.is_empty(), "capture completed cleanly");
 
@@ -4829,14 +4829,8 @@ mod shell_tests {
             [2, 2],
             vec![egui::Color32::WHITE; 4],
         ));
-        h.frame(
-            &s,
-            vec![egui::Event::Screenshot {
-                viewport_id: egui::ViewportId::ROOT,
-                user_data: Default::default(),
-                image,
-            }],
-        );
+        *h.app.screenshot_slot.lock().expect("screenshot slot") = Some(image);
+        h.frame(&s, Vec::new());
         assert!(h.app.local_error.starts_with("Screenshot failed"));
         assert!(h.app.screenshot.is_none());
 
