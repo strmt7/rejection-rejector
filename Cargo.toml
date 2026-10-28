@@ -82,9 +82,6 @@ keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
-[dev-dependencies]
-temp-env = "0.3"
-
 [package.metadata.cargo-machete]
 # Intentional resolver-only dependency: yoke-derive 0.8.3 is yanked while
 # yoke 0.8.3 accepts ^0.8.2. Keep 0.8.2 pinned until the upstream graph moves.

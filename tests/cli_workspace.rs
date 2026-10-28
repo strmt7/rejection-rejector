@@ -293,6 +293,14 @@ fn doctor_require_gates_on_the_exact_readiness_level() {
             "refusal names the unsatisfied level"
         );
     }
+
+    // The refusal sentence is pinned; operators grep for the exact text.
+    let mailbox = rr_in(&dir, &["doctor", "--require", "mailbox"]);
+    assert!(
+        String::from_utf8_lossy(&mailbox.stderr)
+            .contains("Requested readiness level Mailbox is not satisfied"),
+        "the mailbox refusal carries its exact sentence"
+    );
 }
 
 /// The backup pipeline round-trips through backup, verify, drill and
@@ -326,6 +334,25 @@ fn backup_verify_drill_and_restore_round_trip() {
     ));
     assert!(drill.get("restored_schema_version").is_some());
 
+    // The drill success is audited in the workspace journal.
+    let diag =
+        std::env::temp_dir().join(format!("rr-cli-drill-diag-{}.json", uuid::Uuid::new_v4()));
+    assert!(
+        rr_in(&dir, &["diagnostics", "--out", diag.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&diag).expect("diagnostics report"))
+            .expect("diagnostics report is JSON");
+    assert!(
+        report
+            .pointer("/recent_audit/event_kinds/backup.drill_passed")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count >= 1),
+        "the successful drill is audited"
+    );
+
     // Restore refuses anything but the literal acknowledgement.
     let refused = rr_in(
         &dir,
@@ -337,7 +364,10 @@ fn backup_verify_drill_and_restore_round_trip() {
         ],
     );
     assert!(!refused.status.success(), "wrong acknowledgement refused");
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("RESTORE"));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("Restore requires --confirm RESTORE"),
+        "the refusal sentence is pinned"
+    );
 
     // A confirmed restore into a fresh workspace succeeds.
     let (target, _target_guard) = workspace("restore-target");
@@ -474,7 +504,11 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
         ],
     );
     assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("IMPORT"));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("Recovery-key import requires --confirm IMPORT"),
+        "the import refusal sentence is pinned"
+    );
 
     // The acknowledged import installs the recovered key after the old OS
     // credential is gone — the exact disaster-recovery scenario.
@@ -537,6 +571,32 @@ fn recovery_key_envelope_round_trips_with_its_passphrase() {
         output.status.success(),
         "an allowing policy exports: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A workspace opened without the documented headless vault input fails
+/// closed and names the recovery path.
+///
+/// Why: the synthetic test input exists only for fixtures - a missing
+/// production input must refuse loudly, never fall back to a default key.
+/// Inputs: none. Output: none.
+#[cfg(not(any(windows, target_os = "macos")))]
+#[test]
+fn missing_headless_vault_input_fails_closed() {
+    let (dir, _guard) = workspace("no-input");
+    let out = Command::new(env!("CARGO_BIN_EXE_rr"))
+        .env_remove("RR_VAULT_PASSPHRASE")
+        .args(["--data-dir", dir.to_str().unwrap(), "status"])
+        .output()
+        .expect("run rr");
+    assert!(
+        !out.status.success(),
+        "missing production input must fail closed"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("RR_VAULT_PASSPHRASE"),
+        "the refusal names the documented input: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -634,9 +694,75 @@ fn maintenance_commands_write_their_operator_artifacts() {
 
     let rotated = rr_in(&dir, &["rotate-api-token"]);
     assert!(rotated.status.success());
+    let first_token = String::from_utf8_lossy(&rotated.stdout).trim().to_owned();
     assert!(
-        !String::from_utf8_lossy(&rotated.stdout).trim().is_empty(),
+        !first_token.is_empty(),
         "the one-time token is printed once"
+    );
+
+    // A second rotation prints another one-time token.
+    let rotated_again = rr_in(&dir, &["rotate-api-token"]);
+    assert!(
+        rotated_again.status.success(),
+        "second rotation prints a token"
+    );
+    let second_token = String::from_utf8_lossy(&rotated_again.stdout)
+        .trim()
+        .to_owned();
+    assert!(!second_token.is_empty(), "the second token is printed too");
+    assert_ne!(first_token, second_token, "each rotation mints a new token");
+}
+
+/// `configure` applies exactly the requested fields and refuses invalid values
+/// fail-closed without persisting them.
+///
+/// Why: `rr configure` is scripted settings management — an out-of-window
+/// value must not overwrite a working configuration.
+/// Inputs: none. Output: none.
+#[test]
+fn configure_applies_requested_fields_and_refuses_invalid_values() {
+    let (dir, _guard) = workspace("configure");
+    let applied = json_stdout(&rr_in(
+        &dir,
+        &[
+            "configure",
+            "--lookback-days",
+            "3",
+            "--poll-hours",
+            "2",
+            "--signature",
+            "Test Applicant",
+            "--api-enabled",
+            "true",
+            "--api-port",
+            "9001",
+        ],
+    ));
+    assert_eq!(applied.get("lookback_days"), Some(&serde_json::json!(3)));
+    assert_eq!(applied.get("poll_hours"), Some(&serde_json::json!(2)));
+    assert_eq!(
+        applied.get("signature"),
+        Some(&serde_json::json!("Test Applicant"))
+    );
+    assert_eq!(applied.get("api_enabled"), Some(&serde_json::json!(true)));
+    assert_eq!(applied.get("api_port"), Some(&serde_json::json!(9001)));
+
+    let refused = rr_in(&dir, &["configure", "--lookback-days", "5"]);
+    assert!(
+        !refused.status.success(),
+        "an out-of-window lookback is refused"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("Lookback must be 1, 3, 7, 14 or 28 days"),
+        "the refusal names the allowed window"
+    );
+
+    let status = json_stdout(&rr_in(&dir, &["status"]));
+    assert_eq!(
+        status.get("lookback_days"),
+        Some(&serde_json::json!(3)),
+        "the refused change left the previous value in place"
     );
 }
 
@@ -713,31 +839,46 @@ fn long_running_entry_points_fail_fast_on_broken_workspaces() {
 /// Model R&D commands fail closed when the local runtime is unreachable.
 ///
 /// Why: these commands only produce evidence against the local runtime — a
-/// missing runtime must error instead of fabricating a report.
-#[cfg(windows)]
+/// missing runtime must error instead of fabricating a report. The workspace
+/// model tag is one no runtime can serve, so a live Ollama on the machine can
+/// never turn these failures into passes.
 #[test]
 fn model_commands_fail_closed_without_the_local_runtime() {
     let (dir, _guard) = workspace("models");
     // A live Ollama may run on this machine: pin the workspace to a closed
     // loopback port so the commands must fail fast and fail closed.
+    #[cfg(windows)]
     point_ollama_at(&dir, "http://127.0.0.1:9");
+    // Hosts without the in-process settings seam get the same guarantee from
+    // a model tag no runtime can serve.
+    assert!(
+        rr_in(&dir, &["configure", "--model", "rr-audit:absent-runtime"])
+            .status
+            .success(),
+        "the workspace pins an unsatisfiable model tag"
+    );
     let out_root = std::env::temp_dir().join(format!("rr-cli-models-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&out_root).unwrap();
-    // Single-model evidence commands must fail outright.
+    // Single-model evidence commands must fail outright and write nothing.
     for command in ["evaluate", "evaluate-decision", "profile-model"] {
-        let out = rr_in(
-            &dir,
-            &[
-                command,
-                "--out",
-                out_root.join(format!("{command}.json")).to_str().unwrap(),
-            ],
-        );
+        let out_path = out_root.join(format!("{command}.json"));
+        let mut args = vec![command, "--out", out_path.to_str().unwrap()];
+        if command == "evaluate-decision" {
+            args.extend(["--model", "rr-audit:absent-runtime"]);
+        }
+        let out = rr_in(&dir, &args);
         assert!(
             !out.status.success(),
             "{command} cannot fabricate evidence without the runtime"
         );
+        assert!(!out_path.exists(), "{command} fabricates no evidence file");
     }
+
+    let qualify = rr_in(&dir, &["qualify"]);
+    assert!(
+        !qualify.status.success(),
+        "qualification needs a reachable runtime"
+    );
     // Comparison commands always write a report, but an unreachable runtime
     // must leave the recommendation empty instead of inventing a winner.
     let compare = rr_in(
@@ -780,6 +921,10 @@ fn model_commands_fail_closed_without_the_local_runtime() {
             "an unreachable runtime never recommends a model"
         );
     }
+
+    // Synchronize without a connected mailbox fails closed.
+    let sync = rr_in(&dir, &["sync"]);
+    assert!(!sync.status.success(), "sync needs a connected mailbox");
 }
 
 /// The desktop launcher completes its screenshot flow and exits.
