@@ -1,0 +1,22 @@
+# Profile exception (documented, dated): 2026-10-28, owner: the repository
+# maintainer. The engineering manual S02 table prescribes a 100-character
+# target line length for Python; this profile deliberately uses
+# line-length = 120 instead. Per the manual's own mechanism, SHOULD is the
+# default unless a documented, dated exception explains why another
+# implementation meets the same contract. Reason: 120 matches the
+# established portfolio convention — verified in strmt7/FlitzZip
+# (.ruff.toml `line-length = 120`) — and the maintainer's explicit
+# standardization decision. Compensating control: ruff E501 enforces the
+# hard cap at 120 (E is in the selected rule set) and the DeepSource Python
+# analyzer is configured with max_line_length = 120; both are consistent, so
+# line-length drift is still detected, only at 120 rather than 100. The rest
+# of S02 (four-space indentation, double quotes) is unaffected: ruff format
+# enforces double quotes and PEP 8 indentation unchanged.
+line-length = 120
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510"]
+
+[format]
+line-ending = "lf"

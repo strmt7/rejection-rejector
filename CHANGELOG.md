@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Engineering-contract adoption (common standard S01/S03/S07/S15):
+
+- Adds `engineering.toml`, the S01 policy record (lifecycle, RS/PY profiles,
+  supported runtimes, source roots, S03 command vocabulary mapped onto the
+  existing native entry points, required test families, released artifact
+  kinds, dated exceptions EX-001..EX-003).
+- Adds `tools/check_engineering_policy.py`, a read-only S01 validator
+  (missing fields, nonexistent paths, expired exceptions, undefined commands,
+  required lanes without an execution path) with tests in `tests/release/`.
+- Vendors the exact proposed policy/receipt contract under `tools/contract/`
+  (reference validator, two JSON Schemas, synthetic examples, own regression
+  suite) so execution receipts follow the mandated schemas rather than an
+  illustrative shape; every vendored file matches `PACKAGE-MANIFEST.json`.
+- Records S07 suppression governance (owner, review date, removal criterion)
+  and the DeepSource analyzer capability boundary in
+  `docs/deepsource-dispositions.md`; advisory triage gains owner/review fields
+  in `SECURITY.md`.
+- Documents the verification command map in `CONTRIBUTING.md` and the full
+  claim-by-claim verification record in `docs/audit-common-standard.md`.
+
 ## 0.3.0
 
 Breaking (0.x minor = breaking by Cargo semver convention; stored settings

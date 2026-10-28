@@ -90,6 +90,14 @@ residual risk.
   stack (`accesskit`→`zbus`); not compiled into the Windows/MSVC target this
   app ships. No active vulnerability, and the crates are Linux-a11y-only.
 
+Each triage entry above is owned by strmt7 (sole maintainer). Review date:
+2026-10-28 (record created); re-review whenever the dependency graph changes
+and at the next policy review (2027-04-28). Removal criterion: drop the
+ignore when the advisory is fixed in range, the dependency path disappears
+(as planned for RUSTSEC-2023-0086 via the `io-imap` migration), or the stated
+reachability reasoning stops being true; a bare ignore without a current
+reason is itself a defect.
+
 These are accepted-by-triage in `deny.toml` and `tools/local_ci.py` with the
 reasons above; re-review whenever the dependency graph changes.
 

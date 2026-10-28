@@ -1,0 +1,112 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  language-linters:
+    name: Language linters
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14.8"
+      - name: Install Python linters
+        shell: pwsh
+        run: |
+          python -m pip install `
+            --disable-pip-version-check `
+            --require-hashes `
+            --only-binary=:all: `
+            -r .github/requirements/requirements-lint-windows.txt
+      - name: Install actionlint
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $toolName = "actionlint"
+          $version = "1.7.12"
+          $expectedSha256 = "6E7241B51E6817EA6A047693D8E6FED13B31819C9A0DD6C5A726E1592D22F6E9"
+          $archive = Join-Path $env:RUNNER_TEMP "$toolName.$version.zip"
+          $toolDir = Join-Path $env:RUNNER_TEMP "$toolName-$version"
+          Invoke-WebRequest `
+            -Uri "https://github.com/rhysd/actionlint/releases/download/v$version/actionlint_$($version)_windows_amd64.zip" `
+            -OutFile $archive
+          $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "$toolName $version package hash mismatch."
+          }
+          if (Test-Path -LiteralPath $toolDir) {
+            Remove-Item -LiteralPath $toolDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $toolDir)
+          Add-Content -Path $env:GITHUB_PATH -Value $toolDir
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $moduleName = "PSScriptAnalyzer"
+          $version = "1.25.0"
+          $expectedSha256 = "14E634C828EB98EFB9F40B2918BA90F139ED5ECCDF663A2A747736D996995D60"
+          $package = Join-Path $env:RUNNER_TEMP "$moduleName.$version.nupkg"
+          $modulePath = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "PowerShell/Modules/$moduleName/$version"
+          Invoke-WebRequest `
+            -Uri "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/$version/$moduleName.$version.nupkg" `
+            -OutFile $package
+          $actualSha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "$moduleName $version package hash mismatch."
+          }
+          if (Test-Path -LiteralPath $modulePath) {
+            Remove-Item -LiteralPath $modulePath -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $modulePath | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($package, $modulePath)
+          Import-Module $moduleName -RequiredVersion $version -Force
+      - name: Run linters
+        shell: pwsh
+        env:
+          REJECTIONREJECTOR_EVENT_NAME: ${{ github.event_name }}
+          REJECTIONREJECTOR_BASE_REF: ${{ github.base_ref }}
+          REJECTIONREJECTOR_HEAD_SHA: ${{ github.sha }}
+          REJECTIONREJECTOR_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $eventName = $env:REJECTIONREJECTOR_EVENT_NAME
+          if ($eventName -in @("workflow_dispatch", "schedule")) {
+            tools/lint.ps1 -LintMode All
+          } elseif ($eventName -eq "pull_request") {
+            $baseRef = "origin/$($env:REJECTIONREJECTOR_BASE_REF)"
+            tools/lint.ps1 -LintMode Changed -BaseRef "$baseRef" -HeadRef "$env:REJECTIONREJECTOR_HEAD_SHA"
+          } else {
+            $baseRef = $env:REJECTIONREJECTOR_BEFORE_SHA
+            if ([string]::IsNullOrWhiteSpace($baseRef)) {
+              $baseRef = "HEAD~1"
+            } else {
+              git cat-file -e "$baseRef^{commit}" 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                $baseRef = "HEAD~1"
+              }
+            }
+            tools/lint.ps1 -LintMode Changed -BaseRef "$baseRef" -HeadRef "$env:REJECTIONREJECTOR_HEAD_SHA"
+          }

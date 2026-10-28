@@ -157,3 +157,32 @@ their lifetime occurrence counters as historical aggregates.
 3. New findings are fixed at source or dispositioned in this file before the
    change is considered accepted. A green check on an older commit proves
    nothing about the new head.
+
+## Suppression governance fields (S07)
+
+Shared requirement S07 asks every suppression to record a specific
+rule/fingerprint, reason, owner and review/removal criterion. The dispositions
+tables above carry the rule/shortcode and the exact-source reason; the
+governance fields complete the record:
+
+| Field | Value |
+|---|---|
+| Scope | Only the exact listed file/rule pairs (file-level shortcodes) and the one repository-wide `RS-A1008` idiom; nothing else is covered. |
+| Owner | strmt7 (sole maintainer). |
+| Review date | 2026-10-28 (record created); next review 2027-04-28 or immediately when the dependency/analyzer graph changes. |
+| Removal criterion | A suppression is removed when the source is fixed so the pattern disappears, when the analyzer changes its verdict, or when its rationale in this document stops being true. |
+| New-occurrence rule | A new occurrence of a listed shortcode in a listed file, or any occurrence outside the listed scope, must be re-reviewed against this document before suppression covers it (enforced by the review loop above, step 3, and the inventory diff in step 2). |
+
+## Analyzer capability boundary (S07)
+
+DeepSource's documented analyzer support (checked 2026-10-28,
+https://docs.deepsource.com/docs/platform/reference/core-analyzers) lists Rust
+through 1.93 and Python through 3.12. This repository pins Rust 1.99.1
+(rust-toolchain.toml) and runs its operator tooling on Python 3.12, so the
+Rust analysis lane runs outside the analyzer's declared version range. This
+does not prove the newer code is unanalysable, but it is a recorded capability
+boundary: representative-syntax/coverage evidence or provider confirmation is
+required before treating a green DeepSource context as analysis of the current
+toolchain's syntax, and local compiler/Clippy/type checks (tools/local_ci.py,
+ci.yml) remain the authoritative gates. The Python operator tooling (3.12)
+stays inside the declared range.

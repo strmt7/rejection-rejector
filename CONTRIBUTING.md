@@ -51,6 +51,33 @@ assistants (see `AGENTS.md`); they apply to human contributions too:
 - **Generated edits are untrusted until re-read.** After scripted or regex edits, grep
   the result and confirm definition-before-use order.
 
+## Verification command map (engineering standard S03)
+
+The engineering policy record [`engineering.toml`](engineering.toml) is the
+machine-readable command contract; the table below is its human summary. The
+wrapper scripts (`tools/local_ci.py`, `scripts/build-windows.ps1`) delegate to
+these exact commands and propagate their exit codes; they never mask failures.
+
+| Standard command | Native entry point |
+|---|---|
+| setup | `cargo fetch --locked` (external prerequisites in docs/SETUP.md) |
+| format / format-check | `cargo fmt --all` / `cargo fmt --all -- --check` |
+| lint | `cargo clippy --locked --all-targets --all-features -- -D warnings` |
+| typecheck | `cargo check --locked --all-targets --all-features` |
+| test-fast | `cargo test --locked --lib --no-default-features` |
+| test-integration | `cargo test --locked --all-features` |
+| test (operator tools) | `python -m unittest discover -s tests/release -v` |
+| audit | `cargo audit --deny warnings` with the documented ignores; `cargo deny check advisories licenses bans sources` |
+| build | `cargo build --locked --release --bins` |
+| verify | `python tools/local_ci.py` |
+| release-check | `python scripts/verify_package.py --expected-commit <sha> --signing-mode unsigned <package.zip>` |
+
+Policy conformance is checked read-only with
+`python tools/check_engineering_policy.py`. Execution receipts use the exact
+schemas and validator vendored in [`tools/contract/`](tools/contract/); see
+[docs/audit-common-standard.md](docs/audit-common-standard.md) for the
+requirement-by-requirement verification record and open items.
+
 ## Documentation standards
 
 - Documentation aims at a technically rigorous but broadly readable audience: define
@@ -85,3 +112,34 @@ See [the operations runbook](docs/OPERATIONS.md), [threat model](docs/THREAT_MOD
   public Rust surface): https://rust-lang.github.io/api-guidelines/
 - Diátaxis documentation framework: https://diataxis.fr/
 - Google developer documentation style guide: https://developers.google.com/style
+
+## Git Workflow (commit attribution and history policy)
+
+Adapted from the portfolio standard (strmt7/FlitzZip operating guide, Git
+Workflow section) and verified against this repository's own history on
+2026-10-28.
+
+- Develop and publish on `main`; do not create a development branch or pull
+  request without an explicit task-specific maintainer exception.
+- For agent-assisted publication, create commits through the authenticated
+  official GitHub connector (the GitHub API through the authenticated
+  `gh` session - see `tools/connector_commit.py`) and let it assign the
+  contributor identity. Verify the returned author and committer; do not
+  substitute an automation identity, override attribution through environment
+  variables, or change global Git configuration. If the connector cannot
+  perform an operation, report its specific limitation before choosing
+  another publication method.
+- Rewriting published history requires explicit authorization, a verified
+  recovery copy, complete history-invariant checks (trees, parents, both date
+  fields and full message bytes identical; only the authorized identity fields
+  changed) and an expected-head lease. Preserve the original identities of
+  captured test results when commit IDs change: the 2026-10-28 identity
+  rewrite's old-to-new commit mapping is retained as
+  `docs/history-rewrite-mapping-2026-10-28.json`.
+- Inspect `git status --short` before staging. Stage only intentional
+  source/docs/config changes. Never use destructive commands such as
+  `git reset --hard` or `git checkout --` unless a maintainer explicitly
+  requests them.
+- Before pushing, run the checks selected by `tools/local_ci.py`. After
+  pushing, verify the remote URL does not contain credentials and observe the
+  workflow results for the exact pushed SHA.
