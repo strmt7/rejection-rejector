@@ -86,6 +86,29 @@ pub fn dominant_language(text: &str) -> Option<String> {
     detector().detect_language_of(text).map(iso_code)
 }
 
+/// Estimate a text's word count across scripts.
+///
+/// Inputs: `text` — any text. Output: `usize` — the whitespace-separated word
+/// count, or half the CJK character count for spaceless Chinese/Japanese text
+/// (two CJK characters are about one word), whichever is larger; whitespace
+/// alone measures a whole CJK reply as a single "word" and would fail every
+/// length and verifiability gate on the supported CJK languages.
+pub fn word_count(text: &str) -> usize {
+    let cjk = text
+        .chars()
+        .filter(|c| {
+            matches!(
+                c,
+                '\u{3040}'..='\u{30ff}'
+                    | '\u{3400}'..='\u{4dbf}'
+                    | '\u{4e00}'..='\u{9fff}'
+                    | '\u{f900}'..='\u{faff}'
+            )
+        })
+        .count();
+    text.split_whitespace().count().max(cjk.div_ceil(2))
+}
+
 /// Enforce that a drafted reply is written in the expected language.
 ///
 /// Inputs: `reply` — drafted reply body; `expected` — ISO 639-1 code required
@@ -94,7 +117,7 @@ pub fn dominant_language(text: &str) -> Option<String> {
 /// rather than sent. A draft too short to detect is rejected as unverifiable.
 pub fn ensure_reply_language(reply: &str, expected: &str) -> Result<()> {
     ensure!(
-        reply.split_whitespace().count() >= MIN_VERIFIABLE_REPLY_WORDS,
+        word_count(reply) >= MIN_VERIFIABLE_REPLY_WORDS,
         "Reply is too short for its language to be verified"
     );
     let detected = dominant_language(reply)
@@ -185,5 +208,51 @@ mod first_language_fallback_tests {
     fn substantive_segment_decides_before_dominant_fallback() {
         let text = "Thanks for the update. Sehr geehrte Damen und Herren, vielen Dank fuer Ihre Ablehnung. Wir haben uns gegen Sie entschieden und melden uns nicht weiter.";
         assert_eq!(first_language(text, "en"), "de");
+    }
+
+    /// Why: the training corpus banks measure Japanese as one of their twelve
+    /// languages and the bundled qualification fixtures cover Italian and
+    /// Dutch, so the reply-language pipeline must resolve those rejections to
+    /// their own ISO codes and accept correct replies written in them; a
+    /// detector that cannot represent a language silently demands a reply in a
+    /// different language and then false-rejects the correct draft at the gate.
+    #[test]
+    fn measured_corpus_languages_resolve_and_verify_their_replies() {
+        let cases: [(&str, &str); 3] = [
+            (
+                "ja",
+                "ご応募の結果について\n\n鈴木 陽子 さん\n\n選考期間中のご忍耐に感謝いたします。\n\n選考にお時間をいただき、ありがとうございました。\n\n何卒よろしくお願い申し上げます",
+            ),
+            (
+                "it",
+                "Grazie per la candidatura. Abbiamo deciso di non procedere con la sua candidatura per la posizione indicata. Le auguriamo ogni successo futuro.",
+            ),
+            (
+                "nl",
+                "Bedankt voor uw sollicitatie. We hebben besloten uw sollicitatie niet verder in behandeling te nemen. We wensen u veel succes met uw verdere loopbaan.",
+            ),
+        ];
+        for (iso, email) in cases {
+            assert_eq!(first_language(email, "en"), iso, "{iso} email");
+        }
+        let ja_reply = "拝啓 このたびは丁寧なご連絡をありがとうございます。選考基準と私への評価内容の照合について、具体的なご説明をいただけますと幸いです。個別のご検討をお願い申し上げます。何卒よろしくお願いいたします。";
+        assert_eq!(dominant_language(ja_reply).as_deref(), Some("ja"));
+        assert!(ensure_reply_language(ja_reply, "ja").is_ok());
+        assert!(
+            ensure_reply_language("はい", "ja").is_err(),
+            "a two-character reply is still too short to verify"
+        );
+    }
+
+    /// Why: the length and verifiability gates must measure CJK replies like
+    /// whitespace-separated ones; whitespace alone reads an entire Chinese or
+    /// Japanese reply as one "word", which the gates then reject as too short.
+    #[test]
+    fn word_count_measures_spaceless_scripts_by_character() {
+        assert_eq!(word_count("the quick brown fox jumps over the lazy dog"), 9);
+        assert_eq!(word_count("ok"), 1);
+        assert_eq!(word_count("ご応募の結果について"), 5);
+        assert_eq!(word_count("尊敬的招聘团队，感谢您的申请。"), 7);
+        assert_eq!(word_count("Hello 世界"), 2);
     }
 }
