@@ -407,34 +407,72 @@ QUOTE_MARKERS: list[str] = [
 ]
 
 
-def is_quote_start(lowered: str) -> bool:
-    """Inputs: trimmed lowercased body line. Output: True when the line opens a
-    quoted or forwarded section (mirror of `mail::is_quote_start`)."""
-    if any(marker in lowered for marker in QUOTE_MARKERS):
-        return True
-    if lowered.startswith("on ") and lowered.endswith("wrote:"):
-        return True
+def _attribution_de_fr_it(lowered: str) -> bool:
+    """Inputs: trimmed lowercased body line. Output: True for German, French or
+    Italian written-by attribution lines.
+    """
     return (
         (lowered.startswith("am ") and "schrieb" in lowered)
         or (lowered.startswith("le ") and "écrit" in lowered)
         or (lowered.startswith("il ") and "ha scritto" in lowered)
-        or (lowered.startswith("el ") and "escribió" in lowered)
+    )
+
+
+def _attribution_es_pt_nl(lowered: str) -> bool:
+    """Inputs: trimmed lowercased body line. Output: True for Spanish,
+    Portuguese or Dutch written-by attribution lines.
+    """
+    return (
+        (lowered.startswith("el ") and "escribió" in lowered)
         or (lowered.startswith("em ") and "escreveu" in lowered)
         or (lowered.startswith("op ") and "schreef" in lowered)
-        or (lowered.startswith("στις ") and ("έγραψε" in lowered or "εγραψε" in lowered))
+    )
+
+
+def _attribution_el_ru_ja_zh(lowered: str) -> bool:
+    """Inputs: trimmed lowercased body line. Output: True for Greek, Russian,
+    Japanese or Chinese written-by attribution lines.
+    """
+    return (
+        (lowered.startswith("στις ") and ("έγραψε" in lowered or "εγραψε" in lowered))
         or (lowered.endswith(":") and "написал" in lowered)
         or lowered.endswith("のメッセージ:")
         or lowered.endswith("写道：")
         or lowered.endswith("写道:")
-        or "ने लिखा" in lowered
+    )
+
+
+def _attribution_hi_ar_bn(lowered: str) -> bool:
+    """Inputs: trimmed lowercased body line. Output: True for Hindi, Arabic or
+    Bengali written-by attribution lines.
+    """
+    return (
+        "ने लिखा" in lowered
         or (lowered.endswith(":") and "كتب" in lowered)
         or "লিখেছেন" in lowered
     )
 
 
+def is_quote_start(lowered: str) -> bool:
+    """Inputs: trimmed lowercased body line. Output: True when the line opens a
+    quoted or forwarded section (mirror of `mail::is_quote_start`).
+    """
+    if any(marker in lowered for marker in QUOTE_MARKERS):
+        return True
+    if lowered.startswith("on ") and lowered.endswith("wrote:"):
+        return True
+    return (
+        _attribution_de_fr_it(lowered)
+        or _attribution_es_pt_nl(lowered)
+        or _attribution_el_ru_ja_zh(lowered)
+        or _attribution_hi_ar_bn(lowered)
+    )
+
+
 def current_text(body: str) -> str:
     """Inputs: message body. Output: de-quoted current text (mirror of
-    `mail::current_text`)."""
+    `mail::current_text`).
+    """
     lines: list[str] = []
     for raw_line in body.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
@@ -449,7 +487,8 @@ def current_text(body: str) -> str:
 def clear_rejection_language(subject: str, body: str) -> bool:
     """Inputs: subject, body. Output: True when subject + de-quoted body carry
     a literal clear rejection phrase (mirror of
-    `mail::clear_rejection_language`)."""
+    `mail::clear_rejection_language`).
+    """
     lower = (subject + "\n" + current_text(body)).lower()
     return any(phrase in lower for phrase in CLEAR_PHRASES)
 
@@ -457,7 +496,8 @@ def clear_rejection_language(subject: str, body: str) -> bool:
 def auto_language_conflict(subject: str, body: str) -> bool:
     """Inputs: subject, body. Output: True when conflicting or injection
     language is present in subject + de-quoted body (mirror of
-    `mail::auto_language_conflict`)."""
+    `mail::auto_language_conflict`).
+    """
     lower = (subject + "\n" + current_text(body)).lower()
     return any(phrase in lower for phrase in CONFLICT_PHRASES)
 
@@ -527,18 +567,55 @@ OOO_SUBJECT = {
 }
 
 OOO_BODY = {
-    "en": "Thank you for your message. I am currently out of the office with limited access to email and will respond after 2025-06-02. For urgent matters please contact the recruiting team.",
-    "es": "Gracias por su mensaje. Actualmente me encuentro fuera de la oficina con acceso limitado al correo y responderé después del 2 de junio de 2025. Para asuntos urgentes, contacte al equipo de reclutamiento.",
+    "en": (
+        "Thank you for your message. I am currently out of the office with limited access to "
+        "email and will respond after 2025-06-02. For urgent matters please contact the "
+        "recruiting team."
+    ),
+    "es": (
+        "Gracias por su mensaje. Actualmente me encuentro fuera de la oficina con acceso "
+        "limitado al correo y responderé después del 2 de junio de 2025. Para asuntos "
+        "urgentes, contacte al equipo de reclutamiento."
+    ),
     "zh": "感谢您的来信。我目前休假，无法及时查看邮件，将在 2025 年 6 月 2 日之后回复。如有紧急事宜，请联系招聘团队。",
-    "hi": "आपके संदेश के लिए धन्यवाद। मैं वर्तमान में कार्यालय से बाहर हूँ और 2 जून 2025 के बाद उत्तर दूँगा। तत्काल मामलों के लिए कृपया भर्ती टीम से संपर्क करें।",
-    "fr": "Merci pour votre message. Je suis actuellement hors du bureau avec un accès limité aux e-mails et je répondrai après le 2 juin 2025. Pour les urgences, veuillez contacter l'équipe de recrutement.",
-    "ar": "شكراً لرسالتك. أوجد حالياً خارج المكتب مع محدودية في الوصول إلى البريد وسأرد بعد 2 يونيو 2025. للأمور العاجلة يرجى التواصل مع فريق التوظيف.",
-    "bn": "আপনার বার্তার জন্য ধন্যবাদ। আমি বর্তমানে অফিসের বাইরে আছি এবং ২ জুন ২০২৫ এর পরে উত্তর দেব। জরুরি বিষয়ে অনুগ্রহ করে নিয়োগ দলের সাথে যোগাযোগ করুন।",
-    "pt": "Obrigado pela sua mensagem. Atualmente estou fora do escritório com acesso limitado ao e-mail e responderei após 2 de junho de 2025. Para assuntos urgentes, contacte a equipe de recrutamento.",
-    "ru": "Спасибо за ваше сообщение. В настоящее время я вне офиса с ограниченным доступом к почте и отвечу после 2 июня 2025 года. По срочным вопросам, пожалуйста, свяжитесь с командой подбора.",
+    "hi": (
+        "आपके संदेश के लिए धन्यवाद। मैं वर्तमान में कार्यालय से बाहर हूँ और 2 जून 2025 के बाद "
+        "उत्तर दूँगा। तत्काल मामलों के लिए कृपया भर्ती टीम से संपर्क करें।"
+    ),
+    "fr": (
+        "Merci pour votre message. Je suis actuellement hors du bureau avec un accès limité "
+        "aux e-mails et je répondrai après le 2 juin 2025. Pour les urgences, veuillez "
+        "contacter l'équipe de recrutement."
+    ),
+    "ar": (
+        "شكراً لرسالتك. أوجد حالياً خارج المكتب مع محدودية في الوصول إلى البريد وسأرد بعد 2 "
+        "يونيو 2025. للأمور العاجلة يرجى التواصل مع فريق التوظيف."
+    ),
+    "bn": (
+        "আপনার বার্তার জন্য ধন্যবাদ। আমি বর্তমানে অফিসের বাইরে আছি এবং ২ জুন ২০২৫ এর পরে উত্তর "
+        "দেব। জরুরি বিষয়ে অনুগ্রহ করে নিয়োগ দলের সাথে যোগাযোগ করুন।"
+    ),
+    "pt": (
+        "Obrigado pela sua mensagem. Atualmente estou fora do escritório com acesso limitado "
+        "ao e-mail e responderei após 2 de junho de 2025. Para assuntos urgentes, contacte a "
+        "equipe de recrutamento."
+    ),
+    "ru": (
+        "Спасибо за ваше сообщение. В настоящее время я вне офиса с ограниченным доступом к "
+        "почте и отвечу после 2 июня 2025 года. По срочным вопросам, пожалуйста, свяжитесь с "
+        "командой подбора."
+    ),
     "ja": "メッセージありがとうございます。現在オフィス外のためメールへのアクセスが限られており、2025年6月2日以降に返信いたします。緊急の場合は採用チームまでご連絡ください。",
-    "de": "Vielen Dank für Ihre Nachricht. Ich bin derzeit außerhalb des Büros mit begrenztem E-Mail-Zugang und antworte nach dem 2. Juni 2025. Bei dringenden Anliegen wenden Sie sich bitte an das Recruiting-Team.",
-    "el": "Ευχαριστούμε για το μήνυμά σας. Αυτή τη στιγμή είμαι εκτός γραφείου με περιορισμένη πρόσβαση στο ηλεκτρονικό ταχυδρομείο και θα απαντήσω μετά τις 2 Ιουνίου 2025. Για επείγοντα ζητήματα επικοινωνήστε με την ομάδα πρόσληψης.",
+    "de": (
+        "Vielen Dank für Ihre Nachricht. Ich bin derzeit außerhalb des Büros mit begrenztem "
+        "E-Mail-Zugang und antworte nach dem 2. Juni 2025. Bei dringenden Anliegen wenden Sie "
+        "sich bitte an das Recruiting-Team."
+    ),
+    "el": (
+        "Ευχαριστούμε για το μήνυμά σας. Αυτή τη στιγμή είμαι εκτός γραφείου με περιορισμένη "
+        "πρόσβαση στο ηλεκτρονικό ταχυδρομείο και θα απαντήσω μετά τις 2 Ιουνίου 2025. Για "
+        "επείγοντα ζητήματα επικοινωνήστε με την ομάδα πρόσληψης."
+    ),
 }
 
 # Real-world prompt injections arrive in English even in non-English threads.
@@ -569,7 +646,8 @@ class Gates:
     ) -> None:
         """Inputs: raw message; optional MIME-parsed text/completeness for the
         multipart case the simple mirror cannot extract itself. Output: none —
-        gate signals on the struct."""
+        gate signals on the struct.
+        """
         head, _, body = raw.partition("\r\n\r\n")
         self.text = body if parsed_text is None else parsed_text
         if parsed_complete is not None:
@@ -596,7 +674,8 @@ class Gates:
     def complete_input(self) -> bool:
         """Inputs: none beyond the gates. Output: True when the parse captured
         the full body and the subject fits the 600-byte classification budget
-        (`ollama::classify`'s completeness contract)."""
+        (`ollama::classify`'s completeness contract).
+        """
         return self.complete and len(self.subject.encode("utf-8")) <= 600
 
     @property
@@ -604,7 +683,8 @@ class Gates:
         """Inputs: none beyond the gates. Output: True when the deterministic
         gates alone leave the message eligible to respond: clear evidence in
         the current message, no conflict language, complete input and no
-        mailbox hard block."""
+        mailbox hard block.
+        """
         return (
             self.clear
             and not self.conflict
@@ -617,7 +697,8 @@ def tri_state(semantic_category: str, gates: Gates) -> str:
     """Inputs: ground-truth Category (rejection/opportunity/other/uncertain)
     standing in for the classifier, plus gate outputs. Output: respond | hold |
     ignore (mirror of `engine::analyze_job`'s state mapping plus the
-    deterministic evidence gate that runs before any model output)."""
+    deterministic evidence gate that runs before any model output).
+    """
     if semantic_category == "rejection":
         return "respond" if gates.respond_eligible else "hold"
     if semantic_category == "uncertain":
@@ -666,7 +747,8 @@ def make_slots(rng: random.Random, lang: str) -> dict[str, str]:
 
 def matches_any(text: str, phrases: list[str]) -> bool:
     """Inputs: text, phrase list. Output: True when any phrase occurs
-    case-insensitively."""
+    case-insensitively.
+    """
     lower = text.lower()
     return any(p in lower for p in phrases)
 
@@ -697,7 +779,8 @@ def decorate(
     """Inputs: `rng`, `lang`, `slots`, core sentence blocks, reopen flag, long
     flag. Output: body with greeting/context/signature decorations from the
     banks; `long` adds extra context blocks so the body is substantive enough
-    for reply-language detection."""
+    for reply-language detection.
+    """
     bank = BANKS[lang]
     blocks: list[str] = []
     if rng.random() < 0.9:
@@ -728,7 +811,8 @@ def make_raw(
 ) -> str:
     """Inputs: case id, slots, subject, body, extra headers, content type.
     Output: one RFC 5322 raw message (CRLF) exactly as the mail pipeline
-    expects it."""
+    expects it.
+    """
     local = "careers" + re.sub(r"[^a-z0-9]", "", case_id.lower()) + "recruiting"
     headers = [
         f"From: {slots['sender']} <{local}@example.invalid>",
@@ -812,7 +896,8 @@ class CaseFactory:
     ) -> None:
         """Inputs: case identity, content and gate-mirror overrides. Output:
         none — the case is self-checked against the deterministic gate mirror
-        and appended; `CaseError` is raised on any contract violation."""
+        and appended; `CaseError` is raised on any contract violation.
+        """
         case_id = self.next_id(lang, category)
         raw = make_raw(case_id, slots, subject, body, extra_headers, content_type)
         gates = Gates(raw, parsed_text, parsed_complete)
@@ -845,11 +930,13 @@ class CaseFactory:
             }
         )
 
-    def retried(self, target: int, builder) -> None:
+    @staticmethod
+    def retried(target: int, builder) -> None:
         """Inputs: number of cases to add; `builder(add)` closure performing one
         `add` attempt. Output: none — retries candidate draws (deterministically
         via the seeded RNG) until `target` cases land or the attempt budget
-        expires."""
+        expires.
+        """
         made = 0
         attempts = 0
         while made < target:
@@ -870,7 +957,8 @@ class CaseFactory:
 
 def pools_for(lang: str) -> tuple[list[str], list[str], list[str]]:
     """Inputs: language. Output: (strong, soft, conflict-masked) decision
-    fragment pools keyed by the deterministic phrase gates."""
+    fragment pools keyed by the deterministic phrase gates.
+    """
     strong: list[str] = []
     soft: list[str] = []
     masked: list[str] = []
@@ -889,7 +977,8 @@ def pools_for(lang: str) -> tuple[list[str], list[str], list[str]]:
 
 def conflict_sentences(lang: str) -> list[str]:
     """Inputs: language. Output: bank sentences that trip the conflict guard
-    (used to build conflict-masked soft rejections)."""
+    (used to build conflict-masked soft rejections).
+    """
     out: list[str] = []
     bank = BANKS[lang]
     for section in ("neg", "amb"):
@@ -905,11 +994,13 @@ def conflict_sentences(lang: str) -> list[str]:
 
 def gen_strong(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     """Inputs: factory, language, strong fragment pool. Output: none — adds the
-    strong_rejection quota (expected respond)."""
+    strong_rejection quota (expected respond).
+    """
     rng = fx.rng
     bank = BANKS[lang]
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one strong_rejection draw."""
         slots = make_slots(rng, lang)
         decisions = [fmt(rng.choice(strong), slots)]
         if rng.random() < 0.35:
@@ -936,13 +1027,15 @@ def gen_soft(fx: CaseFactory, lang: str, soft: list[str], strong: list[str]) -> 
     """Inputs: factory, language, soft and strong fragment pools. Output: none
     — adds the soft_rejection quota (expected hold): hedged wording without
     evidence, plus conflict-masked rejections where the language has conflict
-    phrases."""
+    phrases.
+    """
     rng = fx.rng
     bank = BANKS[lang]
     conflicts = conflict_sentences(lang)
     masked_quota = min(3, len(conflicts))
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one soft_rejection draw."""
         slots = make_slots(rng, lang)
         remaining = QUOTAS["soft_rejection"] - len(
             [
@@ -987,13 +1080,15 @@ def gen_soft(fx: CaseFactory, lang: str, soft: list[str], strong: list[str]) -> 
 def gen_ambiguous(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     """Inputs: factory, language, strong fragment pool. Output: none — adds the
     ambiguous quota (expected hold): negotiation/pending bank cases plus
-    prompt-injection mixes."""
+    prompt-injection mixes.
+    """
     rng = fx.rng
     bank = BANKS[lang]
     amb_types = sorted(bank["amb"].keys())
     injection_quota = 2
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one ambiguous draw."""
         slots = make_slots(rng, lang)
         made = len(
             [r for r in fx.records if r["category"] == "ambiguous" and r["language"] == lang]
@@ -1025,12 +1120,10 @@ def gen_ambiguous(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     fx.retried(QUOTAS["ambiguous"], attempt)
 
 
-def gen_non_rejection(fx: CaseFactory, lang: str) -> None:
-    """Inputs: factory, language. Output: none — adds the non_rejection quota
-    (expected ignore): offers, interview invites, acknowledgements and neutral
-    mail from the negative banks."""
-    rng = fx.rng
-    bank = BANKS[lang]
+def non_rejection_plan(bank: dict) -> list[str]:
+    """Inputs: language bank. Output: padded negative-case type plan for the
+    non_rejection quota (verbatim plan construction).
+    """
     plan = (
         ["offer_letter"] * 4
         + ["interview_invite"] * 4
@@ -1047,50 +1140,77 @@ def gen_non_rejection(fx: CaseFactory, lang: str) -> None:
         available.append(extra_types.pop(0))
     while len(available) < QUOTAS["non_rejection"]:
         available.append(available[len(available) % len(available)])
+    return available
+
+
+def non_rejection_attempt(
+    fx: CaseFactory,
+    rng: random.Random,
+    lang: str,
+    bank: dict,
+    available: list[str],
+) -> None:
+    """Inputs: factory, seeded RNG, language, negative bank, type plan.
+    Output: none — one non_rejection draw (called via `CaseFactory.retried`).
+    """
+    slots = make_slots(rng, lang)
+    made = len(
+        [
+            r
+            for r in fx.records
+            if r["category"] == "non_rejection" and r["language"] == lang
+        ]
+    )
+    neg_type = available[made % len(available)]
+    payload = bank["neg"][neg_type]
+    core = [fmt(rng.choice(payload["core"]), slots)]
+    if payload.get("intro") and rng.random() < 0.8:
+        core.insert(0, fmt(rng.choice(payload["intro"]), slots))
+    if payload.get("extra") and rng.random() < 0.6:
+        core.append(fmt(rng.choice(payload["extra"]), slots))
+    subject = fmt(rng.choice(payload["subject"]), slots)
+    semantic = (
+        "opportunity"
+        if neg_type in ("offer_letter", "interview_invite", "scheduling_tool")
+        else "other"
+    )
+    body = decorate(rng, lang, slots, core, reopen=False)
+    fx.add(
+        lang,
+        "non_rejection",
+        semantic,
+        "ignore",
+        subject,
+        body,
+        f"non-rejection ({neg_type}): never a decision about the recipient",
+        slots,
+    )
+
+
+def gen_non_rejection(fx: CaseFactory, lang: str) -> None:
+    """Inputs: factory, language. Output: none — adds the non_rejection quota
+    (expected ignore): offers, interview invites, acknowledgements and neutral
+    mail from the negative banks.
+    """
+    rng = fx.rng
+    bank = BANKS[lang]
+    available = non_rejection_plan(bank)
 
     def attempt() -> None:
-        slots = make_slots(rng, lang)
-        made = len(
-            [
-                r
-                for r in fx.records
-                if r["category"] == "non_rejection" and r["language"] == lang
-            ]
-        )
-        neg_type = available[made % len(available)]
-        payload = bank["neg"][neg_type]
-        core = [fmt(rng.choice(payload["core"]), slots)]
-        if payload.get("intro") and rng.random() < 0.8:
-            core.insert(0, fmt(rng.choice(payload["intro"]), slots))
-        if payload.get("extra") and rng.random() < 0.6:
-            core.append(fmt(rng.choice(payload["extra"]), slots))
-        subject = fmt(rng.choice(payload["subject"]), slots)
-        semantic = (
-            "opportunity"
-            if neg_type in ("offer_letter", "interview_invite", "scheduling_tool")
-            else "other"
-        )
-        body = decorate(rng, lang, slots, core, reopen=False)
-        fx.add(
-            lang,
-            "non_rejection",
-            semantic,
-            "ignore",
-            subject,
-            body,
-            f"non-rejection ({neg_type}): never a decision about the recipient",
-            slots,
-        )
+        """Inputs: closure state only. Output: none — one non_rejection draw."""
+        non_rejection_attempt(fx, rng, lang, bank, available)
 
     fx.retried(QUOTAS["non_rejection"], attempt)
 
 
 def gen_auto_reply(fx: CaseFactory, lang: str) -> None:
     """Inputs: factory, language. Output: none — adds the auto_reply quota
-    (expected ignore): out-of-office auto-answers without a decision."""
+    (expected ignore): out-of-office auto-answers without a decision.
+    """
     rng = fx.rng
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one auto_reply draw."""
         slots = make_slots(rng, lang)
         subject = OOO_SUBJECT[lang]
         body = OOO_BODY[lang] + "\n\n" + signature_block(rng, lang, slots)
@@ -1112,11 +1232,13 @@ def gen_auto_reply(fx: CaseFactory, lang: str) -> None:
 def gen_auto_reply_rejection(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     """Inputs: factory, language, strong fragment pool. Output: none — adds the
     auto_reply_rejection quota (expected hold): machine-generated rejections
-    whose auto-submitted marker forces the Attention state."""
+    whose auto-submitted marker forces the Attention state.
+    """
     rng = fx.rng
     bank = BANKS[lang]
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one auto_reply_rejection draw."""
         slots = make_slots(rng, lang)
         core = [
             fmt(rng.choice(strong), slots),
@@ -1142,11 +1264,13 @@ def gen_auto_reply_rejection(fx: CaseFactory, lang: str, strong: list[str]) -> N
 def gen_truncated(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     """Inputs: factory, language, strong fragment pool. Output: none — adds the
     truncated quota (expected hold): a body past the 64 KiB parse budget and a
-    subject past the 600-byte classification budget."""
+    subject past the 600-byte classification budget.
+    """
     rng = fx.rng
     bank = BANKS[lang]
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one truncated draw."""
         slots = make_slots(rng, lang)
         made = len(
             [r for r in fx.records if r["category"] == "truncated" and r["language"] == lang]
@@ -1185,11 +1309,13 @@ def gen_truncated(fx: CaseFactory, lang: str, strong: list[str]) -> None:
 def gen_quoted(fx: CaseFactory, lang: str, strong: list[str]) -> None:
     """Inputs: factory, language, strong fragment pool. Output: none — adds the
     quoted_history quota (hold for forwarded/question shapes, ignore when the
-    current text is an invite/offer)."""
+    current text is an invite/offer).
+    """
     rng = fx.rng
     bank = BANKS[lang]
 
     def attempt() -> None:
+        """Inputs: closure state only. Output: none — one quoted_history draw."""
         slots = make_slots(rng, lang)
         made = len(
             [r for r in fx.records if r["category"] == "quoted_history" and r["language"] == lang]
@@ -1280,7 +1406,8 @@ def gen_quoted(fx: CaseFactory, lang: str, strong: list[str]) -> None:
 
 def extract_rust_list(fn_name: str) -> list[str]:
     """Inputs: Rust function name in src/mail.rs. Output: the string literals
-    of that function's phrase array."""
+    of that function's phrase array.
+    """
     src = (ROOT / "src" / "mail.rs").read_text(encoding="utf-8")
     start = src.index("pub fn " + fn_name)
     seg = src[start : start + 12000]
@@ -1292,7 +1419,8 @@ def extract_rust_list(fn_name: str) -> list[str]:
 
 def gate_sync_report() -> dict[str, list[str]]:
     """Inputs: none. Output: phrases this corpus relies on that the live Rust
-    gate lists are missing (empty lists on a fixed source tree)."""
+    gate lists are missing (empty lists on a fixed source tree).
+    """
     missing_clear = [
         p for p in CLEAR_PHRASES if p not in extract_rust_list("clear_rejection_language")
     ]
@@ -1304,9 +1432,11 @@ def gate_sync_report() -> dict[str, list[str]]:
 
 def bank_overlap_report() -> list[str]:
     """Inputs: none. Output: non-decision bank fragments that contain a clear
-    phrase (the literal gate cannot tell them apart from a rejection)."""
+    phrase (the literal gate cannot tell them apart from a rejection).
+    """
 
     def walk(node, path):
+        """Inputs: bank node and dotted path. Output: (path, text) leaf pairs."""
         if isinstance(node, str):
             yield path, node
         elif isinstance(node, (list, tuple)):
@@ -1333,7 +1463,8 @@ def bank_overlap_report() -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Inputs: optional argv. Output: 0 when the corpus is written
-    and every self-check passed."""
+    and every self-check passed.
+    """
     parser = argparse.ArgumentParser(description="Scale-campaign corpus generator")
     parser.add_argument(
         "--out",
