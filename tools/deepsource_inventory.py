@@ -135,22 +135,16 @@ class ApiClient:
         if len(raw) > MAX_PAGE_BYTES:
             raise InventoryError("DeepSource response exceeds the page byte budget")
         if retained != raw:
-            raise InventoryError(
-                "DeepSource response echoed a credential; retained response was redacted"
-            )
+            raise InventoryError("DeepSource response echoed a credential; retained response was redacted")
         return raw
 
 
-def parse_page(
-    raw: bytes, repository: str, commit: str
-) -> tuple[dict[str, object], dict[str, object]]:
+def parse_page(raw: bytes, repository: str, commit: str) -> tuple[dict[str, object], dict[str, object]]:
     """Decode one native response and require the requested repository and source."""
     try:
         decoded = decode_json(raw)
     except (ValueError, RecursionError):
-        raise InventoryError(
-            "DeepSource returned invalid JSON; inspect the retained response"
-        ) from None
+        raise InventoryError("DeepSource returned invalid JSON; inspect the retained response") from None
     envelope = object_value(decoded, "GraphQL response")
     if envelope.get("errors"):
         raise InventoryError("DeepSource returned GraphQL errors; inspect the retained response")
@@ -158,8 +152,7 @@ def parse_page(
     analysis = object_value(data.get("run"), "analysis run")
     if analysis.get("commitOid") != commit or analysis.get("status") not in ("SUCCESS", "FAILURE"):
         raise InventoryError(
-            "DeepSource analysis is unfinished or unavailable; "
-            "retain the response and wait for completion"
+            "DeepSource analysis is unfinished or unavailable; retain the response and wait for completion"
         )
     text_value(analysis.get("id"), "analysis identity")
     text_value(analysis.get("finishedAt"), "analysis completion time")
@@ -170,9 +163,7 @@ def parse_page(
         or repo.get("name") != repository.split("/")[1]
         or repo.get("latestCommitOid") != commit
     ):
-        raise InventoryError(
-            "DeepSource repository or default-branch commit does not match the requested source"
-        )
+        raise InventoryError("DeepSource repository or default-branch commit does not match the requested source")
     text_value(repo.get("id"), "repository identity")
     text_value(repo.get("defaultBranch"), "default branch")
     object_value(repo.get("configJson"), "analyzer configuration")
@@ -211,8 +202,12 @@ def page_entries(connection: dict[str, object]) -> tuple[list[dict[str, object]]
 
 
 def verify_final_observation(
-    raw: bytes, repository: str, commit: str,
-    identity: dict[str, object], total: int, first_id: object,
+    raw: bytes,
+    repository: str,
+    commit: str,
+    identity: dict[str, object],
+    total: int,
+    first_id: object,
 ) -> None:
     """Check the final count, source and first occurrence against the captured traversal."""
     final, connection = parse_page(raw, repository, commit)
@@ -227,8 +222,11 @@ def verify_final_observation(
 
 
 def collect_pages(
-    fetch: Callable[[dict[str, object], Path], bytes], repository: str, commit: str,
-    output: Path, max_pages: int,
+    fetch: Callable[[dict[str, object], Path], bytes],
+    repository: str,
+    commit: str,
+    output: Path,
+    max_pages: int,
 ) -> dict[str, object]:
     """Traverse native cursors; reject gaps, duplicates, drift and exhausted budgets."""
     identity: dict[str, object] = {}
@@ -258,9 +256,13 @@ def collect_pages(
                 raise InventoryError("Duplicate occurrence ID across pages")
             ids.add(item_id)
             findings.append(item)
-        pages.append({
-            "file": path.name, "sha256": hashlib.sha256(raw).hexdigest(), "count": len(entries),
-        })
+        pages.append(
+            {
+                "file": path.name,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "count": len(entries),
+            }
+        )
         if not more:
             if len(findings) != total:
                 raise InventoryError("Collected occurrence count differs from native totalCount")
@@ -270,20 +272,13 @@ def collect_pages(
             raise InventoryError("Occurrence pagination made no consistent progress")
         cursors.add(after)
     else:
-        raise InventoryError(
-            "Occurrence retrieval exceeded its page budget; inventory is incomplete"
-        )
+        raise InventoryError("Occurrence retrieval exceeded its page budget; inventory is incomplete")
     # A final observation detects changes after the last page, including empty inventories.
     variables.update(first=1, after=None)
     raw = fetch(variables, output / "final-observation.json")
-    verify_final_observation(
-        raw, repository, commit, identity, total, findings[0]["id"] if findings else None
-    )
+    verify_final_observation(raw, repository, commit, identity, total, findings[0]["id"] if findings else None)
     (output / "findings.json").write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
-    categories = Counter(
-        text_value(object_value(item["issue"], "issue")["category"], "category")
-        for item in findings
-    )
+    categories = Counter(text_value(object_value(item["issue"], "issue")["category"], "category") for item in findings)
     return {
         "complete": True,
         "repository": identity,
@@ -292,19 +287,19 @@ def collect_pages(
         "categories": dict(sorted(categories.items())),
         "final_observation_sha256": hashlib.sha256(raw).hexdigest(),
         "findings_sha256": hashlib.sha256((output / "findings.json").read_bytes()).hexdigest(),
-        "consistency": ("cursor traversal with stable commit/count; "
-                        "provider does not promise snapshot isolation"),
+        "consistency": ("cursor traversal with stable commit/count; provider does not promise snapshot isolation"),
     }
 
 
 def capture(
-    fetch: Callable[[dict[str, object], Path], bytes], repository: str, commit: str,
-    output: Path, max_pages: int = 1000,
+    fetch: Callable[[dict[str, object], Path], bytes],
+    repository: str,
+    commit: str,
+    output: Path,
+    max_pages: int = 1000,
 ) -> dict[str, object]:
     """Create fresh evidence; failed runs retain pages and an incomplete manifest."""
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(
-        r"[0-9a-f]{40}", commit
-    ):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise InventoryError("Use owner/repository and a complete lowercase Git commit SHA")
     if type(max_pages) is not int or not 1 <= max_pages <= 1000:
         raise InventoryError("Page budget must be between 1 and 1000")
@@ -328,9 +323,7 @@ def capture(
         raise
     finally:
         manifest["finished_at"] = datetime.now(UTC).isoformat()
-        (output / "manifest.json").write_text(
-            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-        )
+        (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -345,7 +338,10 @@ def main() -> int:
     try:
         result = capture(
             ApiClient(authentication(args.config)),
-            args.repository, args.commit, args.output, args.max_pages,
+            args.repository,
+            args.commit,
+            args.output,
+            args.max_pages,
         )
     except InventoryError as error:
         print(str(error), file=sys.stderr)
@@ -353,8 +349,7 @@ def main() -> int:
     except (OSError, ValueError, RecursionError):
         # Do not echo arbitrary provider/config content or credentials in exceptions.
         print(
-            "DeepSource inventory failed; inspect retained pages/manifest "
-            "and authentication configuration.",
+            "DeepSource inventory failed; inspect retained pages/manifest and authentication configuration.",
             file=sys.stderr,
         )
         return 1

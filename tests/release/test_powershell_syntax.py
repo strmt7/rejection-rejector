@@ -1,4 +1,5 @@
 """Parse operator scripts and inline PowerShell without executing their bodies."""
+
 import json
 import re
 import shutil
@@ -8,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PWSH = shutil.which("pwsh")
-PARSER = r'''
+PARSER = r"""
 $ErrorActionPreference = 'Stop'
 $cases = [Console]::In.ReadToEnd() | ConvertFrom-Json
 foreach ($case in $cases) {
@@ -23,7 +24,7 @@ foreach ($case in $cases) {
         exit 1
     }
 }
-'''
+"""
 
 
 def inline_powershell(path):
@@ -59,14 +60,24 @@ class PowerShellSyntaxTests(unittest.TestCase):
     @unittest.skipUnless(PWSH, "PowerShell parser is exercised on the Windows CI runner")
     def test_operator_and_release_powershell_parse_without_execution(self):
         """All operator scripts and workflow blocks pass the PS parser."""
-        cases = [{"name": str(path.relative_to(ROOT)), "source": path.read_text(encoding="utf-8")}
-                 for path in (ROOT / "scripts").glob("*.ps1")]
+        cases = [
+            {"name": str(path.relative_to(ROOT)), "source": path.read_text(encoding="utf-8")}
+            for path in (ROOT / "scripts").glob("*.ps1")
+        ]
         for path in (ROOT / ".github/workflows").glob("*.yml"):
-            cases.extend({"name": f"{path.name}: block {index}", "source": block}
-                         for index, block in enumerate(inline_powershell(path), 1))
-        result = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", PARSER],
-                                input=json.dumps(cases), text=True, encoding="utf-8",
-                                capture_output=True, timeout=60, check=False)
+            cases.extend(
+                {"name": f"{path.name}: block {index}", "source": block}
+                for index, block in enumerate(inline_powershell(path), 1)
+            )
+        result = subprocess.run(
+            [PWSH, "-NoProfile", "-NonInteractive", "-Command", PARSER],
+            input=json.dumps(cases),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

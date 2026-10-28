@@ -308,9 +308,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          PACKAGE_PATH: ${{ steps.package.outputs.package_path }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $package = "${{ steps.package.outputs.package_path }}"
+          $package = $env:PACKAGE_PATH
           $common = @(
             '--repo', $env:GITHUB_REPOSITORY,
             '--signer-workflow', "$env:GITHUB_REPOSITORY/.github/workflows/release.yml",

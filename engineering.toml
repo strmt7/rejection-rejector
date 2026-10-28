@@ -1,0 +1,552 @@
+# Engineering policy record for strmt7/rejection-rejector (S01).
+#
+# Machine-readable policy record required by shared requirement S01 of the
+# 2026-10-27 engineering implementation manual and validated against the
+# exact reference schema vendored at tools/contract/engineering-policy.schema.json.
+# Verified read-only by `python tools/check_engineering_policy.py` and, for
+# execution receipts, by `python tools/contract/validate_contract.py`.
+# Native manifests (Cargo.toml/Cargo.lock, rust-toolchain.toml) stay
+# authoritative for dependency graphs; this record references them.
+
+schema_version = "1.0"
+repo = "strmt7/rejection-rejector"
+# Historical traceability baseline: the manual's audited snapshot for this
+# repository. Future implementation commits may differ from it.
+audit_baseline_sha = "589b89fceac51effa6922e210d4ee8a4033c9a32"
+owner = "strmt7 (sole maintainer)"
+lifecycle = "maintained"
+reviewed_on = "2026-10-28"
+review_due = "2027-04-28"
+input_files_reason = "Cargo.lock is the dependency-resolution authority and rust-toolchain.toml pins the compiler; both are hashed so a receipt binds the exact dependency and toolchain inputs."
+
+[profile]
+# The shared engineering baseline (S02) is a proposed coordination repository
+# that does not exist yet. Until it is published, the profile identity names
+# this repository's own frozen engineering inputs at the audited commit
+# (rust-toolchain.toml, deny.toml, .editorconfig, AGENTS.md conventions).
+# Homogeneity qualification stays BLOCKED under exception EX-001.
+id = "rr-repo-engineering-baseline-589b89f"
+sha = "589b89fceac51effa6922e210d4ee8a4033c9a32"
+source_url = "https://github.com/strmt7/rejection-rejector/tree/589b89fceac51effa6922e210d4ee8a4033c9a32"
+
+[roots]
+authored = ["src", "tests", "scripts", "tools", "training", "docs", "config", "windows", "fuzz", "build.rs"]
+generated = ["target", "__pycache__"]
+vendor = []
+fixture = ["tests/fixtures", "training/data"]
+
+[[input_files]]
+id = "cargo-lock"
+kind = "lock"
+path = "Cargo.lock"
+sha256 = "f0251d1e64e2f90868b0df1bb10471375e79b9f4e7d5861ba2481c61f6c507e2"
+
+[[input_files]]
+id = "rust-toolchain"
+kind = "configuration"
+path = "rust-toolchain.toml"
+sha256 = "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33"
+
+[[environments]]
+id = "rust-windows-msvc"
+description = "Windows 11 x86_64-pc-windows-msvc product target: rust-toolchain.toml 1.99.1 with rustfmt/clippy, MSVC Build Tools + Windows SDK, CPython 3.12 for operator tests"
+required = true
+[environments.tools]
+rustc = ["1.99.1"]
+python = ["3.12"]
+
+[[environments]]
+id = "rust-linux-gnu"
+description = "Ubuntu x86_64-unknown-linux-gnu CI lanes: tests, clippy, rustdoc, nextest deep verification, mutation, fuzz and llvm-cov coverage on rustc 1.99.1"
+required = true
+[environments.tools]
+rustc = ["1.99.1"]
+python = ["3.12"]
+
+[[environments]]
+id = "python-operator"
+description = "CPython 3.12 running the tests/release operator suite plus scripts/, tools/ and training/ helper tooling (stdlib only)"
+required = true
+[environments.tools]
+python = ["3.12"]
+
+[[environments]]
+id = "python-training-optional"
+description = "Optional locked ML environments (CPU or GPU/ROCm) for training/ model work; outside the base completion promise and qualified per training/README.md"
+required = false
+[environments.tools]
+python = ["3.12"]
+
+# S03 command vocabulary mapped onto the repository's existing native entry
+# points (documented equivalent of a justfile; see CONTRIBUTING.md). Command
+# strings are exact; release-check is the one parameterized template and its
+# reason names the two substitution slots.
+[[commands]]
+id = "setup"
+command = "cargo fetch --locked"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Fetches the exact locked dependency graph; external prerequisites (MSVC Build Tools, Windows SDK, VC++ v14 Redistributable, CPython 3.12, Ollama for runtime) are documented in docs/SETUP.md and docs/WINDOWS-RUNTIME.md"
+
+[[commands]]
+id = "format"
+command = "cargo fmt --all"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Canonical formatter from the declared toolchain (rustfmt 1.99.1); Python tooling formatting adoption is directed under RR-03"
+
+[[commands]]
+id = "format-check"
+command = "cargo fmt --all -- --check"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Read-only formatting check at the same version and scope as format; also a tools/local_ci.py gate"
+
+[[commands]]
+id = "lint"
+command = "cargo clippy --locked --all-targets --all-features -- -D warnings"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Exact CI clippy flags (warnings denied); matches tools/local_ci.py and ci.yml"
+
+[[commands]]
+id = "typecheck"
+command = "cargo check --locked --all-targets --all-features"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Rust type boundary check; Clippy subsumes it in the lint gate but the explicit form is the declared typecheck"
+
+[[commands]]
+id = "test-fast"
+command = "cargo test --locked --lib --no-default-features"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Deterministic core library tests without external services; emits the harness collected/executed/passed counts"
+
+[[commands]]
+id = "test-integration"
+command = "cargo test --locked --all-features"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Full synthetic-fixture suite (bin journeys, cli_workspace child-process harness, invariants); live Gmail/Ollama fixtures are excluded from automation per repo policy"
+
+[[commands]]
+id = "test-operator"
+command = "python -m unittest discover -s tests/release -v"
+environment = "python-operator"
+applicable = true
+reason = "Operator/release-tool regression suite (scripts/, tools/, training/ helpers); also run by ci.yml on Linux and Windows"
+
+[[commands]]
+id = "audit"
+command = "cargo audit --deny warnings --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372 --ignore RUSTSEC-2023-0086"
+environment = "rust-linux-gnu"
+applicable = true
+reason = "Advisory gate with the documented triage from SECURITY.md/deny.toml/osv-scanner.toml; any new advisory must fail until fixed or re-triaged"
+
+[[commands]]
+id = "audit-policy"
+command = "cargo deny check advisories licenses bans sources"
+environment = "rust-linux-gnu"
+applicable = true
+reason = "Authoritative license/source/ban policy (deny.toml); complements the pinned rust-policy job in .github/workflows/supply-chain.yml"
+
+[[commands]]
+id = "build"
+command = "cargo build --locked --release --bins"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "Produces the shipped Windows executables from identified inputs (Cargo.lock + rust-toolchain.toml)"
+
+[[commands]]
+id = "verify"
+command = "python tools/local_ci.py"
+environment = "python-operator"
+applicable = true
+reason = "Exact-gate local runner: fmt, clippy, advisory audit, rustdoc, full cargo test and the tests/release suite; exit 0 only when every gate is green"
+
+[[commands]]
+id = "release-check"
+command = "python scripts/verify_package.py --expected-commit <release-sha> --signing-mode unsigned <package-zip>"
+environment = "python-operator"
+applicable = true
+reason = "Parameterized read-only distributable verification (build/contract/source identities, checksums, signing records); the two angle-bracket slots are substituted per release and the realized values are recorded in the receipt evidence"
+
+[[commands]]
+id = "policy-check"
+command = "python tools/check_engineering_policy.py"
+environment = "python-operator"
+applicable = true
+reason = "Read-only S01 policy validator (missing fields, nonexistent paths, expired exceptions, undefined commands, required lanes without an execution path)"
+
+[[commands]]
+id = "coverage-rust"
+command = "cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info"
+environment = "rust-linux-gnu"
+applicable = true
+reason = "Mirrors .github/workflows/coverage.yml; regression floors --fail-under-lines 95 --fail-under-functions 90 are applied by the workflow summary step"
+
+[[commands]]
+id = "coverage-python"
+command = "python3 -m coverage run --source=scripts -m unittest discover -s tests/release"
+environment = "python-operator"
+applicable = true
+reason = "Mirrors the operator-tooling half of coverage.yml; training/ and tools/ remain outside the measured Python scope (directed under RR-03/N09)"
+
+[[commands]]
+id = "workflow-lint"
+command = "actionlint (1.7.12, checksum-pinned) over .github/workflows per .github/workflows/workflow-lint.yml"
+environment = "python-operator"
+applicable = true
+reason = "Workflow static analysis lane; the exact invocation lives in the workflow, local equivalence is provided by the same checksum-pinned actionlint binary"
+
+[[test_families]]
+id = "rust-core-tests"
+environment = "rust-windows-msvc"
+command_id = "test-fast"
+applicable = true
+reason = "Core library tests (state machine, vault, policy, sync, language, decision); IDs are bare Rust test-function names as listed by the harness"
+minimum_executed = 100
+required_test_ids = [
+  "new_database_creates_schema_and_vault_marker_together",
+  "existing_database_without_vault_marker_is_never_adopted",
+  "audit_chain_detects_ciphertext_tampering",
+  "audit_chain_detects_tail_truncation",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "rust-integration"
+environment = "rust-windows-msvc"
+command_id = "test-integration"
+applicable = true
+reason = "All-features suite: binary journeys, state invariants, mail routing, concurrency, openapi compatibility; synthetic fixtures only"
+minimum_executed = 50
+required_test_ids = [
+  "recovery_key_import_demands_its_exact_confirmation_token",
+  "enterprise_policy_is_monotone_and_idempotent_across_generated_settings",
+  "revision_floor_never_rolls_back_or_accepts_same_revision_drift",
+  "backup_verify_drill_and_restore_round_trip",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "cli-workspace"
+environment = "rust-windows-msvc"
+command_id = "test-integration"
+applicable = true
+reason = "Child-process CLI harness (tests/cli_workspace.rs) provisioning per-child env via Command.env; the pattern RR-01 extends"
+minimum_executed = 10
+required_test_ids = [
+  "readiness_and_status_commands_emit_machine_readable_reports",
+  "doctor_require_gates_on_the_exact_readiness_level",
+  "recovery_key_envelope_round_trips_with_its_passphrase",
+  "validate_policy_accepts_the_example_and_rejects_broken_files",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "operator-tools"
+environment = "python-operator"
+command_id = "test-operator"
+applicable = true
+reason = "Python operator/release-tool suite; IDs use unittest verbose dotted names"
+minimum_executed = 150
+required_test_ids = [
+  "test_release_guard.ReleaseEvidenceTests.test_failed_cancelled_skipped_and_neutral_never_pass",
+  "test_release_guard.BinaryAuditTests.test_success_requires_both_audits",
+  "test_verify_package.PackageVerificationTests.test_wrong_expected_archive_hash_is_rejected",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "policy-tool-tests"
+environment = "python-operator"
+command_id = "test-operator"
+applicable = true
+reason = "tests/release/test_engineering_policy.py: S01 validator checks plus the vendored reference contract package regression (manifest hashes, schema shape, documented example outcomes)"
+minimum_executed = 8
+required_test_ids = [
+  "test_engineering_policy.PolicyValidatorTests.test_real_policy_passes_schema_and_s01_checks",
+  "test_engineering_policy.PolicyValidatorTests.test_expired_exception_is_detected",
+  "test_engineering_policy.ReferenceContractTests.test_reference_package_matches_manifest",
+  "test_engineering_policy.ReferenceContractTests.test_documented_example_outcomes",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "package-verify"
+environment = "python-operator"
+command_id = "test-operator"
+applicable = true
+reason = "Release evidence and package verification regression (release_guard, verify_package, repository_integrity, installer tasks)"
+minimum_executed = 20
+required_test_ids = [
+  "test_verify_package.PackageVerificationTests.test_valid_unsigned_archive_is_checked_without_extraction_or_execution",
+  "test_verify_package.PackageVerificationTests.test_archive_and_member_count_limits",
+  "test_release_guard.BinaryAuditTests.test_missing_binary_blocks_without_invoking_audit",
+]
+allowed_skips = []
+
+[[test_families]]
+id = "calibration-data-tests"
+environment = "python-operator"
+command_id = "test-operator"
+applicable = true
+reason = "Required by RR-02/RR-03: deterministic CPU calibration/data tests (threshold selection oracle, JSONL validation, denominators); implementation directed - tests/release/test_calibration_zero_fp.py does not exist yet, so a receipt for this family stays FAIL until it lands"
+minimum_executed = 5
+required_test_ids = []
+allowed_skips = []
+
+[[artifact_kinds]]
+id = "windows-portable-package"
+environment = "rust-windows-msvc"
+applicable = true
+reason = "The unsigned release ZIP produced by the manual Attested Windows package workflow; verified read-only by scripts/verify_package.py"
+minimum_count = 1
+qualification_command_ids = ["build", "release-check"]
+qualification_test_family_ids = ["package-verify"]
+
+[[artifact_kinds]]
+id = "sbom-cyclonedx"
+environment = "rust-linux-gnu"
+applicable = true
+reason = "CycloneDX 1.5 SBOM generated by .github/workflows/supply-chain.yml and uploaded as per-commit evidence"
+minimum_count = 1
+qualification_command_ids = ["audit-policy"]
+qualification_test_family_ids = []
+
+[[artifact_kinds]]
+id = "coverage-report"
+environment = "rust-linux-gnu"
+applicable = true
+reason = "lcov.info + coverage.xml + coverage summaries retained by .github/workflows/coverage.yml as per-commit artifacts"
+minimum_count = 1
+qualification_command_ids = ["coverage-rust", "coverage-python"]
+qualification_test_family_ids = ["rust-core-tests"]
+
+[[artifact_kinds]]
+id = "signed-windows-package"
+environment = "rust-windows-msvc"
+applicable = false
+reason = "Azure Artifact Signing/OIDC credentials are not provisioned; the shipped default is the explicitly named unsigned package and no signed production release is claimed"
+minimum_count = 0
+qualification_command_ids = []
+qualification_test_family_ids = []
+
+[[coverage_scopes]]
+id = "rust-src-lines"
+applicable = true
+reason = "coverage.yml measures src/ with cargo-llvm-cov line mode and 95%/90% line/function regression floors; branch measurement is not configured (recorded honestly rather than implied)"
+environment = "rust-linux-gnu"
+command_id = "coverage-rust"
+measurement = "line"
+included_roots = ["src"]
+excluded_roots = ["tests", "fuzz"]
+artifact_kind = "coverage-report"
+
+[[coverage_scopes]]
+id = "python-scripts-lines"
+applicable = true
+reason = "coverage.yml measures the operator tooling under scripts/ in line mode; training/ and tools/ are outside the measured Python scope (N09/RR-03 directed work)"
+environment = "python-operator"
+command_id = "coverage-python"
+measurement = "line"
+included_roots = ["scripts"]
+excluded_roots = []
+artifact_kind = "coverage-report"
+
+[[standards]]
+id = "S01"
+applicable = true
+reason = "engineering.toml plus the read-only validator tools/check_engineering_policy.py satisfy the acceptance text (missing fields, nonexistent paths, expired exceptions, undefined commands, lanes without an execution path)"
+command_ids = ["policy-check"]
+test_family_ids = ["policy-tool-tests"]
+artifact_kinds = []
+
+[[standards]]
+id = "S02"
+applicable = true
+reason = "Baseline consumption applies to this maintained pilot repository; homogeneity qualification is BLOCKED until the shared engineering repository is published (EX-001) and the Python line-length default carries the dated SHOULD-exception EX-002"
+command_ids = ["verify"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S03"
+applicable = true
+reason = "Full S03 vocabulary mapped to native commands above; documented equivalent of a justfile with the same semantics (CONTRIBUTING.md mapping)"
+command_ids = ["setup", "format", "format-check", "lint", "typecheck", "test-fast", "test-integration", "audit", "build", "verify", "release-check"]
+test_family_ids = ["rust-core-tests", "rust-integration", "operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S04"
+applicable = true
+reason = "Workflow event semantics and truthful results; the aggregate verify job and server-side required status checks are directed work with dated exception EX-003 (compensating controls: required PR review, tools/local_ci.py, per-workflow stable check names)"
+command_ids = ["verify", "workflow-lint"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S05"
+applicable = true
+reason = "Governance reconciled and evidenced 2026-10-28 via the branch-protection API: 1 required approving review, force pushes and deletions blocked; required_status_checks is null (recorded in EX-003)"
+command_ids = ["policy-check"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S06"
+applicable = true
+reason = "Locked Cargo builds, pinned toolchain, SHA-pinned checksum-verified tool installs, Dependabot as the single updater for cargo + github-actions scopes"
+command_ids = ["audit", "audit-policy", "verify"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = ["sbom-cyclonedx"]
+
+[[standards]]
+id = "S07"
+applicable = true
+reason = "DeepSource common dashboard with exact-source dispositions (docs/deepsource-dispositions.md) plus independent RustSec/cargo-deny/CodeQL lanes; analyzer capability boundary (Rust <=1.93 vs toolchain 1.99.1) is recorded in the dispositions document"
+command_ids = ["audit", "audit-policy"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S08"
+applicable = true
+reason = "Independent oracles (state/CAS invariants, subprocess CLI journeys, recovery drills); RR-02 calibration oracle and input validation are directed open work captured by calibration-data-tests"
+command_ids = ["test-integration"]
+test_family_ids = ["rust-core-tests", "rust-integration", "calibration-data-tests"]
+artifact_kinds = []
+
+[[standards]]
+id = "S09"
+applicable = true
+reason = "Real measured coverage artifacts with declared line mode, included/excluded roots and regression floors; zero-test and skip reporting covered by the release-guard suite"
+command_ids = ["coverage-rust", "coverage-python"]
+test_family_ids = ["rust-core-tests"]
+artifact_kinds = ["coverage-report"]
+
+[[standards]]
+id = "S10"
+applicable = true
+reason = "Authority/state boundaries are explicit and invariant-tested; RR-05 incremental extraction of engine/worker/store/gui orchestration is directed work that must preserve these invariants"
+command_ids = ["lint", "typecheck"]
+test_family_ids = ["rust-integration"]
+artifact_kinds = []
+
+[[standards]]
+id = "S11"
+applicable = true
+reason = "At-most-once delivery with state+revision CAS, affected-row checks, durable recovery and reconciliation without blind retries (store.rs, recovery/) - regression-covered"
+command_ids = ["test-integration"]
+test_family_ids = ["rust-core-tests", "rust-integration"]
+artifact_kinds = []
+
+[[standards]]
+id = "S12"
+applicable = true
+reason = "Fail-closed input parsing, redacted diagnostics, encrypted payloads and path/permission checks with negative and recovery fixtures; synthetic fixtures never contain real credentials"
+command_ids = ["audit"]
+test_family_ids = ["rust-core-tests", "operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S13"
+applicable = true
+reason = "Build-once attested Windows package workflow, two-build reproducibility, package verification and SBOM; signed flavor remains fail-closed until credentials exist"
+command_ids = ["build", "release-check"]
+test_family_ids = ["package-verify"]
+artifact_kinds = ["windows-portable-package", "sbom-cyclonedx"]
+
+[[standards]]
+id = "S14"
+applicable = true
+reason = "README/CONTRIBUTING/SECURITY/AGENTS/docs stay current with implementation; known residual doc drift (yoke-derive rationale, coverage.yml step label, training/README ROCm wording) is directed work recorded in docs/audit-common-standard.md"
+command_ids = ["policy-check", "verify"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = []
+
+[[standards]]
+id = "S15"
+applicable = true
+reason = "Schema-validated execution receipts via the vendored exact reference contract (tools/contract/); the repository-specific receipt producer is directed work"
+command_ids = ["verify", "policy-check"]
+test_family_ids = ["package-verify", "policy-tool-tests"]
+artifact_kinds = ["windows-portable-package", "coverage-report"]
+
+[[tasks]]
+id = "RR-01"
+applicable = true
+reason = "Verify repaired fixtures on the intended hosts and replace the process-global temp-env test seam with prelaunch input or Command.env child fixtures (directed: src/bin/rr.rs)"
+command_ids = ["test-integration", "verify"]
+test_family_ids = ["cli-workspace", "rust-integration"]
+artifact_kinds = []
+
+[[tasks]]
+id = "RR-02"
+applicable = true
+reason = "Correct calibration semantics (observed decision boundaries, deterministic ties, explicit abstention) and reject nonfinite/out-of-range/boolean scores and invalid labels (directed: training/calibrate_zero_fp.py + tests)"
+command_ids = ["test-operator"]
+test_family_ids = ["calibration-data-tests"]
+artifact_kinds = []
+
+[[tasks]]
+id = "RR-03"
+applicable = true
+reason = "Qualify Python and model tooling: extend lint/typing/coverage scope over training/ and tools/, add deterministic CPU data tests, keep GPU environments separate (partially directed)"
+command_ids = ["test-operator", "policy-check", "coverage-python"]
+test_family_ids = ["operator-tools", "calibration-data-tests"]
+artifact_kinds = []
+
+[[tasks]]
+id = "RR-04"
+applicable = true
+reason = "One authoritative pinned advisory lane; duplicate cargo-audit job and bare deny.toml ignore entries are directed work in .github/workflows/supply-chain.yml and deny.toml"
+command_ids = ["audit", "audit-policy"]
+test_family_ids = ["operator-tools"]
+artifact_kinds = ["sbom-cyclonedx"]
+
+[[tasks]]
+id = "RR-05"
+applicable = true
+reason = "Incremental orchestration extraction behind typed interfaces while preserving delivery-state CAS, authority and recovery behavior (directed: src/engine.rs, src/worker.rs, src/store.rs, src/gui.rs)"
+command_ids = ["lint", "typecheck", "test-integration"]
+test_family_ids = ["rust-integration"]
+artifact_kinds = []
+
+[[tasks]]
+id = "RR-06"
+applicable = true
+reason = "Shared command adoption and exact-commit qualification; pending-run retention under concurrency groups is directed work (independent run groups or queue: max + reconciliation)"
+command_ids = ["verify", "release-check"]
+test_family_ids = ["package-verify"]
+artifact_kinds = ["windows-portable-package"]
+
+[[exceptions]]
+id = "EX-001"
+requirement_id = "S02"
+owner = "strmt7 (sole maintainer)"
+reason = "The shared engineering baseline repository (S02) is a proposed coordination repository and is not published yet, so no reviewed shared-profile commit exists to pin; compensating control: this repository's own frozen tool/profile inputs at the audit baseline (rust-toolchain.toml 1.99.1, deny.toml, .editorconfig, AGENTS.md conventions) with local/CI agreement enforced by tools/local_ci.py. Homogeneity qualification remains BLOCKED until the baseline is published."
+expires_on = "2027-04-28"
+alternative_command_ids = ["verify"]
+alternative_test_family_ids = ["operator-tools"]
+
+[[exceptions]]
+id = "EX-002"
+requirement_id = "S02"
+owner = "strmt7 (sole maintainer)"
+reason = "SHOULD-exception to the manual's 100-character Python line-length default: the maintainer-standardized pilot configuration uses 120 (FlitzZip .ruff.toml at 4e6a1bb0d144611a09dcbc65276faa676e923882 sets line-length = 120 with Ruff E-family selected; DeepSource Python max_line_length is set to 120 in the dashboard). The 120 choice meets the same contract through Ruff E501 at 120 plus DeepSource at 120 and avoids reformatting the frozen pilot scope; it is a versioned profile override until the shared baseline resolves the default."
+expires_on = "2027-04-28"
+alternative_command_ids = ["lint"]
+alternative_test_family_ids = ["operator-tools"]
+
+[[exceptions]]
+id = "EX-003"
+requirement_id = "S04"
+owner = "strmt7 (sole maintainer)"
+reason = "No stable aggregate verify job exists yet and the branch-protection API reported required_status_checks = null on 2026-10-28, so a deliberate failing change is not server-side blocked by required checks; compensating controls: one required approving review with stale-review dismissal (verified via API), force-push/deletion blocks, tools/local_ci.py exact-gate runner and named per-workflow checks. Aggregate job + required-check enforcement are directed work owned by the workflow/settings maintainers."
+expires_on = "2027-01-31"
+alternative_command_ids = ["verify"]
+alternative_test_family_ids = ["operator-tools"]

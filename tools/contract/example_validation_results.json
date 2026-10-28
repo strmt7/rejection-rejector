@@ -1,0 +1,451 @@
+[
+  {
+    "example": "consistent",
+    "result": {
+      "validator": "portfolio-reference-1.0",
+      "result": "BLOCKED",
+      "consistency_result": "PASS",
+      "qualification": "synthetic_example_only",
+      "checked_at": "2026-10-27T21:47:14.917151Z",
+      "repo": "strmt7/qfales_fc_website",
+      "target_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+      "profile_sha": "1111111111111111111111111111111111111111",
+      "issues": [],
+      "limitations": [
+        "Reference contract only; no command is executed and no repository or remote setting is changed.",
+        "Target source/profile SHAs are caller-supplied trusted CI inputs; this tool does not query Git, GitHub, a registry or the remote profile.",
+        "Local hashes and metadata do not prove log truthfulness, producer identity, workflow trust, remote authenticity or scientific correctness.",
+        "Declared source/coverage scope and input digests are checked for consistency; this is not exhaustive source inventory or independent measurement of coverage percentages.",
+        "Exceptions are documentary and require passing alternatives; they never waive a failed or blocked requirement.",
+        "Synthetic examples cannot produce a production PASS. No cryptographic signature, attestation or hostile-concurrent-filesystem protection is implemented."
+      ],
+      "declared_overall_status": "PASS",
+      "declared_label_used_as_authority": false,
+      "declared_label_consistency_checked": true,
+      "verified_counts": {
+        "evidence_files": 1,
+        "artifacts": 1,
+        "input_files": 1,
+        "qualified_artifacts": 1,
+        "passing_commands": 1,
+        "passing_test_families": 1,
+        "canonical_tasks": 6,
+        "canonical_standards": 15
+      }
+    }
+  },
+  {
+    "example": "false-pass",
+    "result": {
+      "validator": "portfolio-reference-1.0",
+      "result": "FAIL",
+      "consistency_result": "FAIL",
+      "qualification": "synthetic_example_only",
+      "checked_at": "2026-10-27T21:47:14.920082Z",
+      "repo": "strmt7/qfales_fc_website",
+      "target_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+      "profile_sha": "1111111111111111111111111111111111111111",
+      "issues": [
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_EXIT",
+          "field": "commands/example-check",
+          "message": "passed command requires exit code 0"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_TEST_COMMAND",
+          "field": "test_families/example-unit",
+          "message": "passing family requires its passing command"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_QUALIFICATION",
+          "field": "artifacts/example-artifact/qualification",
+          "message": "artifact requires passing declared qualification commands/families"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "MISSING_ARTIFACT",
+          "field": "artifact_kinds/example-report",
+          "message": "too few verified required artifacts"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_COVERAGE",
+          "field": "coverage_scopes/example-coverage",
+          "message": "coverage requires supported execution"
+        },
+        {
+          "level": "FAIL",
+          "code": "COVERAGE_ARTIFACT",
+          "field": "coverage_scopes/example-coverage",
+          "message": "coverage references missing/unqualified/wrong-kind artifact"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S01",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S02",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S03",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S04",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S05",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S06",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S07",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S08",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S09",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S10",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S11",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S12",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S13",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S14",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "standards/S15",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-01",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-02",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-03",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-04",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-05",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "FALSE_PASS_DEPENDENCY",
+          "field": "tasks/QFALES-06",
+          "message": "claimed passing requirement has an unresolved dependency"
+        },
+        {
+          "level": "FAIL",
+          "code": "OVERALL_STATUS_MISMATCH",
+          "field": "overall_status",
+          "message": "producer label contradicts the independently computed result; it cannot be silently upgraded"
+        }
+      ],
+      "limitations": [
+        "Reference contract only; no command is executed and no repository or remote setting is changed.",
+        "Target source/profile SHAs are caller-supplied trusted CI inputs; this tool does not query Git, GitHub, a registry or the remote profile.",
+        "Local hashes and metadata do not prove log truthfulness, producer identity, workflow trust, remote authenticity or scientific correctness.",
+        "Declared source/coverage scope and input digests are checked for consistency; this is not exhaustive source inventory or independent measurement of coverage percentages.",
+        "Exceptions are documentary and require passing alternatives; they never waive a failed or blocked requirement.",
+        "Synthetic examples cannot produce a production PASS. No cryptographic signature, attestation or hostile-concurrent-filesystem protection is implemented."
+      ],
+      "declared_overall_status": "PASS",
+      "declared_label_used_as_authority": false,
+      "declared_label_consistency_checked": true,
+      "verified_counts": {
+        "evidence_files": 1,
+        "artifacts": 1,
+        "input_files": 1,
+        "qualified_artifacts": 0,
+        "passing_commands": 0,
+        "passing_test_families": 0,
+        "canonical_tasks": 6,
+        "canonical_standards": 15
+      }
+    }
+  },
+  {
+    "example": "blocked",
+    "result": {
+      "validator": "portfolio-reference-1.0",
+      "result": "BLOCKED",
+      "consistency_result": "BLOCKED",
+      "qualification": "synthetic_example_only",
+      "checked_at": "2026-10-27T21:47:14.922959Z",
+      "repo": "strmt7/qfales_fc_website",
+      "target_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+      "profile_sha": "1111111111111111111111111111111111111111",
+      "issues": [
+        {
+          "level": "BLOCKED",
+          "code": "ENVIRONMENT_BLOCKED",
+          "field": "environments/example-host",
+          "message": "Synthetic metadata only"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "COMMAND_BLOCKED",
+          "field": "commands/example-check",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "ZERO_OR_FEW_TESTS",
+          "field": "test_families/example-unit",
+          "message": "too few tests actually executed"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "MISSING_TEST",
+          "field": "test_families/example-unit",
+          "message": "required test example-case absent"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "FAMILY_BLOCKED",
+          "field": "test_families/example-unit",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "ARTIFACT_ENV_BLOCKED",
+          "field": "artifact_kinds/example-report",
+          "message": "required artifact host is unavailable or unsupported"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "MISSING_ARTIFACT",
+          "field": "artifact_kinds/example-report",
+          "message": "too few verified required artifacts"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "COVERAGE_BLOCKED",
+          "field": "coverage_scopes/example-coverage",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S01",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S02",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S03",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S04",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S05",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S06",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S07",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S08",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S09",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S10",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S11",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S12",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S13",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S14",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "standards/S15",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-01",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-02",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-03",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-04",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-05",
+          "message": "Synthetic required host unavailable"
+        },
+        {
+          "level": "BLOCKED",
+          "code": "REQUIREMENT_BLOCKED",
+          "field": "tasks/QFALES-06",
+          "message": "Synthetic required host unavailable"
+        }
+      ],
+      "limitations": [
+        "Reference contract only; no command is executed and no repository or remote setting is changed.",
+        "Target source/profile SHAs are caller-supplied trusted CI inputs; this tool does not query Git, GitHub, a registry or the remote profile.",
+        "Local hashes and metadata do not prove log truthfulness, producer identity, workflow trust, remote authenticity or scientific correctness.",
+        "Declared source/coverage scope and input digests are checked for consistency; this is not exhaustive source inventory or independent measurement of coverage percentages.",
+        "Exceptions are documentary and require passing alternatives; they never waive a failed or blocked requirement.",
+        "Synthetic examples cannot produce a production PASS. No cryptographic signature, attestation or hostile-concurrent-filesystem protection is implemented."
+      ],
+      "declared_overall_status": "BLOCKED",
+      "declared_label_used_as_authority": false,
+      "declared_label_consistency_checked": true,
+      "verified_counts": {
+        "evidence_files": 1,
+        "artifacts": 0,
+        "input_files": 1,
+        "qualified_artifacts": 0,
+        "passing_commands": 0,
+        "passing_test_families": 0,
+        "canonical_tasks": 6,
+        "canonical_standards": 15
+      }
+    }
+  }
+]

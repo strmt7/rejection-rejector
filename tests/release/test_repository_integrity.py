@@ -1,4 +1,5 @@
 """Repository integrity regressions; synthetic Git history only."""
+
 import importlib.util
 import json
 import subprocess
@@ -48,15 +49,22 @@ class TextChecks(unittest.TestCase):
 
     def test_structured_files_must_parse(self):
         """Broken TOML/JSON/Python must parse-fail as findings."""
-        for name, content in (("Cargo.toml", b"[broken\n"), ("config.json", b'{"x":1,"x":2}\n'),
-                              ("config.json", b'{"x":NaN}\n'), ("script.py", b"def f(:\n")):
+        for name, content in (
+            ("Cargo.toml", b"[broken\n"),
+            ("config.json", b'{"x":1,"x":2}\n'),
+            ("config.json", b'{"x":NaN}\n'),
+            ("script.py", b"def f(:\n"),
+        ):
             with self.subTest(name=name):
                 self.assertIn("invalid_structured_text", self.errors(name, content))
 
     def test_valid_structured_text(self):
         """Valid TOML/JSON/Python produce no findings."""
-        for name, content in (("Cargo.toml", b'[package]\nname="example"\n'),
-                              ("config.json", b'{"x":1}\n'), ("script.py", b"x = 1\n")):
+        for name, content in (
+            ("Cargo.toml", b'[package]\nname="example"\n'),
+            ("config.json", b'{"x":1}\n'),
+            ("script.py", b"x = 1\n"),
+        ):
             self.assertFalse(self.errors(name, content))
 
     def test_commit_padding_is_not_documentation(self):
@@ -137,10 +145,28 @@ class HistoryChecks(unittest.TestCase):
     def test_cli_retains_report_patch_and_source_even_on_integrity_failure(self):
         """Artifacts are retained even when the audit reports errors."""
         out = self.root / "artifacts"
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/repository_integrity.py"),
-                                 "--root", str(self.root), "--history-count", "3", "--report", str(out / "audit.json"),
-                                 "--patch-file", str(out / "history.patch"), "--snapshot-file", str(out / "source.zip"), "--bundle-file", str(out / "history.bundle")],
-                                capture_output=True, text=True, timeout=30, check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/repository_integrity.py"),
+                "--root",
+                str(self.root),
+                "--history-count",
+                "3",
+                "--report",
+                str(out / "audit.json"),
+                "--patch-file",
+                str(out / "history.patch"),
+                "--snapshot-file",
+                str(out / "source.zip"),
+                "--bundle-file",
+                str(out / "history.bundle"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
         self.assertEqual(result.returncode, 1, result.stderr)
         report = json.loads((out / "audit.json").read_text())
         self.assertEqual(report["history_count"], 3)

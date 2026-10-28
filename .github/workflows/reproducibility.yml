@@ -33,8 +33,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-reproducibility-main
-  cancel-in-progress: true
+  # Independent run identity per commit (S04/RR-06): the previous fixed
+  # windows-reproducibility-main group with cancel-in-progress: true let every
+  # newer push cancel an older run mid-build, destroying the two-build
+  # reproducibility evidence it exists to produce. Per-SHA groups preserve
+  # every commit's evidence; reruns of the same SHA queue in the same group.
+  group: windows-reproducibility-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   reproducible:

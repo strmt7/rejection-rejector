@@ -16,11 +16,15 @@ yanked = "deny"
 # in the shipped Windows binary; unmaintained notices with no in-range
 # patched version (verified against crates.io 2026-10-19). Migration
 # required upstream; re-check when atspi/accesskit publish zvariant 6.
+# S07 suppression record: owner strmt7; review/removal date 2027-04-01
+# (mirrors osv-scanner.toml ignoreUntil) for the a11y entries, 2027-04-28
+# policy review for RUSTSEC-2023-0086 (see SECURITY.md). Every ignore carries
+# its reason; a bare ignore without a current reason is itself a defect.
 ignore = [
-    "RUSTSEC-2023-0086",
-    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required" },
+    { id = "RUSTSEC-2023-0086", reason = "lexical-core 0.7.6 Unsound, reached via nom 5 <- imap 2 (IMAP client); app talks only to a trusted provider/own host so practical exposure is low; remediation planned: io-imap migration (SECURITY.md). Reviewed 2026-10-28: the imap-2 path is already gone from Cargo.lock (cargo deny advisory-not-detected; cargo audit clean without this ignore) - SECURITY.md's removal criterion is met; drop at the 2027-04-28 policy review if still unmatched; owner strmt7" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required; owner strmt7; review 2027-04-01" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required; owner strmt7; review 2027-04-01" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack, unreachable in the Windows binary; upstream migration required; owner strmt7; review 2027-04-01" },
 ]
 
 [licenses]

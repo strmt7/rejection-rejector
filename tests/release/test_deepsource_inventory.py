@@ -2,14 +2,13 @@
 
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
-
-import os
-import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 import deepsource_inventory as inventory

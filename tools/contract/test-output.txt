@@ -1,0 +1,53 @@
+test_artifact_cannot_postdate_its_qualification_command (test_validate_contract.ContractTests.test_artifact_cannot_postdate_its_qualification_command) ... ok
+test_artifact_cannot_postdate_qualification_family_command (test_validate_contract.ContractTests.test_artifact_cannot_postdate_qualification_family_command) ... ok
+test_artifact_qualification_cannot_be_empty (test_validate_contract.ContractTests.test_artifact_qualification_cannot_be_empty) ... ok
+test_audit_baseline_mismatch_fails (test_validate_contract.ContractTests.test_audit_baseline_mismatch_fails) ... ok
+test_blank_command_fails (test_validate_contract.ContractTests.test_blank_command_fails) ... ok
+test_blank_exception_owner_fails (test_validate_contract.ContractTests.test_blank_exception_owner_fails) ... ok
+test_blank_na_artifact_reason_fails (test_validate_contract.ContractTests.test_blank_na_artifact_reason_fails) ... ok
+test_blank_tool_name_cannot_replace_required_identity (test_validate_contract.ContractTests.test_blank_tool_name_cannot_replace_required_identity) ... ok
+test_changed_artifact_fails (test_validate_contract.ContractTests.test_changed_artifact_fails) ... ok
+test_changed_evidence_fails (test_validate_contract.ContractTests.test_changed_evidence_fails) ... ok
+test_changed_input_lock_fails (test_validate_contract.ContractTests.test_changed_input_lock_fails) ... ok
+test_changed_policy_digest_fails (test_validate_contract.ContractTests.test_changed_policy_digest_fails) ... ok
+test_cli_exit_codes_match_computed_decision (test_validate_contract.ContractTests.test_cli_exit_codes_match_computed_decision) ... ok
+test_command_text_is_never_executed (test_validate_contract.ContractTests.test_command_text_is_never_executed) ... ok
+test_consistent_metadata_passes_without_claiming_log_authenticity (test_validate_contract.ContractTests.test_consistent_metadata_passes_without_claiming_log_authenticity) ... ok
+test_coverage_needs_actual_qualified_report (test_validate_contract.ContractTests.test_coverage_needs_actual_qualified_report) ... ok
+test_coverage_scope_mismatch_fails (test_validate_contract.ContractTests.test_coverage_scope_mismatch_fails) ... ok
+test_duplicate_json_keys_fail (test_validate_contract.ContractTests.test_duplicate_json_keys_fail) ... ok
+test_duplicate_record_ids_fail (test_validate_contract.ContractTests.test_duplicate_record_ids_fail) ... ok
+test_exception_never_waives_original_blocker (test_validate_contract.ContractTests.test_exception_never_waives_original_blocker) ... ok
+test_exception_never_waives_original_failure (test_validate_contract.ContractTests.test_exception_never_waives_original_failure) ... ok
+test_exception_requires_passing_alternative (test_validate_contract.ContractTests.test_exception_requires_passing_alternative) ... ok
+test_expired_exception_fails_with_passing_alternative (test_validate_contract.ContractTests.test_expired_exception_fails_with_passing_alternative) ... ok
+test_explicit_not_applicable_needs_matching_factual_reason (test_validate_contract.ContractTests.test_explicit_not_applicable_needs_matching_factual_reason) ... ok
+test_extra_blank_receipt_tool_name_fails (test_validate_contract.ContractTests.test_extra_blank_receipt_tool_name_fails) ... ok
+test_fabricated_test_counts_fail (test_validate_contract.ContractTests.test_fabricated_test_counts_fail) ... ok
+test_false_pass_nonzero_exit_fails (test_validate_contract.ContractTests.test_false_pass_nonzero_exit_fails) ... ok
+test_future_timestamp_fails (test_validate_contract.ContractTests.test_future_timestamp_fails) ... ok
+test_hardlink_cannot_inflate_artifact_count (test_validate_contract.ContractTests.test_hardlink_cannot_inflate_artifact_count) ... ok
+test_missing_input_record_fails (test_validate_contract.ContractTests.test_missing_input_record_fails) ... ok
+test_missing_standard_fails (test_validate_contract.ContractTests.test_missing_standard_fails) ... ok
+test_missing_task_fails (test_validate_contract.ContractTests.test_missing_task_fails) ... ok
+test_overall_label_cannot_hide_a_failed_command (test_validate_contract.ContractTests.test_overall_label_cannot_hide_a_failed_command) ... ok
+test_overlapping_source_categories_fail (test_validate_contract.ContractTests.test_overlapping_source_categories_fail) ... ok
+test_paths_cannot_escape_evidence_root (test_validate_contract.ContractTests.test_paths_cannot_escape_evidence_root) ... ok
+test_producer_blocked_is_not_silently_upgraded (test_validate_contract.ContractTests.test_producer_blocked_is_not_silently_upgraded) ... ok
+test_producer_fail_is_not_silently_upgraded (test_validate_contract.ContractTests.test_producer_fail_is_not_silently_upgraded) ... ok
+test_receipt_command_must_match_declared_command (test_validate_contract.ContractTests.test_receipt_command_must_match_declared_command) ... ok
+test_required_test_cannot_be_replaced_by_other_pass (test_validate_contract.ContractTests.test_required_test_cannot_be_replaced_by_other_pass) ... ok
+test_stale_profile_fails (test_validate_contract.ContractTests.test_stale_profile_fails) ... ok
+test_stale_source_fails (test_validate_contract.ContractTests.test_stale_source_fails) ... ok
+test_supported_unavailable_host_is_blocked (test_validate_contract.ContractTests.test_supported_unavailable_host_is_blocked) ... ok
+test_synthetic_example_never_qualifies_production (test_validate_contract.ContractTests.test_synthetic_example_never_qualifies_production) ... ok
+test_undeclared_not_applicable_fails (test_validate_contract.ContractTests.test_undeclared_not_applicable_fails) ... ok
+test_unexpected_skip_fails (test_validate_contract.ContractTests.test_unexpected_skip_fails) ... ok
+test_unsupported_tool_version_fails (test_validate_contract.ContractTests.test_unsupported_tool_version_fails) ... ok
+test_wrong_task_id_fails_even_with_six_records (test_validate_contract.ContractTests.test_wrong_task_id_fails_even_with_six_records) ... ok
+test_zero_tests_fails (test_validate_contract.ContractTests.test_zero_tests_fails) ... ok
+
+----------------------------------------------------------------------
+Ran 48 tests in 0.283s
+
+OK

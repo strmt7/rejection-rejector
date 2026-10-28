@@ -1,0 +1,241 @@
+# SYNTHETIC EXAMPLE ONLY. Not an approved Qfales policy or actual test receipt.
+schema_version = "1.0"
+repo = "strmt7/qfales_fc_website"
+audit_baseline_sha = "f455a4e36c0b9541edb6f0207b2870b0369b5f3a"
+owner = "Example owner; no approval implied"
+lifecycle = "experiment"
+reviewed_on = "2026-10-26"
+review_due = "2026-11-26"
+exceptions = []
+
+input_files_reason = "One synthetic lock demonstrates exact input-byte binding; no product input is claimed"
+
+[profile]
+id = "synthetic-example-profile"
+sha = "1111111111111111111111111111111111111111"
+source_url = "https://example.invalid/profile/1111111111111111111111111111111111111111"
+
+[roots]
+authored = ["src"]
+generated = ["generated"]
+vendor = ["vendor"]
+fixture = ["tests/fixtures"]
+
+[[input_files]]
+id = "example-lock"
+kind = "lock"
+path = "inputs/example.lock"
+sha256 = "3e8011ce577caa7d30eb6380e57f2b4a1834a4826f5e0552bed2389c0877f4d1"
+
+[[environments]]
+id = "example-host"
+description = "Synthetic metadata; no Node host was run"
+required = true
+[environments.tools]
+node = ["synthetic-version"]
+
+[[commands]]
+id = "example-check"
+command = "npm test"
+environment = "example-host"
+applicable = true
+reason = "Example command declaration, not evidence of execution"
+
+[[test_families]]
+id = "example-unit"
+environment = "example-host"
+command_id = "example-check"
+applicable = true
+reason = "Synthetic test inventory for validator demonstration"
+minimum_executed = 1
+required_test_ids = ["example-case"]
+allowed_skips = []
+
+[[artifact_kinds]]
+id = "example-report"
+environment = "example-host"
+applicable = true
+reason = "Synthetic artifact used to demonstrate local hashing"
+minimum_count = 1
+qualification_command_ids = ["example-check"]
+qualification_test_family_ids = ["example-unit"]
+
+[[coverage_scopes]]
+id = "example-coverage"
+applicable = true
+reason = "Synthetic scope only; no coverage was measured"
+environment = "example-host"
+command_id = "example-check"
+measurement = "line"
+included_roots = ["src"]
+excluded_roots = ["generated", "vendor", "tests/fixtures"]
+artifact_kind = "example-report"
+
+[[standards]]
+id = "S01"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S02"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S03"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S04"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S05"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S06"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S07"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S08"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S09"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S10"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S11"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S12"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S13"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S14"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[standards]]
+id = "S15"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-01"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-02"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-03"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-04"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-05"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+
+[[tasks]]
+id = "QFALES-06"
+applicable = true
+reason = "Example mapping only; real acceptance must be reviewed per requirement"
+command_ids = ["example-check"]
+test_family_ids = ["example-unit"]
+artifact_kinds = ["example-report"]
+

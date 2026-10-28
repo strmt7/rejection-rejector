@@ -30,7 +30,7 @@ import dataclasses
 import shutil
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 GIB = 1024**3
 
@@ -43,12 +43,12 @@ class ResourceSnapshot:
     decision functions treat None according to ``require_*`` flags.
     """
 
-    vram_free: Optional[int]
-    vram_total: Optional[int]
-    ram_available: Optional[int]
-    ram_total: Optional[int]
-    disk_free: Optional[int]
-    disk_total: Optional[int]
+    vram_free: int | None
+    vram_total: int | None
+    ram_available: int | None
+    ram_total: int | None
+    disk_free: int | None
+    disk_total: int | None
     measured_at: float
 
 
@@ -103,10 +103,10 @@ class Verdict:
 
 def snapshot(
     *,
-    vram_probe: Optional[Callable[[], tuple[int, int]]] = None,
-    ram_probe: Optional[Callable[[], tuple[int, int]]] = None,
+    vram_probe: Callable[[], tuple[int, int]] | None = None,
+    ram_probe: Callable[[], tuple[int, int]] | None = None,
     disk_path: str = ".",
-    disk_probe: Optional[Callable[[], tuple[int, int]]] = None,
+    disk_probe: Callable[[], tuple[int, int]] | None = None,
 ) -> ResourceSnapshot:
     """Measure free/total VRAM, RAM and disk at one instant.
 
@@ -159,50 +159,51 @@ def check(snap: ResourceSnapshot, limits: Thresholds) -> list[Violation]:
     out: list[Violation] = []
 
     def floor_and_fraction(
-        name: str, free: Optional[int], total: Optional[int],
-        min_free: int, max_fraction: float, required: bool,
+        name: str,
+        free: int | None,
+        total: int | None,
+        min_free: int,
+        max_fraction: float,
+        required: bool,
     ) -> None:
         """Record floor and usage-fraction breaches for one resource."""
         if free is None or total is None:
             if required:
-                out.append(Violation(name, "unmeasurable",
-                                     f"{name} could not be measured; fail-closed"))
+                out.append(Violation(name, "unmeasurable", f"{name} could not be measured; fail-closed"))
             return
         if free < min_free:
-            out.append(Violation(name, "below_min_free",
-                                 f"{name} free {free} < required {min_free}"))
+            out.append(Violation(name, "below_min_free", f"{name} free {free} < required {min_free}"))
         if total > 0:
             keep_bytes = total - int(total * max_fraction)
             if free < keep_bytes:
-                out.append(Violation(name, "above_max_use",
-                                     f"{name} usage exceeds {max_fraction:.0%} "
-                                     f"(free {free} of {total})"))
+                out.append(
+                    Violation(
+                        name, "above_max_use", f"{name} usage exceeds {max_fraction:.0%} (free {free} of {total})"
+                    )
+                )
 
-    floor_and_fraction("vram", snap.vram_free, snap.vram_total,
-                       limits.min_free_vram, limits.max_vram_use_fraction,
-                       limits.require_vram)
-    floor_and_fraction("ram", snap.ram_available, snap.ram_total,
-                       limits.min_free_ram, limits.max_ram_use_fraction,
-                       limits.require_ram)
+    floor_and_fraction(
+        "vram", snap.vram_free, snap.vram_total, limits.min_free_vram, limits.max_vram_use_fraction, limits.require_vram
+    )
+    floor_and_fraction(
+        "ram", snap.ram_available, snap.ram_total, limits.min_free_ram, limits.max_ram_use_fraction, limits.require_ram
+    )
     # Disk has no usage-fraction budget; the free floor is the limit.
     if snap.disk_free is None or snap.disk_total is None:
         if limits.require_disk:
-            out.append(Violation("disk", "unmeasurable",
-                                 "disk could not be measured; fail-closed"))
+            out.append(Violation("disk", "unmeasurable", "disk could not be measured; fail-closed"))
     elif snap.disk_free < limits.min_free_disk:
-        out.append(Violation("disk", "below_min_free",
-                             f"disk free {snap.disk_free} < required "
-                             f"{limits.min_free_disk}"))
+        out.append(Violation("disk", "below_min_free", f"disk free {snap.disk_free} < required {limits.min_free_disk}"))
     return out
 
 
 def preflight(
     *,
-    limits: Optional[Thresholds] = None,
-    vram_probe: Optional[Callable[[], tuple[int, int]]] = None,
-    ram_probe: Optional[Callable[[], tuple[int, int]]] = None,
+    limits: Thresholds | None = None,
+    vram_probe: Callable[[], tuple[int, int]] | None = None,
+    ram_probe: Callable[[], tuple[int, int]] | None = None,
     disk_path: str = ".",
-    disk_probe: Optional[Callable[[], tuple[int, int]]] = None,
+    disk_probe: Callable[[], tuple[int, int]] | None = None,
 ) -> Verdict:
     """Fail-closed start gate for a workload.
 
@@ -211,8 +212,7 @@ def preflight(
     every required resource is measurable and within limits.
     """
     limits = limits or Thresholds()
-    snap = snapshot(vram_probe=vram_probe, ram_probe=ram_probe,
-                    disk_path=disk_path, disk_probe=disk_probe)
+    snap = snapshot(vram_probe=vram_probe, ram_probe=ram_probe, disk_path=disk_path, disk_probe=disk_probe)
     violations = check(snap, limits)
     return Verdict(ok=not violations, snapshot=snap, violations=tuple(violations))
 
@@ -232,14 +232,14 @@ class ResourceWatchdog:
     def __init__(
         self,
         *,
-        limits: Optional[Thresholds] = None,
+        limits: Thresholds | None = None,
         on_violation: Callable[[Violation], None],
         interval_s: float = 2.0,
-        soft_resources: Optional[frozenset] = None,
-        vram_probe: Optional[Callable[[], tuple[int, int]]] = None,
-        ram_probe: Optional[Callable[[], tuple[int, int]]] = None,
+        soft_resources: frozenset | None = None,
+        vram_probe: Callable[[], tuple[int, int]] | None = None,
+        ram_probe: Callable[[], tuple[int, int]] | None = None,
         disk_path: str = ".",
-        disk_probe: Optional[Callable[[], tuple[int, int]]] = None,
+        disk_probe: Callable[[], tuple[int, int]] | None = None,
     ) -> None:
         self._limits = limits or Thresholds()
         # Soft resources (e.g. VRAM mid-run) report through on_soft_violation
@@ -254,11 +254,11 @@ class ResourceWatchdog:
         self._disk_path = disk_path
         self._disk_probe = disk_probe
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._fired = False
         self._probe_misses = 0
 
-    def __enter__(self) -> "ResourceWatchdog":
+    def __enter__(self) -> ResourceWatchdog:
         self.start()
         return self
 
@@ -293,9 +293,7 @@ class ResourceWatchdog:
             # Transient probe failures must not kill a healthy run: only a
             # real breach, or a probe that stays unmeasurable for
             # `TOLERATED_MISSED_PROBES` consecutive polls, triggers the stop.
-            unmeasurable_only = violations and all(
-                v.reason == "unmeasurable" for v in violations
-            )
+            unmeasurable_only = violations and all(v.reason == "unmeasurable" for v in violations)
             if unmeasurable_only:
                 self._probe_misses += 1
                 if self._probe_misses < self.TOLERATED_MISSED_PROBES:
@@ -338,6 +336,7 @@ def estimate_training_vram(
 
 
 # --- default probes (documented sources; kept tiny and injectable) ---------
+
 
 def _default_vram_probe() -> tuple[int, int]:
     """GPU memory via PyTorch (official API). Output: (free, total) bytes.

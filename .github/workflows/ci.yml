@@ -8,7 +8,12 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: rust-ci-${{ github.ref }}
+  # Independent run identity per commit (S04/RR-06): a ref-scoped group lets a
+  # newer pending run replace an older pending run even with
+  # cancel-in-progress: false, so per-commit evidence (the comment below) would
+  # be lost on a push burst. Push/schedule/dispatch runs group by SHA; PR runs
+  # still group by ref so superseded PR head runs cancel each other.
+  group: rust-ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   # Main-only development uses each commit as an auditable evidence point.
   cancel-in-progress: false
 jobs:
@@ -131,3 +136,28 @@ jobs:
           name: rejection-rejector-${{ matrix.os }}
           path: artifacts/
           if-no-files-found: error
+
+  # Stable aggregate result (S04/D5): one check that always starts and only
+  # succeeds when every required job succeeded. `if: always()` keeps it running
+  # on failure/cancellation/skip of its dependencies, and it fails on each of
+  # those outcomes (anything other than an explicit success, including a
+  # missing result). The workflow itself has no path/branch filter that could
+  # skip it: push and pull_request on [main] plus workflow_dispatch all start
+  # this job.
+  verify:
+    name: All required checks
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every required job green
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          echo "test job result: ${TEST_RESULT:-missing}"
+          if [ "${TEST_RESULT:-missing}" != "success" ]; then
+            echo "required job did not succeed: ${TEST_RESULT:-missing}" >&2
+            exit 1
+          fi

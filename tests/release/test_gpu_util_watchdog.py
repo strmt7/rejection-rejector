@@ -51,7 +51,7 @@ class HandleSampleTests(unittest.TestCase):
 
     def _events(self):
         """Return the parsed JSONL evidence events written so far."""
-        return [json.loads(l) for l in self.log.read_text(encoding="utf-8").splitlines()]
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
 
     def test_compliant_sample_changes_nothing(self):
         """A sample within the ceiling leaves the duty target untouched."""

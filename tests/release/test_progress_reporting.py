@@ -38,7 +38,13 @@ class ProgressReportingTest(unittest.TestCase):
 
     def test_summary_computes_rate_percent_and_eta(self):
         """Percent, rate and ETA derive from the heartbeat fields."""
-        record = {"step": 50, "total_steps": 200, "elapsed_seconds": 100.0, "updated_at_unix": 1000.0, "status": "running"}
+        record = {
+            "step": 50,
+            "total_steps": 200,
+            "elapsed_seconds": 100.0,
+            "updated_at_unix": 1000.0,
+            "status": "running",
+        }
         summary = progress.summarize(record, now=1010.0)
         self.assertEqual(summary["percent"], 25.0)
         self.assertAlmostEqual(summary["rate_per_second"], 0.5)

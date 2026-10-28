@@ -326,14 +326,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="GPU utilization ceiling watchdog")
     parser.add_argument("--pid", type=int, default=0, help="Target process id (0 = none)")
     parser.add_argument(
-        "--match-name", default="",
+        "--match-name",
+        default="",
         help="Additional process-name substring to watch (e.g. 'vmmem' for "
-             "WSL GPU workloads, whose engine activity is attributed to the "
-             "VM host process)",
+        "WSL GPU workloads, whose engine activity is attributed to the "
+        "VM host process)",
     )
     parser.add_argument("--duty", type=Path, required=True, help="Trainer duty.json path")
     parser.add_argument(
-        "--ceiling", type=float, default=50.0,
+        "--ceiling",
+        type=float,
+        default=50.0,
         help="Max GPU utilization percent (hard operator ceiling)",
     )
     parser.add_argument("--log", type=Path, required=True, help="JSONL evidence path")

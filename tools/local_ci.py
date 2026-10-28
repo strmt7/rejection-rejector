@@ -14,6 +14,7 @@ combined verdict as text; exit code 0 only when EVERY gate is green.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -27,18 +28,31 @@ GATES = [
         "clippy (exact CI flags)",
         ["cargo", "clippy", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"],
     ),
-    # Advisory gate (RUSTSEC/OSV). The three ignores are the documented triage
-    # in osv-scanner.toml: Linux-only accessibility stack (accesskit_unix ->
-    # atspi -> zvariant 5 / zbus_names 4), unreachable in the shipped Windows
-    # binary, "unmaintained" notices with no in-range patched version. Any NEW
-    # advisory must block this gate until it is fixed or triaged with reasons.
+    # Advisory gate (RUSTSEC/OSV). The four ignores are the documented triage
+    # in SECURITY.md / deny.toml / osv-scanner.toml: three Linux-only
+    # accessibility-stack unmaintained notices (accesskit_unix -> atspi ->
+    # zvariant 5 / zbus_names 4; unreachable in the shipped Windows binary; no
+    # in-range patched version) plus the RUSTSEC-2023-0086 lexical-core/imap-2
+    # record (SECURITY.md; removal criterion already met 2026-10-28 - the
+    # imap-2 path left Cargo.lock - drop at the 2027-04-28 policy review).
+    # Owner: strmt7; a11y review/removal date 2027-04-01 (mirrors
+    # osv-scanner.toml). Any NEW advisory must block this gate until it is
+    # fixed or triaged with reasons.
     (
         "cargo audit (advisories)",
         [
-            "cargo", "audit", "--deny", "warnings",
-            "--ignore", "RUSTSEC-2026-0370",
-            "--ignore", "RUSTSEC-2026-0371",
-            "--ignore", "RUSTSEC-2026-0372", "--ignore", "RUSTSEC-2023-0086",
+            "cargo",
+            "audit",
+            "--deny",
+            "warnings",
+            "--ignore",
+            "RUSTSEC-2026-0370",
+            "--ignore",
+            "RUSTSEC-2026-0371",
+            "--ignore",
+            "RUSTSEC-2026-0372",
+            "--ignore",
+            "RUSTSEC-2023-0086",
         ],
     ),
 ]
@@ -46,10 +60,76 @@ GATES = [
 # Transient network fetches must not flip the gate: per-gate retry budget.
 GATE_ATTEMPTS = {"cargo audit (advisories)": 3}
 
+# Ruff lint lanes are xfail-style until the pending ruff format pass: the
+# Python tree predates the FlitzZip-mirrored .ruff.toml profile, so findings
+# are expected today. The lanes run and print counts but must NOT flip the
+# gate on red. TODO(pending format pass): after the one-time
+# `ruff check --fix` + `ruff format` pass over training/, tools/ and tests/,
+# flip RUFF_LANES_ENFORCING to True so red becomes red.
+RUFF_LANES_ENFORCING = False
 
-def run(
-    name: str, cmd: list[str], env: dict | None = None, attempts: int = 1
-) -> bool:
+
+def find_ruff() -> str | None:
+    """Resolve the pinned ruff executable.
+
+    Inputs: none — prefers the repo-local .venv-lint (the hash-pinned
+    install from .github/requirements/requirements-lint-windows.txt) and
+    falls back to PATH. Output: executable path, or None when ruff is not
+    installed.
+    """
+    for candidate in (
+        ROOT / ".venv-lint" / "Scripts" / "ruff.exe",
+        ROOT / ".venv-lint" / "bin" / "ruff",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("ruff")
+
+
+def python_scope_file() -> list[str]:
+    """List the Python lint scope.
+
+    Inputs: none. Output: sorted repo-relative paths covering training/*.py,
+    tools/*.py and tests/**/*.py (the scope owned by tools/lint.ps1).
+    """
+    files = list((ROOT / "training").glob("*.py"))
+    files += list((ROOT / "tools").glob("*.py"))
+    files += list((ROOT / "tests").rglob("*.py"))
+    return sorted(str(p.relative_to(ROOT)).replace("\\", "/") for p in files)
+
+
+def run_ruff_lane(name: str, args: list[str]) -> bool:
+    """Run one ruff lane over the Python scope.
+
+    Inputs: display name and ruff argv without the file list. Output: True
+    when green; while RUFF_LANES_ENFORCING is False a red lane prints its
+    finding count and still reports green (xfail-style, see the pending
+    format pass note above), so the gate never fails on the known
+    unformatted tree.
+    """
+    ruff = find_ruff()
+    if ruff is None:
+        print(
+            f"== {name}: WARNING - ruff not found; create .venv-lint "
+            "(hash-pinned install from .github/requirements/"
+            "requirements-lint-windows.txt)"
+        )
+        return not RUFF_LANES_ENFORCING
+    files = python_scope_file()
+    proc = subprocess.run([ruff, *args, *files], cwd=ROOT, capture_output=True, text=True, check=False)
+    output = proc.stdout + proc.stderr
+    if proc.returncode == 0:
+        print(f"== {name}: GREEN")
+        return True
+    count = sum(1 for line in output.splitlines() if re.search(r"^\S+:\d+:\d+: ", line))
+    if count == 0:
+        count = sum(1 for line in output.splitlines() if line.startswith("Would reformat: "))
+    verdict = "RED" if RUFF_LANES_ENFORCING else "ADVISORY RED (xfail until format pass)"
+    print(f"== {name}: {verdict} - {count} finding(s)")
+    return not RUFF_LANES_ENFORCING
+
+
+def run(name: str, cmd: list[str], env: dict | None = None, attempts: int = 1) -> bool:
     """Run one gate. Inputs: display name, argv, optional env, and retry
     attempts (for network-dependent steps whose transient fetch failures must
     not flip the gate). Output: True when green on any attempt.
@@ -106,9 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     check_credential_store()
-    results = [
-        run(name, cmd, attempts=GATE_ATTEMPTS.get(name, 1)) for name, cmd in GATES
-    ]
+    results = [run(name, cmd, attempts=GATE_ATTEMPTS.get(name, 1)) for name, cmd in GATES]
+    # Ruff lint lanes (see RUFF_LANES_ENFORCING): xfail-style GATES entries —
+    # counts print on red but the gate is not flipped until the pending ruff
+    # format pass lands and the constant is set to True.
+    results.append(run_ruff_lane("ruff check", ["check", "--output-format", "concise"]))
+    results.append(run_ruff_lane("ruff format --check", ["format", "--check", "--output-format", "concise"]))
     # Rustdoc gate: deny warnings so doc-link regressions (e.g. public docs
     # linking a private item) fail here, not only in the deep-verification
     # workflow. Matches the CI command (RUSTDOCFLAGS=-D warnings cargo doc).
@@ -126,8 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     results.append(
         run(
             "python release suites",
-            [sys.executable, "-m", "unittest", "discover",
-             "-s", "tests/release", "-p", "test_*.py"],
+            [sys.executable, "-m", "unittest", "discover", "-s", "tests/release", "-p", "test_*.py"],
         )
     )
     if all(results):

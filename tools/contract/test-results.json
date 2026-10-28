@@ -1,0 +1,21 @@
+{
+  "kind": "real execution of report-validator unit tests; not project/application qualification",
+  "command": "python3 -B record_checks.py",
+  "timestamp": "2026-10-27T21:47:14.916738Z",
+  "python": "3.12.14",
+  "collected": 48,
+  "executed": 48,
+  "passed": 48,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "exit_code": 0,
+  "files": {
+    "validate_contract.py": "c068a02dd5d3b012737767aa74a9bda1d4e6687bb708057b8cf1e77dd6043789",
+    "test_validate_contract.py": "cdea18baa86986f06c9c794b249e68ba79b921620df74495048f3574bf897840",
+    "engineering-policy.schema.json": "b4b541a4ae0f5e5cdcdfae82edddee06734dbc73408f653277cfb1f60f65cbab",
+    "execution-receipt.schema.json": "b901566391e31b5602a4b25c41fd435eeb98f70fac6881fe9d446872d353008b"
+  },
+  "output_sha256": "17a0a9bc1de6063306e83de9a2e1668a3170e7842f04d75fea3b220de71b09b6",
+  "limits": "All application/host records are synthetic fixtures; no repository command or remote operation ran."
+}

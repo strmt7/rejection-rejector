@@ -1,4 +1,5 @@
 """Synthetic ZIPs only: never invoke an executable or a signing/provider service."""
+
 import hashlib
 import importlib.util
 import json
@@ -39,39 +40,67 @@ def fixture_files(signing="unsigned"):
     """Build the complete synthetic release file set for one flavor."""
     files = {name: b"Synthetic non-executable fixture\n" for name in verifier.REQUIRED - {"SHA256SUMS.txt"}}
     files["COMMIT.txt"] = (COMMIT + "\r\n").encode()
-    files["Cargo.lock"] = b'version = 4\n'
+    files["Cargo.lock"] = b"version = 4\n"
     files["docs/openapi-v1.json"] = encoded({"openapi": "3.1.0"})
     files["docs/enterprise-policy.schema.json"] = encoded({"type": "object"})
-    build = dict(schema_version=1, application_version="0.2.0", source_commit=COMMIT,
-                 source_commit_verified=True, rustc_version="rustc 1.99.0 (synthetic)",
-                 target="x86_64-pc-windows-msvc", profile="release",
-                 cargo_lock_sha256=checksum(files["Cargo.lock"]))
+    build = dict(
+        schema_version=1,
+        application_version="0.2.0",
+        source_commit=COMMIT,
+        source_commit_verified=True,
+        rustc_version="rustc 1.99.0 (synthetic)",
+        target="x86_64-pc-windows-msvc",
+        profile="release",
+        cargo_lock_sha256=checksum(files["Cargo.lock"]),
+    )
     # Independently mirror Rust's explicitly ordered, length-prefixed identity.
-    fields = [build[k].encode() for k in ("application_version", "source_commit", "rustc_version",
-                                         "target", "profile", "cargo_lock_sha256")]
+    fields = [
+        build[k].encode()
+        for k in ("application_version", "source_commit", "rustc_version", "target", "profile", "cargo_lock_sha256")
+    ]
     identity = b"rejection-rejector-build-identity-v1\0" + b"".join(struct.pack("<Q", len(x)) + x for x in fields)
     build["identity_sha256"] = checksum(identity)
     files["build-info.json"] = encoded(build)
-    files["contract-info.json"] = encoded(dict(
-        schema_version=1, api_contract_sha256=checksum(files["docs/openapi-v1.json"]),
-        enterprise_policy_schema_sha256=checksum(files["docs/enterprise-policy.schema.json"]),
-        settings_format_version=2, database_schema_version=4, evaluation_suite_sha256="c" * 64))
-    evidence = [dict(workflow=name, run_id=number, run_attempt=1, commit=COMMIT,
-                     updated_at=STAMP, conclusion="success")
-                for number, name in enumerate({**verifier.EXACT, **verifier.DEEP}, 1)]
-    files["release-evidence.json"] = encoded(dict(
-        schema_version=1, repository="strmt7/rejection-rejector", source_commit=COMMIT,
-        checked_at=STAMP, automated_evidence=evidence))
+    files["contract-info.json"] = encoded(
+        dict(
+            schema_version=1,
+            api_contract_sha256=checksum(files["docs/openapi-v1.json"]),
+            enterprise_policy_schema_sha256=checksum(files["docs/enterprise-policy.schema.json"]),
+            settings_format_version=2,
+            database_schema_version=4,
+            evaluation_suite_sha256="c" * 64,
+        )
+    )
+    evidence = [
+        dict(workflow=name, run_id=number, run_attempt=1, commit=COMMIT, updated_at=STAMP, conclusion="success")
+        for number, name in enumerate({**verifier.EXACT, **verifier.DEEP}, 1)
+    ]
+    files["release-evidence.json"] = encoded(
+        dict(
+            schema_version=1,
+            repository="strmt7/rejection-rejector",
+            source_commit=COMMIT,
+            checked_at=STAMP,
+            automated_evidence=evidence,
+        )
+    )
     files["rejection-rejector.cdx.json"] = encoded({"bomFormat": "CycloneDX", "specVersion": "1.5"})
     signed = signing == "azure-artifact-signing"
-    records = [dict(file=name, sha256=checksum(files[name]), requested_mode=signing,
-                    status="Valid" if signed else "NotSigned",
-                    signer_subject="CN=Synthetic Publisher" if signed else None,
-                    signer_thumbprint="D" * 40 if signed else None,
-                    timestamper_subject="CN=Synthetic Timestamp" if signed else None)
-               for name in sorted(verifier.EXECUTABLES)]
-    files["signing.json"] = encoded(dict(schema_version=1, requested_mode=signing,
-                                         verified_signed=signed, files=records))
+    records = [
+        dict(
+            file=name,
+            sha256=checksum(files[name]),
+            requested_mode=signing,
+            status="Valid" if signed else "NotSigned",
+            signer_subject="CN=Synthetic Publisher" if signed else None,
+            signer_thumbprint="D" * 40 if signed else None,
+            timestamper_subject="CN=Synthetic Timestamp" if signed else None,
+        )
+        for name in sorted(verifier.EXECUTABLES)
+    ]
+    files["signing.json"] = encoded(
+        dict(schema_version=1, requested_mode=signing, verified_signed=signed, files=records)
+    )
     return files
 
 
@@ -139,8 +168,13 @@ class PackageVerificationTests(unittest.TestCase):
     def test_archive_and_member_count_limits(self):
         """Every archive/member size and count limit is enforced."""
         self.write()
-        for attribute, limit in (("MAX_ARCHIVE", 8), ("MAX_ENTRIES", 1),
-                                 ("MAX_MEMBER", 8), ("MAX_TOTAL", 8), ("MAX_DIRECTORY", 8)):
+        for attribute, limit in (
+            ("MAX_ARCHIVE", 8),
+            ("MAX_ENTRIES", 1),
+            ("MAX_MEMBER", 8),
+            ("MAX_TOTAL", 8),
+            ("MAX_DIRECTORY", 8),
+        ):
             with (
                 self.subTest(attribute=attribute),
                 patch.object(verifier, attribute, limit),
@@ -156,10 +190,22 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_traversal_absolute_ads_device_and_backslash_paths_are_rejected(self):
         """Traversal, absolute, ADS, device and backslash paths fail."""
-        for name in ("../escape.txt", "/absolute.txt", "C:/drive.txt", "docs/a:stream.md",
-                     "docs/CON.md", "docs/CON .md", "docs/LPT¹.md", "docs/CONOUT$.md",
-                     "docs/evil. /x.md", "docs\\x.md", "docs//x.md", "docs/./x.md",
-                     "docs/tab\tx.md", "docs/file.md "):
+        for name in (
+            "../escape.txt",
+            "/absolute.txt",
+            "C:/drive.txt",
+            "docs/a:stream.md",
+            "docs/CON.md",
+            "docs/CON .md",
+            "docs/LPT¹.md",
+            "docs/CONOUT$.md",
+            "docs/evil. /x.md",
+            "docs\\x.md",
+            "docs//x.md",
+            "docs/./x.md",
+            "docs/tab\tx.md",
+            "docs/file.md ",
+        ):
             with self.subTest(name=name):
                 self.write(extra=((name, b"untrusted"),))
                 with self.assertRaises(verifier.PackageError):
@@ -220,10 +266,12 @@ class PackageVerificationTests(unittest.TestCase):
     def test_manifest_requires_exact_file_set(self):
         """The manifest must cover exactly the archive file set."""
         base = "".join(f"{checksum(data)}  {name}\n" for name, data in sorted(self.files.items()))
-        for manifest in (base + f"{'0' * 64}  missing.md\n",
-                         "\n".join(base.splitlines()[1:]) + "\n",
-                         base + f"{'0' * 64}  SHA256SUMS.txt\n",
-                         base + base.splitlines()[0] + "\n"):
+        for manifest in (
+            base + f"{'0' * 64}  missing.md\n",
+            "\n".join(base.splitlines()[1:]) + "\n",
+            base + f"{'0' * 64}  SHA256SUMS.txt\n",
+            base + base.splitlines()[0] + "\n",
+        ):
             self.write(manifest=manifest.encode())
             with self.assertRaises(verifier.PackageError):
                 self.verify()
@@ -259,8 +307,12 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_wrong_commit_or_build_target_fails(self):
         """Wrong commit, verification flag, profile or target fails."""
-        for key, value in (("source_commit", OTHER), ("source_commit_verified", 1),
-                           ("profile", "debug"), ("target", "x86_64-unknown-linux-gnu")):
+        for key, value in (
+            ("source_commit", OTHER),
+            ("source_commit_verified", 1),
+            ("profile", "debug"),
+            ("target", "x86_64-unknown-linux-gnu"),
+        ):
             self.files = fixture_files()
             self.change("build-info.json", lambda x, key=key, value=value: x.update({key: value}))
             self.write()
@@ -278,8 +330,16 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_unsigned_only_accepts_notsigned(self):
         """Unsigned flavor accepts only the NotSigned status."""
-        for status in ("Valid", "HashMismatch", "NotTrusted", "UnknownError",
-                       "NotSupportedFileFormat", "Incompatible", "", None):
+        for status in (
+            "Valid",
+            "HashMismatch",
+            "NotTrusted",
+            "UnknownError",
+            "NotSupportedFileFormat",
+            "Incompatible",
+            "",
+            None,
+        ):
             self.files = fixture_files()
             self.change("signing.json", lambda x, status=status: x["files"][0].update(status=status))
             self.write()
@@ -319,12 +379,14 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_workflow_failure_missing_and_duplicate_evidence_fails(self):
         """Missing, failed, duplicated or foreign evidence fails."""
-        for edit in (lambda x: x["automated_evidence"].pop(),
-                     lambda x: x["automated_evidence"][0].update(conclusion="cancelled"),
-                     lambda x: x["automated_evidence"].__setitem__(1, x["automated_evidence"][0]),
-                     lambda x: x["automated_evidence"][0].update(commit=OTHER),
-                     lambda x: x["automated_evidence"][0].update(run_id=True),
-                     lambda x: x.update(repository="attacker/fork")):
+        for edit in (
+            lambda x: x["automated_evidence"].pop(),
+            lambda x: x["automated_evidence"][0].update(conclusion="cancelled"),
+            lambda x: x["automated_evidence"].__setitem__(1, x["automated_evidence"][0]),
+            lambda x: x["automated_evidence"][0].update(commit=OTHER),
+            lambda x: x["automated_evidence"][0].update(run_id=True),
+            lambda x: x.update(repository="attacker/fork"),
+        ):
             self.files = fixture_files()
             self.change("release-evidence.json", edit)
             self.write()
@@ -347,8 +409,13 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_duplicate_keys_nonfinite_json_and_boolean_schema_fail(self):
         """Duplicate keys, non-finite numbers and boolean schemas fail."""
-        for content in (b'{"schema_version":1,"schema_version":1}', b'{"x":NaN}',
-                        b'{"schema_version":true}', b'[]', b'\xff'):
+        for content in (
+            b'{"schema_version":1,"schema_version":1}',
+            b'{"x":NaN}',
+            b'{"schema_version":true}',
+            b"[]",
+            b"\xff",
+        ):
             self.files["contract-info.json"] = content
             self.write()
             with self.assertRaises(verifier.PackageError):
@@ -395,9 +462,7 @@ class PackageVerificationTests(unittest.TestCase):
         struct.pack_into("<HH", raw, index + 8, 65535, 65535)
         self.path.write_bytes(raw)
         with (
-            patch.object(
-                verifier.zipfile, "ZipFile", side_effect=AssertionError("must not parse")
-            ),
+            patch.object(verifier.zipfile, "ZipFile", side_effect=AssertionError("must not parse")),
             self.assertRaises(verifier.PackageError),
         ):
             self.verify()
@@ -432,9 +497,21 @@ class PackageVerificationTests(unittest.TestCase):
         """CLI rejection leaks neither private content nor tracebacks."""
         self.files["build-info.json"] = b'{"PRIVATE_CANARY": '
         self.write()
-        result = subprocess.run([sys.executable, str(SCRIPTS / "verify_package.py"), str(self.path),
-                                 "--expected-commit", COMMIT, "--signing-mode", "unsigned"],
-                                capture_output=True, text=True, timeout=10, check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "verify_package.py"),
+                str(self.path),
+                "--expected-commit",
+                COMMIT,
+                "--signing-mode",
+                "unsigned",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("PRIVATE_CANARY", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
@@ -443,10 +520,22 @@ class PackageVerificationTests(unittest.TestCase):
         """The report path can never overwrite the package."""
         self.write()
         before = self.path.read_bytes()
-        result = subprocess.run([sys.executable, str(SCRIPTS / "verify_package.py"), str(self.path),
-                                 "--expected-commit", COMMIT, "--signing-mode", "unsigned",
-                                 "--report", str(self.path)],
-                                capture_output=True, timeout=10, check=False)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "verify_package.py"),
+                str(self.path),
+                "--expected-commit",
+                COMMIT,
+                "--signing-mode",
+                "unsigned",
+                "--report",
+                str(self.path),
+            ],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.path.read_bytes(), before)
 
@@ -475,7 +564,9 @@ class WorkflowIntegrationTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertEqual(workflow.count("python scripts/verify_package.py"), 2)
         self.assertLess(workflow.index("Verify final package contents"), workflow.index("Attest build provenance"))
-        self.assertLess(workflow.index("Verify package bytes are unchanged"), workflow.index("Upload package and evidence"))
+        self.assertLess(
+            workflow.index("Verify package bytes are unchanged"), workflow.index("Upload package and evidence")
+        )
         self.assertIn("--expected-sha256 $report.archive_sha256", workflow)
 
     def test_operator_regressions_run_on_both_supported_ci_platforms(self):

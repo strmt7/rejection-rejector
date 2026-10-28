@@ -18,14 +18,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 import resource_guard as rg  # noqa: E402
 
 
-def snap_of(vram=(8 * rg.GIB, 16 * rg.GIB),
-            ram=(32 * rg.GIB, 64 * rg.GIB),
-            disk=(100 * rg.GIB, 500 * rg.GIB)):
+def snap_of(vram=(8 * rg.GIB, 16 * rg.GIB), ram=(32 * rg.GIB, 64 * rg.GIB), disk=(100 * rg.GIB, 500 * rg.GIB)):
     """Build a snapshot from (free, total) pairs; None marks unmeasurable."""
     return rg.ResourceSnapshot(
-        vram_free=vram[0], vram_total=vram[1],
-        ram_available=ram[0], ram_total=ram[1],
-        disk_free=disk[0], disk_total=disk[1],
+        vram_free=vram[0],
+        vram_total=vram[1],
+        ram_available=ram[0],
+        ram_total=ram[1],
+        disk_free=disk[0],
+        disk_total=disk[1],
         measured_at=0.0,
     )
 
@@ -48,6 +49,7 @@ class SnapshotTests(unittest.TestCase):
         """Why: a failing probe must degrade to unmeasurable (fail-closed at
         the decision layer), never raise through a running workload.
         """
+
         def boom():
             """Model a probe that fails at call time."""
             raise OSError("probe broken")
@@ -62,8 +64,8 @@ class SnapshotTests(unittest.TestCase):
         trusted; they are as good as unmeasurable.
         """
         snap = rg.snapshot(
-            vram_probe=lambda: (10, 5),   # free > total
-            ram_probe=lambda: (-1, 4),    # negative
+            vram_probe=lambda: (10, 5),  # free > total
+            ram_probe=lambda: (-1, 4),  # negative
             disk_probe=lambda: (-5, -1),  # both negative
         )
         self.assertIsNone(snap.vram_free)
@@ -83,7 +85,7 @@ class SnapshotTests(unittest.TestCase):
         """Why: when no GPU stack exists the probe raises and the decision
         layer must then fail closed if VRAM is required.
         """
-        with self.assertRaises(Exception):
+        with self.assertRaises((ImportError, RuntimeError)):
             rg._default_vram_probe()
 
 
@@ -103,8 +105,7 @@ class CheckTests(unittest.TestCase):
         at_floor = snap_of(vram=(limits.min_free_vram, total))
         self.assertEqual(rg.check(at_floor, limits), [])
         below = snap_of(vram=(limits.min_free_vram - 1, total))
-        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "vram"
-                            for v in rg.check(below, limits)))
+        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "vram" for v in rg.check(below, limits)))
 
     def test_ram_floor_boundary_is_strict(self):
         """Why: same contract as VRAM — precise to one byte."""
@@ -113,8 +114,7 @@ class CheckTests(unittest.TestCase):
         at_floor = snap_of(ram=(limits.min_free_ram, total))
         self.assertEqual(rg.check(at_floor, limits), [])
         below = snap_of(ram=(limits.min_free_ram - 1, total))
-        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "ram"
-                            for v in rg.check(below, limits)))
+        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "ram" for v in rg.check(below, limits)))
 
     def test_disk_floor_boundary_is_strict(self):
         """Why: storage exhaustion means data loss; the floor is exact."""
@@ -122,8 +122,7 @@ class CheckTests(unittest.TestCase):
         at_floor = snap_of(disk=(limits.min_free_disk, 500 * rg.GIB))
         self.assertEqual(rg.check(at_floor, limits), [])
         below = snap_of(disk=(limits.min_free_disk - 1, 500 * rg.GIB))
-        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "disk"
-                            for v in rg.check(below, limits)))
+        self.assertTrue(any(v.reason == "below_min_free" and v.resource == "disk" for v in rg.check(below, limits)))
 
     def test_vram_usage_fraction_boundary_is_strict(self):
         """Why: exactly at the keep-bytes boundary is allowed; one byte
@@ -135,8 +134,7 @@ class CheckTests(unittest.TestCase):
         exactly = snap_of(vram=(keep, total))
         self.assertEqual(rg.check(exactly, limits), [])
         over = snap_of(vram=(keep - 1, total))
-        self.assertTrue(any(v.reason == "above_max_use"
-                            for v in rg.check(over, limits)))
+        self.assertTrue(any(v.reason == "above_max_use" for v in rg.check(over, limits)))
 
     def test_ram_usage_fraction_boundary_is_strict(self):
         """Why: same contract as VRAM for the 85% budget, integer-exact."""
@@ -146,8 +144,7 @@ class CheckTests(unittest.TestCase):
         exactly = snap_of(ram=(keep, total))
         self.assertEqual(rg.check(exactly, limits), [])
         over = snap_of(ram=(keep - 1, total))
-        self.assertTrue(any(v.reason == "above_max_use"
-                            for v in rg.check(over, limits)))
+        self.assertTrue(any(v.reason == "above_max_use" for v in rg.check(over, limits)))
 
     def test_unmeasurable_required_resource_fails_closed(self):
         """Why: if RAM/disk cannot be measured the workload must not run."""
@@ -214,12 +211,12 @@ class PreflightTests(unittest.TestCase):
 
     def test_preflight_refuses_when_required_probe_fails(self):
         """Why: fail-closed means 'unknown required state' == 'do not run'."""
+
         def boom():
             """Model a probe that raises before measuring."""
             raise RuntimeError("no probe")
 
-        v = rg.preflight(ram_probe=boom, disk_probe=boom,
-                         vram_probe=lambda: (8 * rg.GIB, 16 * rg.GIB))
+        v = rg.preflight(ram_probe=boom, disk_probe=boom, vram_probe=lambda: (8 * rg.GIB, 16 * rg.GIB))
         self.assertFalse(v.ok)
         self.assertEqual({x.reason for x in v.violations}, {"unmeasurable"})
 
@@ -251,15 +248,15 @@ class WatchdogTests(unittest.TestCase):
             vram_probe=lambda: (8 * rg.GIB, 16 * rg.GIB),
         )
         wd.start()
-        time.sleep(0.1)      # healthy polls must not fire
+        time.sleep(0.1)  # healthy polls must not fire
         self.assertEqual(fired, [])
         with lock:
             flip["violated"] = True
-        time.sleep(0.2)      # one violation window
+        time.sleep(0.2)  # one violation window
         wd.stop()
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0].resource, "ram")
-        time.sleep(0.1)      # no late duplicate fire
+        time.sleep(0.1)  # no late duplicate fire
         self.assertEqual(len(fired), 1)
 
     def test_watchdog_context_manager_starts_and_stops(self):
@@ -426,8 +423,7 @@ class EstimatorTests(unittest.TestCase):
         workspace is the observed OOM peak; both must be included.
         """
         margin = 2 * rg.GIB
-        est = rg.estimate_training_vram(param_billions=9.0, seq_len=1024,
-                                        vocab_size=150_000, margin=margin)
+        est = rg.estimate_training_vram(param_billions=9.0, seq_len=1024, vocab_size=150_000, margin=margin)
         logits = 1024 * 150_000 * 4
         self.assertGreaterEqual(est, margin + logits)
 

@@ -9,7 +9,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-semver-${{ github.ref }}
+  # Independent run identity per commit (S04/RR-06): a ref-scoped group would
+  # let a newer pending run replace an older pending run even with
+  # cancel-in-progress: false, breaking the exact-commit SemVer evidence below.
+  group: rust-semver-${{ github.sha }}
   # Release packaging requires exact-commit SemVer evidence.
   cancel-in-progress: false
 

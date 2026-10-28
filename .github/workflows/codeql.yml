@@ -13,7 +13,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: codeql-rust-${{ github.ref }}
+  # Independent run identity per commit (S04/RR-06): CodeQL is exact-commit
+  # release evidence, so push/schedule/dispatch runs group by SHA and can never
+  # cancel each other; only superseded PR head runs share a group and cancel.
+  group: codeql-rust-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:

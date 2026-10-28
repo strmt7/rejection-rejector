@@ -1,0 +1,303 @@
+{
+  "schema_version": "1.0",
+  "repo": "strmt7/qfales_fc_website",
+  "mode": "synthetic_example",
+  "source_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+  "audit_baseline_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+  "profile_sha": "1111111111111111111111111111111111111111",
+  "policy_sha256": "94c7196f36d72789d9234746ae0b6c71996300544e5a74a830372a541091eb14",
+  "created_at": "2026-10-27T21:46:28Z",
+  "overall_status": "PASS",
+  "input_files": [
+    {
+      "id": "example-lock",
+      "kind": "lock",
+      "path": "inputs/example.lock",
+      "sha256": "3e8011ce577caa7d30eb6380e57f2b4a1834a4826f5e0552bed2389c0877f4d1"
+    }
+  ],
+  "environments": [
+    {
+      "id": "example-host",
+      "status": "available",
+      "reason": "Synthetic metadata only",
+      "tools": {
+        "node": "synthetic-version"
+      }
+    }
+  ],
+  "commands": [
+    {
+      "id": "example-check",
+      "command": "npm test",
+      "status": "passed",
+      "exit_code": 7,
+      "started_at": "2026-10-27T21:46:13Z",
+      "finished_at": "2026-10-27T21:46:18Z",
+      "reason": "Synthetic record, not execution",
+      "evidence_ids": [
+        "example-log"
+      ]
+    }
+  ],
+  "test_families": [
+    {
+      "id": "example-unit",
+      "status": "passed",
+      "reason": "Synthetic inventory only",
+      "evidence_ids": [
+        "example-log"
+      ],
+      "tests": [
+        {
+          "id": "example-case",
+          "status": "passed",
+          "reason": "Synthetic case"
+        }
+      ],
+      "counts": {
+        "collected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "blocked": 0
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "example-artifact",
+      "kind": "example-report",
+      "environment": "example-host",
+      "path": "artifacts/example-report.json",
+      "sha256": "adae0a9287e693c91ada59ca6dab50be1a2e99fd68be6928600964f376fc2893",
+      "created_at": "2026-10-27T21:46:15Z",
+      "source_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+      "profile_sha": "1111111111111111111111111111111111111111",
+      "evidence_kind": "synthetic",
+      "qualification": {
+        "status": "passed",
+        "reason": "Synthetic qualification, no artifact was installed or exercised",
+        "command_ids": [
+          "example-check"
+        ],
+        "test_family_ids": [
+          "example-unit"
+        ],
+        "evidence_ids": [
+          "example-log"
+        ]
+      }
+    }
+  ],
+  "coverage_scopes": [
+    {
+      "id": "example-coverage",
+      "status": "passed",
+      "reason": "Synthetic scope metadata only; no coverage measured",
+      "environment": "example-host",
+      "command_id": "example-check",
+      "measurement": "line",
+      "included_roots": [
+        "src"
+      ],
+      "excluded_roots": [
+        "generated",
+        "vendor",
+        "tests/fixtures"
+      ],
+      "artifact_ids": [
+        "example-artifact"
+      ],
+      "evidence_ids": [
+        "example-log"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "example-log",
+      "path": "logs/example.log",
+      "sha256": "0d8384223f8e9df88f866a5ea688dd8850330979519d401074e99b212f83d380",
+      "captured_at": "2026-10-27T21:46:23Z",
+      "source_sha": "f455a4e36c0b9541edb6f0207b2870b0369b5f3a",
+      "profile_sha": "1111111111111111111111111111111111111111",
+      "kind": "synthetic",
+      "description": "Synthetic fixture; no real command log"
+    }
+  ],
+  "standards": [
+    {
+      "id": "S01",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S02",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S03",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S04",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S05",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S06",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S07",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S08",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S09",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S10",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S11",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S12",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S13",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S14",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "S15",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "QFALES-01",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "QFALES-02",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "QFALES-03",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "QFALES-04",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "QFALES-05",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    },
+    {
+      "id": "QFALES-06",
+      "status": "passed",
+      "reason": "Synthetic example only",
+      "evidence_ids": [
+        "example-log"
+      ]
+    }
+  ],
+  "exceptions": []
+}

@@ -11,24 +11,42 @@ permissions:
   contents: read
 
 concurrency:
-  group: supply-chain-${{ github.ref }}
-  # Preserve dependency/SBOM evidence for every main commit.
+  # Independent run identity per commit (S04): a ref-scoped group would let a
+  # newer pending run replace an older pending run even with
+  # cancel-in-progress: false, so dependency/SBOM evidence for earlier main
+  # commits would be lost on a burst. Per-SHA groups give every pushed commit
+  # its own run slot. Scheduled/dispatch runs group by their resolved SHA.
+  group: supply-chain-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   advisories:
     name: Advisories (RUSTSEC/OSV)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-      # Same documented triage as tools/local_ci.py and osv-scanner.toml:
-      # Linux-only a11y stack (accesskit_unix -> atspi -> zvariant 5), not
-      # reachable in the shipped Windows binary, unmaintained notices with no
-      # in-range patched version. Any new advisory must fail this job.
-      - run: cargo install cargo-audit --locked
+        with:
+          toolchain: 1.99.1
+      # Authoritative pinned RustSec audit (RR-04/D3c): this is the ONE
+      # cargo-audit execution per tool/database; rust-policy keeps cargo-deny as
+      # the second tool's policy check. Suppression record (S07): the four
+      # ignores below mirror deny.toml and SECURITY.md (three Linux-only a11y
+      # unmaintained notices + the documented lexical-core/imap-2 record).
+      # Owner: strmt7. Review dates: 2027-04-01 (a11y, mirrors osv-scanner.toml
+      # ignoreUntil), 2027-04-28 policy review (RUSTSEC-2023-0086; its removal
+      # criterion is already met - the imap-2 path left Cargo.lock, verified
+      # 2026-10-28). Any NEW unsuppressed advisory must fail this job
+      # (--deny warnings).
+      - name: Install pinned cargo-audit from verified releases
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-audit@0.22.2
+          checksum: true
+          fallback: none
       - run: >-
           cargo audit --deny warnings
           --ignore RUSTSEC-2026-0370
@@ -55,20 +73,14 @@ jobs:
       - name: Install pinned security tooling from verified releases
         uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
-          tool: cargo-audit@0.22.2,cargo-deny@0.20.2,cargo-cyclonedx@0.5.9,cargo-machete@0.9.2
+          tool: cargo-deny@0.20.2,cargo-cyclonedx@0.5.9,cargo-machete@0.9.2
           checksum: true
           fallback: none
-      - name: RustSec audit
-        # Same documented triage as tools/local_ci.py and osv-scanner.toml:
-        # Linux-only a11y stack (accesskit_unix -> atspi -> zvariant 5), not
-        # reachable in the shipped Windows binary, unmaintained notices with
-        # no in-range patched version (verified against crates.io 2026-10-19).
-        run: >-
-          cargo audit --deny warnings
-          --ignore RUSTSEC-2026-0370
-          --ignore RUSTSEC-2026-0371
-          --ignore RUSTSEC-2026-0372
-          --ignore RUSTSEC-2023-0086
+      # RR-04 consolidation: the authoritative pinned cargo-audit run lives in
+      # the `advisories` job above (one audit per tool/database). This job is
+      # the second tool's policy check: cargo-deny enforces the structured
+      # deny.toml advisory/licence/ban/source records (owner + review date per
+      # S07) and fails on any new unsuppressed advisory, yanked or banned crate.
       - name: License, source and dependency policy
         run: cargo deny check advisories licenses bans sources
       - name: Unused direct dependency check

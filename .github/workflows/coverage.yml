@@ -53,7 +53,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust 1.99.0 with llvm-tools
+      - name: Rust 1.99.1 with llvm-tools
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.99.1
@@ -72,11 +72,13 @@ jobs:
           mkdir -p artifacts
           cargo llvm-cov --locked --all-features --lcov --output-path artifacts/lcov.info
           cargo llvm-cov report --summary-only --fail-under-lines 95 --fail-under-functions 90 | tee artifacts/coverage-summary.txt
-          # Python operator tooling (scripts/) is release-chain code and is
-          # covered by the operator regression tests; test code itself is
-          # deliberately excluded from measurement.
+          # Release-chain Python (scripts/, tools/, training/) is measured in
+          # full scope; test code itself is deliberately excluded (D4). The
+          # report below is the declared Python coverage artifact for the
+          # receipt - it measures the whole operator surface, not only
+          # scripts/.
           python3 -m pip install -q --require-hashes -r scripts/ci/requirements-coverage.txt
-          python3 -m coverage run --source=scripts -m unittest discover -s tests/release
+          python3 -m coverage run --source=scripts,tools,training --omit='*/tests/*' -m unittest discover -s tests/release
           python3 -m coverage xml -o artifacts/coverage.xml
           python3 -m coverage report | tee artifacts/coverage-python.txt
           test -s artifacts/lcov.info

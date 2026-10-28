@@ -11,7 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: repository-integrity-${{ github.ref }}
+  # Independent run identity per commit (S04/RR-06): repository-integrity is
+  # exact-commit release evidence; push runs group by SHA so a newer commit can
+  # never cancel an older commit's run. Superseded PR head runs share a ref
+  # group and may cancel each other.
+  group: repository-integrity-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:

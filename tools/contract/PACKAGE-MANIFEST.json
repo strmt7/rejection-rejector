@@ -1,0 +1,23 @@
+{
+ "purpose": "Proposed read-only report contract; no repository adoption claimed",
+ "files": {
+  "README.md": "b2c9c833e8af48ecd31f766b71edbdb88084466a5635ca2ac692576061a5e3ce",
+  "build_examples.py": "9ff9a0dc7b9b6e0b4c3c3cb15bd48071ebc23523a26c2ab945068af1bcc15b89",
+  "build_schemas.py": "a62cdeb7e98c277cc1386f47cb41b08790d4e4f147495a99275a66246277d75d",
+  "engineering-policy.schema.json": "b4b541a4ae0f5e5cdcdfae82edddee06734dbc73408f653277cfb1f60f65cbab",
+  "example_validation_results.json": "dd9a5c7ddd76b8c91af8fe1be329c5dc497ed90fda5c05f881b74eb813240317",
+  "examples/artifacts/example-report.json": "adae0a9287e693c91ada59ca6dab50be1a2e99fd68be6928600964f376fc2893",
+  "examples/engineering.toml": "94c7196f36d72789d9234746ae0b6c71996300544e5a74a830372a541091eb14",
+  "examples/inputs/example.lock": "3e8011ce577caa7d30eb6380e57f2b4a1834a4826f5e0552bed2389c0877f4d1",
+  "examples/logs/example.log": "0d8384223f8e9df88f866a5ea688dd8850330979519d401074e99b212f83d380",
+  "examples/receipt-blocked-synthetic.json": "54457fd456eebca55fad17f1b41592912b8cf11cc3635834dfaf10a6aed79c23",
+  "examples/receipt-consistent-synthetic.json": "db5589f17be3bc725fe671644d1389606a7433c0de6d766b7b8cc2747c3ec7c1",
+  "examples/receipt-false-pass-synthetic.json": "51fa1c704491a685ed328545fd913fabb4b8b08f894491301700c47248ef5f47",
+  "execution-receipt.schema.json": "b901566391e31b5602a4b25c41fd435eeb98f70fac6881fe9d446872d353008b",
+  "record_checks.py": "36bebe75d00d05b11b71e8927c8af82f01b1f7ccf20a4f080f87d7cadbd13e15",
+  "test-output.txt": "17a0a9bc1de6063306e83de9a2e1668a3170e7842f04d75fea3b220de71b09b6",
+  "test-results.json": "074d9ffb0c05d3ffce6e66bf51d99d29ad2946b5a801920b8125a0974d6f60a7",
+  "test_validate_contract.py": "88b9fb64813b5dba45b0237c2b8ba2f8b4f0d741d9f0e63f5841203fb8cf759b",
+  "validate_contract.py": "0c7d3decc60f0ddb687b4ff47b18dc3ca13b8739de3016391f1c010517d8196b"
+ }
+}

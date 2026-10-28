@@ -140,9 +140,7 @@ class PersistedConfigPathIsolationTests(unittest.TestCase):
             "HOME",
             "APPDATA",
         ):
-            self.assertNotIn(
-                forbidden, MONITOR_RUNTIME, f"monitor persists via {forbidden}"
-            )
+            self.assertNotIn(forbidden, MONITOR_RUNTIME, f"monitor persists via {forbidden}")
         self.assertEqual(dc.CONTROL_FILENAME, "duty.json")
         self.assertIn('CONTROL_FILENAME: &str = "duty.json"', rust_runtime_source())
 
@@ -207,9 +205,7 @@ class HeartbeatSchemaTests(unittest.TestCase):
         # the operator placeholders ("—") or "waiting for trainer
         # heartbeat…" while the run is live.
         """ProgressSnapshot fields match the trainer heartbeat keys exactly."""
-        struct = re.search(
-            r"pub struct ProgressSnapshot \{(.*?)\n\}", TRAIN_MONITOR_SRC, re.S
-        )
+        struct = re.search(r"pub struct ProgressSnapshot \{(.*?)\n\}", TRAIN_MONITOR_SRC, re.S)
         self.assertIsNotNone(struct, "ProgressSnapshot not found")
         fields = set(re.findall(r"pub (\w+):", struct.group(1)))
         self.assertEqual(

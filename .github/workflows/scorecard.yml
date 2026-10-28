@@ -12,7 +12,10 @@ permissions:
   actions: read
 
 concurrency:
-  group: scorecard-${{ github.ref }}
+  # Independent run identity per commit (S04/RR-06): scorecard runs are
+  # exact-commit release evidence; per-SHA groups keep every commit's run
+  # instead of letting a newer push cancel or replace an older one.
+  group: scorecard-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
