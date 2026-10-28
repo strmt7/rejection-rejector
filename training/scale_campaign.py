@@ -709,6 +709,11 @@ class SafeSlots(dict):
     """format_map target that leaves unknown placeholders untouched."""
 
     def __missing__(self, key: str) -> str:
+        """Leave unknown format placeholders untouched.
+
+        Inputs: `key` -- the missing mapping key. Output: `str` -- the
+        brace-quoted placeholder.
+        """
         return "{" + key + "}"
 
 

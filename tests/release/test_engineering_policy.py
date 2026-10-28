@@ -44,7 +44,8 @@ def _load_tool():
 
 def _real_policy() -> dict:
     """Parse the repository's real engineering.toml. Inputs: none. Output: the
-    parsed policy mapping used as the baseline fixture."""
+    parsed policy mapping used as the baseline fixture.
+    """
     tool = _load_tool()
     return tool.load_policy(POLICY)
 
@@ -60,7 +61,8 @@ class PolicyValidatorTests(unittest.TestCase):
         """Validate one policy copy against the repository root.
 
         Inputs: `policy` -- candidate policy mapping. Output: the validator
-        verdict dict."""
+        verdict dict.
+        """
         tool = _load_tool()
         return tool.validate_policy(policy, REPO, date.today())
 
@@ -106,7 +108,8 @@ class PolicyValidatorTests(unittest.TestCase):
 
     def test_required_family_without_execution_path_is_detected(self):
         """An applicable family whose command is disabled has no execution
-        path and must be reported."""
+        path and must be reported.
+        """
         policy = _real_policy()
         for cmd in policy["commands"]:
             if cmd["id"] == "test-fast":
@@ -134,7 +137,8 @@ class PolicyValidatorTests(unittest.TestCase):
 
 class ReferenceContractTests(unittest.TestCase):
     """The vendored tools/contract/ reference package must stay byte-exact and
-    keep its documented example outcomes."""
+    keep its documented example outcomes.
+    """
 
     def test_reference_package_matches_manifest(self):
         """Every packaged file still matches PACKAGE-MANIFEST.json hashes."""
@@ -149,7 +153,8 @@ class ReferenceContractTests(unittest.TestCase):
     def test_documented_example_outcomes(self):
         """The three synthetic examples reproduce the documented decisions:
         consistent-synthetic is BLOCKED/synthetic (exit 2), false-pass is FAIL
-        (exit 1), blocked-synthetic is BLOCKED (exit 2)."""
+        (exit 1), blocked-synthetic is BLOCKED (exit 2).
+        """
         common = [
             "--policy",
             "examples/engineering.toml",

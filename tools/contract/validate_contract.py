@@ -50,10 +50,17 @@ LIMITATIONS = [
 
 
 class ContractError(ValueError):
+    """Contract validation failure: malformed, unsafe or contradictory input."""
+
     pass
 
 
 def duplicate_free(pairs):
+    """Build a dict that rejects duplicate JSON keys.
+
+    Inputs: `pairs` -- (key, value) pairs in document order. Output: `dict` --
+    the mapping; raises [`ContractError`] on any duplicate key.
+    """
     result = {}
     for key, value in pairs:
         if key in result:
@@ -63,6 +70,11 @@ def duplicate_free(pairs):
 
 
 def load_json(path):
+    """Load one bounded contract JSON document with duplicate-key rejection.
+
+    Inputs: `path` -- the file to read. Output: the parsed JSON document;
+    raises [`ContractError`] over 2 MiB or on malformed text.
+    """
     raw = Path(path).read_bytes()
     if len(raw) > 2 * 1024 * 1024:
         raise ContractError("contract JSON exceeds 2 MiB")
@@ -142,6 +154,10 @@ def check_shape(value, schema, where="$", depth=0):
 
 
 def digest_file(path):
+    """Hash one file's bytes in streaming fashion.
+
+    Inputs: `path` -- the file to read. Output: `str` -- lowercase hex SHA-256.
+    """
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
@@ -150,6 +166,12 @@ def digest_file(path):
 
 
 def relative_path(value):
+    """Parse one portable, containment-safe relative path.
+
+    Inputs: `value` -- forward-slash relative path text. Output:
+    `PurePosixPath` -- the validated path; raises [`ContractError`] for
+    absolute, parent, dot or drive-qualified paths.
+    """
     if "\\" in value:
         raise ContractError("use portable forward-slash relative paths")
     path = PurePosixPath(value)
@@ -161,6 +183,15 @@ def relative_path(value):
 
 
 def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, profile_sha, now=None):
+    """Run the full receipt-consistency validation.
+
+    Inputs: `policy_path` -- engineering policy TOML; `receipt_path` -- the
+    receipt JSON; `evidence_root` -- containment root for referenced files;
+    `repo`/`target_sha`/`profile_sha` -- identity the receipt must bind;
+    `now` -- timezone-aware validation clock (default: current time).
+    Output: the result dict (status plus findings); findings never echo
+    receipt values.
+    """
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ContractError("validation clock must be timezone-aware")
@@ -754,6 +785,11 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
 
 
 def main(argv=None):
+    """CLI entry point for the contract validator.
+
+    Inputs: `argv` -- argument list (default `sys.argv[1:]`). Output: `int` --
+    process exit code (0 pass, 1 FAIL, 2 BLOCKED).
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)

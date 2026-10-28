@@ -113,7 +113,7 @@ def load_receipt(path: Path) -> dict[str, Any]:
         raise ReceiptError("receipt: exceeds the 2 MiB input limit")
     try:
         decoded = decode_json(path.read_bytes())
-    except (ValueError, RecursionError, UnicodeError) as error:
+    except (ValueError, RecursionError) as error:
         raise ReceiptError("receipt: strict JSON decode failed") from error
     if not isinstance(decoded, dict):
         raise ReceiptError("receipt: top level must be an object")

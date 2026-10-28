@@ -316,7 +316,7 @@ def main() -> int:
             print("no score rows", file=sys.stderr)
             return 2
         report = calibrate(rows, args.target_fp, input_identity=file_identity(args.scores))
-    except (ScoreRowError, ValueError, OSError) as error:
+    except (ValueError, OSError) as error:
         print(f"invalid calibration input: {error}", file=sys.stderr)
         return 2
     text = json.dumps(report, indent=2)

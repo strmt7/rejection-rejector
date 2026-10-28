@@ -47,7 +47,7 @@ class SleepSecondsTests(unittest.TestCase):
     """
 
     def test_formula_matches_duty_cycle_definition(self):
-        """off = on * (100 - t) / t at the pinned points; never negative."""
+        """Off = on * (100 - t) / t at the pinned points; never negative."""
         self.assertEqual(dc.sleep_seconds(10.0, 100.0), 0.0)
         self.assertAlmostEqual(dc.sleep_seconds(10.0, 50.0), 10.0)
         self.assertAlmostEqual(dc.sleep_seconds(10.0, 25.0), 30.0)

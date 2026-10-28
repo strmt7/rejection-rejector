@@ -118,6 +118,13 @@ class Watchdog:
         log_path: Path,
         match_name: str = "",
     ):
+        """Configure one watchdog instance.
+
+        Inputs: `pid` -- target process id (0 = none); `duty_path` -- trainer
+        duty.json path; `ceiling` -- max GPU utilization percent; `log_path` --
+        JSONL evidence path; `match_name` -- extra process-name substring to
+        watch. Output: none.
+        """
         self.pid = pid
         self.match_name = match_name
         self.duty_path = duty_path

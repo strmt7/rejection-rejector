@@ -170,20 +170,23 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
 
     def need_command(cid: str, where: str) -> None:
         """Record an error when `cid` is not a declared command. Inputs: cid --
-        referenced command id; where -- referencing location. Output: none."""
+        referenced command id; where -- referencing location. Output: none.
+        """
         if cid not in commands:
             errors.append(f"{where}: undefined command id {cid!r}")
 
     def need_family(fid: str, where: str) -> None:
         """Record an error when `fid` is not a declared test family. Inputs:
         fid -- referenced family id; where -- referencing location. Output:
-        none."""
+        none.
+        """
         if fid not in families:
             errors.append(f"{where}: undefined test family id {fid!r}")
 
     def need_kind(kid: str, where: str) -> None:
         """Record an error when `kid` is not a declared artifact kind. Inputs:
-        kid -- referenced kind id; where -- referencing location. Output: none."""
+        kid -- referenced kind id; where -- referencing location. Output: none.
+        """
         if kid not in kinds:
             errors.append(f"{where}: undefined artifact kind id {kid!r}")
 
@@ -215,7 +218,8 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
     def lane_ok(entry: dict, where: str) -> None:
         """Check one standard/task entry has dependencies and applicable
         commands. Inputs: entry -- the standard/task record; where -- label for
-        messages. Output: none (errors appended in place)."""
+        messages. Output: none (errors appended in place).
+        """
         deps = entry.get("command_ids", []) + entry.get("test_family_ids", []) + entry.get("artifact_kinds", [])
         if entry.get("applicable") and not deps:
             errors.append(f"{where}: applicable lane names no command, test family or artifact kind")

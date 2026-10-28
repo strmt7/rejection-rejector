@@ -420,7 +420,6 @@ def _load_model(args, device: str, pace_load: bool):
     Inputs: parsed CLI args, resolved device string, and whether paced GPU
     placement applies. Output: the loaded model on its target device.
     """
-
     import torch
     from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 

@@ -241,6 +241,14 @@ class ResourceWatchdog:
         disk_path: str = ".",
         disk_probe: Callable[[], tuple[int, int]] | None = None,
     ) -> None:
+        """Configure the resource guard.
+
+        Inputs: `limits` -- threshold set (default built-in); `on_violation` --
+        callback invoked per violation; `interval_s` -- probe period in seconds;
+        `soft_resources` -- resources handled softly; `vram_probe` -- custom VRAM
+        probe; remaining keyword options select probe backends and exits.
+        Output: none.
+        """
         self._limits = limits or Thresholds()
         # Soft resources (e.g. VRAM mid-run) report through on_soft_violation
         # and never stop the workload: an allocator OOM aborts cleanly and
@@ -259,10 +267,18 @@ class ResourceWatchdog:
         self._probe_misses = 0
 
     def __enter__(self) -> ResourceWatchdog:
+        """Start the watchdog and enter the context.
+
+        Inputs: none. Output: `Self` -- the running watchdog.
+        """
         self.start()
         return self
 
     def __exit__(self, *_exc) -> None:
+        """Stop the watchdog on context exit.
+
+        Inputs: `_exc` -- the raised exception triple (ignored). Output: none.
+        """
         self.stop()
 
     def start(self) -> None:

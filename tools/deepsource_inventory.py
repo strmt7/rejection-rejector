@@ -105,6 +105,11 @@ class ApiClient:
     """One authenticated, bounded HTTP request per page; no automatic retries."""
 
     def __init__(self, token: str):
+        """Bind the client to one API token.
+
+        Inputs: `token` -- the DeepSource API bearer token. Output: none;
+        stores the token and a no-redirect URL opener.
+        """
         self._token = token
         self.opener = urllib.request.build_opener(NoRedirects())
 

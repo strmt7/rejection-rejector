@@ -7,12 +7,22 @@ ROOT = Path(__file__).parent
 
 
 def string(pattern=None):
+    """Build one JSON Schema string node.
+
+    Inputs: `pattern` -- regex the value must match (default: non-blank).
+    Output: `dict` -- the schema node.
+    """
     result = {"type": "string", "minLength": 1}
     result["pattern"] = pattern or r"\S"
     return result
 
 
 def array(item, minimum=0, unique=False):
+    """Build one JSON Schema array node.
+
+    Inputs: `item` -- item schema; `minimum` -- minimum item count;
+    `unique` -- require unique items. Output: `dict` -- the schema node.
+    """
     value = {"type": "array", "items": item, "minItems": minimum}
     if unique:
         value["uniqueItems"] = True
@@ -20,6 +30,11 @@ def array(item, minimum=0, unique=False):
 
 
 def obj(properties, optional=()):
+    """Build one JSON Schema object node.
+
+    Inputs: `properties` -- property name to schema map; `optional` -- names
+    exempt from `required`. Output: `dict` -- the schema node.
+    """
     return {
         "type": "object",
         "properties": properties,

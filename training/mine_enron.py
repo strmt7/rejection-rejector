@@ -1214,6 +1214,11 @@ class Redactor:
     """
 
     def __init__(self, name_tokens: set[str]):
+        """Load the PII-name filter and zero its counters.
+
+        Inputs: `name_tokens` -- lowercase name tokens that trigger `name`
+        masking (the `enron` token is ignored). Output: none.
+        """
         self.name_tokens = set(name_tokens) - {"enron"}
         self.counts = {
             "name": 0,

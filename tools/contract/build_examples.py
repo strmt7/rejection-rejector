@@ -13,18 +13,35 @@ PROFILE = "1" * 40  # Deliberately fictitious, never a claimed deployed profile.
 
 
 def q(value):
+    """Render one value as compact JSON text.
+
+    Inputs: `value` -- the object to serialize. Output: `str` -- its JSON text.
+    """
     return json.dumps(value)
 
 
 def digest(path):
+    """Hash one file's bytes.
+
+    Inputs: `path` -- file to read. Output: `str` -- lowercase hex SHA-256.
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def utc(value):
+    """Render a timestamp as RFC 3339 UTC text.
+
+    Inputs: `value` -- aware datetime. Output: `str` -- ISO text with a `Z` suffix.
+    """
     return value.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def build():
+    """Write the synthetic example package to the output directory.
+
+    Inputs: none. Output: none; creates the example receipts, fixtures and
+    synthetic inputs under the package's examples/ directory.
+    """
     DEST.mkdir(exist_ok=True)
     for directory in ("logs", "artifacts", "inputs"):
         (DEST / directory).mkdir(exist_ok=True)

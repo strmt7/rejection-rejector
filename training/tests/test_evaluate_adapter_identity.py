@@ -21,7 +21,13 @@ import evaluate_adapter as ea  # noqa: E402
 
 
 class PathIdentity(unittest.TestCase):
+    """Identity tests for evaluate_adapter.path_identity.
+
+    Pins that digests are stable per content and sensitive to byte changes.
+    """
+
     def test_file_digest_is_stable_and_content_sensitive(self):
+        """File digest is stable and content sensitive."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "holdout.jsonl"
             path.write_text('{"a": 1}\n', encoding="utf-8")
@@ -33,6 +39,7 @@ class PathIdentity(unittest.TestCase):
             self.assertNotEqual(first["sha256"], ea.path_identity(path)["sha256"])
 
     def test_directory_digest_covers_every_member(self):
+        """Directory digest covers every member."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "adapter"
             (root / "sub").mkdir(parents=True)
@@ -47,16 +54,19 @@ class PathIdentity(unittest.TestCase):
             self.assertNotEqual(first["sha256"], ea.path_identity(root)["sha256"])
 
     def test_count_rows_skips_blank_lines(self):
+        """Count rows skips blank lines."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rows.jsonl"
             path.write_text('{"x": 1}\n\n{"x": 2}\n', encoding="utf-8")
             self.assertEqual(ea.count_rows(path), 2)
 
     def test_generation_policy_is_deterministic(self):
+        """Generation policy is deterministic."""
         self.assertFalse(ea.GENERATION["do_sample"])
         self.assertGreater(ea.GENERATION["max_new_tokens"], 0)
 
     def test_module_import_does_not_pull_the_ml_stack(self):
+        """Module import does not pull the ml stack."""
         self.assertNotIn("torch", sys.modules)
 
 

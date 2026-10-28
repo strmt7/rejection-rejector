@@ -57,6 +57,11 @@ def ref_optimum(neg_scores: list[float], pos_scores: list[float], target_fp: int
 
 
 def row(label: str, score: object) -> dict:
+    """Build one calibration score row.
+
+    Inputs: `label` -- gold label; `score` -- the rejection-probability value
+    (invalid values are passed through on purpose). Output: `dict` -- the row.
+    """
     return {"label": label, "rejection_probability": score}
 
 
@@ -64,6 +69,7 @@ class CloseScoreOptimum(unittest.TestCase):
     """RR-02: decision boundaries, not a coarse grid (manual finding N03)."""
 
     def test_manual_straddle_case_reaches_feasible_one_tp(self):
+        """Manual straddle case reaches feasible one tp."""
         # The audited 0.001-grid returned threshold 0.501 / TP 0 here; the
         # feasible cutoff region under `>=` is (0.5001, 0.5002] and the
         # canonical reported cutoff is the positive score itself: 0.5002.
@@ -74,6 +80,7 @@ class CloseScoreOptimum(unittest.TestCase):
         self.assertEqual(report["threshold"], 0.5002)
 
     def test_reported_counts_match_reported_threshold(self):
+        """Reported counts match reported threshold."""
         rng = random.Random(7)
         for _ in range(20):
             rows = [row("not_rejection", round(rng.uniform(0.0, 1.0), 4)) for _ in range(rng.randint(1, 5))] + [
@@ -88,6 +95,7 @@ class CloseScoreOptimum(unittest.TestCase):
             self.assertEqual((fp, tp), (report["false_positives"], report["true_positives"]))
 
     def test_agrees_with_independent_exhaustive_oracle(self):
+        """Agrees with independent exhaustive oracle."""
         rng = random.Random(20261027)
         for _ in range(60):
             neg_scores = [round(rng.uniform(0.0, 1.0), 4) for _ in range(rng.randint(1, 6))]
@@ -102,6 +110,7 @@ class CloseScoreOptimum(unittest.TestCase):
             self.assertEqual(got_tp, expected_tp, f"scores {neg_scores} / {pos_scores}")
 
     def test_close_score_pairs_reach_feasible_optimum(self):
+        """Close score pairs reach feasible optimum."""
         rng = random.Random(42)
         for _ in range(40):
             base = round(rng.uniform(0.2, 0.8), 4)
@@ -118,6 +127,7 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
     """Manual RR-02 acceptance: ties, endpoints, budgets, abstain-all."""
 
     def test_equal_scores_cannot_be_separated(self):
+        """Equal scores cannot be separated."""
         rows = [row("not_rejection", 0.5), row("rejection", 0.5)]
         strict = czf.calibrate(rows, 0)
         self.assertEqual(strict["status"], "abstain_all")
@@ -127,6 +137,7 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
         self.assertEqual((loose["true_positives"], loose["false_positives"]), (1, 1))
 
     def test_score_endpoints(self):
+        """Score endpoints."""
         report = czf.calibrate([row("not_rejection", 0.0), row("rejection", 1.0)], 0)
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["threshold"], 1.0)
@@ -136,6 +147,7 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
         self.assertEqual(report["status"], "abstain_all")
 
     def test_permitted_target_fp_counts(self):
+        """Permitted target fp counts."""
         rows = [
             row("not_rejection", 0.7),
             row("rejection", 0.75),
@@ -150,6 +162,7 @@ class TiesBudgetsAndAbstention(unittest.TestCase):
         self.assertEqual(loose["threshold"], 0.6)
 
     def test_abstain_all_is_explicit(self):
+        """Abstain all is explicit."""
         report = czf.calibrate([row("not_rejection", 0.9), row("rejection", 0.1)], 0)
         self.assertEqual(report["status"], "abstain_all")
         self.assertIsNone(report["threshold"])
@@ -162,6 +175,7 @@ class DiagnosticsAndValidation(unittest.TestCase):
     """Manual N04 acceptance: invalid rows fail; class-empty stays diagnostic."""
 
     def test_class_empty_diagnostics_keep_counts_and_null_metrics(self):
+        """Class empty diagnostics keep counts and null metrics."""
         empty = czf.calibrate([], 0)
         self.assertEqual(empty["status"], "insufficient_data")
         self.assertIsNone(empty["threshold"])
@@ -182,12 +196,14 @@ class DiagnosticsAndValidation(unittest.TestCase):
         self.assertIn("false_positive_rate_upper_95", only_pos["metric_reasons"])
 
     def test_ambiguous_is_explicitly_negative(self):
+        """Ambiguous is explicitly negative."""
         report = czf.calibrate([row("ambiguous", 0.95), row("rejection", 0.9)], 0)
         self.assertEqual(report["status"], "abstain_all")
         self.assertEqual(report["ambiguous_in_negatives"], 1)
         self.assertEqual(report["negatives"], 1)
 
     def test_invalid_rows_fail_before_any_report(self):
+        """Invalid rows fail before any report."""
         bad_rows = [
             row("not_rejection", float("nan")),
             row("not_rejection", float("inf")),
@@ -209,6 +225,7 @@ class DiagnosticsAndValidation(unittest.TestCase):
                 czf.calibrate([bad], 0)
 
     def test_target_fp_validation_in_public_api(self):
+        """Target fp validation in public api."""
         rows = [row("not_rejection", 0.1), row("rejection", 0.9)]
         bad_budgets: list = [-1, 1.5, "0", True]
         for budget in bad_budgets:
@@ -216,6 +233,7 @@ class DiagnosticsAndValidation(unittest.TestCase):
                 czf.calibrate(rows, budget)
 
     def test_load_scores_reports_line_numbers(self):
+        """Load scores reports line numbers."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "scores.jsonl"
             path.write_text(
@@ -237,6 +255,11 @@ class CliContract(unittest.TestCase):
     """The CLI reports the same contract and fails closed on invalid input."""
 
     def run_cli(self, body: str, *extra: str) -> subprocess.CompletedProcess:
+        """Run calibrate_zero_fp.py over a temporary scores file.
+
+        Inputs: `body` -- JSONL text to write; `extra` -- extra CLI arguments.
+        Output: `subprocess.CompletedProcess` -- the captured run.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "scores.jsonl"
             path.write_text(body, encoding="utf-8")
@@ -249,6 +272,7 @@ class CliContract(unittest.TestCase):
             )
 
     def test_valid_input_reports_identity_and_status(self):
+        """Valid input reports identity and status."""
         done = self.run_cli(
             '{"label": "not_rejection", "rejection_probability": 0.2}\n'
             '{"label": "rejection", "rejection_probability": 0.9}\n'
@@ -262,12 +286,14 @@ class CliContract(unittest.TestCase):
         self.assertEqual(report["input"]["rows"], 2)
 
     def test_invalid_input_exits_two_without_a_report(self):
+        """Invalid input exits two without a report."""
         done = self.run_cli('{"label": "not_rejection", "rejection_probability": 2.0}\n')
         self.assertEqual(done.returncode, 2)
         self.assertEqual(done.stdout.strip(), "")
         self.assertIn("line 1", done.stderr)
 
     def test_negative_budget_exits_two(self):
+        """Negative budget exits two."""
         done = self.run_cli(
             '{"label": "rejection", "rejection_probability": 0.9}\n'
             '{"label": "not_rejection", "rejection_probability": 0.1}\n',
@@ -281,14 +307,17 @@ class WilsonBound(unittest.TestCase):
     """Zero observed false positives is never reported as zero risk."""
 
     def test_zero_failures_still_reports_a_positive_bound(self):
+        """Zero failures still reports a positive bound."""
         bound = czf.wilson_upper_bound(0, 10)
         self.assertGreater(bound, 0.0)
         self.assertLessEqual(bound, 1.0)
 
     def test_zero_trials_is_undefined_but_conservative(self):
+        """Zero trials is undefined but conservative."""
         self.assertEqual(czf.wilson_upper_bound(0, 0), 1.0)
 
     def test_bound_monotone_in_failures(self):
+        """Bound monotone in failures."""
         bounds = [czf.wilson_upper_bound(f, 20) for f in range(0, 21)]
         self.assertEqual(bounds, sorted(bounds))
 

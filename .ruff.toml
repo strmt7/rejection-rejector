@@ -16,7 +16,14 @@ line-length = 120
 target-version = "py313"
 
 [lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510"]
+select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D"]
+# D enforcement covers the documentation contract (D1xx: every module,
+# class, function and __init__ carries a docstring). The D2xx/D4xx
+# presentation rules beyond that contract are deliberately not enforced:
+# D205/D212/D213 reflow the established "Summary. / Inputs: ..." style and
+# D401 rewrites descriptive test-case docstrings into imperative mood for
+# no correctness gain. D203 conflicts with D211 (ruff ignores one).
+ignore = ["D203", "D205", "D212", "D213", "D401"]
 
 [format]
 line-ending = "lf"
