@@ -83,6 +83,15 @@ pub trait MailTransport: crate::sync::Provider {
     /// Output: `bool`.
     fn can_send(&self) -> bool;
 
+    /// Whether this backend can start a new conversation (the live self-test
+    /// probe needs a self-addressed message, not a reply). Inputs: none
+    /// (`&self`). Output: `bool` — `true` when the backend relays arbitrary
+    /// raw MIME (IMAP/SMTP); conversation-bound backends keep the `false`
+    /// default and refuse probes with a documented error.
+    fn supports_selftest_probe(&self) -> bool {
+        false
+    }
+
     /// Send one raw MIME reply. Inputs: `raw` — the full RFC-5322 message;
     /// `thread_id` — the conversation to reply within. Output:
     /// `Result<String, SendFailure>` — the provider id, or a typed failure.

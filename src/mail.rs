@@ -821,6 +821,53 @@ pub fn raw_reply(
     Ok(URL_SAFE_NO_PAD.encode(raw.as_bytes()))
 }
 
+/// A composed live self-test probe: its identity and transport payload.
+///
+/// Inputs: none (plain struct). Output: `message_id` for later verification
+/// and `raw` in the same transport envelope as [`raw_reply`].
+pub struct SelftestProbe {
+    /// RFC 2822 Message-ID assigned to the probe.
+    pub message_id: String,
+    /// URL-safe base64 transport payload accepted by `MailTransport::send`.
+    pub raw: String,
+}
+
+/// Compose one self-addressed live send-path self-test probe.
+///
+/// Inputs: `account` -- configured mailbox the probe is sent from and to;
+/// `now` -- send timestamp fixing Date and the unique probe identity.
+/// Output: `Result<SelftestProbe>` -- the rendered probe; errors when
+/// `account` is not exactly one mailbox (header-injection safe).
+pub fn raw_selftest_probe(account: &str, now: DateTime<Utc>) -> Result<SelftestProbe> {
+    let target = mailbox(account)?;
+    let stamp = now.timestamp_nanos_opt().unwrap_or_default();
+    let message_id = format!("<rr.selftest.{stamp}@rejection-rejector.invalid>");
+    let version = env!("CARGO_PKG_VERSION");
+    let body_text = format!(
+        "[RR LIVE SELFTEST] This is an automated live self-test message from Rejection \
+         Rejector {version}.\r\n\
+         It is addressed to its own configured mailbox to verify the send path end to end.\r\n\
+         No action is needed; it is safe to delete.\r\n\
+         Verification token: rr-selftest-{stamp}\r\n"
+    );
+    let body = STANDARD.encode(body_text);
+    let wrapped = body
+        .as_bytes()
+        .chunks(76)
+        .map(std::str::from_utf8)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\r\n");
+    let raw = format!(
+        "From: {account}\r\nTo: {target}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: {message_id}\r\nAuto-Submitted: auto-generated\r\nX-Auto-Response-Suppress: All\r\nX-Rejection-Rejector: {version}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{wrapped}\r\n",
+        encoded_subject("[RR LIVE SELFTEST] send-path round-trip probe"),
+        now.to_rfc2822(),
+    );
+    Ok(SelftestProbe {
+        message_id,
+        raw: URL_SAFE_NO_PAD.encode(raw.as_bytes()),
+    })
+}
+
 /// Validate that a job's identity is internally consistent.
 ///
 /// Inputs: `job` — job to check. Output: `Ok(())` when the stub, email and
@@ -845,6 +892,52 @@ pub fn validate_job_identity(job: &Job) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn raw_selftest_probe_addresses_itself_and_carries_the_test_marker() {
+        use chrono::TimeZone;
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let probe = raw_selftest_probe("me@example.invalid", now).unwrap();
+        assert!(valid_message_id(&probe.message_id));
+        let raw = String::from_utf8(URL_SAFE_NO_PAD.decode(&probe.raw).unwrap()).unwrap();
+        assert!(raw.starts_with("From: me@example.invalid\r\n"));
+        assert!(raw.contains("To: me@example.invalid\r\n"));
+        assert!(raw.contains("Subject: "));
+        assert!(raw.contains("Auto-Submitted: auto-generated\r\n"));
+        assert!(!raw.contains("In-Reply-To:"));
+        assert!(!raw.contains("References:"));
+        // The body is base64; decode it to check the marker and token.
+        let body_b64 = raw.split("\r\n\r\n").nth(1).unwrap();
+        let body =
+            String::from_utf8(STANDARD.decode(body_b64.replace("\r\n", "")).unwrap()).unwrap();
+        assert!(body.contains("[RR LIVE SELFTEST]") || raw.contains("RR LIVE SELFTEST"));
+        assert!(body.contains("rr-selftest-"));
+        assert!(body.contains("safe to delete"));
+    }
+
+    #[test]
+    fn raw_selftest_probe_ids_are_unique_per_timestamp() {
+        use chrono::TimeZone;
+        let a = raw_selftest_probe(
+            "me@example.invalid",
+            Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap(),
+        )
+        .unwrap();
+        let b = raw_selftest_probe(
+            "me@example.invalid",
+            Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 1).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(a.message_id, b.message_id);
+    }
+
+    #[test]
+    fn raw_selftest_probe_rejects_multi_target_accounts() {
+        use chrono::TimeZone;
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        assert!(raw_selftest_probe("a@b.com,c@d.com", now).is_err());
+        assert!(raw_selftest_probe("a@b.com\r\nBcc: c@d.com", now).is_err());
+    }
+
     #[test]
     fn mailbox_rejects_injection_and_multiple_targets() {
         for s in [

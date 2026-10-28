@@ -386,6 +386,59 @@ pub struct Engine {
     /// Workspace directory backing the store and vault.
     pub directory: PathBuf,
 }
+/// Outcome of the operator-invoked live send-path self-test.
+///
+/// Inputs: none (plain struct). Output: the probe identity, the dispatch
+/// result and the independent verification status.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LiveSelftestReport {
+    /// Configured mailbox the probe was sent from and addressed to.
+    pub account: String,
+    /// RFC 2822 Message-ID assigned to the probe.
+    pub message_id: String,
+    /// Whether the transport accepted the probe for delivery.
+    pub sent: bool,
+    /// Provider-side message id returned by the transport, when supplied.
+    pub provider_id: Option<String>,
+    /// Whether `find_sent` located the probe by its Message-ID afterwards.
+    pub find_sent_verified: bool,
+}
+
+/// Compose, dispatch and verify one live self-test probe.
+///
+/// Inputs: `mail` -- connected transport (`None` is refused as not
+/// connected); `account` -- configured mailbox; `now` -- send timestamp.
+/// Output: `Result<LiveSelftestReport>` -- dispatch plus verification; fails
+/// closed on conversation-bound backends and when send scope is missing.
+fn run_live_selftest(
+    mail: Option<&mut (dyn MailTransport + 'static)>,
+    account: &str,
+    now: DateTime<Utc>,
+) -> Result<LiveSelftestReport> {
+    let mail = mail.ok_or_else(|| anyhow::anyhow!("Mailbox is not connected"))?;
+    ensure!(
+        mail.supports_selftest_probe(),
+        "Live selftest needs the app-password (IMAP/SMTP) transport; conversation-bound \
+         backends cannot start a new thread"
+    );
+    ensure!(
+        mail.can_send(),
+        "Send scope has not been granted; connect the mailbox with send consent first"
+    );
+    let probe = crate::mail::raw_selftest_probe(account, now)?;
+    let provider_id = mail
+        .send(&probe.raw, "")
+        .map_err(|failure| anyhow::anyhow!("Probe dispatch failed: {failure}"))?;
+    let find_sent_verified = mail.find_sent(&probe.message_id)?.is_some();
+    Ok(LiveSelftestReport {
+        account: account.to_string(),
+        message_id: probe.message_id,
+        sent: true,
+        provider_id: Some(provider_id),
+        find_sent_verified,
+    })
+}
+
 /// Disarm delivery settings after an unclean shutdown.
 ///
 /// Inputs: `settings` — settings mutated in place; `unclean` — whether the
@@ -1426,6 +1479,19 @@ impl Engine {
         );
         logged?;
         Ok(path)
+    }
+
+    /// Run the live send-path self-test: one self-addressed probe, sent and
+    /// independently verified.
+    ///
+    /// Inputs: `now` — send timestamp fixing the probe's Date and identity.
+    /// Output: `Result<LiveSelftestReport>` — the dispatch and verification
+    /// outcome; refused in demo mode.
+    pub fn live_selftest(&mut self, now: DateTime<Utc>) -> Result<LiveSelftestReport> {
+        ensure!(!self.demo, "Live selftest refuses demo workspaces");
+        let mail: Option<&mut (dyn MailTransport + 'static)> =
+            self.mail.as_mut().map(|m| m.as_mut());
+        run_live_selftest(mail, &self.account, now)
     }
 
     /// Synchronize the mailbox into the workspace store.
@@ -2684,6 +2750,161 @@ mod tests {
         let mut j = Job::new(email.stub.clone(), Utc::now());
         j.email = Some(email);
         assert!(!auto_blocks(&j, &s, "demo@example.invalid", Utc::now()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod live_selftest_tests {
+    use super::*;
+    use crate::gmail::{
+        FetchFailure, HistoryResult, MessagePage, Profile, SendFailure, SendFailureKind, Thread,
+    };
+    use crate::types::{Email, Stub};
+    use chrono::TimeZone;
+
+    /// In-memory transport double capturing the probe dispatch.
+    struct ProbeTransport {
+        /// Whether `can_send` reports authorized.
+        can_send: bool,
+        /// Whether the backend claims new-message probe support.
+        supports_probe: bool,
+        /// Whether the next `send` accepts (true) or fails closed (false).
+        accept: bool,
+        /// Captured (raw, thread_id) pairs from accepted `send` calls.
+        sent: Vec<(String, String)>,
+        /// Canned `find_sent` answer.
+        find_sent: Option<String>,
+    }
+
+    impl Provider for ProbeTransport {
+        fn profile(&mut self) -> Result<Profile> {
+            Ok(Profile {
+                email_address: String::new(),
+                history_id: String::new(),
+            })
+        }
+        fn list(&mut self, _query: &str, _page: Option<&str>) -> Result<MessagePage> {
+            Ok(MessagePage {
+                messages: Vec::new(),
+                next_page_token: None,
+            })
+        }
+        fn history(&mut self, _start: &str, _page: Option<&str>) -> Result<HistoryResult> {
+            Ok(HistoryResult::Expired)
+        }
+    }
+
+    impl MailTransport for ProbeTransport {
+        fn can_send(&self) -> bool {
+            self.can_send
+        }
+        fn supports_selftest_probe(&self) -> bool {
+            self.supports_probe
+        }
+        fn send(&mut self, raw: &str, thread_id: &str) -> std::result::Result<String, SendFailure> {
+            if !self.accept {
+                return Err(SendFailure {
+                    kind: SendFailureKind::NotAccepted,
+                    message: "probe refused by double".into(),
+                });
+            }
+            self.sent.push((raw.to_string(), thread_id.to_string()));
+            Ok("probe-provider-id".into())
+        }
+        fn email(&mut self, _stub: &Stub) -> std::result::Result<Option<Email>, FetchFailure> {
+            Ok(None)
+        }
+        fn thread(&mut self, id: &str) -> Result<Thread> {
+            anyhow::bail!("ProbeTransport does not serve conversations (requested {id})")
+        }
+        fn find_sent(&mut self, _message_id: &str) -> Result<Option<String>> {
+            Ok(self.find_sent.clone())
+        }
+    }
+
+    /// Build one double. Inputs: `can_send`/`supports_probe`/`accept` —
+    /// capability and outcome flags; `find_sent` — canned verification
+    /// answer. Output: the configured [`ProbeTransport`].
+    fn fake(
+        can_send: bool,
+        supports_probe: bool,
+        accept: bool,
+        find_sent: Option<String>,
+    ) -> ProbeTransport {
+        ProbeTransport {
+            can_send,
+            supports_probe,
+            accept,
+            sent: Vec::new(),
+            find_sent,
+        }
+    }
+
+    #[test]
+    fn live_probe_dispatches_and_verifies_through_the_transport() {
+        let mut t = fake(true, true, true, Some("probe-provider-id".into()));
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let report = run_live_selftest(Some(&mut t), "me@example.invalid", now).unwrap();
+        assert!(report.sent);
+        assert_eq!(report.account, "me@example.invalid");
+        assert_eq!(report.provider_id.as_deref(), Some("probe-provider-id"));
+        assert!(report.find_sent_verified);
+        assert_eq!(t.sent.len(), 1);
+        assert_eq!(t.sent[0].1, "", "a new-message probe carries no thread id");
+    }
+
+    #[test]
+    fn live_probe_reports_unverified_when_find_sent_misses() {
+        let mut t = fake(true, true, true, None);
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let report = run_live_selftest(Some(&mut t), "me@example.invalid", now).unwrap();
+        assert!(report.sent);
+        assert!(!report.find_sent_verified);
+    }
+
+    #[test]
+    fn live_probe_fails_closed_without_transport_or_send_scope() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let err = run_live_selftest(None, "me@example.invalid", now).unwrap_err();
+        assert!(err.to_string().contains("not connected"));
+        let mut t = fake(false, true, true, None);
+        let err = run_live_selftest(Some(&mut t), "me@example.invalid", now).unwrap_err();
+        assert!(err.to_string().contains("Send scope"));
+        assert!(
+            t.sent.is_empty(),
+            "nothing is dispatched without send scope"
+        );
+    }
+
+    #[test]
+    fn live_probe_refuses_conversation_bound_backends() {
+        let mut t = fake(true, false, true, None);
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let err = run_live_selftest(Some(&mut t), "me@example.invalid", now).unwrap_err();
+        assert!(err.to_string().contains("app-password"));
+        assert!(t.sent.is_empty());
+    }
+
+    #[test]
+    fn live_probe_surfaces_dispatch_failures() {
+        let mut t = fake(true, true, false, None);
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap();
+        let err = run_live_selftest(Some(&mut t), "me@example.invalid", now).unwrap_err();
+        assert!(err.to_string().contains("Probe dispatch failed"));
+    }
+
+    #[test]
+    fn demo_workspaces_refuse_the_live_selftest() {
+        let d = tempfile::tempdir().unwrap();
+        let mut e = Engine::open(
+            d.path().into(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let err = e.live_selftest(Utc::now()).unwrap_err();
+        assert!(err.to_string().contains("demo"));
     }
 }
 

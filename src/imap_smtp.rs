@@ -59,10 +59,40 @@ pub struct ImapSmtpConfig {
     pub smtp_host: String,
     /// SMTP send port (default `587`, SMTP STARTTLS).
     pub smtp_port: u16,
-    /// Whether the SMTP transport must negotiate TLS (`relay`). Default `true`
-    /// (Gmail). `false` selects a plaintext transport for protocol-level tests
-    /// against a local SMTP double; production never sets it.
+    /// Whether the SMTP transport must negotiate TLS. Default `true`
+    /// (Gmail). TLS follows the port's IANA semantics: port `465` uses
+    /// implicit TLS (SMTPS, `Tls::Wrapper`), every other port negotiates
+    /// STARTTLS (Gmail's default `587`). `false` selects a plaintext
+    /// transport for protocol-level tests against a local SMTP double;
+    /// production never sets it.
     pub smtp_secure: bool,
+}
+
+/// The TLS negotiation mode for one SMTP send transport.
+///
+/// Inputs: none (plain enum). Output: the pairing applied between the
+/// configured port and the TLS handshake (`Wrapper` = implicit TLS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SmtpTlsMode {
+    /// Implicit TLS from the first byte (SMTPS, IANA port 465).
+    Wrapper,
+    /// Plaintext connect upgraded by mandatory STARTTLS (port 587 et al.).
+    Starttls,
+    /// No TLS at all (local protocol doubles only).
+    Plaintext,
+}
+
+/// Select the SMTP TLS mode for one configured endpoint.
+///
+/// Inputs: `secure` — the `smtp_secure` flag; `port` — the configured send
+/// port. Output: [`SmtpTlsMode`] — `Wrapper` only on 465, `Starttls` on any
+/// other secure port, `Plaintext` when `secure` is `false`.
+fn smtp_tls_mode(secure: bool, port: u16) -> SmtpTlsMode {
+    match (secure, port) {
+        (false, _) => SmtpTlsMode::Plaintext,
+        (true, 465) => SmtpTlsMode::Wrapper,
+        (true, _) => SmtpTlsMode::Starttls,
+    }
 }
 
 impl Default for ImapSmtpConfig {
@@ -410,6 +440,10 @@ fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
 }
 
 impl crate::sync::Provider for ImapSmtp {
+    /// Fetch the mailbox identity over IMAP.
+    ///
+    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the mailbox
+    /// address with an IMAP UIDVALIDITY-based history cursor.
     fn profile(&mut self) -> Result<Profile> {
         // The identity is the configured address; the cursor is established on
         // first sync (see history()). IMAP has no Gmail history id, so the
@@ -475,10 +509,13 @@ impl MailTransport for ImapSmtp {
         true
     }
 
-    /// Fetch the mailbox identity over IMAP.
+    /// IMAP/SMTP relays arbitrary raw MIME, so new-message probes work.
     ///
-    /// Inputs: none (`&mut self`). Output: `Result<Profile>` — the mailbox
-    /// address with an IMAP UIDVALIDITY-based history cursor.
+    /// Inputs: none (`&self`). Output: `true`.
+    fn supports_selftest_probe(&self) -> bool {
+        true
+    }
+
     /// Send one reply over SMTP.
     ///
     /// Inputs: `raw` — base64url RFC-5322 MIME from `mail::raw_reply`;
@@ -496,17 +533,24 @@ impl MailTransport for ImapSmtp {
 
         // A relay/build failure means nothing left the box (NotAccepted); a
         // transport error is Uncertain (it may or may not have been sent).
-        // TLS-required relay in production; a plaintext transport only for
-        // protocol tests against a local SMTP double (`smtp_secure: false`).
-        let builder = if self.config.smtp_secure {
-            SmtpTransport::relay(&self.config.smtp_host).map_err(|e| {
+        // TLS follows the port's IANA semantics (see `smtp_tls_mode`):
+        // pairing implicit TLS with the STARTTLS submission port fails the
+        // handshake with a TLS-record error before any bytes are sent.
+        let builder = match smtp_tls_mode(self.config.smtp_secure, self.config.smtp_port) {
+            SmtpTlsMode::Wrapper => SmtpTransport::relay(&self.config.smtp_host).map_err(|e| {
                 fail(
                     SendFailureKind::NotAccepted,
                     format!("SMTP relay unavailable: {e}"),
                 )
-            })?
-        } else {
-            SmtpTransport::builder_dangerous(&self.config.smtp_host)
+            })?,
+            SmtpTlsMode::Starttls => SmtpTransport::starttls_relay(&self.config.smtp_host)
+                .map_err(|e| {
+                    fail(
+                        SendFailureKind::NotAccepted,
+                        format!("SMTP relay unavailable: {e}"),
+                    )
+                })?,
+            SmtpTlsMode::Plaintext => SmtpTransport::builder_dangerous(&self.config.smtp_host),
         };
         let mailer = builder
             .port(self.config.smtp_port)
@@ -629,6 +673,19 @@ mod tests {
 
     fn b64(s: &str) -> String {
         URL_SAFE_NO_PAD.encode(s.as_bytes())
+    }
+
+    #[test]
+    fn smtp_tls_mode_pairs_the_handshake_with_the_port_semantics() {
+        // Port 465 is IANA implicit-TLS SMTPS; every other secure port
+        // negotiates STARTTLS; insecure is test-only plaintext. The old
+        // pairing (implicit TLS on 587) failed the Gmail handshake with a
+        // TLS-record InvalidContentType error before any bytes were sent.
+        assert_eq!(smtp_tls_mode(true, 465), SmtpTlsMode::Wrapper);
+        assert_eq!(smtp_tls_mode(true, 587), SmtpTlsMode::Starttls);
+        assert_eq!(smtp_tls_mode(true, 25), SmtpTlsMode::Starttls);
+        assert_eq!(smtp_tls_mode(false, 465), SmtpTlsMode::Plaintext);
+        assert_eq!(smtp_tls_mode(false, 587), SmtpTlsMode::Plaintext);
     }
 
     #[test]

@@ -170,6 +170,8 @@ enum Action {
     },
     /// Synchronize the connected mailbox once and print the count of new identities.
     Sync,
+    /// Send one self-addressed probe through the configured transport and verify it independently.
+    LiveSelftest,
     /// Verify the active encrypted database structure and authenticated vault marker.
     Integrity,
     /// Checkpoint, VACUUM, optimize and re-verify the encrypted SQLite workspace.
@@ -540,7 +542,7 @@ fn dispatch(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
         Action::Qualify { .. } | Action::CompareModels { .. } | Action::Metrics { .. } => {
             dispatch_model_operations(command, data_dir)
         }
-        Action::Configure { .. } | Action::Sync | Action::RotateApiToken => {
+        Action::Configure { .. } | Action::Sync | Action::LiveSelftest | Action::RotateApiToken => {
             dispatch_configuration(command, data_dir)
         }
         Action::Integrity
@@ -646,6 +648,7 @@ fn dispatch_configuration(command: Action, data_dir: &Option<PathBuf>) -> Result
             data_dir,
         )?,
         Action::Sync => cmd_sync(data_dir)?,
+        Action::LiveSelftest => cmd_live_selftest(data_dir)?,
         Action::RotateApiToken => cmd_rotate_api_token(data_dir)?,
         other => dispatch(other, data_dir)?,
     }
@@ -1114,6 +1117,18 @@ fn cmd_sync(data_dir: &Option<PathBuf>) -> Result<()> {
             "new_identities": inserted,
         }))?
     );
+    Ok(())
+}
+
+/// Execute the `rr live-selftest` send-path probe subcommand.
+///
+/// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
+/// prints the selftest JSON report; propagated failure.
+fn cmd_live_selftest(data_dir: &Option<PathBuf>) -> Result<()> {
+    let dir = resolve_dir(data_dir)?;
+    let mut e = open_engine(dir, false, true)?;
+    let report = e.live_selftest(chrono::Utc::now())?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }
 
