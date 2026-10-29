@@ -392,7 +392,7 @@ fn autostart_report(
     dir: &std::path::Path,
     run: background::CommandRunner,
 ) -> Result<serde_json::Value> {
-    let value = match action {
+    let value: serde_json::Value = match action {
         AutostartAction::Install => {
             serde_json::to_value(background::install(executable, dir, run)?)?
         }

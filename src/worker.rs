@@ -1081,9 +1081,8 @@ fn handle_api_write(
                 kind,
                 "Creating and verifying encrypted same-vault backup…",
             );
-            let result =
-                crate::recovery::create_backup(&e.db, &e.directory, std::path::Path::new(out))
-                    .map(|_| ());
+            let out_path = std::path::Path::new(out);
+            let result = crate::recovery::create_backup(&e.db, &e.directory, out_path).map(|_| ());
             report_write(e, context, kind, result)
         }
         WriteRequest::Purge => {

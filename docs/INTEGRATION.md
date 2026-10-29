@@ -140,10 +140,10 @@ identifiers; restart a feed from page one after an API contract/version change.
 ## Sources (checked 2026-10-12)
 
 - IETF RFC 6750, "The OAuth 2.0 Authorization Framework: Bearer Token Usage":
-  https://www.rfc-editor.org/rfc/rfc6750
+  <https://www.rfc-editor.org/rfc/rfc6750>
 - NIST FIPS 180-4, Secure Hash Standard (SHA-256):
-  https://csrc.nist.gov/pubs/fips/180/4/final
+  <https://csrc.nist.gov/pubs/fips/180/4/final>
 - OpenAPI Initiative, OpenAPI Specification (3.1.0 in this contract; 3.2.0 latest):
-  https://spec.openapis.org/oas/latest.html
+  <https://spec.openapis.org/oas/latest.html>
 - Rust API Guidelines (public Rust surface conventions):
-  https://rust-lang.github.io/api-guidelines/
+  <https://rust-lang.github.io/api-guidelines/>

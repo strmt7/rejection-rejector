@@ -120,8 +120,11 @@ def call_ollama(
     # loopback Ollama endpoint (no network transit to protect locally).
     if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
         raise ValueError(f"chat endpoint is restricted to https (or http on loopback), got {parsed.scheme!r}")
+    if parsed.hostname is None:
+        raise ValueError(f"chat endpoint has no host: {OLLAMA_URL!r}")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    connection = connection_cls(parsed.hostname, parsed.port, timeout=timeout_s)
+    connection = connection_cls(parsed.hostname, port, timeout=timeout_s)
     try:
         path = parsed.path or "/"
         if parsed.query:
