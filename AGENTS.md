@@ -130,6 +130,25 @@ exist only as regression floors. Rules:
 3. Every uncovered line left in a changed area must have a written reason
    (unreachable, platform-gated, or rendering glue).
 
+## Findings policy (all AI agents) — fix at source, never suppress
+
+Non-negotiable, owner-set policy (`docs/deepsource-dispositions.md` is the
+full statement):
+
+1. Every static-analysis finding (DeepSource, code scanning, linters) is
+   fixed at source by a complete, professional rewrite — the rule's pattern
+   must stop existing because the code became better.
+2. **Never create a suppression of any kind**: no DeepSource ignore rules,
+   no `report_false_positive` dispositions, no code-scanning dismissals
+   ("false positive" or "won't fix"), no analyzer-silencing attributes.
+   A previous suppression found anywhere is deleted on sight.
+3. A finding that genuinely cannot be solved (external registration,
+   deliberate governance decision) stays **open and listed** in
+   `docs/deepsource-dispositions.md` — never hidden. Two or three such
+   findings are acceptable.
+4. Analyzer outages and slow analysis are waited out. Poll patiently; never
+   escalate to support and never compensate with a suppression.
+
 ## Lessons learned (all AI agents)
 
 Read `docs/LESSONS.md` before starting non-trivial work. It is a sanitized,

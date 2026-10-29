@@ -394,9 +394,15 @@ fn autostart_report(
 ) -> Result<serde_json::Value> {
     let value: serde_json::Value = match action {
         AutostartAction::Install => {
-            serde_json::to_value(background::install(executable, dir, run)?)?
+            let installed = background::install(executable, dir, run)?;
+            let rendered: serde_json::Value = serde_json::to_value(installed)?;
+            rendered
         }
-        AutostartAction::Status => serde_json::to_value(background::status(executable, dir, run)?)?,
+        AutostartAction::Status => {
+            let status = background::status(executable, dir, run)?;
+            let rendered: serde_json::Value = serde_json::to_value(status)?;
+            rendered
+        }
         AutostartAction::Remove => {
             background::remove(run)?;
             serde_json::json!({ "removed": true, "task_name": background::TASK_NAME })
