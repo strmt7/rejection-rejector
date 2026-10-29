@@ -52,8 +52,6 @@ LIMITATIONS = [
 class ContractError(ValueError):
     """Contract validation failure: malformed, unsafe or contradictory input."""
 
-    pass
-
 
 def duplicate_free(pairs):
     """Build a dict that rejects duplicate JSON keys.
@@ -83,7 +81,6 @@ def load_json(path):
         object_pairs_hook=duplicate_free,
         parse_constant=lambda x: (_ for _ in ()).throw(ContractError(f"invalid JSON constant {x}")),
     )
-
 
 
 def check_shape(value, schema, where="$", depth=0):
@@ -207,6 +204,7 @@ def _check_string(value, schema, where):
     if "pattern" in schema and not re.search(schema["pattern"], value):
         raise ContractError(f"{where}: pattern mismatch")
 
+
 def digest_file(path):
     """Hash one file's bytes in streaming fashion.
 
@@ -234,7 +232,6 @@ def relative_path(value):
     if not path.parts:
         raise ContractError("empty path")
     return path
-
 
 
 class _Validation:
@@ -377,7 +374,9 @@ class _Validation:
         before = len(self.issues)
         for key, expected in [("source_sha", self.target_sha), ("profile_sha", self.profile_sha)]:
             if item[key] != expected:
-                self.fail("FILE_IDENTITY", f"{field}/{key}", "evidence/artifact identity differs from the current target")
+                self.fail(
+                    "FILE_IDENTITY", f"{field}/{key}", "evidence/artifact identity differs from the current target"
+                )
                 good = False
         when = self.timestamp(item[time_field], f"{field}/{time_field}")
         if when > self.created:
@@ -484,7 +483,9 @@ class _Validation:
             self.fail("REPO", "repo", "repository is outside the 13 canonical report identities")
             return self.output()
         if not re.fullmatch("[0-9a-f]{40}", self.target_sha) or not re.fullmatch("[0-9a-f]{40}", self.profile_sha):
-            self.fail("TARGET", "target", "trusted current source/profile inputs must be full lowercase 40-character SHAs")
+            self.fail(
+                "TARGET", "target", "trusted current source/profile inputs must be full lowercase 40-character SHAs"
+            )
         if self.policy["repo"] != self.repo or self.receipt["repo"] != self.repo:
             self.fail("REPO", "repo", "policy, receipt and trusted target repository differ")
         if self.receipt["source_sha"] != self.target_sha:
@@ -592,6 +593,7 @@ class _Validation:
             for other_kind, other in roots[i + 1 :]:
                 if path == other or path in other.parents or other in path.parents:
                     self.fail("ROOT_OVERLAP", "roots", f"{kind}:{path} overlaps {other_kind}:{other}")
+
     def _check_environments(self):
         """Validate environment and tool declarations against the receipt.
 
@@ -667,6 +669,7 @@ class _Validation:
         self.command_finished = {}
         for key, declared in self.p["commands"].items():
             self._check_one_command(key, declared)
+
     def check_test_families(self):
         """Validate test families: counts, required tests and skip policy.
 
@@ -676,6 +679,7 @@ class _Validation:
         self.passed_families = set()
         for key, declared in self.p["test_families"].items():
             self._check_one_family(key, declared)
+
     def check_artifact_qualification(self):
         """Validate artifact qualification dependencies and timing.
 
@@ -743,7 +747,9 @@ class _Validation:
             if declared["applicable"]:
                 if not declared["qualification_command_ids"]:
                     self.fail(
-                        "QUALIFICATION_POLICY", f"artifact_kinds/{key}", "applicable artifact needs a qualification command"
+                        "QUALIFICATION_POLICY",
+                        f"artifact_kinds/{key}",
+                        "applicable artifact needs a qualification command",
                     )
                 if not set(declared["qualification_command_ids"]) <= set(self.p["commands"]) or not set(
                     declared["qualification_test_family_ids"]
@@ -772,6 +778,7 @@ class _Validation:
         """
         for key, declared in self.p["coverage_scopes"].items():
             self._check_one_coverage(key, declared)
+
     def check_requirements(self):
         """Validate standards/tasks acceptance dependencies.
 
@@ -806,7 +813,9 @@ class _Validation:
                         and set(declared["test_family_ids"]) <= self.passed_families
                         and set(declared["artifact_kinds"]) <= self.valid_kinds
                     ):
-                        self.fail("FALSE_PASS_DEPENDENCY", field, "claimed passing requirement has an unresolved dependency")
+                        self.fail(
+                            "FALSE_PASS_DEPENDENCY", field, "claimed passing requirement has an unresolved dependency"
+                        )
 
     def check_exceptions(self):
         """Validate policy exceptions and their proven alternatives.
@@ -868,7 +877,6 @@ class _Validation:
             "canonical_standards": len(STANDARD_IDS),
         }
         return result
-
 
     def _check_one_command(self, key, declared):
         """Validate one command record against its policy declaration.
@@ -940,7 +948,6 @@ class _Validation:
         if status == "blocked" and actual["exit_code"] is not None:
             self.fail("BLOCKED_EXIT", field, "blocked command cannot claim an execution exit code")
 
-
     def _check_one_family(self, key, declared):
         """Validate one test-family record against its policy declaration.
 
@@ -959,7 +966,9 @@ class _Validation:
             if actual["tests"]:
                 self.fail("NA_TESTS", field, "N/A family cannot claim executed test records")
             if declared["minimum_executed"] or declared["required_test_ids"] or declared["allowed_skips"]:
-                self.fail("NA_TEST_POLICY", field, "N/A family must not retain contradictory execution or skip requirements")
+                self.fail(
+                    "NA_TEST_POLICY", field, "N/A family must not retain contradictory execution or skip requirements"
+                )
             return
         self.references(actual["evidence_ids"], field, actual["status"] in ("passed", "failed"))
         self._family_execution_checks(key, declared, actual, field, computed, tests, allowed, before)
@@ -1006,7 +1015,9 @@ class _Validation:
         policy-allowed skips; `before` -- issue baseline. Output: none.
         """
         if declared["minimum_executed"] < 1 or not declared["required_test_ids"]:
-            self.fail("TEST_POLICY", field, "applicable family requires a positive executed floor and named required tests")
+            self.fail(
+                "TEST_POLICY", field, "applicable family requires a positive executed floor and named required tests"
+            )
         unmet = self.block if actual["status"] == "blocked" else self.fail
         if computed["executed"] < declared["minimum_executed"]:
             unmet("ZERO_OR_FEW_TESTS", field, "too few tests actually executed")
@@ -1034,8 +1045,6 @@ class _Validation:
             if len(self.issues) == before and set(actual["evidence_ids"]) <= self.valid_evidence:
                 self.passed_families.add(key)
 
-
-
     def _family_required_tests(self, declared, actual, field, tests, allowed, unmet):
         """Validate required tests and unexpected skips.
 
@@ -1047,8 +1056,10 @@ class _Validation:
             if test_id not in tests:
                 unmet("MISSING_TEST", field, f"required test {test_id} absent")
             elif tests[test_id]["status"] != "passed":
-                report = self.block if tests[test_id]["status"] == "blocked" and actual["status"] == "blocked" else self.fail
+                blocked = tests[test_id]["status"] == "blocked" and actual["status"] == "blocked"
+                report = self.block if blocked else self.fail
                 report("REQUIRED_TEST_NOT_PASSED", field, f"required test {test_id} did not pass")
+
     def _check_one_coverage(self, key, declared):
         """Validate one coverage-scope record against its policy declaration.
 
@@ -1067,7 +1078,9 @@ class _Validation:
         if not self.applicability(declared, actual, field):
             return
         if declared["measurement"] == "none" or not declared["included_roots"]:
-            self.fail("COVERAGE_POLICY", field, "applicable coverage needs a measurement mode and explicit source scope")
+            self.fail(
+                "COVERAGE_POLICY", field, "applicable coverage needs a measurement mode and explicit source scope"
+            )
         if actual["status"] == "failed":
             self.fail("COVERAGE_FAILED", field, actual["reason"])
         if actual["status"] == "blocked":
@@ -1084,7 +1097,6 @@ class _Validation:
                     or self.r["artifacts"][artifact_id]["kind"] != declared["artifact_kind"]
                 ):
                     self.fail("COVERAGE_ARTIFACT", field, "coverage references missing/unqualified/wrong-kind artifact")
-
 
     def _coverage_declared_checks(self, declared, field):
         """Validate one coverage scope's declared references and paths.
@@ -1113,6 +1125,8 @@ class _Validation:
                 relative_path(value)
             except ContractError as error:
                 self.fail("COVERAGE_PATH", field, str(error))
+
+
 def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, profile_sha, now=None):
     """Run the full receipt-consistency validation.
 
@@ -1143,6 +1157,7 @@ def validate(policy_path, receipt_path, evidence_root, *, repo, target_sha, prof
             break
         phase()
     return run.build_result()
+
 
 def main(argv=None):
     """CLI entry point for the contract validator.
@@ -1175,4 +1190,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

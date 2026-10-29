@@ -206,6 +206,55 @@ def select_best(negatives: list[dict], positives: list[dict], target_fp: int) ->
     return best
 
 
+def _insufficient_data_report(base: dict, positives: list, negatives: list) -> dict:
+    """Build the insufficient-data report with per-metric reasons.
+
+    Inputs: `base` -- the identity block; `positives`/`negatives` -- the class
+    partitions. Output: the finished report dict (status `insufficient_data`).
+    """
+    reasons = {}
+    if not positives:
+        reasons["recall"] = "no positive (rejection) rows"
+    if not negatives:
+        reasons["false_positive_rate_upper_95"] = "no negative rows"
+    base.update(
+        {
+            "status": "insufficient_data",
+            "threshold": None,
+            "true_positives": None,
+            "false_positives": None,
+            "recall": None,
+            "false_positive_rate_upper_95": None,
+            "metric_reasons": reasons,
+        }
+    )
+    return base
+
+    return base
+
+
+def _abstain_all_report(base: dict, negatives: list) -> dict:
+    """Build the abstain-all report produced when no threshold meets the FP
+    budget.
+
+    Inputs: `base` -- the identity block; `negatives` -- negative rows.
+    Output: the finished report dict (status `abstain_all`).
+    """
+    base.update(
+        {
+            "status": "abstain_all",
+            "threshold": None,
+            "true_positives": 0,
+            "false_positives": 0,
+            "recall": 0.0,
+            "false_positive_rate_upper_95": wilson_upper_bound(0, len(negatives)),
+        }
+    )
+    return base
+
+    return base
+
+
 def calibrate(rows: list, target_fp: int, input_identity: dict | None = None) -> dict:
     """Select the FP-compliant threshold with maximal recall; build the report.
 
@@ -236,39 +285,14 @@ def calibrate(rows: list, target_fp: int, input_identity: dict | None = None) ->
     if input_identity:
         base["input"] = dict(input_identity)
     if not positives or not negatives:
-        reasons = {}
-        if not positives:
-            reasons["recall"] = "no positive (rejection) rows"
-        if not negatives:
-            reasons["false_positive_rate_upper_95"] = "no negative rows"
-        base.update(
-            {
-                "status": "insufficient_data",
-                "threshold": None,
-                "true_positives": None,
-                "false_positives": None,
-                "recall": None,
-                "false_positive_rate_upper_95": None,
-                "metric_reasons": reasons,
-            }
-        )
-        return base
+        return _insufficient_data_report(base, positives, negatives)
     best = select_best(negatives, positives, target_fp)
     if best is None:
-        base.update(
-            {
-                "status": "abstain_all",
-                "threshold": None,
-                "true_positives": 0,
-                "false_positives": 0,
-                "recall": 0.0,
-                "false_positive_rate_upper_95": wilson_upper_bound(0, len(negatives)),
-            }
-        )
-        return base
+        return _abstain_all_report(base, negatives)
     # Recount at the reported threshold so the counts provably match it.
     fp, tp = counts_at(negatives, positives, best["threshold"])
-    assert (fp, tp) == (best["false_positives"], best["true_positives"])
+    if (fp, tp) != (best["false_positives"], best["true_positives"]):
+        raise RuntimeError("reported threshold does not reproduce its reported counts")
     base.update(
         {
             "status": "ok",

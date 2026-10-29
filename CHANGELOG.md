@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+DeepSource-parity and complexity wave (2026-10-29). Added:
+
+- Ruff parity enforcement: `C901` (every function at McCabe 15 or below),
+  `PIE790` (no stray `pass`) and `S101` (production code raises typed errors;
+  asserts allowed only in tests via `per-file-ignores`) are now in the
+  enforced rule set — the same classes the DeepSource analyzers flag.
+
+Changed:
+
+- `tools/contract/validate_contract.py`: complete class decomposition of the
+  5,661-character `validate()` monolith (McCabe 178) into cohesive phase
+  methods and per-record helpers; behavior proven unchanged by the three
+  documented example outcomes and the 48-test reference suite.
+- `tools/check_engineering_policy.py`, `tools/validate_receipt.py`,
+  `training/calibrate_zero_fp.py`: hot functions split into cohesive
+  checks/validators (46/19/16 complexity each) with identical messages.
+
+Fixed:
+
+- Two production asserts and one stray `pass` (the BAN-B101/PTC-W0063
+  classes) replaced with explicit typed errors or removed.
+
 Audit and live-verification waves (2026-10-28). Added:
 
 - `rr live-selftest`: operator-invoked self-addressed send-path probe with

@@ -187,36 +187,57 @@ def _validate_gates(receipt: dict[str, Any], now: datetime, generated_at: dateti
         if gate_id not in REQUIRED_GATES:
             findings.append(f"gate.unknown_id:{gate_id}")
             continue
-        try:
-            command = _str_field(gate.get("command"), f"{field}.command")
-            exit_code = _int_field(gate.get("exit_code"), f"{field}.exit_code", minimum=0)
-            status = _str_field(gate.get("status"), f"{field}.status")
-            started = parse_time(gate.get("started_at"), f"{field}.started_at")
-            finished = parse_time(gate.get("finished_at"), f"{field}.finished_at")
-        except ReceiptError as error:
-            findings.append(f"{field}:malformed:{error}")
-            continue
-        if status not in STATUSES:
-            findings.append(f"gate.status_invalid:{gate_id}")
-        if REQUIRED_GATES[gate_id] not in command:
-            findings.append(f"gate.command_mismatch:{gate_id}")
-        # The producer's exit code and status must tell the same story.
-        if (status == "passed") != (exit_code == 0) or status == "blocked" and exit_code == 0:
-            findings.append(f"gate.exit_status_contradiction:{gate_id}")
-        if status == "blocked" and "reason" not in gate:
-            findings.append(f"gate.blocked_without_reason:{gate_id}")
-        if started > finished:
-            findings.append(f"gate.time_order:{gate_id}")
-        for label, moment in (("started", started), ("finished", finished)):
-            if moment - now > MAX_CLOCK_SKEW:
-                findings.append(f"gate.future_timestamp:{gate_id}:{label}")
-        if generated_at is not None and finished - generated_at > MAX_CLOCK_SKEW:
-            findings.append(f"gate.finished_after_receipt:{gate_id}")
-        if gate_id in FAMILY_GATES:
-            _validate_family(gate.get("test_family"), gate_id, findings)
+        findings.extend(_validate_one_gate(gate, gate_id, field, now, generated_at))
     for required in REQUIRED_GATES:
         if required not in seen:
             findings.append(f"gate.missing:{required}")
+    return findings
+
+    return findings
+
+
+def _validate_one_gate(
+    gate: dict[str, Any],
+    gate_id: str,
+    field: str,
+    now: datetime,
+    generated_at: datetime | None,
+) -> list[str]:
+    """Check one parsed gate's fields, semantics and family link.
+
+    Inputs: `gate` -- the gate record; `gate_id` -- its verified id; `field` --
+    the receipt field label; `now` -- the validation clock; `generated_at` --
+    the receipt generation time when known. Output: `list[str]` -- findings for
+    this gate (empty when valid).
+    """
+    findings: list[str] = []
+    try:
+        command = _str_field(gate.get("command"), f"{field}.command")
+        exit_code = _int_field(gate.get("exit_code"), f"{field}.exit_code", minimum=0)
+        status = _str_field(gate.get("status"), f"{field}.status")
+        started = parse_time(gate.get("started_at"), f"{field}.started_at")
+        finished = parse_time(gate.get("finished_at"), f"{field}.finished_at")
+    except ReceiptError as error:
+        findings.append(f"{field}:malformed:{error}")
+        return findings
+    if status not in STATUSES:
+        findings.append(f"gate.status_invalid:{gate_id}")
+    if REQUIRED_GATES[gate_id] not in command:
+        findings.append(f"gate.command_mismatch:{gate_id}")
+    # The producer's exit code and status must tell the same story.
+    if (status == "passed") != (exit_code == 0) or status == "blocked" and exit_code == 0:
+        findings.append(f"gate.exit_status_contradiction:{gate_id}")
+    if status == "blocked" and "reason" not in gate:
+        findings.append(f"gate.blocked_without_reason:{gate_id}")
+    if started > finished:
+        findings.append(f"gate.time_order:{gate_id}")
+    for label, moment in (("started", started), ("finished", finished)):
+        if moment - now > MAX_CLOCK_SKEW:
+            findings.append(f"gate.future_timestamp:{gate_id}:{label}")
+    if generated_at is not None and finished - generated_at > MAX_CLOCK_SKEW:
+        findings.append(f"gate.finished_after_receipt:{gate_id}")
+    if gate_id in FAMILY_GATES:
+        _validate_family(gate.get("test_family"), gate_id, findings)
     return findings
 
 

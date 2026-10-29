@@ -98,17 +98,23 @@ def _index(records: list[dict], kind: str, errors: list[str]) -> dict[str, dict]
     return out
 
 
-def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
-    """Run every S01 acceptance check against a parsed policy.
+def _need_ref(index: dict[str, dict], label: str, rid: str, where: str, errors: list[str]) -> None:
+    """Record an error when `rid` is not a declared record of `label`.
 
-    Inputs: `policy` -- parsed engineering.toml mapping; `repo_root` -- the
-    repository root used to resolve declared root/input paths; `today` -- the
-    current date used for expiry and review-deadline checks. Output: verdict
-    dict with `result` ("PASS" or "FAIL") and `errors` (list of human-readable
-    defect descriptions, empty on PASS).
+    Inputs: `index` -- id-indexed policy records; `label` -- record kind for
+    the message; `rid` -- the referenced id; `where` -- referencing location;
+    `errors` -- the shared error list. Output: none.
     """
-    errors: list[str] = []
+    if rid not in index:
+        errors.append(f"{where}: undefined {label} id {rid!r}")
 
+
+def _check_required_fields(policy: dict, errors: list[str]) -> None:
+    """Check required fields, canonical id sets and schema conformance.
+
+    Inputs: `policy` -- parsed policy mapping; `errors` -- the shared error
+    list. Output: none; findings are appended to `errors`.
+    """
     # 1. Missing fields: exact reference schema shape plus the S01 named set.
     for key in TOP_REQUIRED:
         if key not in policy:
@@ -127,9 +133,18 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
         reference.check_shape(policy, schema)
     except Exception as exc:  # noqa: BLE001 - surfaced as a validation error
         errors.append(f"schema conformance: {exc}")
-    if errors:
-        return {"result": "FAIL", "errors": errors}
 
+
+def _check_paths_and_digests(policy: dict, repo_root: Path, errors: list[str]) -> None:
+    """Check declared root paths exist and input digests match disk.
+
+    Generated roots are build outputs that need not exist in a clean checkout,
+    so existence is enforced for authored/vendor/fixture roots and the hashed
+    input files only.
+
+    Inputs: `policy` -- parsed policy mapping; `repo_root` -- repository root;
+    `errors` -- the shared error list. Output: none.
+    """
     # 2. Nonexistent paths and input digests. Generated roots are build
     # outputs that need not exist in a clean checkout, so existence is enforced
     # for authored/vendor/fixture roots and the hashed input files only.
@@ -151,6 +166,13 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
                 f"(recorded {rec.get('sha256')}, actual {digest})"
             )
 
+
+def _check_dates(policy: dict, today: date, errors: list[str]) -> None:
+    """Check exception expiry dates and the policy review deadline.
+
+    Inputs: `policy` -- parsed policy mapping; `today` -- the current date;
+    `errors` -- the shared error list. Output: none.
+    """
     # 3. Expired exceptions and review deadlines.
     for exc_rec in policy.get("exceptions", []):
         expires = date.fromisoformat(exc_rec["expires_on"])
@@ -162,57 +184,64 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
     if date.fromisoformat(policy["review_due"]) < today:
         errors.append(f"review_due {policy['review_due']} is in the past; policy review is overdue")
 
+
+def _check_references(
+    policy: dict,
+    commands: dict[str, dict],
+    families: dict[str, dict],
+    kinds: dict[str, dict],
+    environments: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check every cross-record reference resolves to a declared id.
+
+    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/`kinds`/
+    `environments` -- id-indexed record maps; `errors` -- the shared error
+    list. Output: none.
+    """
     # 4. Undefined references across commands, test families and artifact kinds.
     commands = _index(policy.get("commands", []), "commands", errors)
     families = _index(policy.get("test_families", []), "test_families", errors)
     kinds = _index(policy.get("artifact_kinds", []), "artifact_kinds", errors)
     environments = _index(policy.get("environments", []), "environments", errors)
 
-    def need_command(cid: str, where: str) -> None:
-        """Record an error when `cid` is not a declared command. Inputs: cid --
-        referenced command id; where -- referencing location. Output: none.
-        """
-        if cid not in commands:
-            errors.append(f"{where}: undefined command id {cid!r}")
-
-    def need_family(fid: str, where: str) -> None:
-        """Record an error when `fid` is not a declared test family. Inputs:
-        fid -- referenced family id; where -- referencing location. Output:
-        none.
-        """
-        if fid not in families:
-            errors.append(f"{where}: undefined test family id {fid!r}")
-
-    def need_kind(kid: str, where: str) -> None:
-        """Record an error when `kid` is not a declared artifact kind. Inputs:
-        kid -- referenced kind id; where -- referencing location. Output: none.
-        """
-        if kid not in kinds:
-            errors.append(f"{where}: undefined artifact kind id {kid!r}")
-
     for fam in policy.get("test_families", []):
         where = f"test_families[{fam['id']}]"
-        need_command(fam.get("command_id", ""), where)
+        _need_ref(commands, "command", fam.get("command_id", ""), where, errors)
         if fam.get("environment") not in environments:
             errors.append(f"{where}: undefined environment {fam.get('environment')!r}")
     for kind in policy.get("artifact_kinds", []):
         where = f"artifact_kinds[{kind['id']}]"
         for cid in kind.get("qualification_command_ids", []):
-            need_command(cid, where)
+            _need_ref(commands, "command", cid, where, errors)
         for fid in kind.get("qualification_test_family_ids", []):
-            need_family(fid, where)
+            _need_ref(families, "test family", fid, where, errors)
         if kind.get("environment") not in environments:
             errors.append(f"{where}: undefined environment {kind.get('environment')!r}")
     for cov in policy.get("coverage_scopes", []):
         where = f"coverage_scopes[{cov['id']}]"
-        need_command(cov.get("command_id", ""), where)
-        need_kind(cov.get("artifact_kind", ""), where)
+        _need_ref(commands, "command", cov.get("command_id", ""), where, errors)
+        _need_ref(kinds, "artifact kind", cov.get("artifact_kind", ""), where, errors)
     for exc_rec in policy.get("exceptions", []):
         where = f"exceptions[{exc_rec['id']}]"
         for cid in exc_rec.get("alternative_command_ids", []):
-            need_command(cid, where)
+            _need_ref(commands, "command", cid, where, errors)
         for fid in exc_rec.get("alternative_test_family_ids", []):
-            need_family(fid, where)
+            _need_ref(families, "test family", fid, where, errors)
+
+
+def _check_lanes(
+    policy: dict,
+    commands: dict[str, dict],
+    families: dict[str, dict],
+    kinds: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check every required lane has a live execution path.
+
+    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/`kinds` --
+    id-indexed record maps; `errors` -- the shared error list. Output: none.
+    """
 
     # 5. Required lanes without an execution path and canonical id sets.
     def lane_ok(entry: dict, where: str) -> None:
@@ -224,13 +253,13 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
         if entry.get("applicable") and not deps:
             errors.append(f"{where}: applicable lane names no command, test family or artifact kind")
         for cid in entry.get("command_ids", []):
-            need_command(cid, where)
+            _need_ref(commands, "command", cid, where, errors)
             if cid in commands and not commands[cid].get("applicable"):
                 errors.append(f"{where}: references command {cid!r} which is marked not applicable")
         for fid in entry.get("test_family_ids", []):
-            need_family(fid, where)
+            _need_ref(families, "test family", fid, where, errors)
         for kid in entry.get("artifact_kinds", []):
-            need_kind(kid, where)
+            _need_ref(kinds, "artifact kind", kid, where, errors)
 
     for entry in policy.get("standards", []) + policy.get("tasks", []):
         lane_ok(entry, f"{entry.get('id')}")
@@ -251,6 +280,28 @@ def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
                     f"(command {cov.get('command_id')!r} is marked not applicable)"
                 )
 
+
+def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:
+    """Run every S01 acceptance check against a parsed policy.
+
+    Inputs: `policy` -- parsed engineering.toml mapping; `repo_root` -- the
+    repository root used to resolve declared root/input paths; `today` -- the
+    current date used for expiry and review-deadline checks. Output: verdict
+    dict with `result` ("PASS" or "FAIL") and `errors` (list of human-readable
+    defect descriptions, empty on PASS).
+    """
+    errors: list[str] = []
+    _check_required_fields(policy, errors)
+    if errors:
+        return {"result": "FAIL", "errors": errors}
+    _check_paths_and_digests(policy, repo_root, errors)
+    _check_dates(policy, today, errors)
+    commands = _index(policy.get("commands", []), "commands", errors)
+    families = _index(policy.get("test_families", []), "test_families", errors)
+    kinds = _index(policy.get("artifact_kinds", []), "artifact_kinds", errors)
+    environments = _index(policy.get("environments", []), "environments", errors)
+    _check_references(policy, commands, families, kinds, environments, errors)
+    _check_lanes(policy, commands, families, kinds, errors)
     return {"result": "PASS" if not errors else "FAIL", "errors": errors}
 
 

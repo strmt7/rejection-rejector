@@ -31,13 +31,17 @@ class TestRuffConfig(unittest.TestCase):
         self.assertEqual(config["target-version"], "py313")
         self.assertEqual(
             config["lint"]["select"],
-            ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D"],
+            ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D", "C901", "PIE790", "S101"],
         )
         # The D contract: documentation rules on (every module, class,
         # function and magic method carries a docstring), presentation-only
         # D2xx/D4xx rules off (see the rationale block in .ruff.toml).
         self.assertEqual(config["lint"]["ignore"], ["D203", "D205", "D212", "D213", "D401"])
         self.assertEqual(config["format"]["line-ending"], "lf")
+        # Parity classes (dated 2026-10-29): complexity capped at 15,
+        # production asserts banned (tests may assert), no stray pass.
+        self.assertEqual(config["lint"]["mccabe"]["max-complexity"], 15)
+        self.assertEqual(config["lint"]["per-file-ignores"], {"tests/*": ["S101"]})
 
     def test_line_length_exception_is_documented_and_dated(self) -> None:
         """Line length exception is documented and dated."""

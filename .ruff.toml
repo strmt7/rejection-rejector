@@ -15,8 +15,18 @@
 line-length = 120
 target-version = "py313"
 
+# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 15),
+# PIE790 and S101 are enabled so the enforced rule set covers the same
+# complexity, unnecessary-pass and production-assert classes the DeepSource
+# analyzers flag (PTC-W0062, PTC-W0063, BAN-B101). Test modules may use
+# asserts (S101 ignored there); production code raises typed errors instead.
+# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 15),
+# PIE790 and S101 are enabled so the enforced rule set covers the same
+# complexity, unnecessary-pass and production-assert classes the DeepSource
+# analyzers flag (PTC-W0062, PTC-W0063, BAN-B101). Test modules may use
+# asserts (S101 ignored there); production code raises typed errors instead.
 [lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D"]
+select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D", "C901", "PIE790", "S101"]
 # D enforcement covers the documentation contract (D1xx: every module,
 # class, function and __init__ carries a docstring). The D2xx/D4xx
 # presentation rules beyond that contract are deliberately not enforced:
@@ -24,6 +34,12 @@ select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D"]
 # D401 rewrites descriptive test-case docstrings into imperative mood for
 # no correctness gain. D203 conflicts with D211 (ruff ignores one).
 ignore = ["D203", "D205", "D212", "D213", "D401"]
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.per-file-ignores]
+"tests/*" = ["S101"]
 
 [format]
 line-ending = "lf"

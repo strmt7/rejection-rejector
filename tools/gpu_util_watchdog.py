@@ -202,7 +202,8 @@ class Watchdog:
             text=True,
         )
         try:
-            assert proc.stdout is not None
+            if proc.stdout is None:
+                raise RuntimeError("watchdog subprocess produced no stdout")
             bad_samples = 0
             for line in proc.stdout:
                 line = line.strip()
