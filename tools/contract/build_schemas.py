@@ -12,9 +12,7 @@ def string(pattern=None):
     Inputs: `pattern` -- regex the value must match (default: non-blank).
     Output: `dict` -- the schema node.
     """
-    result = {"type": "string", "minLength": 1}
-    result["pattern"] = pattern or r"\S"
-    return result
+    return {"type": "string", "minLength": 1, "pattern": pattern or r"\S"}
 
 
 def array(item, minimum=0, unique=False):
