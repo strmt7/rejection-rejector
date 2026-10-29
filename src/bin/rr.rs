@@ -392,23 +392,25 @@ fn autostart_report(
     dir: &std::path::Path,
     run: background::CommandRunner,
 ) -> Result<serde_json::Value> {
-    let value: serde_json::Value = match action {
+    match action {
         AutostartAction::Install => {
             let installed = background::install(executable, dir, run)?;
             let rendered: serde_json::Value = serde_json::to_value(installed)?;
-            rendered
+            Ok(rendered)
         }
         AutostartAction::Status => {
             let status = background::status(executable, dir, run)?;
             let rendered: serde_json::Value = serde_json::to_value(status)?;
-            rendered
+            Ok(rendered)
         }
         AutostartAction::Remove => {
             background::remove(run)?;
-            serde_json::json!({ "removed": true, "task_name": background::TASK_NAME })
+            Ok(serde_json::json!({
+                "removed": true,
+                "task_name": background::TASK_NAME
+            }))
         }
-    };
-    Ok(value)
+    }
 }
 
 /// Wait until the background worker reports its startup state.
