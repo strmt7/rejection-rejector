@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-### Added
+Audit and live-verification waves (2026-10-28). Added:
+
 - `rr live-selftest`: operator-invoked self-addressed send-path probe with
   independent `find_sent` verification; fail-closed on demo workspaces,
   missing transport, missing send scope and conversation-bound backends.
@@ -16,7 +17,8 @@
   class, function, `__init__` and magic method carries a docstring with
   Inputs/Output documentation; 134 docstrings written across the tree.
 
-### Fixed
+Fixed:
+
 - SMTP TLS pairing: the app-password send path paired lettre's implicit-TLS
   `relay()` with the STARTTLS submission port, failing every live handshake
   with a TLS-record error. TLS now follows IANA port semantics (465 implicit
@@ -67,6 +69,7 @@ installer, corpus-proven twelve-language reply policy, and the coverage
 doctrine (100% lines as a standing goal, never a CI gate).
 
 ### Added
+
 - Multilingual reply policy: replies follow the email's first substantive
   language (deterministically detected and verified against the draft; a
   mismatch holds the message). Twelve languages are contractually guaranteed:
@@ -81,12 +84,11 @@ doctrine (100% lines as a standing goal, never a CI gate).
   review remains the default mode.
 
 ### Fixed
+
 - Classification output budget: real recruiting mail needs ~6.5k think tokens
   before schema JSON; the previous 3072 budget failed closed on every real
   email while short fixtures passed. Budgets now scale with the context tier
   (32768 supported) and the email-text budget matches the output envelope.
-
-
 
 - Removes the legacy manual Windows-ZIP path from ordinary Rust CI so user-facing packages cannot bypass the attested release gates. Preserves normal Windows/Linux builds, source/debug evidence and manual verification runs.
 - Records the original 100-commit incident scope and reproducible audit procedure, prohibits commit-count padding, and aligns testing documentation with actual source-bound release checks.
@@ -133,7 +135,6 @@ Enterprise AI-verification hardening.
 - Adds enterprise policy v3 controls to require independent verification and restrict verifier tags.
 - Migrates encrypted settings format v1 to v2 fail-closed, invalidating prior task qualification and unattended delivery.
 - Bumps the pre-1.0 Rust library version because public configuration/policy/status/analysis structs gain verifier fields.
-
 
 ## 0.1.0
 

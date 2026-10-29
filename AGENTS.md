@@ -25,7 +25,7 @@ authorizes sending), fail-closed emergency stop, encrypted SQLite payloads.
 
 ## Commands
 
-```
+```text
 cargo fmt --all --check
 cargo test --locked --lib --no-default-features
 cargo test --locked
@@ -83,6 +83,7 @@ tool/crate's real API and current version before use (Verification discipline
 ## Verification discipline (all AI agents)
 
 Never assume — verify against live sources, then re-verify after changes.
+
 1. State facts only from tool output run this turn (CI status, versions,
    signatures, file contents) — never from memory, training data, or a
    stale result from an earlier turn.
