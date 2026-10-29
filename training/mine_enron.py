@@ -704,7 +704,6 @@ def _iter_tar_messages(corpus: Path):
             data = handle.read()
             if data:
                 yield member.name, data
-    return
 
 
 def _iter_directory_messages(corpus: Path):

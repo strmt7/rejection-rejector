@@ -930,7 +930,7 @@ class _Validation:
         original early exits.
         """
         if self.aborted:
-            return
+            return self.output()
         computed = self.output()["consistency_result"]
         if self.receipt["overall_status"] != computed:
             self.fail(
