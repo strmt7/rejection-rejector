@@ -2,7 +2,7 @@
   "files": {
     "README.md": "b2c9c833e8af48ecd31f766b71edbdb88084466a5635ca2ac692576061a5e3ce",
     "build_examples.py": "ae0ac5cf6cf84d3ede1a7b21ac66d2966e2def6b858feb8d093561c324052c8a",
-    "build_schemas.py": "dcba1398c3c008a52696098c531107868323a23ba7c7d4a4788daebb6d9974b4",
+    "build_schemas.py": "b027c30e8607cd79985d4b1d44b3f0ad479440037710c578b49cf3b64f49ea13",
     "engineering-policy.schema.json": "b4b541a4ae0f5e5cdcdfae82edddee06734dbc73408f653277cfb1f60f65cbab",
     "example_validation_results.json": "dd9a5c7ddd76b8c91af8fe1be329c5dc497ed90fda5c05f881b74eb813240317",
     "examples/artifacts/example-report.json": "adae0a9287e693c91ada59ca6dab50be1a2e99fd68be6928600964f376fc2893",
@@ -17,7 +17,7 @@
     "test-output.txt": "17a0a9bc1de6063306e83de9a2e1668a3170e7842f04d75fea3b220de71b09b6",
     "test-results.json": "074d9ffb0c05d3ffce6e66bf51d99d29ad2946b5a801920b8125a0974d6f60a7",
     "test_validate_contract.py": "2b5f5fc5120b61e063ec612795dcf7ec29849bda078b8391072229339baec7e7",
-    "validate_contract.py": "a1729b3743c53251a7fbe7307a912d7e7b4d8ceb8a8e8b3bf5541ca9e671dff4"
+    "validate_contract.py": "d8a696470d2bba8261e8d469afb2541df52617d26cf4a3c765e6f88c600dd635"
   },
   "purpose": "Proposed read-only report contract; no repository adoption claimed"
 }
