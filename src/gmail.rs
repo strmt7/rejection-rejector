@@ -374,7 +374,7 @@ impl Gmail {
             .context("Google token refresh failed; reconnect if consent expired")?;
         let mut t: Tokens = net::json(response, 32768)?;
         let until = Instant::now() + Duration::from_secs(t.expires_in.saturating_sub(60).max(1));
-        let raw_token = std::mem::take(&mut t.access_token);
+        let raw_token: String = std::mem::take(&mut t.access_token);
         let access_token = Zeroizing::new(raw_token);
         self.token = Some((access_token.clone(), until));
         if let Some(refresh_token) = &mut t.refresh_token {
