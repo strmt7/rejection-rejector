@@ -374,7 +374,8 @@ impl Gmail {
             .context("Google token refresh failed; reconnect if consent expired")?;
         let mut t: Tokens = net::json(response, 32768)?;
         let until = Instant::now() + Duration::from_secs(t.expires_in.saturating_sub(60).max(1));
-        let access_token = Zeroizing::new(std::mem::take(&mut t.access_token));
+        let raw_token = std::mem::take(&mut t.access_token);
+        let access_token = Zeroizing::new(raw_token);
         self.token = Some((access_token.clone(), until));
         if let Some(refresh_token) = &mut t.refresh_token {
             refresh_token.zeroize();
@@ -1463,9 +1464,9 @@ mod tests {
 
     fn test_creds(can_send: bool) -> Credentials {
         Credentials {
-            client_id: "client-id".into(),
-            client_secret: "client-secret".into(),
-            refresh_token: "refresh-token".into(),
+            client_id: "example-client-id".into(),
+            client_secret: "example-client-secret".into(),
+            refresh_token: "example-refresh-token".into(),
             can_send,
         }
     }

@@ -214,68 +214,76 @@ fn login_with<E: Into<anyhow::Error>>(
         "OAuth client file must be a regular file, not a symlink"
     );
     ensure!(metadata.len() <= 32768, "OAuth client file is too large");
-    let mut config_bytes = Zeroizing::new(Vec::new());
-    fs::File::open(path)?
-        .take(32769)
-        .read_to_end(&mut config_bytes)?;
-    ensure!(
-        config_bytes.len() <= 32768,
-        "OAuth client file is too large"
-    );
-    let mut config: ClientFile = serde_json::from_slice(&config_bytes).map_err(|_| {
-        anyhow::anyhow!(
-            "Choose a Google Desktop app OAuth JSON file containing an installed object"
-        )
-    })?;
-    drop(config_bytes);
+    // `config_bytes` holds the raw client-secret bytes; the scope below
+    // zeroizes them the moment the parsed config exists, before any later
+    // code path can observe the raw file content.
+    let mut config: ClientFile = {
+        let mut config_bytes = Zeroizing::new(Vec::new());
+        fs::File::open(path)?
+            .take(32769)
+            .read_to_end(&mut config_bytes)?;
+        ensure!(
+            config_bytes.len() <= 32768,
+            "OAuth client file is too large"
+        );
+        serde_json::from_slice(&config_bytes).map_err(|_| {
+            anyhow::anyhow!(
+                "Choose a Google Desktop app OAuth JSON file containing an installed object"
+            )
+        })?
+    };
     ensure!(
         !config.installed.client_id.is_empty() && !config.installed.client_secret.is_empty(),
         "Incomplete OAuth client file"
     );
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    listener.set_nonblocking(true)?;
-    let redirect = format!(
-        "http://127.0.0.1:{}/callback",
-        listener.local_addr()?.port()
-    );
-    let state = secret();
     let verifier = Zeroizing::new(secret());
-    let challenge = pkce_challenge(verifier.as_str());
-    let scope = if send {
-        format!("{READ_SCOPE} {SEND_SCOPE}")
-    } else {
-        READ_SCOPE.into()
+    // The loopback consent listener lives exactly for the consent phase:
+    // it closes with this scope, before the token exchange can reuse its port.
+    let (code, redirect) = {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let redirect = format!(
+            "http://127.0.0.1:{}/callback",
+            listener.local_addr()?.port()
+        );
+        let state = secret();
+        let challenge = pkce_challenge(verifier.as_str());
+        let scope = if send {
+            format!("{READ_SCOPE} {SEND_SCOPE}")
+        } else {
+            READ_SCOPE.into()
+        };
+        let mut url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")?;
+        url.query_pairs_mut().extend_pairs([
+            ("client_id", config.installed.client_id.as_str()),
+            ("redirect_uri", redirect.as_str()),
+            ("response_type", "code"),
+            ("scope", scope.as_str()),
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+            ("state", state.as_str()),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ]);
+        open_browser(url.as_str()).map_err(|error| {
+            let error: anyhow::Error = error.into();
+            anyhow::anyhow!("Cannot open the system browser for Google sign-in: {error}")
+        })?;
+        let login_deadline = Instant::now() + timeout;
+        let local_port = listener.local_addr()?.port();
+        let code = consent_code(
+            TcpListener::accept,
+            &listener,
+            local_port,
+            state.as_str(),
+            cancelled,
+            login_deadline,
+        )?;
+        // Do not exchange an authorization code after cancellation or expiry.
+        ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
+        ensure!(Instant::now() < login_deadline, "Authorization expired");
+        (code, redirect)
     };
-    let mut url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")?;
-    url.query_pairs_mut().extend_pairs([
-        ("client_id", config.installed.client_id.as_str()),
-        ("redirect_uri", redirect.as_str()),
-        ("response_type", "code"),
-        ("scope", scope.as_str()),
-        ("access_type", "offline"),
-        ("prompt", "consent"),
-        ("state", state.as_str()),
-        ("code_challenge", challenge.as_str()),
-        ("code_challenge_method", "S256"),
-    ]);
-    open_browser(url.as_str()).map_err(|error| {
-        let error: anyhow::Error = error.into();
-        anyhow::anyhow!("Cannot open the system browser for Google sign-in: {error}")
-    })?;
-    let login_deadline = Instant::now() + timeout;
-    let local_port = listener.local_addr()?.port();
-    let code = consent_code(
-        TcpListener::accept,
-        &listener,
-        local_port,
-        state.as_str(),
-        cancelled,
-        login_deadline,
-    )?;
-    // Do not exchange an authorization code after cancellation or expiry.
-    ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
-    ensure!(Instant::now() < login_deadline, "Authorization expired");
-    drop(listener);
     let response = net::client(30, false)?
         .post(token_url)
         .form(&[
@@ -399,7 +407,7 @@ mod tests {
     #[test]
     fn token_wiping_clears_both_secrets() {
         let mut tokens = Tokens {
-            access_token: "private-access-token".into(),
+            access_token: "example-access-token".into(),
             expires_in: 3600,
             refresh_token: Some("private-refresh-token".into()),
             scope: None,

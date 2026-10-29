@@ -324,15 +324,18 @@ fn copy_private_from_reader(input: &mut impl Read, destination: &Path) -> Result
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut output = options.open(destination)?;
-    let result = (|| -> Result<()> {
-        std::io::copy(input, &mut output)?;
-        output.flush()?;
-        output.sync_all()?;
-        Ok(())
-    })();
+    let result = {
+        // The destination handle closes at the end of this scope, before the
+        // error path below: Windows cannot remove a file that is still open.
+        let mut output = options.open(destination)?;
+        (|| -> Result<()> {
+            std::io::copy(input, &mut output)?;
+            output.flush()?;
+            output.sync_all()?;
+            Ok(())
+        })()
+    };
     if result.is_err() {
-        drop(output);
         let _ = fs::remove_file(destination);
     }
     result

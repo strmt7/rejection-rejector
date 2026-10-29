@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Findings-policy wave (2026-10-29). Changed:
+
+- Owner policy adopted and enforced: **static-analysis findings are fixed at
+  source by complete professional rewrites; suppressions of any kind are
+  banned** (no DeepSource ignore rules, no false-positive dispositions, no
+  code-scanning dismissals). `docs/deepsource-dispositions.md` is now the
+  policy statement with the accepted-open list (CII registration, Scorecard
+  Code-Review/Maintained), replacing the former dispositions registry.
+- All 15 DeepSource ignore rules were deleted and both manually dismissed
+  code-scanning alerts reopened; the previously disposed patterns were
+  eliminated at source instead: `String::default()` construction
+  (RS-W1079), `Default`/`new` delegation inverted so `default()` is the
+  constructor of record (RS-A1008), unit-lambda result normalization
+  rewritten as explicit matches/statements (RS-E1015 ×3), explicit
+  `drop(...)` lifetime calls rewritten as scopes (RS-E1011 ×5), envelope
+  tests assert CRLF-only line breaks explicitly and split with `lines()`
+  (RS-W1217), test/doc secret fixtures carry `example-` placeholders
+  (SCT-A000), and the local-model probe talks to its endpoint through
+  `http.client` with the same https/loopback restriction (BAN-B310).
+
 DeepSource-parity and complexity wave (2026-10-29). Added:
 
 - Ruff parity enforcement: `C901` (every function at McCabe 10 or below —

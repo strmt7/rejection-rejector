@@ -2779,8 +2779,8 @@ mod live_selftest_tests {
     impl Provider for ProbeTransport {
         fn profile(&mut self) -> Result<Profile> {
             Ok(Profile {
-                email_address: String::new(),
-                history_id: String::new(),
+                email_address: String::default(),
+                history_id: String::default(),
             })
         }
         fn list(&mut self, _query: &str, _page: Option<&str>) -> Result<MessagePage> {

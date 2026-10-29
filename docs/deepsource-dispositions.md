@@ -1,204 +1,54 @@
-# DeepSource Dispositions
+# Static-Analysis Findings Policy — Fix at Source, Never Suppress
 
 DeepSource analyzes every commit on `main` through the GitHub integration
-([dashboard](https://app.deepsource.com/gh/strmt7/rejection-rejector)). Findings
-are remediated at the source wherever the finding reflects a real defect. This
-document records the **exact-source false-positive dispositions** — findings the
-analyzer reports that the surrounding source proves harmless — so acceptance
-never rests on a dashboard ignore alone.
+([dashboard](https://app.deepsource.com/gh/strmt7/rejection-rejector)); code
+scanning runs through GitHub's own lanes. This repository operates under a
+single, standing policy for every finding both systems report.
 
-Inventory retrieval (complete active occurrence list for a commit) uses the
-documented DeepSource repository occurrence API through the official CLI's
-stored session; see `docs/OPERATIONS.md` for the review loop.
+## Policy (standing, non-negotiable)
 
-## Policy
+1. **Every finding is fixed at source by a complete, professional code
+   change.** Rewrites, not patches: the shape that triggers the rule must
+   stop existing because the code became better, never because the rule was
+   silenced.
+2. **No suppressions. Ever.** No DeepSource ignore rules, no
+   `report_false_positive` dispositions, no code-scanning dismissals (not
+   "false positive", not "won't fix"), no `# noqa`/`#[allow]`-style analyzer
+   silencing introduced to make a finding disappear. This applies to agents
+   and humans alike.
+3. **A finding that genuinely cannot be solved stays open.** Two or three
+   unsolvable findings are acceptable; a silenced finding is not. "Cannot be
+   solved" means the rule contradicts a hard external constraint (an
+   external registration, a governance decision the repository deliberately
+   follows). Such findings are listed below with the exact constraint —
+   visible and open, not hidden.
+4. **Analyzer outages and slow analysis are waited out**, not worked around.
+   Poll; do not escalate; do not compensate with suppressions.
+5. If a previous session or contributor left a suppression behind, deleting
+   it is the first action. Historical suppression records the platform does
+   not let us delete are rendered void by fixing their patterns at source;
+   they must never be cited as precedent.
 
-1. A finding is fixed at source when the source can be improved (semantics,
-   safety, style, documentation). A cleaner source that also removes the
-   pattern is preferred over suppression.
-2. A finding is dispositioned here only when the analyzer's rule contradicts
-   what the exact source proves — and the proof is written below with the
-   precise item types involved.
-3. Dashboard "ignore" actions alone are never an acceptance basis. If an
-   ignore is applied, the same reasoning is recorded here first.
+## Accepted-open findings (visible, unsolved by design)
 
-## Dispositions (current analysis run, commit `f7cfd8d`)
+These code-scanning alerts stay open because no code change can close them.
+They are the acceptable "2 or 3" category; everything else must be fixed.
 
-### SECRETS — `SCT-A000` (6 findings)
-
-All flagged values are low-entropy fixture strings or documentation words
-that the secret scanner's entropy heuristic flags for audit. None is a
-credential: none authenticates anywhere, all are compile-time literals in
-test fixtures or prose. The literals are deliberately not reproduced in this
-document (quoting them retrips the scanner at the quote site).
-
-| Location | Kind | Exact-source evidence |
+| Alert | Rule | Why it cannot be solved in code |
 |---|---|---|
-| `src/gmail.rs` (test fixture constructor) | placeholder secret names | `#[cfg(test)]` helper builds a `Credentials` struct whose secret fields hold their own field names as placeholder values; never sent anywhere. |
-| `src/oauth.rs` (token-wiping test) | placeholder token | Fixture `Tokens` value in the zeroization test; the literal exists to prove the wipe removes it. |
-| `src/store.rs` (tamper-detection test) | forged thread-key constant | SQL fixture value used to simulate a forged delivery thread key; must be a recognizable constant for the assertion. |
-| `docs/INTEGRATION.md` | PowerShell cmdlet name | The interactive prompt cmdlet in an example that asks the operator for a local API token; documentation prose, not a value. |
+| #9 | `CIIBestPracticesID` | Requires the human owner to register the project at bestpractices.dev. No code change affects it; no agent can complete the registration. |
+| #8 | `CodeReviewID` | Scorecard's code-review criterion assumes a PR-reviewed merging model; this repository deliberately follows a documented main-only policy (CONTRIBUTING.md). Closing it would mean changing the governance decision, not the code. |
+| #7 | `MaintainedID` | Scorecard's maintenance metric is computed from an external snapshot cadence the repository cannot influence from code. |
 
-### BUG_RISK — `RS-E1011` "drop with a `Copy` type" (5 findings)
+## History of this policy
 
-Every flagged `drop(x)` argument is a **non-`Copy`** type; each call performs a
-real, intended lifetime action. The rule's `Copy` premise does not hold for any
-of them:
-
-| Location | Dropped value (exact type) | Why the drop is intentional |
-|---|---|---|
-| `src/oauth.rs` | `Zeroizing<Vec<u8>>` (`config_bytes`) | Forces zeroization of the OAuth client secret bytes before the parsed config is used further. |
-| `src/oauth.rs` | `std::net::TcpListener` (`listener`) | Closes the loopback consent listener before the token exchange begins; a live listener would accept stray requests. |
-| `src/recovery.rs` | backup output file handle (`output`) | Closes the destination file before `fs::remove_file` on the error path; Windows cannot remove an open file. |
-| `src/recovery/restore.rs` | `Store` (`probe`) | Closes the probe database before the staging store reopens the same directory; SQLite files must not be double-opened through two handles. |
-| `tests/decision_protocol.rs` | `std::sync::MutexGuard` (`calls`) | Releases the recording lock before the serialized report file is read below; without the drop the mutex stays held. |
-
-### BUG_RISK — `RS-E1015` "arguments contain the unit type" (3 findings)
-
-| Location | Flagged call | Exact-source evidence |
-|---|---|---|
-| `src/worker.rs` | `crate::recovery::create_backup(...)` | The call returns a backup path which `.map(|_| ())` deliberately discards for a `report_write(...)` that only carries success/failure. No argument is `()`. |
-| `src/gmail.rs` | `Zeroizing::new(std::mem::take(&mut t.access_token))` | `String::take` yields the owned `String` (moved out of the parsed token response); the wrapper deliberately zeroizes it on drop. No argument is `()`. |
-| `src/bin/rr.rs` | `Ok(match action { ... })` | The match arms serialize `AutostartStatus` values (`background::install`/`status` return `Result<AutostartStatus>`), producing `serde_json::Value`. No arm returns `()`. |
-
-### BUG_RISK — `RS-A1008` "call returning `Self` in `default()`" (1 finding)
-
-`src/worker.rs` (`WorkerPulse::default`) — `impl Default for WorkerPulse { fn default() -> Self { Self::new() } }`.
-Delegating `Default` to `Self::new()` is the pattern `clippy::new_without_default`
-recommends and the repository's clippy gate (CI parity, `-D warnings`) requires;
-inlining the constructor body would duplicate it and drift.
-
-### BUG_RISK — `RS-W1079` "empty call to `new()`" (contradiction pair with `RS-A1008`)
-
-`src/engine.rs` (`live_selftest_tests::ProbeTransport::profile`) constructs
-empty `String` fields with `String::new()`. `RS-W1079` asks for
-`String::default()` instead, while `RS-A1008` (disposed above, repo-wide)
-asks for exactly the opposite idiom — `Self::new()` as the constructor of
-record. The two rules cannot both be satisfied: the repository standardizes
-on `new()` for empty construction, which the Rust API Guidelines (C-CTOR)
-and `clippy::new_without_default` both endorse. `String::default()` is an
-alias of `String::new()` with no behavioral difference, so the finding is
-not a bug risk — it is a style preference that contradicts a second rule of
-the same analyzer. Disposition: false positive at the rule level; the
-occurrences are recorded here with their exact source so the decision is
-auditable from the repository alone.
-
-### BUG_RISK — `PTC-W0063` "unwrapped `next()`" (remediated at source)
-
-`training/build_corpus_v2.py` (`generate_records`) iterates `itertools.cycle`, which is
-infinite, so `StopIteration` is impossible. The source was still improved: the
-call now passes an explicit default (`next(it, fallback)`), which removes the
-rule pattern and documents the fallback.
-
-## Remediated at source (analysis run at commit `f7cfd8d`)
-
-The 2026-10-27 review wave remediated the remaining ~1,470 findings at the
-source across `training/`, `tools/`, `scripts/`, `tests/`, `build.rs`, `fuzz/`,
-`windows/` and all of `src/`: rustdoc added for every undocumented public item,
-line length normalized to 100 columns, `clone_from`/`map_or`/`unwrap_or_else`
-idioms applied where the rule prescribes them, `create_dir_all` hardening,
-`assert!` rewrites for boolean comparisons, subprocess `check=` made explicit,
-`urlopen` restricted to https (loopback excepted), `assert`-based input
-validation replaced with explicit raises, `ls`-based discovery replaced with
-`find`, and the cyclomatic-complexity rule satisfied by decomposition in all but
-the functions below.
-
-### SECURITY — `BAN-B310` (1 finding)
-
-`training/probe_llm_limits.py` (`call_ollama`). The rule audits `urlopen`
-call sites for scheme validation. The source restricts remote endpoints to
-https and permits plain http only for the loopback Ollama endpoint (no
-network transit to protect locally) — the strictest configuration that keeps
-the local model probe functional. The rule's pattern still matches any
-`urlopen` call, so this exact-source disposition records the evidence.
-
-#### BUG_RISK — `RS-W1217` `.split("
-")` (2 findings)
-
-`src/mail.rs` (the raw-reply envelope tests). The rule suggests `.lines()`,
-but the assertions exist to prove the rendered envelope uses CRLF line breaks
-exactly: `.lines()` also accepts bare-LF text and would let a regression
-through. The deliberate `split("
-")` is the assertion's subject.
-
-## `RS-R1000` cyclomatic complexity: resolved
-
-All 14 functions previously over the threshold were decomposed into
-documented helpers with verbatim block moves; every function now scores at
-most 15 (`src/bin/rr.rs` `main` 144→1, `src/worker.rs` `run` 112→14,
-`src/gui.rs` `settings` 90→2, `src/engine.rs` `send_attempt` 73→13,
-`src/gui.rs` `local_ai` 63→7, `src/engine.rs` `open` 58→11,
-`src/store.rs` `verify_application_invariants_connection` 51→7,
-`src/evaluation.rs` `evaluate` 42→7, `src/engine.rs` `automatic_policy` 40→4,
-`src/worker.rs` `api_query_with_operation` 39→14,
-`src/store.rs` `open` 38→9, `src/worker.rs` `handle_api_write` 37→15,
-`src/store.rs` `verify_backup_file` 35→11, `src/worker.rs` `kind` 34→14).
-
-## Dashboard suppression rules
-
-The dispositions above are also enforced on the DeepSource dashboard as
-scoped ignore rules (created through the official MCP `create_ignore_rule`
-tool with reasons citing this document), so the open-findings list stays
-honest without hiding anything else:
-
-| Scope | Shortcodes |
-|---|---|
-| `src/store.rs`, `src/oauth.rs`, `src/gmail.rs`, `docs/INTEGRATION.md` | `SCT-A000` (file-level) |
-| `src/recovery.rs`, `src/oauth.rs`, `src/recovery/restore.rs`, `tests/decision_protocol.rs` | `RS-E1011` (file-level) |
-| `src/worker.rs`, `src/bin/rr.rs`, `src/gmail.rs` | `RS-E1015` (file-level) |
-| `training/probe_llm_limits.py` | `BAN-B310` (file-level) |
-| `src/mail.rs` | `RS-W1217` (file-level) |
-| repository-wide | `RS-A1008` (`Default` delegating to `Self::new()` is the clippy-required idiom) |
-| repository-wide | `RS-W1079` (contradicts `RS-A1008`; `new()` is the documented empty-constructor idiom — see the contradiction-pair entry above) |
-
-File-level scoping keeps every rule active for all other files: a real
-secret, an unsafe drop, or a unit-type mistake anywhere else is still
-reported. A new occurrence of one of these shortcodes in a listed file must
-be re-reviewed against this document before suppression covers it.
-
-## False-positive dispositions (analysis level)
-
-Every suppressed occurrence is additionally recorded through DeepSource's
-`report_false_positive` disposition surface (source `STATIC`, one report per
-CheckIssue occurrence), each with a comment citing this document. The
-repository's open/unsuppressed occurrence count is zero; issue rows retain
-their lifetime occurrence counters as historical aggregates.
-
-## Review loop
-
-1. Push the change and wait for the DeepSource statuses on the exact commit
-   (the bot posts one status per analyzer).
-2. Retrieve the complete active inventory for the new default-branch head and
-   diff it against the run recorded here.
-3. New findings are fixed at source or dispositioned in this file before the
-   change is considered accepted. A green check on an older commit proves
-   nothing about the new head.
-
-## Suppression governance fields (S07)
-
-Shared requirement S07 asks every suppression to record a specific
-rule/fingerprint, reason, owner and review/removal criterion. The dispositions
-tables above carry the rule/shortcode and the exact-source reason; the
-governance fields complete the record:
-
-| Field | Value |
-|---|---|
-| Scope | Only the exact listed file/rule pairs (file-level shortcodes) and the one repository-wide `RS-A1008` idiom; nothing else is covered. |
-| Owner | strmt7 (sole maintainer). |
-| Review date | 2026-10-28 (record created); next review 2027-04-28 or immediately when the dependency/analyzer graph changes. |
-| Removal criterion | A suppression is removed when the source is fixed so the pattern disappears, when the analyzer changes its verdict, or when its rationale in this document stops being true. |
-| New-occurrence rule | A new occurrence of a listed shortcode in a listed file, or any occurrence outside the listed scope, must be re-reviewed against this document before suppression covers it (enforced by the review loop above, step 3, and the inventory diff in step 2). |
-
-## Analyzer capability boundary (S07)
-
-DeepSource's documented analyzer support (checked 2026-10-28,
-https://docs.deepsource.com/docs/platform/reference/core-analyzers) lists Rust
-through 1.93 and Python through 3.12. This repository pins Rust 1.99.1
-(rust-toolchain.toml) and runs its operator tooling on Python 3.12, so the
-Rust analysis lane runs outside the analyzer's declared version range. This
-does not prove the newer code is unanalysable, but it is a recorded capability
-boundary: representative-syntax/coverage evidence or provider confirmation is
-required before treating a green DeepSource context as analysis of the current
-toolchain's syntax, and local compiler/Clippy/type checks (tools/local_ci.py,
-ci.yml) remain the authoritative gates. The Python operator tooling (3.12)
-stays inside the declared range.
+Earlier waves used false-positive dispositions and file-level ignore rules
+for findings whose rules we judged misfiring. The owner cancelled that
+entire approach on 2026-10-29: every ignore rule was deleted (15 rules,
+verified zero remaining), both manually dismissed code-scanning alerts were
+reopened, and every previously disposed pattern (`SCT-A000`, `RS-E1011`,
+`RS-E1015`, `RS-A1008`, `RS-W1079`, `RS-W1217`, `BAN-B310`) was eliminated
+at source by professional rewrites. The twelve historical DeepSource
+disposition records cannot be deleted through the platform API on this
+account type (`unsuppressIssueForTeam` is refused); their patterns are
+gone, so they remain as inert history only.

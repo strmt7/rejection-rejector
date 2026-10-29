@@ -3599,7 +3599,7 @@ mod tests {
         db.reserve_send(&candidate, 10, Utc::now()).unwrap();
         db.conn
             .execute(
-                "UPDATE deliveries SET thread_key='forged-thread' WHERE item_id=?1",
+                "UPDATE deliveries SET thread_key='example-tampered-thread' WHERE item_id=?1",
                 [&candidate.id],
             )
             .unwrap();

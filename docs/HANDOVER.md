@@ -19,9 +19,11 @@ picking up the repository cold.
 - Test corpus at handover: 1,058 Rust tests, 232 release/operator Python
   tests, 24 model-free training tests. Coverage floors 95% lines / 90%
   functions are enforced by the coverage lane.
-- DeepSource: driven to dashboard zero after a 1,551-finding remediation
-  wave; later findings fixed at source (see the waves below). Dispositions
-  and suppression rules live in `docs/deepsource-dispositions.md`.
+- DeepSource: findings fixed at source by professional rewrite only —
+  suppressions of any kind are banned (owner policy, 2026-10-29; the
+  standing policy lives in `docs/deepsource-dispositions.md`). All 15
+  legacy ignore rules were deleted and the two dismissed code-scanning
+  alerts reopened.
 - Dependabot: zero open security alerts; the PR queue (7 upgrade PRs) is
   drained (auto-merged). All toolchain/action pins were independently
   re-audited against upstream releases, not just dependabot.
@@ -111,10 +113,12 @@ picking up the repository cold.
   this drift.
 - **DeepSource**: API access via the MCP endpoint with the token from the
   CLI session (`~/.deepsource/config.toml`); never print or commit the
-  token. Policy: fix findings at source first; false positives get
-  exact-source evidence in `docs/deepsource-dispositions.md` and an
-  analysis-level report; dashboard ignore rules alone never flip
-  occurrences and are never an acceptance basis.
+  token. Policy (owner-set, 2026-10-29): every finding is fixed at source
+  by professional rewrite; **suppressions of any kind are banned** — no
+  ignore rules, no `report_false_positive` dispositions, no code-scanning
+  dismissals. Genuinely unsolvable findings stay open and are listed in
+  `docs/deepsource-dispositions.md`. Analyzer outages/slowness are waited
+  out, never worked around.
 - **Python**: line length 120 (documented, dated S02 exception with
   compensating controls; rationale block in `.ruff.toml`). Digests and
   pinned hashes are computed over LF bytes (the connector normalizes).
@@ -133,7 +137,7 @@ picking up the repository cold.
 | `engineering.toml` + `tools/check_engineering_policy.py` | S01 policy record and read-only validator |
 | `tools/contract/` | execution-receipt contract: validator, schemas, synthetic examples, 48-test suite, hash-pinned manifest |
 | `docs/audit-*.md` (4 files) | claim-by-claim manual verification with evidence |
-| `docs/deepsource-dispositions.md` | suppression rules and false-positive dispositions |
+| `docs/deepsource-dispositions.md` | findings policy: fix at source, never suppress; accepted-open list |
 | `docs/scale-campaign-report.md` | 1,032-case corpus results and the two product root causes |
 | `docs/model-scale-report.md` | live model evidence incl. the evidence-identity header |
 | `docs/TESTING.md`, `docs/OPERATIONS.md` | test and operations runbooks |

@@ -38,8 +38,7 @@ CORS permissions are emitted. Call from the trusted Rust backend of the future d
 application, not arbitrary web content.
 
 ```powershell
-$token = Read-Host 'Local API token'
-$headers = @{ Authorization = "Bearer $token" }
+$headers = @{ Authorization = "Bearer " + (Read-Host 'Local API token') }
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/capabilities' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/status' -Headers $headers
 Invoke-RestMethod 'http://127.0.0.1:8734/v1/metrics' -Headers $headers

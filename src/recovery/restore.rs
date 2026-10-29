@@ -255,19 +255,22 @@ fn verify_staged_candidate(
 ) -> Result<(i64, String)> {
     // A separate same-key probe verifies the ORIGINAL, read-only image.
     // Opening input_stage first would migrate it and invalidate its manifest.
-    let probe = Store::open(&staging.join("probe.sqlite3"), vault.clone())?;
-    let original = probe.verify_backup_file(input_stage)?;
-    ensure!(
-        original.schema_version == manifest.schema_version,
-        "Original backup schema does not match the authorized manifest"
-    );
-    if manifest.format_version >= 2 {
+    // The probe store closes with its scope, before the staging store below
+    // reopens the same directory through a single SQLite handle.
+    {
+        let probe = Store::open(&staging.join("probe.sqlite3"), vault.clone())?;
+        let original = probe.verify_backup_file(input_stage)?;
         ensure!(
-            original.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
-            "Original backup audit head does not match the authorized manifest"
+            original.schema_version == manifest.schema_version,
+            "Original backup schema does not match the authorized manifest"
         );
+        if manifest.format_version >= 2 {
+            ensure!(
+                original.audit_head.as_deref() == Some(manifest.audit_head.as_str()),
+                "Original backup audit head does not match the authorized manifest"
+            );
+        }
     }
-    drop(probe);
 
     let staged = Store::open(input_stage, vault.clone())?;
     staged.integrity_check()?;

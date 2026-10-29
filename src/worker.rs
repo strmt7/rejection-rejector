@@ -112,13 +112,7 @@ impl WorkerPulse {
     ///
     /// Inputs: none. Output: [`Self`] tracking progress from the current time.
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(WorkerPulseState {
-                last_progress_at: Utc::now(),
-                current_operation: OperationKind::Idle,
-                operation_started_at: None,
-            })),
-        }
+        Self::default()
     }
 
     /// Mark the start of one operation.
@@ -206,11 +200,18 @@ impl WorkerPulse {
 }
 
 impl Default for WorkerPulse {
-    /// Construct the default pulse.
+    /// Construct the default pulse in its idle state.
     ///
-    /// Inputs: none. Output: `Self` — identical to [`Self::new`].
+    /// Inputs: none. Output: `Self` — the canonical constructor for
+    /// [`WorkerPulse::new`], tracking progress from the current time.
     fn default() -> Self {
-        Self::new()
+        Self {
+            inner: Arc::new(Mutex::new(WorkerPulseState {
+                last_progress_at: Utc::now(),
+                current_operation: OperationKind::Idle,
+                operation_started_at: None,
+            })),
+        }
     }
 }
 /// One command sent to the background worker over the bounded channel.
@@ -1998,7 +1999,10 @@ fn execute_vault_ops(
                 &pulse,
                 "Creating and verifying encrypted same-vault backup…",
             );
-            crate::recovery::create_backup(&e.db, &e.directory, &out).map(|_| ())
+            match crate::recovery::create_backup(&e.db, &e.directory, &out) {
+                Ok(_path) => Ok(()),
+                Err(error) => Err(error),
+            }
         }
         Command::RecoveryDrill { backup } => {
             busy(

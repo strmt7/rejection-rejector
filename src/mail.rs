@@ -906,7 +906,7 @@ mod tests {
         assert!(!raw.contains("In-Reply-To:"));
         assert!(!raw.contains("References:"));
         // The body is base64; decode it to check the marker and token.
-        let body_b64 = raw.split("\r\n\r\n").nth(1).unwrap();
+        let body_b64 = raw.split_once("\r\n\r\n").unwrap().1;
         let body =
             String::from_utf8(STANDARD.decode(body_b64.replace("\r\n", "")).unwrap()).unwrap();
         assert!(body.contains("[RR LIVE SELFTEST]") || raw.contains("RR LIVE SELFTEST"));
@@ -1217,7 +1217,11 @@ mod tests {
     #[test]
     fn unicode_header_folding() {
         let s = encoded_subject(&"Δοκιμή ".repeat(30));
-        assert!(s.split("\r\n").all(|line| line.len() < 78));
+        assert!(
+            !s.replace("\r\n", "").contains(['\r', '\n']),
+            "encoded subject must fold with CRLF line breaks only"
+        );
+        assert!(s.lines().all(|line| line.len() < 78));
     }
 }
 
@@ -1304,11 +1308,16 @@ mod reply_envelope_tests {
         assert!(raw.contains("Content-Type: text/plain; charset=UTF-8\r\n"));
         assert!(raw.contains("Content-Transfer-Encoding: base64\r\n"));
 
-        let wrapped = raw.split("\r\n\r\n").nth(1).unwrap().trim_end();
-        for chunk in wrapped.split("\r\n") {
+        let wrapped = raw.split_once("\r\n\r\n").unwrap().1.trim_end();
+        assert!(
+            !wrapped.replace("\r\n", "").contains(['\r', '\n']),
+            "base64 body must fold with CRLF line breaks only"
+        );
+
+        for chunk in wrapped.lines() {
             assert!(chunk.len() <= 76, "base64 line exceeds the 76-char limit");
         }
-        let body = wrapped.split("\r\n").collect::<String>();
+        let body = wrapped.lines().collect::<String>();
         assert_eq!(
             STANDARD.decode(body).unwrap(),
             b"First line\r\nSecond line".to_vec(),

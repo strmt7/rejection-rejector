@@ -211,20 +211,23 @@ fn decision_evaluation_uses_typed_local_protocol_without_fixture_text_in_report(
     );
     assert_eq!(fixture.requests.lock().unwrap().len(), 74);
 
-    let calls = fixture.requests.lock().unwrap();
-    let first = &calls[0];
-    assert_eq!(first["model"], "nimble:9b-q8_0");
-    assert!(first.get("messages").is_none());
-    assert!(first["state"].get("current_message").is_some());
-    assert_eq!(first["questions"]["category"]["type"], "choice");
-    assert_eq!(
-        first["questions"]["category"]["criteria"]
-            .as_object()
-            .unwrap()
-            .len(),
-        4
-    );
-    drop(calls);
+    {
+        // The recording lock releases at the end of this scope, before the
+        // report file is read below.
+        let calls = fixture.requests.lock().unwrap();
+        let first = &calls[0];
+        assert_eq!(first["model"], "nimble:9b-q8_0");
+        assert!(first.get("messages").is_none());
+        assert!(first["state"].get("current_message").is_some());
+        assert_eq!(first["questions"]["category"]["type"], "choice");
+        assert_eq!(
+            first["questions"]["category"]["criteria"]
+                .as_object()
+                .unwrap()
+                .len(),
+            4
+        );
+    }
 
     let serialized = std::fs::read_to_string(&report_path).unwrap();
     for private_fixture_text in [

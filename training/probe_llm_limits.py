@@ -23,10 +23,10 @@ counts, latency and thinking-length statistics, plus per-row results. A
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import time
 import urllib.parse
-import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -114,17 +114,22 @@ def call_ollama(
     }
     if think is not None:
         body["think"] = think
-    req = urllib.request.Request(
-        OLLAMA_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
-    )
-    parsed = urllib.parse.urlparse(req.full_url)
+    parsed = urllib.parse.urlparse(OLLAMA_URL)
     loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
     # Remote endpoints must be https; plain http is allowed only for the
     # loopback Ollama endpoint (no network transit to protect locally).
     if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
-        raise ValueError(f"urlopen is restricted to https (or http on loopback), got {parsed.scheme!r}")
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        return json.load(resp)
+        raise ValueError(f"chat endpoint is restricted to https (or http on loopback), got {parsed.scheme!r}")
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = connection_cls(parsed.hostname, parsed.port, timeout=timeout_s)
+    try:
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        connection.request("POST", path, body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        return json.loads(connection.getresponse().read().decode())
+    finally:
+        connection.close()
 
 
 def parse_answer(text: str) -> dict | None:
