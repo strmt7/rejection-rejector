@@ -193,8 +193,6 @@ def _validate_gates(receipt: dict[str, Any], now: datetime, generated_at: dateti
             findings.append(f"gate.missing:{required}")
     return findings
 
-    return findings
-
 
 def _validate_one_gate(
     gate: dict[str, Any],
@@ -220,6 +218,27 @@ def _validate_one_gate(
     except ReceiptError as error:
         findings.append(f"{field}:malformed:{error}")
         return findings
+    _gate_semantic_checks(gate, gate_id, command, exit_code, status, findings)
+    _gate_time_checks(gate_id, started, finished, now, generated_at, findings)
+    if gate_id in FAMILY_GATES:
+        _validate_family(gate.get("test_family"), gate_id, findings)
+    return findings
+
+
+def _gate_semantic_checks(
+    gate: dict[str, Any],
+    gate_id: str,
+    command: str,
+    exit_code: int,
+    status: str,
+    findings: list[str],
+) -> None:
+    """Check one gate's status, command and exit-code agreement.
+
+    Inputs: `gate` -- the gate record; `gate_id` -- its id; `command`/
+    `exit_code`/`status` -- its parsed fields; `findings` -- the shared
+    finding list. Output: none.
+    """
     if status not in STATUSES:
         findings.append(f"gate.status_invalid:{gate_id}")
     if REQUIRED_GATES[gate_id] not in command:
@@ -229,6 +248,22 @@ def _validate_one_gate(
         findings.append(f"gate.exit_status_contradiction:{gate_id}")
     if status == "blocked" and "reason" not in gate:
         findings.append(f"gate.blocked_without_reason:{gate_id}")
+
+
+def _gate_time_checks(
+    gate_id: str,
+    started: datetime,
+    finished: datetime,
+    now: datetime,
+    generated_at: datetime | None,
+    findings: list[str],
+) -> None:
+    """Check one gate's timestamps: order, clock skew and receipt finish.
+
+    Inputs: `gate_id` -- the gate id; `started`/`finished` -- its timestamps;
+    `now` -- the validation clock; `generated_at` -- the receipt generation
+    time when known; `findings` -- the shared finding list. Output: none.
+    """
     if started > finished:
         findings.append(f"gate.time_order:{gate_id}")
     for label, moment in (("started", started), ("finished", finished)):
@@ -236,9 +271,6 @@ def _validate_one_gate(
             findings.append(f"gate.future_timestamp:{gate_id}:{label}")
     if generated_at is not None and finished - generated_at > MAX_CLOCK_SKEW:
         findings.append(f"gate.finished_after_receipt:{gate_id}")
-    if gate_id in FAMILY_GATES:
-        _validate_family(gate.get("test_family"), gate_id, findings)
-    return findings
 
 
 def _validate_artifacts(receipt: dict[str, Any], evidence_root: Path) -> list[str]:
@@ -252,41 +284,53 @@ def _validate_artifacts(receipt: dict[str, Any], evidence_root: Path) -> list[st
     seen: set[Path] = set()
     root = evidence_root.resolve()
     for index, artifact in enumerate(artifacts):
-        field = f"artifact[{index}]"
-        if not isinstance(artifact, dict):
-            findings.append(f"{field}:not_an_object")
-            continue
-        try:
-            rel = _str_field(artifact.get("path"), f"{field}.path")
-            digest = _str_field(artifact.get("sha256"), f"{field}.sha256")
-        except ReceiptError as error:
-            findings.append(f"{field}:malformed:{error}")
-            continue
-        candidate = Path(rel)
-        if candidate.is_absolute() or candidate.drive or ".." in candidate.parts:
-            findings.append(f"artifact.path_escape:{index}")
-            continue
-        resolved = (root / candidate).resolve()
-        if root not in resolved.parents:
-            findings.append(f"artifact.path_escape:{index}")
-            continue
-        if resolved in seen:
-            findings.append(f"artifact.duplicate_path:{index}")
-            continue
-        seen.add(resolved)
-        if not SHA256.fullmatch(digest):
-            findings.append(f"artifact.digest_malformed:{index}")
-            continue
-        if not resolved.is_file() or resolved.is_symlink():
-            findings.append(f"artifact.missing:{index}")
-            continue
-        import hashlib
-
-        actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
-        if actual != digest:
-            findings.append(f"artifact.digest_mismatch:{index}")
+        findings.extend(_validate_one_artifact(artifact, index, root, seen))
     return findings
 
+
+def _validate_one_artifact(artifact: Any, index: int, root: Path, seen: set[Path]) -> list[str]:
+    """Check one artifact's path containment, existence and digest.
+
+    Inputs: `artifact` -- the artifact record; `index` -- its position; `root`
+    -- the resolved evidence root; `seen` -- the set of already-declared
+    resolved paths (mutated). Output: `list[str]` -- findings for this
+    artifact (empty when valid).
+    """
+    findings: list[str] = []
+    field = f"artifact[{index}]"
+    if not isinstance(artifact, dict):
+        findings.append(f"{field}:not_an_object")
+        return findings
+    try:
+        rel = _str_field(artifact.get("path"), f"{field}.path")
+        digest = _str_field(artifact.get("sha256"), f"{field}.sha256")
+    except ReceiptError as error:
+        findings.append(f"{field}:malformed:{error}")
+        return findings
+    candidate = Path(rel)
+    if candidate.is_absolute() or candidate.drive or ".." in candidate.parts:
+        findings.append(f"artifact.path_escape:{index}")
+        return findings
+    resolved = (root / candidate).resolve()
+    if root not in resolved.parents:
+        findings.append(f"artifact.path_escape:{index}")
+        return findings
+    if resolved in seen:
+        findings.append(f"artifact.duplicate_path:{index}")
+        return findings
+    seen.add(resolved)
+    if not SHA256.fullmatch(digest):
+        findings.append(f"artifact.digest_malformed:{index}")
+        return findings
+    if not resolved.is_file() or resolved.is_symlink():
+        findings.append(f"artifact.missing:{index}")
+        return findings
+    import hashlib
+
+    actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if actual != digest:
+        findings.append(f"artifact.digest_mismatch:{index}")
+    return findings
 
 def _validate_exceptions(receipt: dict[str, Any], now: datetime) -> list[str]:
     """Check exception records; exceptions never change the computed result."""

@@ -15,12 +15,12 @@
 line-length = 120
 target-version = "py313"
 
-# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 15),
+# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 10 — DeepSource parity threshold),
 # PIE790 and S101 are enabled so the enforced rule set covers the same
 # complexity, unnecessary-pass and production-assert classes the DeepSource
 # analyzers flag (PTC-W0062, PTC-W0063, BAN-B101). Test modules may use
 # asserts (S101 ignored there); production code raises typed errors instead.
-# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 15),
+# Parity addition (documented, dated): 2026-10-29. C901 (max complexity 10 — DeepSource parity threshold),
 # PIE790 and S101 are enabled so the enforced rule set covers the same
 # complexity, unnecessary-pass and production-assert classes the DeepSource
 # analyzers flag (PTC-W0062, PTC-W0063, BAN-B101). Test modules may use
@@ -36,7 +36,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "PLW1510", "D", "C901", "PIE790", "S1
 ignore = ["D203", "D205", "D212", "D213", "D401"]
 
 [lint.mccabe]
-max-complexity = 15
+max-complexity = 10
 
 [lint.per-file-ignores]
 "tests/*" = ["S101"]

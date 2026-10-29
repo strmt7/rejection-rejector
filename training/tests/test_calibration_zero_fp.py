@@ -254,7 +254,8 @@ class DiagnosticsAndValidation(unittest.TestCase):
 class CliContract(unittest.TestCase):
     """The CLI reports the same contract and fails closed on invalid input."""
 
-    def run_cli(self, body: str, *extra: str) -> subprocess.CompletedProcess:
+    @staticmethod
+    def run_cli(body: str, *extra: str) -> subprocess.CompletedProcess:
         """Run calibrate_zero_fp.py over a temporary scores file.
 
         Inputs: `body` -- JSONL text to write; `extra` -- extra CLI arguments.

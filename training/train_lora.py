@@ -177,6 +177,84 @@ def vram_reading_or_raise(vram_state: dict) -> tuple[int, int]:
     return reading
 
 
+def _vram_probe_step(probe, error_count: int) -> int:
+    """Run one VRAM probe with rate-limited failure evidence.
+
+    Inputs: `probe` -- the probe callable; `error_count` -- failures so far.
+    Output: `int` -- the updated failure count.
+    """
+    try:
+        probe()
+    except Exception as exc:
+        # Keep the last reading, but never silence the cause:
+        # rate-limited evidence for root-cause analysis.
+        error_count += 1
+        if error_count <= 3 or error_count % 50 == 0:
+            print(
+                f"resource-guard: vram probe failed ({error_count}x): {exc!r}",
+                file=sys.stderr,
+            )
+    return error_count
+
+
+def _drain_gpu_queue() -> None:
+    """Drain the async GPU queue once (ROCm AsyncEventsLoop mitigation).
+
+    Inputs: none. Output: none.
+    """
+    # Drain the async GPU queue every step: the known ROCm
+    # AsyncEventsLoop spin class (ROCm#6406) builds up in an
+    # undrained queue; a per-step synchronize keeps it empty (same
+    # mitigation family as pytorch#160759's exit synchronize).
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+    except Exception:
+        pass
+
+
+def _honor_cooperative_stop(control, duty_path) -> None:
+    """Honour a cooperative stop request from the control file.
+
+    Input: the trainer `control` (sets `should_training_stop`) and the run's
+    `duty_path`. Output: none. The GPU utilization watchdog (and the operator)
+    can request a clean stop via duty.json; the run then ends at
+    the next step boundary with checkpoints intact. No signals.
+    """
+    try:
+        if duty_cycle.read_stop_flag(duty_path):
+            print(
+                "resource-guard: cooperative stop requested via duty control file",
+                file=sys.stderr,
+            )
+            control.should_training_stop = True
+    except Exception as exc:
+        print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
+
+
+def _write_progress(path, time_module, began: float, state, status: str) -> None:
+    """Atomically persist one heartbeat record.
+
+    Inputs: `path` -- heartbeat file; `time_module` -- injected time module;
+    `began` -- run start; `state` -- trainer run state; `status` -- the status
+    string. Output: none.
+    """
+    now = time_module.time()
+    step = int(state.global_step)
+    record = {
+        "job": "train_lora",
+        "step": step,
+        "total_steps": int(state.max_steps or 0),
+        "loss": state.log_history[-1].get("loss") if state.log_history else None,
+        "elapsed_seconds": now - began,
+        "updated_at_unix": now,
+        "status": status,
+    }
+    progress.write_progress(path, record)
+
+
 def _make_progress_callback(callback_base):
     """Build the heartbeat TrainerCallback class.
 
@@ -218,48 +296,10 @@ def _make_progress_callback(callback_base):
             # the GPU work: calling GPU APIs from the watchdog thread races
             # the bridge and intermittently fails or wedges it.
             if self.vram_probe is not None:
-                try:
-                    self.vram_probe()
-                except Exception as exc:
-                    # Keep the last reading, but never silence the cause:
-                    # rate-limited evidence for root-cause analysis.
-                    self._probe_errors += 1
-                    if self._probe_errors <= 3 or self._probe_errors % 50 == 0:
-                        print(
-                            f"resource-guard: vram probe failed ({self._probe_errors}x): {exc!r}",
-                            file=sys.stderr,
-                        )
-            # Drain the async GPU queue every step: the known ROCm
-            # AsyncEventsLoop spin class (ROCm#6406) builds up in an
-            # undrained queue; a per-step synchronize keeps it empty (same
-            # mitigation family as pytorch#160759's exit synchronize).
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-            except Exception:
-                pass
+                self._probe_errors = _vram_probe_step(self.vram_probe, self._probe_errors)
+            _drain_gpu_queue()
             self._write(state, "running")
-            self._maybe_stop(control)
-
-        def _maybe_stop(self, control) -> None:
-            """Honour a cooperative stop request from the control file.
-
-            Input: the trainer `control` (sets `should_training_stop`).
-            Output: none. The GPU utilization watchdog (and the operator)
-            can request a clean stop via duty.json; the run then ends at
-            the next step boundary with checkpoints intact. No signals.
-            """
-            try:
-                if duty_cycle.read_stop_flag(self.duty_path):
-                    print(
-                        "resource-guard: cooperative stop requested via duty control file",
-                        file=sys.stderr,
-                    )
-                    control.should_training_stop = True
-            except Exception as exc:
-                print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
+            _honor_cooperative_stop(control, self.duty_path)
 
         def on_train_end(self, args, state, control, **kwargs):
             """Write the terminal heartbeat. Inputs: trainer callback args.
@@ -271,20 +311,73 @@ def _make_progress_callback(callback_base):
             """Atomically persist one heartbeat record. Inputs: trainer run
             `state` and the status string. Output: none.
             """
-            now = self._time.time()
-            step = int(state.global_step)
-            record = {
-                "job": "train_lora",
-                "step": step,
-                "total_steps": int(state.max_steps or 0),
-                "loss": state.log_history[-1].get("loss") if state.log_history else None,
-                "elapsed_seconds": now - self.began,
-                "updated_at_unix": now,
-                "status": status,
-            }
-            progress.write_progress(self.path, record)
+            _write_progress(self.path, self._time, self.began, state, status)
 
     return ProgressCallback
+
+
+def _paced_micro_batch_preparation(control, duty_path, seed_target, recent_on, progress_path) -> None:
+    """Cooperative-stop check plus one duty-paced sleep before a micro-batch.
+
+    Inputs: `control` -- trainer control; `duty_path`/`seed_target` --
+    pacing control state; `recent_on` -- recent micro-batch on-times;
+    `progress_path` -- heartbeat path. Output: none.
+    """
+    import os
+
+    try:
+        if duty_cycle.read_stop_flag(duty_path):
+            print(
+                "resource-guard: cooperative stop requested via duty control file",
+                file=sys.stderr,
+            )
+            control.should_training_stop = True
+    except Exception as exc:
+        print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
+    try:
+        target = duty_cycle.read_target(duty_path)
+        if target is None:
+            target = seed_target
+        if recent_on:
+            # P90 baseline (not median): on a shared GPU the
+            # desktop occasionally stretches bursts; pacing
+            # against the 90th percentile is conservative and
+            # keeps even stretched windows under the ceiling.
+            ordered = sorted(recent_on)
+            baseline = ordered[min(len(ordered) - 1, int(0.9 * len(ordered)))]
+            off = duty_cycle.sleep_seconds(baseline, target)
+            if off > 0.0:
+                # Sliced sleep with heartbeat touches so the
+                # stall instruments stay quiet during pacing.
+                duty_cycle.paced_sleep(
+                    off,
+                    touch=lambda: os.utime(progress_path),
+                )
+    except Exception as exc:
+        print(f"resource-guard: micro-batch pacing skipped: {exc!r}", file=sys.stderr)
+
+
+def _append_pace_log(progress_path, step_index: int, measured: float, duty_path) -> None:
+    """Append one durable per-micro-batch pacing-evidence record.
+
+    Inputs: `progress_path` -- heartbeat path; `step_index` -- micro-batch
+    number; `measured` -- on-time seconds; `duty_path` -- control path.
+    Output: none (evidence only; failures never break training).
+    """
+    try:
+        with progress_path.parent.joinpath("pace-log.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "step": step_index,
+                        "on_s": round(measured, 4),
+                        "target_pct": duty_cycle.read_target(duty_path),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
 
 
 def _make_paced_trainer(trainer_base):
@@ -329,39 +422,11 @@ def _make_paced_trainer(trainer_base):
             Output: the micro-batch loss (unchanged semantics; pacing is
             pure host-side sleeping before the call).
             """
-            import os
             import time as _t
 
-            try:
-                if duty_cycle.read_stop_flag(self.duty_path):
-                    print(
-                        "resource-guard: cooperative stop requested via duty control file",
-                        file=sys.stderr,
-                    )
-                    self.control.should_training_stop = True
-            except Exception as exc:
-                print(f"resource-guard: stop-flag check failed: {exc!r}", file=sys.stderr)
-            try:
-                target = duty_cycle.read_target(self.duty_path)
-                if target is None:
-                    target = self.seed_target
-                if self._recent_on:
-                    # P90 baseline (not median): on a shared GPU the
-                    # desktop occasionally stretches bursts; pacing
-                    # against the 90th percentile is conservative and
-                    # keeps even stretched windows under the ceiling.
-                    ordered = sorted(self._recent_on)
-                    baseline = ordered[min(len(ordered) - 1, int(0.9 * len(ordered)))]
-                    off = duty_cycle.sleep_seconds(baseline, target)
-                    if off > 0.0:
-                        # Sliced sleep with heartbeat touches so the
-                        # stall instruments stay quiet during pacing.
-                        duty_cycle.paced_sleep(
-                            off,
-                            touch=lambda: os.utime(self.progress_path),
-                        )
-            except Exception as exc:
-                print(f"resource-guard: micro-batch pacing skipped: {exc!r}", file=sys.stderr)
+            _paced_micro_batch_preparation(
+                self.control, self.duty_path, self.seed_target, self._recent_on, self.progress_path
+            )
             t0 = _t.perf_counter()
             loss = super().training_step(*args, **kwargs)
             measured = _t.perf_counter() - t0
@@ -372,20 +437,7 @@ def _make_paced_trainer(trainer_base):
             # utilization ceiling must be verifiable from logs, not
             # taken on faith.
             self._step_index += 1
-            try:
-                with self.progress_path.parent.joinpath("pace-log.jsonl").open("a", encoding="utf-8") as fh:
-                    fh.write(
-                        json.dumps(
-                            {
-                                "step": self._step_index,
-                                "on_s": round(measured, 4),
-                                "target_pct": duty_cycle.read_target(self.duty_path),
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
+            _append_pace_log(self.progress_path, self._step_index, measured, self.duty_path)
             return loss
 
     return PacedTrainer

@@ -17,7 +17,7 @@
     "test-output.txt": "17a0a9bc1de6063306e83de9a2e1668a3170e7842f04d75fea3b220de71b09b6",
     "test-results.json": "074d9ffb0c05d3ffce6e66bf51d99d29ad2946b5a801920b8125a0974d6f60a7",
     "test_validate_contract.py": "2b5f5fc5120b61e063ec612795dcf7ec29849bda078b8391072229339baec7e7",
-    "validate_contract.py": "ae02c353099344110252479d2183e43666f7c171494eba7cc8f475772cb776e4"
+    "validate_contract.py": "0b60018ebe595b2c3f6e61e0156a69ae8a24648dca86ac8f2ad45e74ffea6ae4"
   },
   "purpose": "Proposed read-only report contract; no repository adoption claimed"
 }

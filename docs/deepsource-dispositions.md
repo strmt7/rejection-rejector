@@ -68,6 +68,21 @@ Delegating `Default` to `Self::new()` is the pattern `clippy::new_without_defaul
 recommends and the repository's clippy gate (CI parity, `-D warnings`) requires;
 inlining the constructor body would duplicate it and drift.
 
+### BUG_RISK — `RS-W1079` "empty call to `new()`" (contradiction pair with `RS-A1008`)
+
+`src/engine.rs` (`live_selftest_tests::ProbeTransport::profile`) constructs
+empty `String` fields with `String::new()`. `RS-W1079` asks for
+`String::default()` instead, while `RS-A1008` (disposed above, repo-wide)
+asks for exactly the opposite idiom — `Self::new()` as the constructor of
+record. The two rules cannot both be satisfied: the repository standardizes
+on `new()` for empty construction, which the Rust API Guidelines (C-CTOR)
+and `clippy::new_without_default` both endorse. `String::default()` is an
+alias of `String::new()` with no behavioral difference, so the finding is
+not a bug risk — it is a style preference that contradicts a second rule of
+the same analyzer. Disposition: false positive at the rule level; the
+occurrences are recorded here with their exact source so the decision is
+auditable from the repository alone.
+
 ### BUG_RISK — `PTC-W0063` "unwrapped `next()`" (remediated at source)
 
 `training/build_corpus_v2.py` (`generate_records`) iterates `itertools.cycle`, which is
@@ -134,6 +149,7 @@ honest without hiding anything else:
 | `training/probe_llm_limits.py` | `BAN-B310` (file-level) |
 | `src/mail.rs` | `RS-W1217` (file-level) |
 | repository-wide | `RS-A1008` (`Default` delegating to `Self::new()` is the clippy-required idiom) |
+| repository-wide | `RS-W1079` (contradicts `RS-A1008`; `new()` is the documented empty-constructor idiom — see the contradiction-pair entry above) |
 
 File-level scoping keeps every rule active for all other files: a real
 secret, an unsafe drop, or a unit-type mistake anywhere else is still

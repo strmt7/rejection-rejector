@@ -185,6 +185,58 @@ def _check_dates(policy: dict, today: date, errors: list[str]) -> None:
         errors.append(f"review_due {policy['review_due']} is in the past; policy review is overdue")
 
 
+def _check_container_references(
+    policy: dict,
+    commands: dict[str, dict],
+    families: dict[str, dict],
+    environments: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check test-family and artifact-kind references resolve to declared ids.
+
+    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/
+    `environments` -- id-indexed record maps; `errors` -- the shared error
+    list. Output: none.
+    """
+    for fam in policy.get("test_families", []):
+        where = f"test_families[{fam['id']}]"
+        _need_ref(commands, "command", fam.get("command_id", ""), where, errors)
+        if fam.get("environment") not in environments:
+            errors.append(f"{where}: undefined environment {fam.get('environment')!r}")
+    for kind in policy.get("artifact_kinds", []):
+        where = f"artifact_kinds[{kind['id']}]"
+        for cid in kind.get("qualification_command_ids", []):
+            _need_ref(commands, "command", cid, where, errors)
+        for fid in kind.get("qualification_test_family_ids", []):
+            _need_ref(families, "test family", fid, where, errors)
+        if kind.get("environment") not in environments:
+            errors.append(f"{where}: undefined environment {kind.get('environment')!r}")
+
+
+def _check_scope_references(
+    policy: dict,
+    commands: dict[str, dict],
+    families: dict[str, dict],
+    kinds: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check coverage-scope and exception references resolve to declared ids.
+
+    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/`kinds` --
+    id-indexed record maps; `errors` -- the shared error list. Output: none.
+    """
+    for cov in policy.get("coverage_scopes", []):
+        where = f"coverage_scopes[{cov['id']}]"
+        _need_ref(commands, "command", cov.get("command_id", ""), where, errors)
+        _need_ref(kinds, "artifact kind", cov.get("artifact_kind", ""), where, errors)
+    for exc_rec in policy.get("exceptions", []):
+        where = f"exceptions[{exc_rec['id']}]"
+        for cid in exc_rec.get("alternative_command_ids", []):
+            _need_ref(commands, "command", cid, where, errors)
+        for fid in exc_rec.get("alternative_test_family_ids", []):
+            _need_ref(families, "test family", fid, where, errors)
+
+
 def _check_references(
     policy: dict,
     commands: dict[str, dict],
@@ -200,69 +252,47 @@ def _check_references(
     list. Output: none.
     """
     # 4. Undefined references across commands, test families and artifact kinds.
-    commands = _index(policy.get("commands", []), "commands", errors)
-    families = _index(policy.get("test_families", []), "test_families", errors)
-    kinds = _index(policy.get("artifact_kinds", []), "artifact_kinds", errors)
-    environments = _index(policy.get("environments", []), "environments", errors)
-
-    for fam in policy.get("test_families", []):
-        where = f"test_families[{fam['id']}]"
-        _need_ref(commands, "command", fam.get("command_id", ""), where, errors)
-        if fam.get("environment") not in environments:
-            errors.append(f"{where}: undefined environment {fam.get('environment')!r}")
-    for kind in policy.get("artifact_kinds", []):
-        where = f"artifact_kinds[{kind['id']}]"
-        for cid in kind.get("qualification_command_ids", []):
-            _need_ref(commands, "command", cid, where, errors)
-        for fid in kind.get("qualification_test_family_ids", []):
-            _need_ref(families, "test family", fid, where, errors)
-        if kind.get("environment") not in environments:
-            errors.append(f"{where}: undefined environment {kind.get('environment')!r}")
-    for cov in policy.get("coverage_scopes", []):
-        where = f"coverage_scopes[{cov['id']}]"
-        _need_ref(commands, "command", cov.get("command_id", ""), where, errors)
-        _need_ref(kinds, "artifact kind", cov.get("artifact_kind", ""), where, errors)
-    for exc_rec in policy.get("exceptions", []):
-        where = f"exceptions[{exc_rec['id']}]"
-        for cid in exc_rec.get("alternative_command_ids", []):
-            _need_ref(commands, "command", cid, where, errors)
-        for fid in exc_rec.get("alternative_test_family_ids", []):
-            _need_ref(families, "test family", fid, where, errors)
+    _check_container_references(policy, commands, families, environments, errors)
+    _check_scope_references(policy, commands, families, kinds, errors)
 
 
-def _check_lanes(
-    policy: dict,
+def _lane_ok(
+    entry: dict,
+    where: str,
     commands: dict[str, dict],
     families: dict[str, dict],
     kinds: dict[str, dict],
     errors: list[str],
 ) -> None:
-    """Check every required lane has a live execution path.
+    """Check one standard/task entry has dependencies and applicable commands.
 
-    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/`kinds` --
-    id-indexed record maps; `errors` -- the shared error list. Output: none.
+    Inputs: `entry` -- the standard/task record; `where` -- label for messages;
+    `commands`/`families`/`kinds` -- id-indexed record maps; `errors` -- the
+    shared error list. Output: none (errors appended in place).
     """
+    deps = entry.get("command_ids", []) + entry.get("test_family_ids", []) + entry.get("artifact_kinds", [])
+    if entry.get("applicable") and not deps:
+        errors.append(f"{where}: applicable lane names no command, test family or artifact kind")
+    for cid in entry.get("command_ids", []):
+        _need_ref(commands, "command", cid, where, errors)
+        if cid in commands and not commands[cid].get("applicable"):
+            errors.append(f"{where}: references command {cid!r} which is marked not applicable")
+    for fid in entry.get("test_family_ids", []):
+        _need_ref(families, "test family", fid, where, errors)
+    for kid in entry.get("artifact_kinds", []):
+        _need_ref(kinds, "artifact kind", kid, where, errors)
 
-    # 5. Required lanes without an execution path and canonical id sets.
-    def lane_ok(entry: dict, where: str) -> None:
-        """Check one standard/task entry has dependencies and applicable
-        commands. Inputs: entry -- the standard/task record; where -- label for
-        messages. Output: none (errors appended in place).
-        """
-        deps = entry.get("command_ids", []) + entry.get("test_family_ids", []) + entry.get("artifact_kinds", [])
-        if entry.get("applicable") and not deps:
-            errors.append(f"{where}: applicable lane names no command, test family or artifact kind")
-        for cid in entry.get("command_ids", []):
-            _need_ref(commands, "command", cid, where, errors)
-            if cid in commands and not commands[cid].get("applicable"):
-                errors.append(f"{where}: references command {cid!r} which is marked not applicable")
-        for fid in entry.get("test_family_ids", []):
-            _need_ref(families, "test family", fid, where, errors)
-        for kid in entry.get("artifact_kinds", []):
-            _need_ref(kinds, "artifact kind", kid, where, errors)
 
-    for entry in policy.get("standards", []) + policy.get("tasks", []):
-        lane_ok(entry, f"{entry.get('id')}")
+def _check_execution_paths(
+    policy: dict,
+    commands: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check applicable families and scopes whose command is not applicable.
+
+    Inputs: `policy` -- parsed policy mapping; `commands` -- id-indexed record
+    map; `errors` -- the shared error list. Output: none.
+    """
     for fam in policy.get("test_families", []):
         if fam.get("applicable"):
             cmd = commands.get(fam.get("command_id", ""))
@@ -279,6 +309,24 @@ def _check_lanes(
                     f"coverage_scopes[{cov['id']}]: applicable scope has no execution path "
                     f"(command {cov.get('command_id')!r} is marked not applicable)"
                 )
+
+
+def _check_lanes(
+    policy: dict,
+    commands: dict[str, dict],
+    families: dict[str, dict],
+    kinds: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Check every required lane has a live execution path.
+
+    Inputs: `policy` -- parsed policy mapping; `commands`/`families`/`kinds` --
+    id-indexed record maps; `errors` -- the shared error list. Output: none.
+    """
+    # 5. Required lanes without an execution path and canonical id sets.
+    for entry in policy.get("standards", []) + policy.get("tasks", []):
+        _lane_ok(entry, f"{entry.get('id')}", commands, families, kinds, errors)
+    _check_execution_paths(policy, commands, errors)
 
 
 def validate_policy(policy: dict, repo_root: Path, today: date) -> dict:

@@ -688,34 +688,54 @@ def extract_body(msg) -> str:
     return re.sub(r"[ \t]+", " ", text)
 
 
+def _iter_tar_messages(corpus: Path):
+    """Yield (source_key, raw_bytes) from a tar corpus.
+
+    Inputs: `corpus` -- the tar archive. Output: iterator of
+    `(member.name, data)` tuples; the archive is never extracted to disk.
+    """
+    with tarfile.open(corpus, "r|*") as tar:
+        for member in tar:
+            if not member.isfile() or member.size > MAX_MEMBER_BYTES:
+                continue
+            handle = tar.extractfile(member)
+            if handle is None:
+                continue
+            data = handle.read()
+            if data:
+                yield member.name, data
+    return
+
+
+def _iter_directory_messages(corpus: Path):
+    """Yield (source_key, raw_bytes) from a directory corpus.
+
+    Inputs: `corpus` -- extracted maildir or parquet directory. Output:
+    iterator of `(name, data)` tuples.
+    """
+    parquet_files = sorted(corpus.glob("*.parquet"))
+    if parquet_files:
+        yield from _iter_parquet(parquet_files)
+        return
+    for path in sorted(corpus.rglob("*")):
+        if not path.is_file() or path.stat().st_size > MAX_MEMBER_BYTES:
+            continue
+        data = path.read_bytes()
+        if data:
+            yield path.name, data
+    return
+
+
 def iter_raw_messages(corpus: Path):
     """Inputs: `corpus` path (tar.gz/.tar archive, extracted maildir directory,
     or parquet file/dir). Output: iterator of (source_key, raw_bytes) streamed
     one message at a time; the archive is never extracted to disk.
     """
     if corpus.is_file() and tarfile.is_tarfile(corpus):
-        with tarfile.open(corpus, "r|*") as tar:
-            for member in tar:
-                if not member.isfile() or member.size > MAX_MEMBER_BYTES:
-                    continue
-                handle = tar.extractfile(member)
-                if handle is None:
-                    continue
-                data = handle.read()
-                if data:
-                    yield member.name, data
+        yield from _iter_tar_messages(corpus)
         return
     if corpus.is_dir():
-        parquet_files = sorted(corpus.glob("*.parquet"))
-        if parquet_files:
-            yield from _iter_parquet(parquet_files)
-            return
-        for path in sorted(corpus.rglob("*")):
-            if not path.is_file() or path.stat().st_size > MAX_MEMBER_BYTES:
-                continue
-            data = path.read_bytes()
-            if data:
-                yield path.name, data
+        yield from _iter_directory_messages(corpus)
         return
     if corpus.suffix == ".parquet":
         yield from _iter_parquet([corpus])

@@ -4,10 +4,12 @@
 
 DeepSource-parity and complexity wave (2026-10-29). Added:
 
-- Ruff parity enforcement: `C901` (every function at McCabe 15 or below),
-  `PIE790` (no stray `pass`) and `S101` (production code raises typed errors;
-  asserts allowed only in tests via `per-file-ignores`) are now in the
-  enforced rule set — the same classes the DeepSource analyzers flag.
+- Ruff parity enforcement: `C901` (every function at McCabe 10 or below —
+  DeepSource's threshold), `PIE790` (no stray `pass`) and `S101` (production
+  code raises typed errors; asserts allowed only in tests via
+  `per-file-ignores`) are now in the enforced rule set.
+- `RS-W1079` disposition documented as a contradiction pair with the
+  repo-wide `RS-A1008` idiom (`docs/deepsource-dispositions.md`).
 
 Changed:
 
@@ -16,8 +18,10 @@ Changed:
   methods and per-record helpers; behavior proven unchanged by the three
   documented example outcomes and the 48-test reference suite.
 - `tools/check_engineering_policy.py`, `tools/validate_receipt.py`,
-  `training/calibrate_zero_fp.py`: hot functions split into cohesive
-  checks/validators (46/19/16 complexity each) with identical messages.
+  `training/calibrate_zero_fp.py`, `training/mine_enron.py`,
+  `training/scale_campaign.py`, `training/train_lora.py`: every hot function
+  split into cohesive checks/validators; the whole Python tree is now at
+  McCabe 10 or below (ruff C901: zero findings over tools/ training/ tests/).
 
 Fixed:
 

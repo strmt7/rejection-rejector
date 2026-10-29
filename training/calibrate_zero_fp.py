@@ -230,8 +230,6 @@ def _insufficient_data_report(base: dict, positives: list, negatives: list) -> d
     )
     return base
 
-    return base
-
 
 def _abstain_all_report(base: dict, negatives: list) -> dict:
     """Build the abstain-all report produced when no threshold meets the FP
@@ -250,8 +248,6 @@ def _abstain_all_report(base: dict, negatives: list) -> dict:
             "false_positive_rate_upper_95": wilson_upper_bound(0, len(negatives)),
         }
     )
-    return base
-
     return base
 
 

@@ -1404,26 +1404,28 @@ def gate_sync_report() -> dict[str, list[str]]:
     return {"missing_clear_phrases": missing_clear, "missing_conflict_phrases": missing_conflict}
 
 
+def walk_bank(node, path):
+    """Inputs: bank node and dotted path. Output: (path, text) leaf pairs."""
+    if isinstance(node, str):
+        yield path, node
+    elif isinstance(node, (list, tuple)):
+        for i, v in enumerate(node):
+            yield from walk_bank(v, f"{path}[{i}]")
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from walk_bank(v, f"{path}.{k}")
+
+
+hits: list[str] = []
+
+
 def bank_overlap_report() -> list[str]:
     """Inputs: none. Output: non-decision bank fragments that contain a clear
     phrase (the literal gate cannot tell them apart from a rejection).
     """
-
-    def walk(node, path):
-        """Inputs: bank node and dotted path. Output: (path, text) leaf pairs."""
-        if isinstance(node, str):
-            yield path, node
-        elif isinstance(node, (list, tuple)):
-            for i, v in enumerate(node):
-                yield from walk(v, f"{path}[{i}]")
-        elif isinstance(node, dict):
-            for k, v in node.items():
-                yield from walk(v, f"{path}.{k}")
-
-    hits: list[str] = []
     for lang in LANGUAGES:
         bank = {k: v for k, v in BANKS[lang].items() if k != "decision"}
-        for path, text in walk(bank, lang):
+        for path, text in walk_bank(bank, lang):
             for phrase in CLEAR_PHRASES:
                 if phrase in text.lower():
                     hits.append(f"{lang} {path}: {text!r} matches {phrase!r}")
@@ -1505,6 +1507,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"expected outcomes: {expected_counts}")
     for lang in LANGUAGES:
         print(f"  {lang}: {counts[lang]}")
+    return _report_sync_and_overlaps(sync, overlaps)
+
+
+def _report_sync_and_overlaps(sync, overlaps) -> int:
+    """Print corpus-sync and bank-overlap diagnostics.
+
+    Inputs: `sync` -- corpus sync report; `overlaps` -- overlap hits.
+    Output: `int` -- 0 (diagnostics are informational).
+    """
     if sync["missing_clear_phrases"] or sync["missing_conflict_phrases"]:
         print("GATE SYNC: missing phrases in src/mail.rs:")
         for p in sync["missing_clear_phrases"]:

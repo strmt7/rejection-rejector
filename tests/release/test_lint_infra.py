@@ -38,9 +38,9 @@ class TestRuffConfig(unittest.TestCase):
         # D2xx/D4xx rules off (see the rationale block in .ruff.toml).
         self.assertEqual(config["lint"]["ignore"], ["D203", "D205", "D212", "D213", "D401"])
         self.assertEqual(config["format"]["line-ending"], "lf")
-        # Parity classes (dated 2026-10-29): complexity capped at 15,
+        # Parity classes (dated 2026-10-29): complexity capped at 10,
         # production asserts banned (tests may assert), no stray pass.
-        self.assertEqual(config["lint"]["mccabe"]["max-complexity"], 15)
+        self.assertEqual(config["lint"]["mccabe"]["max-complexity"], 10)
         self.assertEqual(config["lint"]["per-file-ignores"], {"tests/*": ["S101"]})
 
     def test_line_length_exception_is_documented_and_dated(self) -> None:

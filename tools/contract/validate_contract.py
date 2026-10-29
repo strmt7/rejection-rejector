@@ -372,16 +372,40 @@ class _Validation:
         """
         good = True
         before = len(self.issues)
+        if not self._verify_file_identity(item, field):
+            good = False
+        when = self.timestamp(item[time_field], f"{field}/{time_field}")
+        if when > self.created:
+            self.fail("EVIDENCE_ORDER", field, "evidence/artifact postdates receipt creation")
+            good = False
+        if not self._verify_file_bytes(item, field):
+            good = False
+        if self.receipt["mode"] == "production" and item[kind_field] == "synthetic":
+            self.block("SYNTHETIC_EVIDENCE", field, "synthetic evidence cannot qualify a production requirement")
+        return good and len(self.issues) == before
+
+    def _verify_file_identity(self, item, field):
+        """Check the source/profile identity pair against the trusted targets.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        good = True
         for key, expected in [("source_sha", self.target_sha), ("profile_sha", self.profile_sha)]:
             if item[key] != expected:
                 self.fail(
                     "FILE_IDENTITY", f"{field}/{key}", "evidence/artifact identity differs from the current target"
                 )
                 good = False
-        when = self.timestamp(item[time_field], f"{field}/{time_field}")
-        if when > self.created:
-            self.fail("EVIDENCE_ORDER", field, "evidence/artifact postdates receipt creation")
-            good = False
+        return good
+
+    def _verify_file_bytes(self, item, field):
+        """Resolve and hash one referenced file's physical bytes.
+
+        Inputs: `item` -- the evidence or artifact record; `field` -- field name.
+        Output: `bool` -- whether the bytes verified.
+        """
+        good = True
         try:
             rel = relative_path(item["path"])
             resolved = (self.evidence_root / rel).resolve()
@@ -409,9 +433,7 @@ class _Validation:
         except (OSError, RuntimeError, ContractError) as error:
             self.fail("FILE_PATH", field, str(error))
             good = False
-        if self.receipt["mode"] == "production" and item[kind_field] == "synthetic":
-            self.block("SYNTHETIC_EVIDENCE", field, "synthetic evidence cannot qualify a production requirement")
-        return good and len(self.issues) == before
+        return good
 
     def references(self, ids, field, nonempty=False):
         """Check one evidence-id reference list against verified evidence.
@@ -604,26 +626,34 @@ class _Validation:
             self.fail("ENVIRONMENT", "environments", "at least one required environment must be declared")
         self.available = set()
         for key, declared in self.p["environments"].items():
-            actual = self.r["environments"].get(key)
-            if not declared["tools"]:
-                self.fail("TOOLS", f"environments/{key}", "declare at least one exact supported tool version")
-            if any(not name.strip() for name in declared["tools"]):
-                self.fail("TOOL_IDENTITY", f"environments/{key}/tools", "policy tool names must be nonblank")
-            if actual is None:
-                continue
-            if any(not name.strip() for name in actual["tools"]):
-                self.fail("TOOL_IDENTITY", f"environments/{key}/tools", "receipt tool names must be nonblank")
-            if actual["status"] == "blocked":
-                if declared["required"]:
-                    self.block("ENVIRONMENT_BLOCKED", f"environments/{key}", actual["reason"])
-                continue
-            valid = True
-            for name, allowed in declared["tools"].items():
-                if actual["tools"].get(name) not in allowed:
-                    self.fail("TOOL_VERSION", f"environments/{key}/tools/{name}", "missing or unsupported tool version")
-                    valid = False
-            if valid:
-                self.available.add(key)
+            self._check_one_environment(key, declared)
+
+    def _check_one_environment(self, key, declared):
+        """Validate one environment record against its policy declaration.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        actual = self.r["environments"].get(key)
+        if not declared["tools"]:
+            self.fail("TOOLS", f"environments/{key}", "declare at least one exact supported tool version")
+        if any(not name.strip() for name in declared["tools"]):
+            self.fail("TOOL_IDENTITY", f"environments/{key}/tools", "policy tool names must be nonblank")
+        if actual is None:
+            return
+        if any(not name.strip() for name in actual["tools"]):
+            self.fail("TOOL_IDENTITY", f"environments/{key}/tools", "receipt tool names must be nonblank")
+        if actual["status"] == "blocked":
+            if declared["required"]:
+                self.block("ENVIRONMENT_BLOCKED", f"environments/{key}", actual["reason"])
+            return
+        valid = True
+        for name, allowed in declared["tools"].items():
+            if actual["tools"].get(name) not in allowed:
+                self.fail("TOOL_VERSION", f"environments/{key}/tools/{name}", "missing or unsupported tool version")
+                valid = False
+        if valid:
+            self.available.add(key)
 
     def verify_local_files(self):
         """Verify every referenced evidence, input and artifact file.
@@ -634,6 +664,14 @@ class _Validation:
         for key, item in self.r["evidence"].items():
             if self.verify_file(item, f"evidence/{key}", "captured_at", "kind"):
                 self.valid_evidence.add(key)
+        self._verify_policy_records()
+
+    def _verify_policy_records(self):
+        """Verify policy-bound input files and declared artifact receipts.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
         for key, item in self.r["input_files"].items():
             if key not in self.p["input_files"]:
                 continue
@@ -688,50 +726,66 @@ class _Validation:
         """
         self.qualified_artifacts = set()
         for key, item in self.r["artifacts"].items():
-            if item["kind"] not in self.p["artifact_kinds"]:
-                continue
-            declared = self.p["artifact_kinds"][item["kind"]]
-            actual = item["qualification"]
-            field = f"artifacts/{key}/qualification"
-            if set(actual["command_ids"]) != set(declared["qualification_command_ids"]) or set(
-                actual["test_family_ids"]
-            ) != set(declared["qualification_test_family_ids"]):
-                self.fail("QUALIFICATION_IDENTITY", field, "qualification dependencies differ from policy")
-                continue
-            if not self.applicability(declared, actual, field):
-                continue
-            if actual["status"] == "failed":
-                self.fail("ARTIFACT_QUALIFICATION_FAILED", field, actual["reason"])
-            if actual["status"] == "blocked":
-                self.block("ARTIFACT_QUALIFICATION_BLOCKED", field, actual["reason"])
-            if actual["status"] == "passed":
-                before = len(self.issues)
-                has_evidence = self.references(actual["evidence_ids"], field, True)
-                artifact_created = self.timestamp(item["created_at"], field + "/artifact_created_at")
-                qualification_commands = set(actual["command_ids"])
-                qualification_commands.update(
-                    self.p["test_families"][family_id]["command_id"]
-                    for family_id in actual["test_family_ids"]
-                    if family_id in self.p["test_families"]
-                )
-                for command_id in qualification_commands:
-                    if command_id in self.command_finished and artifact_created > self.command_finished[command_id]:
-                        self.fail(
-                            "ARTIFACT_QUALIFICATION_TIME",
-                            field,
-                            "artifact cannot be created after a command asserted to have qualified it finished",
-                        )
-                if (
-                    not set(actual["command_ids"]) <= self.passed_commands
-                    or not set(actual["test_family_ids"]) <= self.passed_families
-                ):
+            self._check_one_qualification(key, item)
+
+    def _check_one_qualification(self, key, item):
+        """Validate one artifact's qualification command and test evidence.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        if item["kind"] not in self.p["artifact_kinds"]:
+            return
+        declared = self.p["artifact_kinds"][item["kind"]]
+        actual = item["qualification"]
+        field = f"artifacts/{key}/qualification"
+        if set(actual["command_ids"]) != set(declared["qualification_command_ids"]) or set(
+            actual["test_family_ids"]
+        ) != set(declared["qualification_test_family_ids"]):
+            self.fail("QUALIFICATION_IDENTITY", field, "qualification dependencies differ from policy")
+            return
+        if not self.applicability(declared, actual, field):
+            return
+        if actual["status"] == "failed":
+            self.fail("ARTIFACT_QUALIFICATION_FAILED", field, actual["reason"])
+        if actual["status"] == "blocked":
+            self.block("ARTIFACT_QUALIFICATION_BLOCKED", field, actual["reason"])
+        self._qualification_passed_checks(key, item, declared, actual, field)
+
+    def _qualification_passed_checks(self, key, item, declared, actual, field):
+        """Validate one passed qualification's timing and dependency claims.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        if actual["status"] == "passed":
+            before = len(self.issues)
+            has_evidence = self.references(actual["evidence_ids"], field, True)
+            artifact_created = self.timestamp(item["created_at"], field + "/artifact_created_at")
+            qualification_commands = set(actual["command_ids"])
+            qualification_commands.update(
+                self.p["test_families"][family_id]["command_id"]
+                for family_id in actual["test_family_ids"]
+                if family_id in self.p["test_families"]
+            )
+            for command_id in qualification_commands:
+                if command_id in self.command_finished and artifact_created > self.command_finished[command_id]:
                     self.fail(
-                        "FALSE_PASS_QUALIFICATION",
+                        "ARTIFACT_QUALIFICATION_TIME",
                         field,
-                        "artifact requires passing declared qualification commands/families",
+                        "artifact cannot be created after a command asserted to have qualified it finished",
                     )
-                elif has_evidence and key in self.valid_artifacts and len(self.issues) == before:
-                    self.qualified_artifacts.add(key)
+            if (
+                not set(actual["command_ids"]) <= self.passed_commands
+                or not set(actual["test_family_ids"]) <= self.passed_families
+            ):
+                self.fail(
+                    "FALSE_PASS_QUALIFICATION",
+                    field,
+                    "artifact requires passing declared qualification commands/families",
+                )
+            elif has_evidence and key in self.valid_artifacts and len(self.issues) == before:
+                self.qualified_artifacts.add(key)
 
     def check_artifact_kinds(self):
         """Validate artifact-kind policies and required artifact counts.
@@ -741,34 +795,42 @@ class _Validation:
         """
         self.valid_kinds = set()
         for key, declared in self.p["artifact_kinds"].items():
-            if declared["environment"] not in self.p["environments"]:
-                self.fail("ENVIRONMENT_REF", f"artifact_kinds/{key}", "undeclared artifact environment")
-            count = sum(a["kind"] == key and aid in self.qualified_artifacts for aid, a in self.r["artifacts"].items())
-            if declared["applicable"]:
-                if not declared["qualification_command_ids"]:
-                    self.fail(
-                        "QUALIFICATION_POLICY",
-                        f"artifact_kinds/{key}",
-                        "applicable artifact needs a qualification command",
-                    )
-                if not set(declared["qualification_command_ids"]) <= set(self.p["commands"]) or not set(
-                    declared["qualification_test_family_ids"]
-                ) <= set(self.p["test_families"]):
-                    self.fail("QUALIFICATION_REF", f"artifact_kinds/{key}", "undeclared qualification dependency")
-                if declared["minimum_count"] < 1:
-                    self.fail("ARTIFACT_POLICY", f"artifact_kinds/{key}", "applicable kind requires a positive count")
-                if declared["environment"] not in self.available:
-                    self.block(
-                        "ARTIFACT_ENV_BLOCKED",
-                        f"artifact_kinds/{key}",
-                        "required artifact host is unavailable or unsupported",
-                    )
-                if count < declared["minimum_count"]:
-                    self.block("MISSING_ARTIFACT", f"artifact_kinds/{key}", "too few verified required artifacts")
-                elif declared["environment"] in self.available:
-                    self.valid_kinds.add(key)
-            elif declared["minimum_count"] != 0:
-                self.fail("NA_ARTIFACT_POLICY", f"artifact_kinds/{key}", "N/A kind must have zero required count")
+            self._check_one_kind(key, declared)
+
+    def _check_one_kind(self, key, declared):
+        """Validate one artifact-kind policy record and its receipts.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        if declared["environment"] not in self.p["environments"]:
+            self.fail("ENVIRONMENT_REF", f"artifact_kinds/{key}", "undeclared artifact environment")
+        count = sum(a["kind"] == key and aid in self.qualified_artifacts for aid, a in self.r["artifacts"].items())
+        if declared["applicable"]:
+            if not declared["qualification_command_ids"]:
+                self.fail(
+                    "QUALIFICATION_POLICY",
+                    f"artifact_kinds/{key}",
+                    "applicable artifact needs a qualification command",
+                )
+            if not set(declared["qualification_command_ids"]) <= set(self.p["commands"]) or not set(
+                declared["qualification_test_family_ids"]
+            ) <= set(self.p["test_families"]):
+                self.fail("QUALIFICATION_REF", f"artifact_kinds/{key}", "undeclared qualification dependency")
+            if declared["minimum_count"] < 1:
+                self.fail("ARTIFACT_POLICY", f"artifact_kinds/{key}", "applicable kind requires a positive count")
+            if declared["environment"] not in self.available:
+                self.block(
+                    "ARTIFACT_ENV_BLOCKED",
+                    f"artifact_kinds/{key}",
+                    "required artifact host is unavailable or unsupported",
+                )
+            if count < declared["minimum_count"]:
+                self.block("MISSING_ARTIFACT", f"artifact_kinds/{key}", "too few verified required artifacts")
+            elif declared["environment"] in self.available:
+                self.valid_kinds.add(key)
+        elif declared["minimum_count"] != 0:
+            self.fail("NA_ARTIFACT_POLICY", f"artifact_kinds/{key}", "N/A kind must have zero required count")
 
     def check_coverage_scopes(self):
         """Validate coverage scopes, their identities and report artifacts.
@@ -786,36 +848,50 @@ class _Validation:
         recorded on the run state.
         """
         for category in ("standards", "tasks"):
-            for key, declared in self.p[category].items():
-                actual = self.r[category].get(key)
-                field = f"{category}/{key}"
-                for name, collection in [
-                    ("command_ids", "commands"),
-                    ("test_family_ids", "test_families"),
-                    ("artifact_kinds", "artifact_kinds"),
-                ]:
-                    if set(declared[name]) - set(self.p[collection]):
-                        self.fail("DEPENDENCY_REF", field, "requirement refers to undeclared dependencies")
-                if actual is None:
-                    continue
-                if not self.applicability(declared, actual, field):
-                    continue
-                if not any(declared[k] for k in ("command_ids", "test_family_ids", "artifact_kinds")):
-                    self.fail("NO_ACCEPTANCE", field, "applicable requirement needs explicit acceptance dependencies")
-                if actual["status"] == "failed":
-                    self.fail("REQUIREMENT_FAILED", field, actual["reason"])
-                if actual["status"] == "blocked":
-                    self.block("REQUIREMENT_BLOCKED", field, actual["reason"])
-                if actual["status"] == "passed":
-                    self.references(actual["evidence_ids"], field, True)
-                    if not (
-                        set(declared["command_ids"]) <= self.passed_commands
-                        and set(declared["test_family_ids"]) <= self.passed_families
-                        and set(declared["artifact_kinds"]) <= self.valid_kinds
-                    ):
-                        self.fail(
-                            "FALSE_PASS_DEPENDENCY", field, "claimed passing requirement has an unresolved dependency"
-                        )
+            self._check_category_requirements(category)
+
+    def _check_category_requirements(self, category):
+        """Validate every standard/task requirement in one category.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        for key, declared in self.p[category].items():
+            self._check_one_requirement(category, key, declared)
+
+    def _check_one_requirement(self, category, key, declared):
+        """Validate one standard/task requirement record.
+
+        Inputs: `category`/`key`/`declared` -- the record coordinates and
+        policy. Output: none; findings are recorded on the run state.
+        """
+        actual = self.r[category].get(key)
+        field = f"{category}/{key}"
+        for name, collection in [
+            ("command_ids", "commands"),
+            ("test_family_ids", "test_families"),
+            ("artifact_kinds", "artifact_kinds"),
+        ]:
+            if set(declared[name]) - set(self.p[collection]):
+                self.fail("DEPENDENCY_REF", field, "requirement refers to undeclared dependencies")
+        if actual is None:
+            return
+        if not self.applicability(declared, actual, field):
+            return
+        if not any(declared[k] for k in ("command_ids", "test_family_ids", "artifact_kinds")):
+            self.fail("NO_ACCEPTANCE", field, "applicable requirement needs explicit acceptance dependencies")
+        if actual["status"] == "failed":
+            self.fail("REQUIREMENT_FAILED", field, actual["reason"])
+        if actual["status"] == "blocked":
+            self.block("REQUIREMENT_BLOCKED", field, actual["reason"])
+        if actual["status"] == "passed":
+            self.references(actual["evidence_ids"], field, True)
+            if not (
+                set(declared["command_ids"]) <= self.passed_commands
+                and set(declared["test_family_ids"]) <= self.passed_families
+                and set(declared["artifact_kinds"]) <= self.valid_kinds
+            ):
+                self.fail("FALSE_PASS_DEPENDENCY", field, "claimed passing requirement has an unresolved dependency")
 
     def check_exceptions(self):
         """Validate policy exceptions and their proven alternatives.
@@ -1023,16 +1099,15 @@ class _Validation:
             unmet("ZERO_OR_FEW_TESTS", field, "too few tests actually executed")
         self._family_required_tests(declared, actual, field, tests, allowed, unmet)
         for test_id, test in tests.items():
-            if test["status"] == "failed":
-                self.fail("TEST_FAILED", field + "/" + test_id, test["reason"])
-            if test["status"] == "blocked":
-                self.block("TEST_BLOCKED", field + "/" + test_id, test["reason"])
-            if test["status"] == "skipped" and (test_id not in allowed or test["reason"] != allowed[test_id]["reason"]):
-                self.fail(
-                    "UNEXPECTED_SKIP",
-                    field + "/" + test_id,
-                    "skip is not explicitly policy-declared with its factual reason",
-                )
+            self._family_test_outcomes(test_id, test, allowed, field, actual)
+        self._family_status_checks(key, declared, actual, field, before)
+
+    def _family_status_checks(self, key, declared, actual, field, before):
+        """Validate one family's recorded status against its issue history.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
         if actual["status"] == "failed":
             self.fail("FAMILY_FAILED", field, actual["reason"])
         if actual["status"] == "blocked":
@@ -1044,6 +1119,23 @@ class _Validation:
                 self.fail("FALSE_PASS_TEST_ENV", field, "passing family requires its available supported environment")
             if len(self.issues) == before and set(actual["evidence_ids"]) <= self.valid_evidence:
                 self.passed_families.add(key)
+
+    def _family_test_outcomes(self, test_id, test, allowed, field, actual):
+        """Validate each family test record's outcome and skip legitimacy.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
+        if test["status"] == "failed":
+            self.fail("TEST_FAILED", field + "/" + test_id, test["reason"])
+        if test["status"] == "blocked":
+            self.block("TEST_BLOCKED", field + "/" + test_id, test["reason"])
+        if test["status"] == "skipped" and (test_id not in allowed or test["reason"] != allowed[test_id]["reason"]):
+            self.fail(
+                "UNEXPECTED_SKIP",
+                field + "/" + test_id,
+                "skip is not explicitly policy-declared with its factual reason",
+            )
 
     def _family_required_tests(self, declared, actual, field, tests, allowed, unmet):
         """Validate required tests and unexpected skips.
@@ -1071,12 +1163,19 @@ class _Validation:
         self._coverage_declared_checks(declared, field)
         if actual is None:
             return
-            return
         for name in ("environment", "command_id", "measurement", "included_roots", "excluded_roots"):
             if actual[name] != declared[name]:
                 self.fail("COVERAGE_IDENTITY", field, "recorded coverage scope/mode differs from policy")
         if not self.applicability(declared, actual, field):
             return
+        self._coverage_actual_checks(key, declared, actual, field)
+
+    def _coverage_actual_checks(self, key, declared, actual, field):
+        """Validate one applicable coverage's measurement and artifact claims.
+
+        Inputs: named record state from the run. Output: none;
+        findings are recorded on the run state.
+        """
         if declared["measurement"] == "none" or not declared["included_roots"]:
             self.fail(
                 "COVERAGE_POLICY", field, "applicable coverage needs a measurement mode and explicit source scope"

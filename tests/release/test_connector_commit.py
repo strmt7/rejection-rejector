@@ -64,7 +64,8 @@ class TreeEntryTests(unittest.TestCase):
 class IdentityPolicyTests(unittest.TestCase):
     """Contract tests for the connector identity policy check."""
 
-    def _commit(self, author, committer):
+    @staticmethod
+    def _commit(author, committer):
         """Build one commit identity-pair fixture.
 
         Inputs: `author`/`committer` -- (name, email) tuples. Output: `dict` --
