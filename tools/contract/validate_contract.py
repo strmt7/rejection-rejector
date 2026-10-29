@@ -503,7 +503,7 @@ class _Validation:
         """
         if self.repo not in PREFIXES:
             self.fail("REPO", "repo", "repository is outside the 13 canonical report identities")
-            return self.output()
+            return
         if not re.fullmatch("[0-9a-f]{40}", self.target_sha) or not re.fullmatch("[0-9a-f]{40}", self.profile_sha):
             self.fail(
                 "TARGET", "target", "trusted current source/profile inputs must be full lowercase 40-character SHAs"
@@ -930,7 +930,7 @@ class _Validation:
         original early exits.
         """
         if self.aborted:
-            return self.output()
+            return
         computed = self.output()["consistency_result"]
         if self.receipt["overall_status"] != computed:
             self.fail(

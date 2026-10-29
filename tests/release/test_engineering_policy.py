@@ -57,7 +57,8 @@ class PolicyValidatorTests(unittest.TestCase):
     asserts the validator names it; the untouched real policy must pass.
     """
 
-    def _validate(self, policy: dict):
+    @staticmethod
+    def _validate(policy: dict):
         """Validate one policy copy against the repository root.
 
         Inputs: `policy` -- candidate policy mapping. Output: the validator

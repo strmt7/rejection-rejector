@@ -332,6 +332,7 @@ def _validate_one_artifact(artifact: Any, index: int, root: Path, seen: set[Path
         findings.append(f"artifact.digest_mismatch:{index}")
     return findings
 
+
 def _validate_exceptions(receipt: dict[str, Any], now: datetime) -> list[str]:
     """Check exception records; exceptions never change the computed result."""
     findings: list[str] = []
