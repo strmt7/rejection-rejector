@@ -694,23 +694,47 @@ fn maintenance_commands_write_their_operator_artifacts() {
 
     let rotated = rr_in(&dir, &["rotate-api-token"]);
     assert!(rotated.status.success());
-    let first_token = String::from_utf8_lossy(&rotated.stdout).trim().to_owned();
-    assert!(
-        !first_token.is_empty(),
-        "the one-time token is printed once"
+    let parse_tokens = |output: &str| -> Vec<String> {
+        output
+            .lines()
+            .filter_map(|line| {
+                line.split_once(": ").map(|(scope, token)| {
+                    assert!(
+                        matches!(scope, "read" | "write"),
+                        "unexpected token scope {scope}"
+                    );
+                    token.to_owned()
+                })
+            })
+            .collect()
+    };
+    let first_tokens = parse_tokens(String::from_utf8_lossy(&rotated.stdout).trim());
+    assert_eq!(
+        first_tokens.len(),
+        2,
+        "both one-time scope tokens are printed once"
+    );
+    assert_ne!(
+        first_tokens[0], first_tokens[1],
+        "the read and write credentials are distinct"
     );
 
-    // A second rotation prints another one-time token.
+    // A second rotation prints two more one-time tokens.
     let rotated_again = rr_in(&dir, &["rotate-api-token"]);
     assert!(
         rotated_again.status.success(),
-        "second rotation prints a token"
+        "second rotation prints the tokens"
     );
-    let second_token = String::from_utf8_lossy(&rotated_again.stdout)
-        .trim()
-        .to_owned();
-    assert!(!second_token.is_empty(), "the second token is printed too");
-    assert_ne!(first_token, second_token, "each rotation mints a new token");
+    let second_tokens = parse_tokens(String::from_utf8_lossy(&rotated_again.stdout).trim());
+    assert_eq!(
+        second_tokens.len(),
+        2,
+        "both scope tokens are printed again"
+    );
+    assert_ne!(
+        first_tokens, second_tokens,
+        "each rotation mints new tokens"
+    );
 }
 
 /// `configure` applies exactly the requested fields and refuses invalid values

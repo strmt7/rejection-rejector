@@ -1,5 +1,5 @@
 use crate::{
-    api_auth::ApiTokenVerifier,
+    api_auth::ApiTokens,
     worker::{Command, WorkerPulse},
 };
 use anyhow::Result;
@@ -89,6 +89,31 @@ impl RateLimiter {
     }
 }
 
+/// Rate-limit buckets partitioned by caller validity: admitted requests
+/// (valid Host, Origin and scoped bearer) draw from `admitted`; rejected
+/// traffic draws from `rejected`, so a tokenless local process can never
+/// drain the capacity reserved for authenticated callers.
+///
+/// Inputs: none (plain struct). Output: the two token buckets.
+#[derive(Clone, Debug)]
+struct RateBuckets {
+    admitted: RateLimiter,
+    rejected: RateLimiter,
+}
+
+impl RateBuckets {
+    /// Create both buckets full.
+    ///
+    /// Inputs: `now` — instant both bucket clocks start from. Output: `Self`
+    /// with both buckets at full burst.
+    fn new(now: Instant) -> Self {
+        Self {
+            admitted: RateLimiter::new(now),
+            rejected: RateLimiter::new(now),
+        }
+    }
+}
+
 /// Fingerprint the bundled OpenAPI contract document.
 ///
 /// Inputs: none. Output: `String` of lowercase hex — the SHA-256 digest of [`OPENAPI_DOCUMENT`].
@@ -159,13 +184,42 @@ fn unique_header<'a>(headers: &'a [tiny_http::Header], name: &str) -> Option<&'a
     Some(value)
 }
 
-/// Check one request's bearer header against the verifier.
+/// Authorization verdict for one request's bearer under its route scope.
 ///
-/// Inputs: `value` — raw `Authorization` header value, if present; `verifier` —
-/// API token verifier. Output: `true` only when the header authorizes the
-/// request.
-fn authorized(value: Option<&str>, verifier: &ApiTokenVerifier) -> bool {
-    verifier.authorize_header(value)
+/// Inputs: none (plain enum). Output: distinguishes an authentic-but-narrow
+/// credential from an absent one so a read-only integration gets a typed
+/// `insufficient_scope` rejection instead of an authentication error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Authz {
+    /// The bearer carries the authority the route requires.
+    Authorized,
+    /// The bearer is authentic but its scope does not cover the route.
+    InsufficientScope,
+    /// No authentic bearer credential.
+    Denied,
+}
+
+/// Check one request's bearer header against the scope its route requires.
+///
+/// Inputs: `value` — raw `Authorization` header value, if present;
+/// `requires_write` — whether the route is state-changing; `tokens` — both
+/// scope verifiers. Output: [`Authz`] — `Authorized` when the credential
+/// covers the route's scope (the write credential reads and writes), and
+/// `InsufficientScope` when a read-only credential targets a write route.
+fn authorize_scope(value: Option<&str>, requires_write: bool, tokens: &ApiTokens) -> Authz {
+    if requires_write {
+        if tokens.authorize_write(value) {
+            Authz::Authorized
+        } else if tokens.authorize_read(value) {
+            Authz::InsufficientScope
+        } else {
+            Authz::Denied
+        }
+    } else if tokens.authorize_read(value) {
+        Authz::Authorized
+    } else {
+        Authz::Denied
+    }
 }
 
 /// Whether the request is a navigation for the embedded web page.
@@ -401,21 +455,23 @@ fn finalize_response(
 
 /// Local loopback HTTP surface: read API, embedded web page, gated writes.
 ///
-/// No CORS, literal loopback Host, bearer token on every data route, and no
-/// browser `Origin` except same-origin writes from the embedded page. The
-/// static page at `GET /` contains no data and needs no token; read endpoints
-/// stay read-only, and state-changing endpoints accept only authenticated
-/// POST requests under the fixed body cap.
+/// No CORS, literal loopback Host, scoped bearer tokens on every data route,
+/// and no browser `Origin` except same-origin writes from the embedded page.
+/// The static page at `GET /` contains no data and needs no token; read
+/// endpoints accept either scope, and state-changing endpoints accept only
+/// the write-scope credential on authenticated POST requests under the fixed
+/// body cap.
 ///
-/// Inputs: `port` — loopback TCP port to bind (`0` picks an ephemeral one); `verifier`
-/// — bearer-token verifier applied to every data route; `commands` — channel
-/// to the worker for write commands; `stop` — flag that shuts the accept loop
-/// down; `disabled` — flag that stops the accept loop while the API is
-/// disabled; `pulse` — worker liveness source for read snapshots. Output: `Result<u16>`
-/// with the port actually bound; errors when the listener cannot bind.
-pub fn start_with_verifier(
+/// Inputs: `port` — loopback TCP port to bind (`0` picks an ephemeral one);
+/// `tokens` — both scope verifiers applied to every data route; `commands` —
+/// channel to the worker for write commands; `stop` — flag that shuts the
+/// accept loop down; `disabled` — flag that stops the accept loop while the
+/// API is disabled; `pulse` — worker liveness source for read snapshots.
+/// Output: `Result<u16>` with the port actually bound; errors when the
+/// listener cannot bind.
+pub fn start_with_tokens(
     port: u16,
-    verifier: ApiTokenVerifier,
+    tokens: ApiTokens,
     commands: Sender<Command>,
     stop: Arc<AtomicBool>,
     disabled: Arc<AtomicBool>,
@@ -435,7 +491,7 @@ pub fn start_with_verifier(
     let server = Server::from_listener(listener, None)
         .map_err(|e| anyhow::anyhow!("Cannot bind loopback API: {e}"))?;
     std::thread::spawn(move || {
-        let mut rate_limiter = RateLimiter::new(Instant::now());
+        let mut rates = RateBuckets::new(Instant::now());
         while !stop.load(Ordering::SeqCst) && !disabled.load(Ordering::SeqCst) {
             let mut request = match server.recv_timeout(Duration::from_millis(250)) {
                 Ok(Some(r)) => r,
@@ -444,7 +500,7 @@ pub fn start_with_verifier(
             };
             let request_id = uuid::Uuid::new_v4().to_string();
             let (status, body, content_type) =
-                match guard_request(&request, &request_id, &mut rate_limiter, port, &verifier) {
+                match guard_request(&request, &request_id, &mut rates, port, &tokens) {
                     Some(rejection) => rejection,
                     None => route_request(&mut request, &request_id, &commands, &pulse),
                 };
@@ -483,51 +539,108 @@ fn json_error(
     )
 }
 
-/// Apply the rate limit and the Host, Origin and authentication policies.
+/// Validate Host, Origin and the route's bearer scope in cheap-first order,
+/// without spending any rate capacity.
+///
+/// Inputs: `request` — received request; `port` — the port the listener
+/// actually holds; `tokens` — both scope verifiers. Output: `None` when the
+/// request may proceed to rate charging, otherwise `(status, code, message)`
+/// for the typed rejection — 403 `insufficient_scope` when an authentic
+/// read-scope credential targets a state-changing route, 401 otherwise.
+fn validate_request(
+    request: &tiny_http::Request,
+    port: u16,
+    tokens: &ApiTokens,
+) -> Option<(u16, &'static str, &'static str)> {
+    let host = unique_header(request.headers(), "Host");
+    if host != Some(format!("127.0.0.1:{port}").as_str()) {
+        return Some((
+            401,
+            "unauthorized",
+            "Authentication, Host or Origin policy rejected the request",
+        ));
+    }
+    let origin_present = request.headers().iter().any(|h| h.field.equiv("Origin"));
+    let origin = unique_header(request.headers(), "Origin");
+    if !origin_policy_allows(
+        request.method(),
+        request.url(),
+        origin,
+        origin_present,
+        port,
+    ) {
+        return Some((
+            401,
+            "unauthorized",
+            "Authentication, Host or Origin policy rejected the request",
+        ));
+    }
+    if is_web_page(request.method(), request.url()) {
+        return None;
+    }
+    let auth = unique_header(request.headers(), "Authorization");
+    let requires_write = crate::web::is_write_route(request.url());
+    match authorize_scope(auth, requires_write, tokens) {
+        Authz::Authorized => None,
+        Authz::InsufficientScope => Some((
+            403,
+            crate::web::CODE_INSUFFICIENT_SCOPE,
+            "The credential is read-scope; this route requires the write-scope credential",
+        )),
+        Authz::Denied => Some((
+            401,
+            "unauthorized",
+            "Authentication, Host or Origin policy rejected the request",
+        )),
+    }
+}
+
+/// Apply the Host, Origin and scope policies, then charge the rate bucket
+/// that matches the caller class.
+///
+/// Validation runs before any capacity is charged: rejected traffic draws
+/// only from the cheap rejection bucket, so invalid requests cannot drain
+/// the capacity reserved for validly authorized callers.
 ///
 /// Inputs: `request` — received request; `request_id` — correlation id;
-/// `rate_limiter` — per-listener token bucket; `port` — the port the listener
-/// actually holds; `verifier` — API token verifier. Output: `Some` wire
+/// `rates` — partitioned rate buckets; `port` — the port the listener
+/// actually holds; `tokens` — both scope verifiers. Output: `Some` wire
 /// response when the request is refused, `None` when it may proceed.
 fn guard_request(
     request: &tiny_http::Request,
     request_id: &str,
-    rate_limiter: &mut RateLimiter,
+    rates: &mut RateBuckets,
     port: u16,
-    verifier: &ApiTokenVerifier,
+    tokens: &ApiTokens,
 ) -> Option<(u16, String, &'static str)> {
-    let auth = unique_header(request.headers(), "Authorization");
-    let host = unique_header(request.headers(), "Host");
-    let origin_present = request.headers().iter().any(|h| h.field.equiv("Origin"));
-    let origin = unique_header(request.headers(), "Origin");
-    let page = is_web_page(request.method(), request.url());
-    if !rate_limiter.allow(Instant::now()) {
-        Some(json_error(
-            429,
-            "rate_limited",
-            "The local integration API request rate exceeded its bounded burst",
-            true,
-            request_id,
-        ))
-    } else if host != Some(format!("127.0.0.1:{port}").as_str())
-        || !origin_policy_allows(
-            request.method(),
-            request.url(),
-            origin,
-            origin_present,
-            port,
-        )
-        || (!page && !authorized(auth, verifier))
-    {
-        Some(json_error(
-            401,
-            "unauthorized",
-            "Authentication, Host or Origin policy rejected the request",
-            false,
-            request_id,
-        ))
-    } else {
-        None
+    let now = Instant::now();
+    match validate_request(request, port, tokens) {
+        None => {
+            if rates.admitted.allow(now) {
+                None
+            } else {
+                Some(json_error(
+                    429,
+                    "rate_limited",
+                    "The local integration API request rate exceeded its bounded burst",
+                    true,
+                    request_id,
+                ))
+            }
+        }
+        Some((status, code, message)) => {
+            if rates.rejected.allow(now) {
+                Some(json_error(status, code, message, false, request_id))
+            } else {
+                Some(json_error(
+                    429,
+                    "rate_limited",
+                    "The local integration API request rate exceeded its bounded burst",
+                    true,
+                    request_id,
+                ))
+            }
+        }
     }
 }
 
@@ -648,26 +761,6 @@ fn worker_call<T: Send + 'static>(
     })
 }
 
-/// Backwards-compatible library entry point. The supplied plaintext token is
-/// immediately reduced to an in-memory verifier; application persistence uses
-/// only verifier material.
-///
-/// Inputs: `port` — loopback TCP port to bind; `token` — plaintext bearer
-/// token, reduced to a verifier before use; `commands` — channel to the
-/// worker; `stop` — flag that shuts the accept loop down; `disabled` — flag
-/// that stops the accept loop while the API is disabled; `pulse` — worker
-/// liveness source. Output: `Result<u16>` with the bound port, as [`start_with_verifier`].
-pub fn start(
-    port: u16,
-    token: String,
-    commands: Sender<Command>,
-    stop: Arc<AtomicBool>,
-    disabled: Arc<AtomicBool>,
-    pulse: WorkerPulse,
-) -> Result<u16> {
-    let verifier = ApiTokenVerifier::from_token(&token)?;
-    start_with_verifier(port, verifier, commands, stop, disabled, pulse)
-}
 #[cfg(test)]
 mod tests {
 
@@ -708,21 +801,42 @@ mod tests {
     // when the code under test sends a command the scenario does not
     // expect (which is exactly what they pin), so they never run green.
     use super::*;
+    use crate::api_auth::{ApiTokenVerifier, TokenScope};
     use crate::web::{CODE_CONFIRM_REPLY_MISMATCH, CODE_METHOD_NOT_ALLOWED, WriteOutcome};
     use crossbeam_channel::Receiver;
 
-    /// Bind a free loopback port and start the real API server for one test.
+    /// Build both scope verifiers from two plaintext credentials.
     ///
-    /// Inputs: `token` — bearer credential the client will present. Output:
-    /// `(port, receiver, stop)` where `receiver` plays the worker role (the
-    /// test answers dispatched commands itself) and `stop` shuts the
-    /// listener down.
-    fn serve(token: &str) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
+    /// Inputs: `read_token` / `write_token` — plaintext credentials for each
+    /// scope. Output: `ApiTokens` — the scoped verifiers. Tests modelling a
+    /// single-credential deployment pass the same plaintext for both scopes;
+    /// scope-enforcement tests pass distinct credentials.
+    fn test_tokens(read_token: &str, write_token: &str) -> ApiTokens {
+        ApiTokens {
+            read: ApiTokenVerifier::from_token(TokenScope::Read, read_token).unwrap(),
+            write: ApiTokenVerifier::from_token(TokenScope::Write, write_token).unwrap(),
+            plaintext_read_once: None,
+            plaintext_write_once: None,
+            migrated_legacy: false,
+        }
+    }
+
+    /// Bind a free loopback port and start the real API server for one test,
+    /// with distinct read and write credentials.
+    ///
+    /// Inputs: `read_token` — query-only credential; `write_token` —
+    /// write-scope credential. Output: `(port, receiver, stop)` where
+    /// `receiver` plays the worker role (the test answers dispatched commands
+    /// itself) and `stop` shuts the listener down.
+    fn serve_scoped(
+        read_token: &str,
+        write_token: &str,
+    ) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
         let (commands, receiver) = bounded(4);
         let stop = Arc::new(AtomicBool::new(false));
-        let port = start(
+        let port = start_with_tokens(
             0,
-            token.into(),
+            test_tokens(read_token, write_token),
             commands,
             stop.clone(),
             Arc::new(AtomicBool::new(false)),
@@ -730,6 +844,17 @@ mod tests {
         )
         .unwrap();
         (port, receiver, stop)
+    }
+
+    /// Bind a free loopback port and start the real API server for one test.
+    ///
+    /// Inputs: `token` — bearer credential the client will present; the same
+    /// plaintext is provisioned under both scopes, modelling a
+    /// single-credential deployment. Output: `(port, receiver, stop)` where
+    /// `receiver` plays the worker role (the test answers dispatched commands
+    /// itself) and `stop` shuts the listener down.
+    fn serve(token: &str) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
+        serve_scoped(token, token)
     }
 
     /// Assert a response carries the strict Content-Security-Policy header.
@@ -1240,9 +1365,9 @@ mod tests {
             }
         });
 
-        let port = start(
+        let port = start_with_tokens(
             0,
-            token.clone(),
+            test_tokens(&token, &token),
             commands,
             stop.clone(),
             disabled,
@@ -1295,17 +1420,143 @@ mod tests {
 
     #[test]
     fn exact_bearer_required() {
-        let verifier = ApiTokenVerifier::from_token(&"correct".repeat(8)).unwrap();
         let token = "correct".repeat(8);
-        assert!(authorized(Some(&format!("Bearer {token}")), &verifier));
+        let tokens = test_tokens(&token, &"W".repeat(48));
+        assert_eq!(
+            authorize_scope(Some(&format!("Bearer {token}")), false, &tokens),
+            Authz::Authorized
+        );
         for value in [
             None,
             Some(token.as_str()),
             Some("Bearer wrongwrongwrongwrongwrongwrongwrongwrongwrong"),
             Some("Bearer correctcorrectcorrectcorrectcorrectcorrectcorrectcorrect "),
         ] {
-            assert!(!authorized(value, &verifier));
+            assert_eq!(authorize_scope(value, false, &tokens), Authz::Denied);
         }
+    }
+
+    // why (security review finding 1): a read-scope integration credential
+    // must never reach a state-changing route — with Origin absent and with a
+    // forged Origin alike — while the write credential performs the same
+    // command. The refusal must happen before the worker is dispatched.
+    #[test]
+    fn read_bearer_reads_but_every_write_route_refuses_it() {
+        let (port, receiver, stop) = serve_scoped(&"R".repeat(48), &"W".repeat(48));
+        let client = crate::net::client(5, true).unwrap();
+        // The read credential reads.
+        let read = client
+            .get(format!("http://127.0.0.1:{port}/v1/live"))
+            .bearer_auth("R".repeat(48))
+            .send()
+            .unwrap();
+        assert_eq!(read.status().as_u16(), 200);
+        // Every documented write route refuses it, Origin absent...
+        for route in crate::web::WRITE_ROUTES {
+            let response = client
+                .post(format!("http://127.0.0.1:{port}{route}"))
+                .bearer_auth("R".repeat(48))
+                .json(&serde_json::json!({}))
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 403, "{route}");
+            let body: serde_json::Value = response.json().unwrap();
+            assert_eq!(body["error"]["code"], crate::web::CODE_INSUFFICIENT_SCOPE);
+        }
+        // ...and with a forged Origin, which fails the earlier policy instead.
+        for route in crate::web::WRITE_ROUTES {
+            let response = client
+                .post(format!("http://127.0.0.1:{port}{route}"))
+                .bearer_auth("W".repeat(48))
+                .header(reqwest::header::ORIGIN, "http://evil.invalid")
+                .json(&serde_json::json!({}))
+                .send()
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 401, "{route}");
+        }
+        // Nothing may have been dispatched by any refusal above.
+        assert!(receiver.try_recv().is_err());
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why (security review finding 1): the write credential must actually
+    // perform a permitted command — the scope separation must reduce
+    // authority, not break the console.
+    #[test]
+    fn write_credential_dispatches_the_authorized_command() {
+        let (port, receiver, stop) = serve_scoped(&"R".repeat(48), &"W".repeat(48));
+        let handle = std::thread::spawn(move || {
+            match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Command::ApiWrite { request, reply } => {
+                    assert_eq!(
+                        request,
+                        crate::web::WriteRequest::EditDraft {
+                            id: "a".repeat(64),
+                            revision: 2,
+                            body: "Please reconsider this rejection.".into()
+                        }
+                    );
+                    reply
+                        .send(WriteOutcome::accepted_with(
+                            serde_json::json!({"operation": {"kind": "edit_draft"}}),
+                        ))
+                        .unwrap();
+                }
+                _ => panic!("unexpected command for the scoped write test"),
+            }
+        });
+        let response = crate::net::client(5, true)
+            .unwrap()
+            .post(format!("http://127.0.0.1:{port}/v1/commands/edit-draft"))
+            .bearer_auth("W".repeat(48))
+            .json(&serde_json::json!({
+                "id": "a".repeat(64),
+                "revision": 2,
+                "body": "Please reconsider this rejection."
+            }))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        handle.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    // why (security review finding 8): rejected traffic draws from its own
+    // bucket — draining it must bound the invalid traffic itself while never
+    // denying a validly authorized caller the capacity reserved for it.
+    #[test]
+    fn rejected_traffic_cannot_drain_the_admitted_capacity() {
+        let (port, _receiver, stop) = serve_scoped(&"R".repeat(48), &"W".repeat(48));
+        let client = crate::net::client(30, true).unwrap();
+        // Far more invalid requests than the rejection burst: they must end
+        // up bounded by their own bucket, not the admitted one.
+        let mut rejected_unauthorized = 0;
+        let mut rejected_rate_limited = 0;
+        for _ in 0..45 {
+            let response = client
+                .get(format!("http://127.0.0.1:{port}/v1/live"))
+                .bearer_auth("wrong".repeat(12))
+                .send()
+                .unwrap();
+            match response.status().as_u16() {
+                401 => rejected_unauthorized += 1,
+                429 => rejected_rate_limited += 1,
+                other => panic!("invalid traffic got status {other}"),
+            }
+        }
+        assert!(rejected_unauthorized > 0, "invalid traffic is refused");
+        assert!(
+            rejected_rate_limited > 0,
+            "invalid traffic is bounded by the rejection bucket"
+        );
+        // The admitted bucket was never charged: a valid read goes through.
+        let read = client
+            .get(format!("http://127.0.0.1:{port}/v1/live"))
+            .bearer_auth("R".repeat(48))
+            .send()
+            .unwrap();
+        assert_eq!(read.status().as_u16(), 200);
+        stop.store(true, Ordering::SeqCst);
     }
 
     /// Bind the real API server with an explicit worker-channel capacity so
@@ -1317,9 +1568,9 @@ mod tests {
     fn serve_cap(token: &str, capacity: usize) -> (u16, Receiver<Command>, Arc<AtomicBool>) {
         let (commands, receiver) = bounded(capacity);
         let stop = Arc::new(AtomicBool::new(false));
-        let port = start(
+        let port = start_with_tokens(
             0,
-            token.into(),
+            test_tokens(token, token),
             commands,
             stop.clone(),
             Arc::new(AtomicBool::new(false)),

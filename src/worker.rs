@@ -85,6 +85,8 @@ pub struct Snapshot {
     pub review_only: bool,
     /// Revealed API token, when requested.
     pub api_token: Option<Zeroizing<String>>,
+    /// Revealed read-scope integration token, when requested.
+    pub api_read_token: Option<Zeroizing<String>>,
     /// Instant the revealed token stops being shown.
     pub api_token_expires: Option<Instant>,
     /// Whether the local API listener is running.
@@ -874,14 +876,19 @@ fn rotate_api_token(
     shared: &Arc<Mutex<Snapshot>>,
     api_disabled: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let material = api_auth::rotate(&mut e.db)?;
-    let replacement = material
+    let write = api_auth::rotate(&mut e.db, api_auth::TokenScope::Write)?;
+    let read = api_auth::rotate(&mut e.db, api_auth::TokenScope::Read)?;
+    let replacement = write
+        .plaintext_once
+        .context("Rotated API credential did not return one-time plaintext")?;
+    let read_replacement = read
         .plaintext_once
         .context("Rotated API credential did not return one-time plaintext")?;
     api_disabled.store(true, Ordering::SeqCst);
     if let Ok(mut snapshot) = shared.lock() {
         snapshot.api_listening = false;
         snapshot.api_token = Some(replacement);
+        snapshot.api_read_token = Some(read_replacement);
         snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
     }
     Ok(())
@@ -1603,17 +1610,24 @@ fn start_api_listener(
     shared: &Arc<Mutex<Snapshot>>,
 ) -> Result<()> {
     if e.settings.api_enabled && !e.demo {
-        let material = api_auth::load_or_create(&mut e.db)?;
-        if let Some(token) = material.plaintext_once
-            && let Ok(mut snapshot) = shared.lock()
-        {
-            snapshot.api_token = Some(token);
-            snapshot.api_token_expires =
-                Some(Instant::now() + worker_interval(Duration::from_secs(60)));
+        let mut tokens = api_auth::load_or_create(&mut e.db)?;
+        let write_once = tokens.plaintext_write_once.take();
+        let read_once = tokens.plaintext_read_once.take();
+        if let Ok(mut snapshot) = shared.lock() {
+            if let Some(token) = write_once {
+                snapshot.api_token = Some(token);
+                snapshot.api_token_expires =
+                    Some(Instant::now() + worker_interval(Duration::from_secs(60)));
+            }
+            if let Some(token) = read_once {
+                snapshot.api_read_token = Some(token);
+                snapshot.api_token_expires =
+                    Some(Instant::now() + worker_interval(Duration::from_secs(60)));
+            }
         }
-        match crate::api::start_with_verifier(
+        match crate::api::start_with_tokens(
             e.settings.api_port,
-            material.verifier,
+            tokens,
             sender,
             e.stop.clone(),
             api_disabled.clone(),
@@ -1883,6 +1897,7 @@ fn execute_item_ops(
         Command::HideApiToken => {
             if let Ok(mut s) = shared.lock() {
                 s.api_token = None;
+                s.api_read_token = None;
                 s.api_token_expires = None;
             }
             Ok(())
@@ -3371,8 +3386,14 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let stored_verifier: String = engine.db.meta(api_auth::TOKEN_HASH_META).unwrap().unwrap();
-        assert_eq!(stored_verifier.len(), 64);
+        let stored_read: String = engine.db.meta(api_auth::TOKEN_HASH_META).unwrap().unwrap();
+        assert_eq!(stored_read.len(), 64);
+        let stored_write: String = engine
+            .db
+            .meta(api_auth::TOKEN_WRITE_HASH_META)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored_write.len(), 64);
 
         let snapshot = shared.lock().unwrap();
         assert!(!snapshot.api_listening);
@@ -3381,13 +3402,26 @@ mod tests {
             .as_ref()
             .map(|token| token.as_str().to_owned())
             .unwrap();
+        let displayed_read = snapshot
+            .api_read_token
+            .as_ref()
+            .map(|token| token.as_str().to_owned())
+            .unwrap();
         drop(snapshot);
 
         assert_ne!(displayed, old);
         assert!(displayed.len() >= 40);
-        let verifier = api_auth::ApiTokenVerifier::from_hex(&stored_verifier).unwrap();
-        assert!(verifier.verify_token(&displayed));
-        assert!(!verifier.verify_token(&old));
+        assert!(displayed_read.len() >= 40);
+        let write_verifier =
+            api_auth::ApiTokenVerifier::from_hex(api_auth::TokenScope::Write, &stored_write)
+                .unwrap();
+        assert!(write_verifier.verify_token(&displayed));
+        assert!(!write_verifier.verify_token(&old));
+        let read_verifier =
+            api_auth::ApiTokenVerifier::from_hex(api_auth::TokenScope::Read, &stored_read).unwrap();
+        assert!(read_verifier.verify_token(&displayed_read));
+        // The scopes never cross: the write plaintext is not the read one.
+        assert!(!read_verifier.verify_token(&displayed));
 
         let events = engine.db.events(0, 100).unwrap();
         let event = events
@@ -3398,6 +3432,7 @@ mod tests {
         assert_eq!(event.severity, AuditSeverity::Security);
         assert!(!event.detail.contains(&old));
         assert!(!event.detail.contains(&displayed));
+        assert!(!event.detail.contains(&displayed_read));
     }
 
     #[test]

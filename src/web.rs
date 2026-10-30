@@ -76,12 +76,38 @@ pub const BACKUP_ROUTE: &str = "/v1/commands/backup";
 /// State-changing route: purge retained records past the policy window.
 pub const PURGE_ROUTE: &str = "/v1/commands/purge";
 
+/// Every state-changing route path, in one sealed list.
+///
+/// Inputs: none (constant). Output: `&[&str]` — the exact route paths whose
+/// requests require the write-scope credential. The classifier test asserts
+/// this list and the write-route classifier agree item for item, so adding a
+/// write route without sealing it here fails the suite.
+pub const WRITE_ROUTES: &[&str] = &[
+    EDIT_DRAFT_ROUTE,
+    REGENERATE_ROUTE,
+    DISMISS_ROW_ROUTE,
+    SEND_ROUTE,
+    UPDATE_SETTINGS_ROUTE,
+    AUTOMATIC_ARM_ROUTE,
+    CHECK_NOW_ROUTE,
+    QUALIFY_ROUTE,
+    CONNECT_APP_PASSWORD_ROUTE,
+    DISCONNECT_ROUTE,
+    INTEGRITY_CHECK_ROUTE,
+    COMPACT_ROUTE,
+    BACKUP_ROUTE,
+    PURGE_ROUTE,
+];
+
 /// Stable machine-readable error code: the request body or JSON shape was rejected.
 pub const CODE_INVALID_REQUEST: &str = "invalid_request";
 /// Stable machine-readable error code: the request body exceeded [`MAX_WRITE_BODY_BYTES`].
 pub const CODE_REQUEST_BODY_TOO_LARGE: &str = "request_body_too_large";
 /// Stable machine-readable error code: the write targeted an unknown route.
 pub const CODE_ROUTE_NOT_FOUND: &str = "route_not_found";
+/// Stable machine-readable error code: an authentic read-scope credential
+/// targeted a state-changing route reserved for the write-scope credential.
+pub const CODE_INSUFFICIENT_SCOPE: &str = "insufficient_scope";
 /// Stable machine-readable error code: the route exists but not for this method.
 pub const CODE_METHOD_NOT_ALLOWED: &str = "method_not_allowed";
 /// Stable machine-readable error code: the referenced message does not exist here.
@@ -475,6 +501,37 @@ fn classify_write_route(route: &str) -> Option<WriteRoute> {
 /// path a different route and is rejected).
 pub fn is_write_route(route: &str) -> bool {
     classify_write_route(route).is_some()
+}
+
+#[cfg(test)]
+mod write_route_seal {
+    use super::*;
+
+    // why (security review finding 1): the write-scope gate and the tests
+    // that walk "every write route" depend on this list being complete — a
+    // write route added to the classifier but not sealed here would silently
+    // escape the walk. The classifier and the sealed list must agree exactly.
+    #[test]
+    fn sealed_write_routes_match_the_classifier_exactly() {
+        for route in WRITE_ROUTES {
+            assert!(
+                classify_write_route(route).is_some(),
+                "{route} must classify as a write route"
+            );
+            assert!(is_write_route(route));
+        }
+        assert_eq!(
+            WRITE_ROUTES.len(),
+            14,
+            "the sealed list pins the write surface"
+        );
+        for suffix in ["/v1/status", "/v1/items/x", "/v1/live", "/"] {
+            assert!(
+                !is_write_route(suffix),
+                "{suffix} must not classify as a write route"
+            );
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

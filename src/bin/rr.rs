@@ -971,18 +971,24 @@ fn cmd_doctor(require: Option<ReadinessRequirement>, data_dir: &Option<PathBuf>)
 /// Execute the `rr rotate-api-token` subcommand.
 ///
 /// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
-/// prints the one-time plaintext token; propagated rotation failure.
+/// prints both one-time plaintext tokens, labelled `read:` and `write:`;
+/// propagated rotation failure.
 fn cmd_rotate_api_token(data_dir: &Option<PathBuf>) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
     let mut e = open_engine(dir, false, true)?;
-    let material = api_auth::rotate(&mut e.db)?;
+    let read = api_auth::rotate(&mut e.db, api_auth::TokenScope::Read)?;
+    let write = api_auth::rotate(&mut e.db, api_auth::TokenScope::Write)?;
     e.checkpoint_audit_protection()?;
-    let token = material
+    let read_token = read
         .plaintext_once
         .context("Token rotation did not return one-time plaintext")?;
-    println!("{}", token.as_str());
+    let write_token = write
+        .plaintext_once
+        .context("Token rotation did not return one-time plaintext")?;
+    println!("read: {}", read_token.as_str());
+    println!("write: {}", write_token.as_str());
     eprintln!(
-        "Store this credential in the consuming application's OS-protected secret store. It cannot be revealed again; rotate it if lost."
+        "The read credential is for machine integrations (query-only); the write credential is for the web console. Store both in the consuming application's OS-protected secret store. They cannot be revealed again; rotate if lost."
     );
     Ok(())
 }
