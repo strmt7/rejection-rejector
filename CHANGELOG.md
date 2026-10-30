@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+Enron-corpus privacy and containment hardening (2026-10-30, security review
+findings 2 and 9). Changed:
+
+- The former tracked outputs `training/data/enron_mined_v1.jsonl` and
+  `training/data/enron_mined_report.json` are **removed from tracked
+  assets**: their redaction grammar had documented blind spots and residual
+  source-derived identifiers could not be ruled out. Any future corpus must
+  be regenerated and pass human privacy review before tracking.
+- Redaction grammars now cover the observed bypass classes: bare-domain
+  mail identifiers, phones split across physical or escaped line
+  boundaries, punctuation-bearing and lowercase names in
+  greeting/title/closing slots, and account-like identifiers.
+- **Validation is independent of redaction**: `redaction_sweep` uses
+  separate, more permissive scanners (never the redaction regexes), runs
+  over boundary-normalized serialized text, and the writer re-scans the
+  exact serialized bytes before any write, failing closed on disagreement.
+- Reports disclose `known_limits` and `claims_absolute_redaction: false`;
+  no code path may describe redaction as absolute again.
+- Directory corpus mining is contained (finding 9): lstat semantics reject
+  symlinks and non-regular files, resolved paths must stay beneath the
+  corpus root, opened-file identity is re-verified after open, and reads
+  are hard-capped (`_read_contained`/`_contained_member`).
+
+Findings 6, 10 and 14 landed in their own commits (fuzz workspace lock,
+bounded receipt-validator hashing, bounded OAuth callback parsing).
+
 Web-console pivot and advisory-suppression elimination (2026-10-30). Changed:
 
 - **The desktop UI is gone**: `src/gui.rs`, `src/gui/`, `src/bin/desktop.rs`,

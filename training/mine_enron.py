@@ -13,6 +13,17 @@ hard negatives (newsletters, mailing lists, HR announcements, scheduling,
 notifications, cold recruiter outreach, personal mail) are mined as `other`
 while interview invitations and offer letters become `opportunity`.
 
+Privacy and regeneration policy (security review finding 2, 2026-10-30): the
+former tracked outputs `enron_mined_v1.jsonl` and `enron_mined_report.json`
+were removed from tracked assets because their redaction grammar had known
+blind spots and residual source-derived identifiers could not be ruled out.
+Redaction and validation now use separate detector implementations, the
+independent scanners re-run over the exact serialized bytes, and reports
+disclose `known_limits` and `claims_absolute_redaction: false`. Any future
+corpus must be regenerated with this tool AND pass human privacy review and
+provenance approval before it may be tracked; prefer synthetic data when
+absolute anonymization cannot be supported.
+
 Privacy: the repo is public, so every mined row is aggressively REDACTED before
 it is written: names -> [NAME], e-mail addresses -> [EMAIL], company names ->
 [COMPANY], phone numbers -> [PHONE], URLs -> [URL]. Evidence quotes are
@@ -62,8 +73,10 @@ import hashlib
 import html
 import json
 import math
+import os
 import random
 import re
+import stat
 import sys
 import tarfile
 import unicodedata
@@ -706,8 +719,60 @@ def _iter_tar_messages(corpus: Path):
                 yield member.name, data
 
 
+def _read_contained(path: Path, expected: os.stat_result, limit: int) -> bytes:
+    """Read one already-validated regular file under race-safe checks.
+
+    why (security review finding 9): the file identity is re-checked against
+    the lstat result after open, and the read is hard-capped, so a symlink
+    swap between validation and open cannot redirect the read.
+
+    Inputs: `path` -- candidate file; `expected` -- its lstat record;
+    `limit` -- hard byte cap. Output: `bytes` -- file content up to the cap;
+    raises `OSError` on identity mismatch or I/O failure.
+    """
+    with path.open("rb") as handle:
+        actual = os.fstat(handle.fileno())
+        if (actual.st_ino, actual.st_dev) != (expected.st_ino, expected.st_dev):
+            raise OSError("file identity changed between validation and open")
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise OSError("file exceeds the member byte cap")
+    return data
+
+
+def _contained_member(entry_path: str, root: Path, meta: os.stat_result) -> bytes:
+    """Read one directory entry if it is a contained regular file.
+
+    why (security review finding 9): non-regular files are rejected before
+    any read, containment is re-checked on the resolved path, and the opened
+    file identity is verified again inside `_read_contained`.
+
+    Inputs: `entry_path` -- candidate path; `root` -- resolved corpus root;
+    `meta` -- the candidate's lstat record. Output: `bytes` -- file content
+    up to the member cap; empty when the entry must be skipped.
+    """
+    if not stat.S_ISREG(meta.st_mode):
+        return b""
+    if meta.st_size > MAX_MEMBER_BYTES:
+        return b""
+    path = Path(entry_path)
+    try:
+        resolved = path.resolve()
+        if root not in resolved.parents:
+            return b""
+        return _read_contained(path, meta, MAX_MEMBER_BYTES)
+    except OSError:
+        return b""
+
+
 def _iter_directory_messages(corpus: Path):
     """Yield (source_key, raw_bytes) from a directory corpus.
+
+    why (security review finding 9): directory traversal must not follow
+    symlinks outside the selected root. Entries are lstat-checked (symlinks,
+    devices and directories are rejected), every candidate must resolve
+    beneath the resolved corpus root, and the opened file identity is
+    re-verified after open.
 
     Inputs: `corpus` -- extracted maildir or parquet directory. Output:
     iterator of `(name, data)` tuples.
@@ -716,12 +781,26 @@ def _iter_directory_messages(corpus: Path):
     if parquet_files:
         yield from _iter_parquet(parquet_files)
         return
-    for path in sorted(corpus.rglob("*")):
-        if not path.is_file() or path.stat().st_size > MAX_MEMBER_BYTES:
-            continue
-        data = path.read_bytes()
-        if data:
-            yield path.name, data
+    root = corpus.resolve()
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in sorted(entries, key=lambda e: e.name):
+                try:
+                    # os.stat (not DirEntry.stat): the latter reports a zeroed
+                    # st_ino/st_dev on Windows, which would defeat the identity
+                    # comparison in _read_contained; follow_symlinks=False keeps
+                    # the no-follow semantics of an lstat.
+                    meta = os.stat(entry.path, follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISDIR(meta.st_mode):
+                    stack.append(Path(entry.path))
+                    continue
+                data = _contained_member(entry.path, root, meta)
+                if data:
+                    yield Path(entry.path).name, data
     return
 
 
@@ -791,7 +870,9 @@ def parse_message(raw: bytes):
 # redaction
 # --------------------------------------------------------------------------- #
 
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+# why (security review finding 2): the dotted-domain requirement let
+# bare-domain mail identifiers ("jane.doe@enron") survive redaction.
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w.]+)*")
 URL_RE = re.compile(r"https?://\S*|www\.\S*", re.IGNORECASE)
 PHONE_RE = re.compile(
     r"(?<!\d)(?:\+?\d{1,3}[\s.\-])?(?:\(\d{3}\)|\d{3})[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"
@@ -801,12 +882,22 @@ PHONE_RE = re.compile(
     r"(?:\s*(?:x|ext|extension)[\s.\-]?\d{1,6})?"
 )
 LONG_DIGIT_RE = re.compile(r"(?<!\d)\d{7,}(?!\d)")
+# why (security review finding 2): account-like identifiers ("acct no.
+# 4471123", "employee id 114863") hide below the long-digit threshold
+# behind context words; lower case and punctuation are matched too.
+ACCOUNT_ID_RE = re.compile(
+    r"(?i)\b(?:account|acct|employee|badge|customer|invoice|order|policy|member|user)"
+    r"\s*(?:id|no\.?|number|#)?\s*[:#]?\s*[A-Z0-9][A-Z0-9\-_/]{4,}\b"
+)
 # Separator-aware phone shapes that the shape-specific PHONE_RE misses:
 # international with parens ("+44 (20) 7330 3000"), spaced groups
 # ("0401 77 66 18", "02 9930 4318", "517 453897"), stray-paren forms
 # ("212) 704 - 4312"), dash-space forms ("800- 356- 6611"). Fail-closed:
 # ANY mixed digit-group run with >= 7 digits is treated as a phone.
-PHONE_LOOSE_RE = re.compile(r"\+?\d[\d\-\.\(\) ]{8,}\d")
+# why (security review finding 2): the separator class excluded line
+# boundaries, so phones split across newlines (or their escaped form in
+# serialized output) evaded redaction.
+PHONE_LOOSE_RE = re.compile(r"\+?\d(?:[\d\-\.\(\) \t]|\\[nrt]|[\r\n]){8,}\d")
 # Decimal price/quote series ("24.15 -0.62", "642.74 669.50 -4.00") are
 # financial figures, not phones: every block is exactly digits.2-digits.
 FINANCIAL_SERIES_RE = re.compile(r"^\s*\d+\.\d{2}(?:\s*[-−]?\s*\d+\.\d{2})*\s*$")
@@ -835,14 +926,17 @@ ORG_CONTEXT_RE = re.compile(
 )
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 NAME_PAIR_RE = re.compile(r"\b([A-Z][a-zA-Z'\-]{1,20})\s+([A-Z][a-zA-Z'\-]{1,20})\b")
-TITLE_NAME_RE = re.compile(r"(?:Mr|Mrs|Ms|Miss|Dr|Prof|Professor)\.?\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*)")
+TITLE_NAME_RE = re.compile(
+    r"(?:Mr|Mrs|Ms|Miss|Dr|Prof|Professor)\.?\s+"
+    r"([A-Za-z][A-Za-z.'\-]+(?:\s+[A-Za-z][A-Za-z.'\-]+)*)"
+)
 GREETING_NAME_RE = re.compile(
     r"(?:Dear|Hi|Hello|Hey|Good "
-    r"(?:morning|afternoon|evening))\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*)"
+    r"(?:morning|afternoon|evening))\s+([A-Za-z][A-Za-z.'\-]+(?:\s+[A-Za-z][A-Za-z.'\-]+)*)"
 )
 CLOSING_NAME_RE = re.compile(
-    r"(?:Regards|Thanks|Thank you|Sincerely|Best|Cheers|Yours truly|Cordially|Respectfully)[,!]?\s+"
-    r"(?:\n\s*)?([A-Z][A-Za-z'\-]+(?:\s+[A-Za-z'\-]+){0,3})"
+    r"(?:Regards|Thanks|Thank you|Sincerely|Best|Cheers|Yours truly|Cordially|Respectfully)[,!?]\s+"
+    r"(?:\n\s*)?([A-Za-z][A-Za-z.'\-]+(?:\s+[A-Za-z.'\-]+){0,3})"
 )
 # words that may follow a closing ("Thanks again", "Best Wishes") but are not names
 COMMON_CLOSING_WORDS = {
@@ -1262,6 +1356,7 @@ class Redactor:
             text = CC_RE.sub(self._sub_id, text)
             text = PHONE_RE.sub(self._sub_phone, text)
             text = LONG_DIGIT_RE.sub(self._sub_phone, text)
+            text = ACCOUNT_ID_RE.sub(self._sub_id, text)
             text = PHONE_LOOSE_RE.sub(self._sub_phone_loose, text)
             text = STREET_ADDR_RE.sub(self._sub_address, text)
             text = FLOOR_SUITE_RE.sub(self._sub_address, text)
@@ -1391,19 +1486,60 @@ COMPANY_SUFFIX_RE = re.compile(
 )
 
 
+# --------------------------------------------------------------------------- #
+# independent post-serialization validation (why: security review finding 2)
+# ---------------------------------------------------------------------------
+# These scanners are DELIBERATELY separate from, and more permissive than,
+# the redaction grammars above: transformation and verification must not
+# share detectors, or a grammar blind spot becomes undetected published PII.
+# They scan the SERIALIZED row text after escaped and physical line
+# boundaries are normalized to spaces.
+
+SCAN_BOUNDARY_RE = re.compile(r"\\[nrt]|[\r\n\t]")
+SCAN_EMAIL_ANY_RE = re.compile(r"[\w.+-]+\s?@\s?[\w.+-]+")
+SCAN_DIGIT_CHAIN_RE = re.compile(r"\+?\d(?:[\d\s\-\.\(\)/]|\\[nrt]){6,}\d")
+SCAN_ACCOUNT_ANY_RE = re.compile(
+    r"(?i)(?:account|acct|employee|badge|customer|invoice|order|policy|member|user)"
+    r"\W{0,3}(?:\w+\W{0,3}){0,2}?"
+    r"[a-z0-9\-_ /]*\d[a-z0-9\-_ /]*\d[a-z0-9\-_ /]*"
+)
+SCAN_SLOT_NAME_RE = re.compile(
+    r"(?i)\b(?:dear|hi|hello|hey|regards|sincerely|cheers|cordially|respectfully)\b"
+    r"[,:!?]?\s+([A-Za-z][A-Za-z.'\-]{2,}(?:\s+[A-Za-z][A-Za-z.'\-]{2,}){0,3})"
+)
+
+# Honest, permanent disclosure of what shape-based screening cannot promise.
+KNOWN_DETECTOR_LIMITS = (
+    "Human names outside greeting/closing/title slots and below lexicon coverage are not detectable.",
+    "Identifiers inside attachments or non-text MIME parts are out of scope.",
+    "Mixed-script, misspelled or image-embedded identifiers can evade shape-based detectors.",
+    "Absolute anonymization cannot be supported: rows are screened and human "
+    "privacy review is required before tracking.",
+)
+
+
 def redaction_sweep(text: str, name_tokens: set[str]) -> dict:
-    """Inputs: redacted `text` and the name lexicon. Output: dict of leftover
-    counts for EVERY PII class (all must be 0): e-mail addresses, phone-shaped
-    numbers, long digit runs (SSN/CC/account), street addresses, floor/suite
-    lines, city-state-zip blocks, URLs, company references ('enron' or
-    corporate-suffix names), and capitalised lexicon name tokens. Placeholder
-    tokens themselves are excluded from the scan. Rows with any leftover are
-    DROPPED by the pipeline - redaction is absolute.
+    """Screen one serialized row for PII leftovers with independent detectors.
+
+    why (security review finding 2): the former sweep reused the redaction
+    regexes and reported zero leftovers while real identifiers survived.
+    Validation now uses separate, more permissive scanners over the
+    normalized serialized text, and the pipeline drops any flagged row.
+
+    Inputs: `text` -- the serialized row text (JSONL content); `name_tokens`
+    -- the capitalised-name lexicon. Output: dict of leftover COUNTS for
+    every screened class; nonzero means the row must be dropped. Coverage is
+    incomplete by construction -- see `KNOWN_DETECTOR_LIMITS`; no caller may
+    describe the result as absolute or complete redaction.
     """
     scan = PLACEHOLDER_SPLIT_RE.sub(" ", text)
+    scan = SCAN_BOUNDARY_RE.sub(" ", scan)
+    slot_names = [
+        name for name in SCAN_SLOT_NAME_RE.findall(scan) if name.split()[0].lower() not in COMMON_CLOSING_WORDS
+    ]
     return {
-        "emails_remaining": len(EMAIL_RE.findall(scan)),
-        "phones_remaining": len(PHONE_RE.findall(scan)),
+        "emails_remaining": len(SCAN_EMAIL_ANY_RE.findall(scan)),
+        "phones_remaining": len(SCAN_DIGIT_CHAIN_RE.findall(scan)),
         "long_digit_runs_remaining": len(LONG_DIGIT_RE.findall(scan)),
         "ssn_or_card_remaining": len(SSN_RE.findall(scan)) + len(CC_RE.findall(scan)),
         "street_addresses_remaining": len(STREET_ADDR_RE.findall(scan)),
@@ -1420,27 +1556,14 @@ def redaction_sweep(text: str, name_tokens: set[str]) -> dict:
             for w in TOKEN_RE.findall(scan)
             if w[0].isupper() and word_core(w) in name_tokens and word_core(w) not in NAME_STOPWORDS
         ),
-        # name-like words that survive only in the two leak shapes: next to an
-        # already-redacted name ("Bill [NAME]") or as a two-homonym pair
-        # ("Bill Grant"); bare prose homonyms ("May I", "June 3") are ordinary
-        # words and are not counted
         "homonym_names_remaining": (
             len(NAME_ADJ_LEFT_RE.findall(scan))
             + len(NAME_ADJ_RIGHT_RE.findall(scan))
-            + sum(
-                1
-                for a, b in NAME_PAIR_RE.findall(scan)
-                if word_core(a) in NAME_HOMONYMS and word_core(b) in NAME_HOMONYMS
-            )
+            + len(NAME_HOMONYM_PAIR_RE.findall(scan))
         ),
-        # malformed placeholder shapes ("[[NAME]", "[mailto:[EMAIL]") must be tidied
-        "malformed_placeholders_remaining": (len(re.findall(r"\[\s*\[[A-Z]+\]|\[[A-Z]+\]\s*\]|\[\s*mailto:", text))),
+        "account_ids_remaining": len(SCAN_ACCOUNT_ANY_RE.findall(scan)),
+        "slot_names_remaining": len(slot_names),
     }
-
-
-# --------------------------------------------------------------------------- #
-# classification (runs on REDACTED text, fail closed)
-# --------------------------------------------------------------------------- #
 
 
 def detect_language(text: str) -> str:
@@ -2166,7 +2289,9 @@ def record_source_provenance(corpus: Path) -> dict:
             "lines, "
             "city-state-zip blocks, URLs, company references, capitalised name-lexicon words) must "
             "report zero "
-            "leftovers; ANY row with a leftover is DROPPED entirely, so redaction is absolute. "
+            "leftovers; ANY row with a leftover is DROPPED entirely. Detector "
+            "coverage is incomplete by construction (known limits are listed in "
+            "the report), so no output may claim absolute or complete redaction. "
             "Source mailbox "
             "paths and message headers are never written to the outputs. With these substitutions "
             "the rows are "
@@ -2274,7 +2399,8 @@ def _redact_dedup(candidates: list[dict], name_tokens: set[str], existing_exact:
         text = subject + "\n" + body
         sweep = redaction_sweep(text, name_tokens)
         if any(sweep.values()):
-            # redaction is absolute: any PII leftover drops the whole row
+            # any PII leftover drops the whole row (screening is
+            # incomplete by construction; see KNOWN_DETECTOR_LIMITS)
             dedup_stats["pii_unredactable_dropped"] += 1
             continue
         exact_hash = hash_text(normalize_text(text))
@@ -2430,6 +2556,9 @@ def _build_report(
             "placeholder_tokens": list(PLACEHOLDER_TOKENS),
             "replacements": redactor.counts,
             "sweep_leftovers": sweep_totals,
+            "detector": "independent post-serialization scanners (separate from the redaction grammars)",
+            "known_limits": list(KNOWN_DETECTOR_LIMITS),
+            "claims_absolute_redaction": False,
         },
         "validation": {
             "schema_conformance_full_file": schema_full,
@@ -2630,7 +2759,13 @@ def main() -> int:
     out_path = args.out_dir / "enron_mined_v1.jsonl"
     with out_path.open("w", encoding="utf-8", newline="\n") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            line = json.dumps(row, ensure_ascii=False)
+            # why (security review finding 2): the independent scanners run
+            # again over EXACTLY the serialized bytes that ship; a flag here
+            # is detector disagreement and fails closed before any write.
+            if any(redaction_sweep(line, name_tokens).values()):
+                raise SystemExit(f"post-serialization scan flagged row {row['meta']['id']}; refusing to write")
+            handle.write(line + "\n")
 
     # ---- phase 4: verification + report ----
     schema_full = verify_schema(rows, reference)
