@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "notices": [
+    {
+      "name": "Caveman prompt reference",
+      "source": "docs/licenses/Caveman-MIT.txt",
+      "upstream": "https://raw.githubusercontent.com/JuliusBrussee/caveman/9aa63945a349bef17206540650db48c30fafbdf2/LICENSE",
+      "terms": "MIT; scope excludes Engine-linked components",
+      "sha256": "f0abc56b6f49ab2e285bb6e6723f028abb7ebd4fe0e242bbdc2b4dded0ace8b9"
+    },
+    {
+      "name": "Caveman license scope",
+      "source": "docs/licenses/Caveman-licensing-scope.md",
+      "upstream": "https://raw.githubusercontent.com/JuliusBrussee/caveman/9aa63945a349bef17206540650db48c30fafbdf2/LICENSING.md",
+      "terms": "Upstream scope declaration",
+      "sha256": "40e82e1afe000f110e37de76229be158e1c8def078e35f855a453c068666e19d"
+    },
+    {
+      "name": "Crawl4AI 0.9.5",
+      "source": "docs/licenses/Crawl4AI-0.9.5.txt",
+      "upstream": "https://raw.githubusercontent.com/unclecode/crawl4ai/v0.9.5/LICENSE",
+      "terms": "Apache-2.0 terms plus appended attribution requirement",
+      "sha256": "193fe32704bee15cd74f5153e569cdf830e26445e19798a55daee32da40758aa"
+    },
+    {
+      "name": "CocoIndex Code 0.2.42",
+      "source": "docs/licenses/CocoIndex-Code-0.2.42.txt",
+      "upstream": "https://pypi.org/project/cocoindex-code/0.2.42/",
+      "terms": "Apache-2.0",
+      "sha256": "5e8c0ba20456f84943cba547175e212962117b43ad1b20c877aa983429eb256c"
+    }
+  ]
+}
