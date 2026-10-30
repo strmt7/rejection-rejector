@@ -246,6 +246,104 @@ class ArtifactTests(unittest.TestCase):
             self.assertIn("artifact.duplicate_path:1", verdict["findings"])
 
 
+class ArtifactBudgetTests(unittest.TestCase):
+    """why (security review finding 10): receipt-controlled artifacts are
+    hashed incrementally under hard budgets instead of read fully into
+    memory.
+    """
+
+    @staticmethod
+    def _sparse(path: Path, size: int) -> None:
+        """Create a sparse file of `size` bytes without allocating it."""
+        with path.open("wb") as handle:
+            handle.seek(size - 1)
+            handle.write(b"\0")
+
+    def test_oversized_artifact_fails_without_large_allocation(self):
+        """A sparse artifact above the per-file cap fails closed and fast."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._sparse(root / "huge.bin", 65 * 1024 * 1024)
+            receipt = good_receipt(artifacts=[{"path": "huge.bin", "sha256": "a" * 64}])
+            verdict = vr.validate(receipt, root, NOW)
+            self.assertEqual(verdict["result"], "FAIL")
+            self.assertIn("artifact.too_large:0", verdict["findings"])
+
+    def test_artifact_count_budget_fails_closed(self):
+        """More artifacts than the count budget fail before any hashing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts = [
+                {"path": f"file{index}.txt", "sha256": "a" * 64}
+                for index in range(vr.bounded_hash.MAX_ARTIFACT_COUNT + 1)
+            ]
+            verdict = vr.validate(good_receipt(artifacts=artifacts), root, NOW)
+            self.assertEqual(verdict["result"], "FAIL")
+            self.assertIn("artifact.count_budget", verdict["findings"])
+
+    def test_aggregate_byte_budget_fails_closed(self):
+        """Sparse artifacts summing past the aggregate cap fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifacts = []
+            size = 60 * 1024 * 1024
+            for index in range(5):
+                name = f"part{index}.bin"
+                self._sparse(root / name, size)
+                artifacts.append({"path": name, "sha256": "a" * 64})
+            verdict = vr.validate(good_receipt(artifacts=artifacts), root, NOW)
+            self.assertEqual(verdict["result"], "FAIL")
+            self.assertTrue(
+                any(f.startswith("artifact.aggregate_budget:") for f in verdict["findings"]),
+                verdict["findings"],
+            )
+
+    def test_bounded_artifacts_still_validate_digests(self):
+        """Contained, budget-respecting artifacts keep digest validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "ok.txt").write_bytes(b"evidence")
+            import hashlib
+
+            digest = hashlib.sha256(b"evidence").hexdigest()
+            receipt = good_receipt(artifacts=[{"path": "ok.txt", "sha256": digest}])
+            self.assertEqual(vr.validate(receipt, root, NOW)["result"], "PASS")
+
+    def test_replacement_during_hashing_fails_closed(self):
+        """why: identity is compared before and after streaming, so a file
+        swapped mid-hash is rejected rather than digesting mixed bytes.
+        """
+        from unittest import mock
+
+        import bounded_hash
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "swap.bin"
+            target.write_bytes(b"original")
+            with (
+                mock.patch.object(bounded_hash.os, "fstat", return_value=os.stat_result((0,) * 10)),
+                self.assertRaises(bounded_hash.HashBudgetError),
+            ):
+                bounded_hash.bounded_sha256(target)
+
+    def test_unmodified_artifact_hashes_to_its_digest(self):
+        """The streamed digest equals the classic one-shot digest."""
+        import hashlib
+
+        import bounded_hash
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "plain.bin"
+            payload = b"x" * (2 * 1024 * 1024)
+            target.write_bytes(payload)
+            self.assertEqual(
+                bounded_hash.bounded_sha256(target),
+                hashlib.sha256(payload).hexdigest(),
+            )
+
+
 class ExceptionTests(unittest.TestCase):
     """Exceptions are records, never an upgrade path for failures."""
 

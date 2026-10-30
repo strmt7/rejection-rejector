@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bounded_hash  # noqa: E402
 from json_input import decode_json  # noqa: E402
 
 # Canonical gate vocabulary: mirrors the authoritative commands in
@@ -274,26 +275,37 @@ def _gate_time_checks(
 
 
 def _validate_artifacts(receipt: dict[str, Any], evidence_root: Path) -> list[str]:
-    """Check declared artifact paths and byte digests under the evidence root."""
+    """Check declared artifact paths and byte digests under the evidence root.
+
+    why (security review finding 10): the artifact list is receipt-controlled,
+    so its count and aggregate bytes are budgeted before any hashing.
+
+    Inputs: `receipt` -- the parsed receipt; `evidence_root` -- the contained
+    evidence directory. Output: `list[str]` -- findings (empty when valid).
+    """
     findings: list[str] = []
     artifacts = receipt.get("artifacts")
     if artifacts is None:
         return findings
     if not isinstance(artifacts, list):
         return ["artifact.list_invalid"]
+    if len(artifacts) > bounded_hash.MAX_ARTIFACT_COUNT:
+        return ["artifact.count_budget"]
     seen: set[Path] = set()
     root = evidence_root.resolve()
+    budget = {"bytes": 0}
     for index, artifact in enumerate(artifacts):
-        findings.extend(_validate_one_artifact(artifact, index, root, seen))
+        findings.extend(_validate_one_artifact(artifact, index, root, seen, budget))
     return findings
 
 
-def _validate_one_artifact(artifact: Any, index: int, root: Path, seen: set[Path]) -> list[str]:
+def _validate_one_artifact(artifact: Any, index: int, root: Path, seen: set[Path], budget: dict[str, int]) -> list[str]:
     """Check one artifact's path containment, existence and digest.
 
     Inputs: `artifact` -- the artifact record; `index` -- its position; `root`
     -- the resolved evidence root; `seen` -- the set of already-declared
-    resolved paths (mutated). Output: `list[str]` -- findings for this
+    resolved paths (mutated); `budget` -- shared aggregate byte counter
+    (mutated). Output: `list[str]` -- findings for this
     artifact (empty when valid).
     """
     findings: list[str] = []
@@ -325,12 +337,38 @@ def _validate_one_artifact(artifact: Any, index: int, root: Path, seen: set[Path
     if not resolved.is_file() or resolved.is_symlink():
         findings.append(f"artifact.missing:{index}")
         return findings
-    import hashlib
-
-    actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    actual, finding = _artifact_digest(resolved, index, budget)
+    if finding is not None:
+        findings.append(finding)
+        return findings
     if actual != digest:
         findings.append(f"artifact.digest_mismatch:{index}")
     return findings
+
+
+def _artifact_digest(resolved: Path, index: int, budget: dict[str, int]) -> tuple[str | None, str | None]:
+    """Hash one contained artifact under the size and aggregate budgets.
+
+    why (security review finding 10): hashing streams under hard budgets and
+    fails closed on oversized or replaced files instead of materializing the
+    artifact in memory.
+
+    Inputs: `resolved` -- the contained artifact path; `index` -- its receipt
+    position; `budget` -- shared aggregate byte counter (mutated). Output:
+    `tuple[str | None, str | None]` -- the hex digest and no finding, or no
+    digest and the finding id.
+    """
+    size = resolved.stat().st_size
+    if size > bounded_hash.MAX_ARTIFACT_BYTES:
+        return None, f"artifact.too_large:{index}"
+    budget["bytes"] += size
+    if budget["bytes"] > bounded_hash.MAX_AGGREGATE_BYTES:
+        return None, f"artifact.aggregate_budget:{index}"
+    try:
+        return bounded_hash.bounded_sha256(resolved), None
+    except bounded_hash.HashBudgetError as error:
+        reason = "changed" if "changed" in str(error) else "too_large"
+        return None, f"artifact.{reason}:{index}"
 
 
 def _validate_exceptions(receipt: dict[str, Any], now: datetime) -> list[str]:
