@@ -379,6 +379,7 @@ fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
     use std::collections::BTreeMap;
     let parsed = mailparse::parse_mail(bytes).context("IMAP MIME could not be parsed")?;
     let mut headers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut security_headers_complete = true;
     for h in &parsed.headers {
         let key = h.get_key().to_lowercase();
         if [
@@ -399,10 +400,21 @@ fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
             let value = h.get_value();
             if value.len() <= 8192 {
                 headers.entry(key).or_default().push(value);
+            } else {
+                // A tracked safety header over the value cap is recorded as
+                // dropped without its attacker-sized value: presence-based
+                // checks must not read the drop as genuine absence (security
+                // review finding 5). Duplicates cannot launder the signal —
+                // any oversized tracked occurrence marks the message.
+                security_headers_complete = false;
             }
         }
     }
-    let text = parsed.get_body().unwrap_or_default();
+    // One shared bounded recursive extractor for both providers (security
+    // review finding 3): attachments and named parts never contribute text,
+    // message/rfc822 stays inert and incomplete, and multipart/alternative
+    // prefers a nonblank text/plain alternative.
+    let (text, mime_complete) = crate::gmail::mime_text(&parsed, 0)?;
     let (bounded, within) = crate::mail::bounded_text(&text, 65536);
     let received_at = parsed
         .headers
@@ -435,7 +447,8 @@ fn email_from_rfc822(bytes: &[u8], stub: &Stub) -> Result<Email> {
             .collect(),
         headers,
         labels: Vec::new(),
-        body_complete: within,
+        body_complete: mime_complete && within,
+        security_headers_complete,
     })
 }
 
@@ -2149,10 +2162,12 @@ mod tests {
         assert_eq!(thread_key(&deeply_nested_mime(120)), None);
     }
 
-    /// Why: the classification context map is bounded — an oversized tracked
-    /// header is dropped instead of ballooning memory through the queue.
+    // why (security review finding 5): an oversized tracked safety header is
+    // recorded as dropped without its attacker-sized value and marks the
+    // message's safety-header capture incomplete, so presence-based checks
+    // can never read the drop as genuine absence and proceed automatically.
     #[test]
-    fn email_from_rfc822_drops_oversized_tracked_headers() {
+    fn oversized_tracked_headers_mark_the_message_incomplete() {
         let stub = stub_with("9", "t");
         let mime = format!(
             "From: r@co.com\r\nList-Id: {}\r\nSubject: S\r\n\r\nbody",
@@ -2161,11 +2176,79 @@ mod tests {
         let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
         assert!(
             !email.headers.contains_key("list-id"),
-            "an oversized tracked header must be dropped"
+            "the attacker-sized value is never retained"
+        );
+        assert!(
+            !email.security_headers_complete,
+            "the drop must mark safety-header capture incomplete"
         );
         assert!(
             email.headers.contains_key("from"),
             "bounded headers must still land"
+        );
+        // The deterministic gate fails closed for the message.
+        assert!(!crate::mail::hard_blocks(&email, "me@example.com").is_empty());
+    }
+
+    // why (security review finding 5): oversized duplicates cannot launder
+    // the signal to absence — one oversized occurrence marks the message
+    // even when a bounded duplicate of the same header is retained.
+    #[test]
+    fn oversized_duplicate_headers_cannot_launder_absence() {
+        let stub = stub_with("9", "t");
+        let mime = format!(
+            "From: r@co.com\r\nList-Id: {}\r\nList-Id: small-id\r\nSubject: S\r\n\r\nbody",
+            "x".repeat(9000)
+        );
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert!(
+            email.headers.contains_key("list-id"),
+            "the bounded duplicate is retained"
+        );
+        assert!(!email.security_headers_complete);
+    }
+
+    // why (security review finding 3): a text attachment must never supply
+    // deterministic rejection evidence or model input — the shared extractor
+    // excludes attachments and named parts entirely.
+    #[test]
+    fn multipart_text_attachments_cannot_supply_rejection_evidence() {
+        let stub = stub_with("9", "t");
+        let mime = "From: r@co.com\r\nSubject: S\r\nMIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+            --b\r\nContent-Type: text/plain\r\n\r\nThanks for applying.\r\n\
+            --b\r\nContent-Type: text/plain; name=\"notes.txt\"\r\n\
+            Content-Disposition: attachment; filename=\"notes.txt\"\r\n\r\n\
+            We regret to inform you we are not moving forward.\r\n\
+            --b--\r\n";
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert!(
+            !crate::mail::clear_rejection_language(&email.subject, &email.text),
+            "attachment text must not mint rejection evidence: {:?}",
+            email.text
+        );
+    }
+
+    // why (security review finding 3): an embedded message/rfc822 is inert
+    // and marks the capture incomplete — forwarded rejection text can never
+    // authorize an automatic reply.
+    #[test]
+    fn embedded_messages_are_inert_and_incomplete() {
+        let stub = stub_with("9", "t");
+        let mime = "From: r@co.com\r\nSubject: S\r\nMIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+            --b\r\nContent-Type: text/plain\r\n\r\nPlease see below.\r\n\
+            --b\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment\r\n\r\n\
+            From: old@co.com\r\nSubject: old\r\n\r\nNot moving forward.\r\n\
+            --b--\r\n";
+        let email = email_from_rfc822(mime.as_bytes(), &stub).expect("parse");
+        assert!(
+            !email.body_complete,
+            "embedded messages mark capture incomplete"
+        );
+        assert!(
+            !crate::mail::clear_rejection_language(&email.subject, &email.text),
+            "forwarded rejection text must not mint evidence"
         );
     }
 }

@@ -326,6 +326,12 @@ pub fn validate_draft(text: &str) -> Result<()> {
 /// Output: `Vec<String>` of blocking reasons (empty when the message is
 /// clear).
 pub fn hard_blocks(email: &Email, account: &str) -> Vec<String> {
+    // Fail closed (security review finding 5): a tracked safety header that
+    // could not be retained within bounds makes every presence-based check
+    // untrustworthy, so the message must not proceed automatically.
+    if !email.security_headers_complete {
+        return vec!["Safety headers were not fully captured".into()];
+    }
     let mut reasons = Vec::new();
     if email.stub.source != Source::Gmail {
         reasons.push("Demo messages can never be sent".into());

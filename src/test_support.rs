@@ -220,6 +220,7 @@ pub(crate) fn gmail_email_to(
         headers: std::collections::BTreeMap::default(),
         labels: vec![],
         body_complete: true,
+        security_headers_complete: true,
     }
 }
 

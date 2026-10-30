@@ -683,6 +683,7 @@ fn parse_raw_message(raw: &RawMessage, stub: &Stub) -> Result<Email> {
         headers,
         labels: raw.label_ids.clone(),
         body_complete: complete && within,
+        security_headers_complete: true,
     })
 }
 
@@ -727,17 +728,21 @@ pub fn parse_mime_text(bytes: &[u8]) -> Result<(String, bool)> {
 /// at 20). Output: `Result<(String, bool)>` — the extracted text and whether
 /// the part is an attachment (attachments yield empty text); error on unsafe
 /// nesting or malformed content.
-fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
+pub(crate) fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, bool)> {
     ensure!(depth <= 20, "MIME nesting exceeds safe limit");
+    // An embedded message is inert content AND marks the capture incomplete
+    // whatever its disposition: forwarded history is never current content,
+    // and its presence means provenance is no longer structurally decidable
+    // (security review finding 3).
+    if part.ctype.mimetype == "message/rfc822" {
+        return Ok((String::default(), false));
+    }
     let disposition = part.get_content_disposition();
     if disposition.disposition == mailparse::DispositionType::Attachment
         || disposition.params.contains_key("filename")
         || part.ctype.params.contains_key("name")
     {
         return Ok((String::default(), true));
-    }
-    if part.ctype.mimetype == "message/rfc822" {
-        return Ok((String::default(), false));
     }
     if !part.subparts.is_empty() {
         ensure!(part.subparts.len() <= 100, "Too many MIME parts");

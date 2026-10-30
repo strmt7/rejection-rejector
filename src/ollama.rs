@@ -1563,6 +1563,7 @@ pub fn sample_email(subject: &str, text: &str) -> Email {
         headers: std::collections::BTreeMap::default(),
         labels: vec![],
         body_complete: true,
+        security_headers_complete: true,
     }
 }
 

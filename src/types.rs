@@ -91,6 +91,11 @@ pub struct Email {
     pub labels: Vec<String>,
     /// Whether the stored body is the complete body.
     pub body_complete: bool,
+    /// Whether every tracked safety header was retained within bounds. A
+    /// tracked header over the value cap is recorded as dropped without its
+    /// attacker-sized value, so header-absence never reads as a genuine
+    /// absence of a safety signal (security review finding 5).
+    pub security_headers_complete: bool,
 }
 impl Email {
     /// Read the first value of one message header.
