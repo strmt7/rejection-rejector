@@ -322,11 +322,19 @@ fn login_with<E: Into<anyhow::Error>>(
 /// One accept step on the loopback consent listener.
 type AcceptFn = fn(&TcpListener) -> std::io::Result<(std::net::TcpStream, std::net::SocketAddr)>;
 
-/// Drive the loopback consent callback until an authorization code arrives.
+/// Maximum OAuth callback connections parsed concurrently.
 ///
-/// Inputs: `accept` — one accept step on the listener (production passes
-/// [`TcpListener::accept`]; tests inject an always-failing step to pin the
-/// error mapping without a real socket failure); `listener` — loopback
+/// why (security review finding 14): callback parsing is unauthenticated, so
+/// serial parsing let one slow socket monopolize the only parser for its
+/// per-connection deadline and repeated slow sockets could starve the real
+/// browser callback until the consent deadline expired. A bounded pool
+/// parses connections concurrently — a valid callback completes alongside
+/// stalled sockets — while a connection flood cannot spawn unbounded work.
+const MAX_CONCURRENT_CALLBACKS: usize = 8;
+
+/// Run the OAuth consent loop until a code, cancellation, expiry or failure.
+///
+/// Inputs: `accept` — injectable accept step; `listener` — non-blocking
 /// listener bound to `127.0.0.1`, so every accepted peer is loopback by
 /// construction and no peer filter is needed; `local_port` — port advertised
 /// in the redirect URI; `state` — expected OAuth state; `cancelled` —
@@ -341,49 +349,80 @@ fn consent_code(
     cancelled: &AtomicBool,
     login_deadline: Instant,
 ) -> Result<Zeroizing<String>> {
-    let code = loop {
-        ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
-        ensure!(
-            Instant::now() < login_deadline,
-            "Authorization timed out; no credentials saved"
-        );
-        match accept(listener) {
-            Ok((mut stream, _peer)) => {
-                stream.set_read_timeout(Some(Duration::from_millis(250)))?;
-                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-                let deadline = (Instant::now() + Duration::from_secs(2)).min(login_deadline);
-                let result =
-                    callback::read_headers(&mut stream, cancelled, deadline).and_then(|headers| {
-                        let target = callback::request_target(&headers, local_port)?;
-                        callback_code(target, state)
-                    });
-                let (status, text) = if matches!(&result, Ok(Some(_))) {
-                    (
-                        "200 OK",
-                        "Authorization received. Return to Rejection Rejector.",
-                    )
-                } else {
-                    (
-                        "400 Bad Request",
-                        "Authorization not accepted. Retry from the application.",
-                    )
-                };
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
-                    text.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                if let Ok(Some(code)) = result {
-                    break code;
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(MAX_CONCURRENT_CALLBACKS);
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    std::thread::scope(|scope| -> Result<Zeroizing<String>> {
+        loop {
+            // A completed valid callback always wins over further accepts.
+            match receiver.try_recv() {
+                Ok(code) => return Ok(Zeroizing::new(code)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    anyhow::bail!("OAuth callback handler pool disconnected")
                 }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50))
+            ensure!(!cancelled.load(Ordering::SeqCst), "Authorization cancelled");
+            ensure!(
+                Instant::now() < login_deadline,
+                "Authorization timed out; no credentials saved"
+            );
+            if active.load(Ordering::SeqCst) >= MAX_CONCURRENT_CALLBACKS {
+                // Pool saturated: wait for a completion instead of accepting.
+                if let Ok(code) = receiver.recv_timeout(Duration::from_millis(100)) {
+                    return Ok(Zeroizing::new(code));
+                }
+                continue;
             }
-            Err(e) => return Err(e.into()),
+            match accept(listener) {
+                Ok((mut stream, _peer)) => {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let sender = sender.clone();
+                    let active = std::sync::Arc::clone(&active);
+                    scope.spawn(move || {
+                        let result = (|| -> Result<Option<String>> {
+                            stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+                            stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+                            let deadline =
+                                (Instant::now() + Duration::from_secs(2)).min(login_deadline);
+                            callback::read_headers(&mut stream, cancelled, deadline).and_then(
+                                |headers| {
+                                    let target = callback::request_target(&headers, local_port)?;
+                                    callback_code(target, state)
+                                },
+                            )
+                        })();
+                        let (status, text) = if matches!(&result, Ok(Some(_))) {
+                            (
+                                "200 OK",
+                                "Authorization received. Return to Rejection Rejector.",
+                            )
+                        } else {
+                            (
+                                "400 Bad Request",
+                                "Authorization not accepted. Retry from the application.",
+                            )
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
+                            text.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                        if let Ok(Some(code)) = result {
+                            let _ = sender.send(code);
+                        }
+                        active.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Idle: wait briefly for a completion instead of spinning.
+                    if let Ok(code) = receiver.recv_timeout(Duration::from_millis(50)) {
+                        return Ok(Zeroizing::new(code));
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
-    };
-    Ok(Zeroizing::new(code))
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -1035,6 +1074,110 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("injected listener failure"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod consent_concurrency {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    // Only `callback_pool_concurrency_is_bounded_under_a_connection_flood`
+    // reads this counter, so Rust's parallel test threads cannot cross-talk.
+    static ACCEPTED: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_accept(
+        listener: &TcpListener,
+    ) -> std::io::Result<(TcpStream, std::net::SocketAddr)> {
+        let accepted = listener.accept()?;
+        ACCEPTED.fetch_add(1, Ordering::SeqCst);
+        Ok(accepted)
+    }
+
+    fn stalled_client(addr: std::net::SocketAddr) -> TcpStream {
+        let stream = TcpStream::connect(addr).expect("connect");
+        stream
+            .set_nonblocking(false)
+            .expect("blocking client stream");
+        stream
+    }
+
+    fn valid_client(addr: std::net::SocketAddr, port: u16) -> TcpStream {
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        let request = format!(
+            "GET /callback?code=the-code&state=st HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).expect("write request");
+        stream
+    }
+
+    // why (security review finding 14): several incomplete sockets must not
+    // prevent a valid callback from completing; the serial accept/parse loop
+    // stalled the real browser callback behind each slow socket's deadline,
+    // and this test fails on that serial design.
+    #[test]
+    fn slow_incomplete_connections_do_not_block_a_valid_callback() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let stalled: Vec<TcpStream> = (0..4).map(|_| stalled_client(addr)).collect();
+        let valid = valid_client(addr, addr.port());
+        let started = Instant::now();
+        let code = consent_code(
+            TcpListener::accept,
+            &listener,
+            addr.port(),
+            "st",
+            &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(30),
+        )
+        .expect("valid callback completes");
+        let elapsed = started.elapsed();
+        assert_eq!(code.as_str(), "the-code");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "valid callback took {elapsed:?}; serial parsing needs ~8s behind four stalled sockets"
+        );
+        drop(valid);
+        drop(stalled);
+    }
+
+    // why (security review finding 14): a connection flood must stay bounded
+    // by MAX_CONCURRENT_CALLBACKS; the app-level accept count cannot pass the
+    // pool cap before any handler's per-connection deadline can expire.
+    #[test]
+    fn callback_pool_concurrency_is_bounded_under_a_connection_flood() {
+        ACCEPTED.store(0, Ordering::SeqCst);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let _flood: Vec<TcpStream> = (0..32).map(|_| stalled_client(addr)).collect();
+        let cancelled = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let running = scope.spawn(|| {
+                consent_code(
+                    counting_accept,
+                    &listener,
+                    addr.port(),
+                    "st",
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(30),
+                )
+            });
+            // Handlers hold their sockets past this observation point, so no
+            // slot can free and the accepted count equals spawned handlers.
+            std::thread::sleep(Duration::from_secs(1));
+            let accepted = ACCEPTED.load(Ordering::SeqCst);
+            cancelled.store(true, Ordering::SeqCst);
+            let _ = running.join().expect("consent loop ends on cancellation");
+            assert!(
+                accepted <= MAX_CONCURRENT_CALLBACKS,
+                "accepted {accepted} connections concurrently; cap is {MAX_CONCURRENT_CALLBACKS}"
+            );
+        });
     }
 }
 
