@@ -62,20 +62,38 @@ jobs:
           set -euo pipefail
           cargo install --locked cargo-fuzz --version 0.13.2
           cargo fuzz --version
+      - name: Verify the tracked fuzz lock and fetch the locked graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          # why (security review finding 6): the standalone fuzz workspace
+          # must resolve exactly the tracked lock; a missing or drifted lock
+          # fails here before any target compiles, and the run steps below
+          # resolve offline from this fetched graph only.
+          cargo metadata --locked --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+          cargo fetch --locked --manifest-path fuzz/Cargo.toml
+          mkdir -p artifacts/fuzz-logs
+          sha256sum fuzz/Cargo.lock | tee artifacts/fuzz-logs/lock.sha256
       - name: Fuzz mailbox and quote boundaries
         shell: bash
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: |
           set -euo pipefail
           mkdir -p artifacts/fuzz-logs
           cargo +nightly-2026-09-26 fuzz run mail_boundaries --fuzz-dir fuzz -- -max_total_time=90 -max_len=65536 -timeout=10 -rss_limit_mb=2048 2>&1 | tee artifacts/fuzz-logs/mail-boundaries.log
       - name: Fuzz MIME extraction
         shell: bash
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: |
           set -euo pipefail
           mkdir -p artifacts/fuzz-logs
           cargo +nightly-2026-09-26 fuzz run mime_parser --fuzz-dir fuzz -- -max_total_time=90 -max_len=262144 -timeout=10 -rss_limit_mb=2048 2>&1 | tee artifacts/fuzz-logs/mime-parser.log
       - name: Fuzz rejection policy language
         shell: bash
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: |
           set -euo pipefail
           mkdir -p artifacts/fuzz-logs
