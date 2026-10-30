@@ -10,8 +10,11 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    api_auth, audit_anchor, background, build_info, config, contracts, decision, engine::Engine,
-    ollama::Ollama, policy, recovery, shadow, worker::Worker,
+    api_auth, audit_anchor, background, build_info, config, contracts, decision,
+    engine::{self, Engine},
+    ollama::Ollama,
+    policy, recovery, shadow,
+    worker::Worker,
 };
 use std::{
     path::PathBuf,
@@ -1258,7 +1261,15 @@ fn cmd_export_recovery_key(
     data_dir: &Option<PathBuf>,
 ) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
-    if let Some(loaded) = policy::load_optional()? {
+    // Workspace-aware policy authorization (security review finding 11):
+    // open the authenticated workspace state and run the one policy
+    // authorization API before any passphrase read or vault access, so a
+    // replayed older authentic policy, same-revision drift, or a missing
+    // managed policy in a managed workspace all fail closed here.
+    let mut e = open_engine(dir.clone(), false, true)?;
+    let loaded = policy::load_optional()?;
+    engine::authorize_standalone_policy(&mut e.db, loaded.as_ref())?;
+    if let Some(loaded) = &loaded {
         ensure!(
             loaded.policy.allows_recovery_key_export(),
             "Enterprise policy prohibits portable recovery-key export"

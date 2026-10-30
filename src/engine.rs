@@ -478,6 +478,40 @@ fn staged_policy_revision_floor(
     Ok((Some(floor), changed))
 }
 
+/// Workspace-aware policy authorization for sensitive standalone commands.
+///
+/// This is the one policy authorization API every sensitive standalone
+/// command must call with authenticated workspace state (an opened store),
+/// before any passphrase read or vault access: it observes the loaded policy
+/// against the persisted revision floor exactly as engine startup does (so a
+/// replayed older authentic policy and same-revision byte drift are
+/// rejected), commits the observed floor like startup does, and fails closed
+/// when a managed workspace presents no managed policy at all.
+///
+/// Inputs: `db` — opened workspace store; `loaded` — the policy currently
+/// loaded, if any. Output: `Result<()>` — `Ok` only when the floor
+/// observation passes and a managed workspace presents its managed policy.
+pub fn authorize_standalone_policy(db: &mut Store, loaded: Option<&LoadedPolicy>) -> Result<()> {
+    let (floor, changed) = staged_policy_revision_floor(db, loaded)?;
+    if let (Some(floor), true) = (floor, changed) {
+        let committed = db.change_meta(
+            &[("enterprise_policy_revision_floor", serde_json::json!(floor))],
+            &[],
+            "policy.floor_observed",
+            "Standalone sensitive command observed the enterprise policy revision floor",
+        );
+        committed?;
+    }
+    if loaded.is_none() {
+        let floor: Option<PolicyRevisionFloor> = db.meta("enterprise_policy_revision_floor")?;
+        ensure!(
+            floor.is_none(),
+            "Managed enterprise policy is required for this operation but is missing"
+        );
+    }
+    Ok(())
+}
+
 /// Resolve the workspace directory and open its exclusive session state.
 ///
 /// Inputs: `directory` — workspace directory (replaced by a temporary
@@ -7003,5 +7037,55 @@ mod open_stage_and_automatic_gap_tests {
             message.contains("persisted settings and rollback floor committed together"),
             "the audit detail must say what was committed together: {message}"
         );
+    }
+}
+
+#[cfg(test)]
+mod standalone_policy_authorization_tests {
+    use super::*;
+    use crate::vault::Vault;
+
+    /// Build one loaded managed policy identity.
+    ///
+    /// Inputs: `revision` — policy revision; `digest` — policy document
+    /// digest. Output: `LoadedPolicy` carrying the identity the revision
+    /// floor tracks.
+    fn loaded(revision: u64, digest: &str) -> LoadedPolicy {
+        LoadedPolicy {
+            policy: crate::policy::EnterprisePolicy {
+                version: 2,
+                policy_id: Some("corp.policy".into()),
+                revision: Some(revision),
+                ..Default::default()
+            },
+            digest: digest.to_string(),
+            expected_digest: None,
+            signature_enforced: false,
+            signature_verified: false,
+            signer_key_sha256: None,
+        }
+    }
+
+    // why (security review finding 11): the recovery-key export path must
+    // reject a replayed older authentic policy, same-revision byte drift and
+    // a missing managed policy in a managed workspace — while a current
+    // policy and an unmanaged workspace still authorize. The observation
+    // must persist, or rollback detection would apply only within one call.
+    #[test]
+    fn standalone_policy_authorization_enforces_the_floor_and_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&root.path().join("state.sqlite3"), Vault::random()).unwrap();
+        // Unmanaged workspace: no floor and no policy may authorize.
+        assert!(authorize_standalone_policy(&mut db, None).is_ok());
+        // First managed observation: revision 3 accepted and committed.
+        assert!(authorize_standalone_policy(&mut db, Some(&loaded(3, "digest-a"))).is_ok());
+        // Rollback to revision 2 is rejected against the committed floor...
+        assert!(authorize_standalone_policy(&mut db, Some(&loaded(2, "digest-b"))).is_err());
+        // ...and so is same-revision byte drift.
+        assert!(authorize_standalone_policy(&mut db, Some(&loaded(3, "drifted"))).is_err());
+        // The unchanged current policy still authorizes.
+        assert!(authorize_standalone_policy(&mut db, Some(&loaded(3, "digest-a"))).is_ok());
+        // A managed workspace presenting no managed policy fails closed.
+        assert!(authorize_standalone_policy(&mut db, None).is_err());
     }
 }
