@@ -18,7 +18,9 @@ Web-console pivot and advisory-suppression elimination (2026-10-30). Changed:
   `--ignore` flags and their triage comments) per the standing
   never-suppress policy, and `tests/release/test_no_advisory_suppressions.py`
   fails the repository if any suppression construct reappears in a tracked
-  policy file. `cargo-audit` bumps to 0.23.1 in the pinned audit lane.
+  policy file. The `cargo-audit` pin was re-verified against upstream's
+  checksum manifest: 0.22.2 is the newest release the pinned installer
+  verifies (v2.88.0), and the installer action pin itself was bumped.
 - The redundant `rr-train-monitor`/`src/train_monitor.rs` GUI twin dies; the
   GPU duty-cycle ceiling stays enforced by `training/duty_cycle.py` and
   `tools/gpu_util_watchdog.py` unchanged.

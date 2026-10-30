@@ -39,9 +39,13 @@ jobs:
       # 0372) disappeared at the source when their dependency paths left the
       # graph. Any advisory must fail this job (--deny warnings).
       - name: Install pinned cargo-audit from verified releases
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
-          tool: cargo-audit@0.23.1
+          # 0.22.2 is the newest cargo-audit release present in the
+          # installer's checksum-verified manifest (checked against upstream
+          # manifests/cargo-audit.json at v2.88.0); later crate versions are
+          # not yet adopted there and are never pinned speculatively.
+          tool: cargo-audit@0.22.2
           checksum: true
           fallback: none
       - run: cargo audit --deny warnings

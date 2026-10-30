@@ -60,8 +60,13 @@ class NoAdvisorySuppressions(unittest.TestCase):
             cwd=ROOT,
             check=True,
         ).stdout.splitlines()
+        self_name = str(pathlib.Path(__file__).resolve().relative_to(ROOT)).replace("\\", "/")
         offenders = []
         for name in tracked:
+            if name == self_name:
+                # This scanner's own source necessarily contains the pattern
+                # it searches for; it cannot flag itself.
+                continue
             path = ROOT / name
             if not path.exists():
                 # Tracked but deleted on disk: a pending deletion that the

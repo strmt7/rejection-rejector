@@ -98,8 +98,10 @@ jobs:
           cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" status > artifacts/recovery-init.json
           cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" integrity > artifacts/recovery-integrity.json
           cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" backup --out "$backup" > artifacts/recovery-backup.json
-          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" verify-backup "$backup" > artifacts/recovery-verify.json
-          cargo run --locked --no-default-features --bin rr -- --data-dir "$workspace" recovery-drill "$backup" > artifacts/recovery-drill.json
+          cargo run --locked --no-default-features --bin rr -- \
+            --data-dir "$workspace" verify-backup "$backup" > artifacts/recovery-verify.json
+          cargo run --locked --no-default-features --bin rr -- \
+            --data-dir "$workspace" recovery-drill "$backup" > artifacts/recovery-drill.json
           python3 - <<'PY'
           import json
           from pathlib import Path

@@ -128,11 +128,11 @@ jobs:
               echo "All viable tested mutants were caught."
               ;;
             2)
-              echo "::error::Safety-critical mutation testing found surviving mutants. The release-quality gate requires all viable tested mutants to be caught."
+              echo "::error::Safety-critical mutation testing found surviving mutants; all viable tested mutants must be caught."
               exit 2
               ;;
             3)
-              echo "::error::Safety-critical mutation testing timed out. An inconclusive mutation result cannot satisfy the release-quality gate."
+              echo "::error::Safety-critical mutation testing timed out; inconclusive results cannot satisfy the release gate."
               exit 3
               ;;
             1|4|5|6|70)

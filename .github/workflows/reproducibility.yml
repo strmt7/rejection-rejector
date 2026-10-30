@@ -85,7 +85,8 @@ jobs:
             $env:CARGO_TARGET_DIR = $target
             # RUSTFLAGS takes precedence over Cargo target rustflags, so include
             # both MSVC deterministic-link mode and path normalization here.
-            $env:RUSTFLAGS = "-C link-arg=/Brepro -C link-arg=/PDBALTPATH:%_PDB% --remap-path-prefix=$workspace=$canonicalSource --remap-path-prefix=$target=$canonicalTarget"
+            $env:RUSTFLAGS = "-C link-arg=/Brepro -C link-arg=/PDBALTPATH:%_PDB% " +
+              "--remap-path-prefix=$workspace=$canonicalSource --remap-path-prefix=$target=$canonicalTarget"
             cargo auditable build --locked --release --bins
             if ($LASTEXITCODE -ne 0) { throw "$label release build failed" }
           }
@@ -116,8 +117,10 @@ jobs:
           $infoA = Get-Content artifacts/build-info-a.json -Raw | ConvertFrom-Json
           $infoB = Get-Content artifacts/build-info-b.json -Raw | ConvertFrom-Json
           if ($infoA.identity_sha256 -ne $infoB.identity_sha256) { throw "Build identity differs between clean builds" }
-          if ($infoA.source_commit -ne $env:GITHUB_SHA -or -not $infoA.source_commit_verified) { throw "First build has invalid source identity" }
-          if ($infoB.source_commit -ne $env:GITHUB_SHA -or -not $infoB.source_commit_verified) { throw "Second build has invalid source identity" }
+          if ($infoA.source_commit -ne $env:GITHUB_SHA -or
+            -not $infoA.source_commit_verified) { throw "First build has invalid source identity" }
+          if ($infoB.source_commit -ne $env:GITHUB_SHA -or
+            -not $infoB.source_commit_verified) { throw "Second build has invalid source identity" }
 
           if ($mismatches.Count -gt 0) {
             New-Item -ItemType Directory -Force artifacts/repro-a,artifacts/repro-b | Out-Null
