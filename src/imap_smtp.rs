@@ -559,6 +559,17 @@ impl MailTransport for ImapSmtp {
                 self.creds.password().to_string(),
             ))
             .build();
+        // Fail-closed emergency gate at the provider boundary: the sentinel is
+        // re-evaluated after all message, credential and transport preparation
+        // and immediately before the relay send, so a stop engaged during
+        // preparation still leaves the box untouched (security review finding
+        // 4). A blocked dispatch is NotAccepted: definitely unsent.
+        if let Err(error) = crate::emergency::ensure_dispatch_allowed() {
+            return Err(fail(
+                SendFailureKind::NotAccepted,
+                format!("Emergency stop blocked the SMTP dispatch: {error}"),
+            ));
+        }
         // SMTP returns no provider message id; the local delivery record is the
         // at-most-once source of truth, so a fixed marker keeps the contract.
         mailer
@@ -972,6 +983,89 @@ mod tests {
             "threading lost"
         );
         assert!(seen.data.contains("Your process was unfair."), "body lost");
+    }
+
+    #[test]
+    fn smtp_send_is_blocked_at_the_sink_by_the_emergency_gate() {
+        // why (security review finding 4): the emergency gate must fire at the
+        // provider boundary after all preparation — a stop engaged late still
+        // means zero provider requests, and the blocked dispatch classifies as
+        // NotAccepted (definitely unsent) for the at-most-once ledger. The
+        // probe and the live self-test reach the relay only through this same
+        // sealed send, so the gate covers every caller.
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        let raw = b64(&sample_reply_mime());
+        let outcome = crate::test_support::with_dispatch_gate(
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("Enterprise emergency stop is active"))),
+            || MailTransport::send(&mut client, &raw, "orig@corp.com"),
+        );
+        let failure = outcome.expect_err("the emergency gate must block the send");
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        let seen = fake.captured();
+        assert!(
+            !seen
+                .dialog
+                .iter()
+                .any(|line| line.to_uppercase().contains("DATA")),
+            "no message may reach the relay: {:?}",
+            seen.dialog
+        );
+    }
+
+    #[test]
+    fn every_unsafe_sentinel_state_blocks_the_smtp_sink_with_zero_sends() {
+        // why (security review finding 4): the report's acceptance matrix —
+        // active, malformed, non-regular and uninspectable sentinel states
+        // must all produce zero live-self-test/SMTP sends — is proven through
+        // the real evaluation behind the real transport sink, state by state.
+        let root = tempfile::tempdir().unwrap();
+        let active = root.path().join("stop");
+        std::fs::write(&active, b"incident").unwrap();
+        let directory = root.path().join("stop-dir");
+        std::fs::create_dir_all(&directory).unwrap();
+        let absent = root.path().join("absent");
+        let states: [(&str, std::ffi::OsString); 4] = [
+            ("active", active.as_os_str().to_owned()),
+            ("malformed", std::ffi::OsString::new()),
+            ("non-regular", directory.as_os_str().to_owned()),
+            ("uninspectable", std::ffi::OsString::from("relative.stop")),
+        ];
+        for (name, value) in states {
+            let fake = FakeSmtp::start(false);
+            let mut client = fake.client();
+            let raw = b64(&sample_reply_mime());
+            let gate_value = value.clone();
+            let outcome = crate::test_support::with_dispatch_gate(
+                std::sync::Arc::new(move || {
+                    crate::emergency::ensure_dispatch_allowed_for(Some(gate_value.clone()))
+                }),
+                || MailTransport::send(&mut client, &raw, "orig@corp.com"),
+            );
+            let failure = outcome
+                .map(|_| ())
+                .expect_err("an unsafe sentinel state must block the provider sink");
+            assert_eq!(failure.kind, SendFailureKind::NotAccepted, "{name}");
+            assert!(
+                !fake
+                    .captured()
+                    .dialog
+                    .iter()
+                    .any(|line| line.to_uppercase().contains("DATA")),
+                "{name}: zero sends may reach the relay"
+            );
+        }
+        // The only state that permits dispatch is an absent sentinel.
+        let fake = FakeSmtp::start(false);
+        let mut client = fake.client();
+        let raw = b64(&sample_reply_mime());
+        let allowed = crate::test_support::with_dispatch_gate(
+            std::sync::Arc::new(move || {
+                crate::emergency::ensure_dispatch_allowed_for(Some(absent.as_os_str().to_owned()))
+            }),
+            || MailTransport::send(&mut client, &raw, "orig@corp.com"),
+        );
+        assert!(allowed.is_ok(), "an absent sentinel permits dispatch");
     }
 
     #[test]

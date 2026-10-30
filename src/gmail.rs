@@ -532,6 +532,17 @@ impl Gmail {
             kind: SendFailureKind::NotAccepted,
             message: format!("Gmail client could not be created: {error}"),
         })?;
+        // Fail-closed emergency gate at the provider boundary: the sentinel is
+        // re-evaluated after all credential, message and client preparation
+        // and immediately before the send request, so a stop engaged during
+        // preparation still leaves the box untouched (security review finding
+        // 4). A blocked dispatch is NotAccepted: definitely unsent.
+        if let Err(error) = crate::emergency::ensure_dispatch_allowed() {
+            return Err(SendFailure {
+                kind: SendFailureKind::NotAccepted,
+                message: format!("Emergency stop blocked the Gmail dispatch: {error}"),
+            });
+        }
         let response = client
             .post(format!("{}/messages/send", self.root))
             .bearer_auth(token.as_str())
@@ -1865,6 +1876,37 @@ mod tests {
         let failure = client.send("raw", "not a valid id!").unwrap_err();
         assert_eq!(failure.kind, SendFailureKind::NotAccepted);
         assert_eq!(fake.hits().len(), 0, "neither refusal may reach the wire");
+    }
+
+    // why (security review finding 4): the emergency gate must fire at the
+    // Gmail boundary after token refresh and client construction — a stop
+    // engaged during preparation must still leave zero send requests on the
+    // wire, and the blocked dispatch classifies as NotAccepted (definitely
+    // unsent) for the at-most-once ledger.
+    #[test]
+    fn emergency_gate_blocks_the_gmail_sink_with_zero_send_requests() {
+        let fake = Fake::new(&[("/token", 200, "", TOKEN_OK)]);
+        let mut client = fake.client(true);
+        let failure = crate::test_support::with_dispatch_gate(
+            std::sync::Arc::new(|| Err(anyhow::anyhow!("Enterprise emergency stop is active"))),
+            || client.send("raw", "thread-1"),
+        )
+        .unwrap_err();
+        assert_eq!(failure.kind, SendFailureKind::NotAccepted);
+        assert!(
+            failure.message.contains("Emergency stop"),
+            "{}",
+            failure.message
+        );
+        let hits = fake.hits();
+        let send_hits: Vec<&String> = hits
+            .iter()
+            .filter(|hit| hit.contains("messages/send"))
+            .collect();
+        assert!(
+            send_hits.is_empty(),
+            "zero send requests may reach the wire: {send_hits:?}"
+        );
     }
 
     /// Client factory that always fails, standing in for an unbuildable HTTP

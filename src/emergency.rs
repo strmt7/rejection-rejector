@@ -90,7 +90,7 @@ pub fn ensure_dispatch_allowed() -> Result<()> {
 /// only when the sentinel is a regular file that is currently absent; an active
 /// sentinel or an uninspectable configuration returns `Err` (fail closed), and
 /// the state is never cached between calls.
-fn ensure_dispatch_allowed_for(value: Option<OsString>) -> Result<()> {
+pub(crate) fn ensure_dispatch_allowed_for(value: Option<OsString>) -> Result<()> {
     let status = evaluate(value)?;
     ensure!(
         !status.active,
