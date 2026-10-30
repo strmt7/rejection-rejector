@@ -43,6 +43,7 @@ crossterm = "=0.29.0"
 directories = "6"
 fs2 = "0.4"
 html2text = "0.17"
+html5ever = "0.40.1"
 lingua = { version = "1.8", default-features = false, features = ["english", "chinese", "hindi", "spanish", "french", "arabic", "bengali", "portuguese", "russian", "urdu", "german", "greek", "japanese", "italian", "dutch"] }
 mailparse = "0.18"
 rand = "0.10"

@@ -39,7 +39,7 @@ fixture = ["tests/fixtures", "training/data"]
 id = "cargo-lock"
 kind = "lock"
 path = "Cargo.lock"
-sha256 = "f0251d1e64e2f90868b0df1bb10471375e79b9f4e7d5861ba2481c61f6c507e2"
+sha256 = "5c5e6ba1dfa330aaf2aaff131d38de95ad9b92e027c73a22c252abfb2e15ae6d"
 
 [[input_files]]
 id = "rust-toolchain"

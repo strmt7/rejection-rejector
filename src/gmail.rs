@@ -783,11 +783,11 @@ pub(crate) fn mime_text(part: &ParsedMail<'_>, depth: u8) -> Result<(String, boo
         "text/plain" => Ok((part.get_body()?, true)),
         "text/html" => {
             let body = part.get_body()?;
-            Ok((
-                html2text::from_read(body.as_bytes(), 100)
-                    .context("Cannot convert HTML to inert text")?,
-                true,
-            ))
+            // Structural current-versus-quoted split before flattening
+            // (security review finding 13): quoted history is removed as
+            // markup, and unrecognized quote shapes mark the capture
+            // incomplete instead of guessing provenance.
+            Ok(crate::html_quote::current_html_to_text(&body))
         }
         _ => Ok((String::default(), true)),
     }

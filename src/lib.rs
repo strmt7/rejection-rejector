@@ -87,6 +87,7 @@ pub mod gmail;
 /// network, database and model work stays on the background worker.
 #[cfg(feature = "gui")]
 pub mod gui;
+mod html_quote;
 /// IMAP/SMTP app-password mail transport (the [`mail_transport::MailTransport`]
 /// backend).
 ///
