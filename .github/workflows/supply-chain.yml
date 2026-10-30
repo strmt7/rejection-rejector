@@ -33,26 +33,18 @@ jobs:
           toolchain: 1.99.1
       # Authoritative pinned RustSec audit (RR-04/D3c): this is the ONE
       # cargo-audit execution per tool/database; rust-policy keeps cargo-deny as
-      # the second tool's policy check. Suppression record (S07): the four
-      # ignores below mirror deny.toml and SECURITY.md (three Linux-only a11y
-      # unmaintained notices + the documented lexical-core/imap-2 record).
-      # Owner: strmt7. Review dates: 2027-04-01 (a11y, mirrors osv-scanner.toml
-      # ignoreUntil), 2027-04-28 policy review (RUSTSEC-2023-0086; its removal
-      # criterion is already met - the imap-2 path left Cargo.lock, verified
-      # 2026-10-28). Any NEW unsuppressed advisory must fail this job
-      # (--deny warnings).
+      # the second tool's policy check. Zero suppressions by standing policy
+      # (docs/deepsource-dispositions.md): the former ignores (lexical-core
+      # RUSTSEC-2023-0086 and the egui-winit a11y stack RUSTSEC-2026-0370/0371/
+      # 0372) disappeared at the source when their dependency paths left the
+      # graph. Any advisory must fail this job (--deny warnings).
       - name: Install pinned cargo-audit from verified releases
         uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
-          tool: cargo-audit@0.22.2
+          tool: cargo-audit@0.23.1
           checksum: true
           fallback: none
-      - run: >-
-          cargo audit --deny warnings
-          --ignore RUSTSEC-2026-0370
-          --ignore RUSTSEC-2026-0371
-          --ignore RUSTSEC-2026-0372
-          --ignore RUSTSEC-2023-0086
+      - run: cargo audit --deny warnings
   rust-policy:
     name: Rust dependency, license and SBOM policy
     runs-on: ubuntu-latest

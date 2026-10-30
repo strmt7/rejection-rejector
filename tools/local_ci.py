@@ -28,45 +28,23 @@ GATES = [
         "clippy (exact CI flags)",
         ["cargo", "clippy", "--locked", "--all-targets", "--all-features", "--", "-D", "warnings"],
     ),
-    # Advisory gate (RUSTSEC/OSV). The four ignores are the documented triage
-    # in SECURITY.md / deny.toml / osv-scanner.toml: three Linux-only
-    # accessibility-stack unmaintained notices (accesskit_unix -> atspi ->
-    # zvariant 5 / zbus_names 4; unreachable in the shipped Windows binary; no
-    # in-range patched version) plus the RUSTSEC-2023-0086 lexical-core/imap-2
-    # record (SECURITY.md; removal criterion already met 2026-10-28 - the
-    # imap-2 path left Cargo.lock - drop at the 2027-04-28 policy review).
-    # Owner: strmt7; a11y review/removal date 2027-04-01 (mirrors
-    # osv-scanner.toml). Any NEW advisory must block this gate until it is
-    # fixed or triaged with reasons.
-    (
-        "cargo audit (advisories)",
-        [
-            "cargo",
-            "audit",
-            "--deny",
-            "warnings",
-            "--ignore",
-            "RUSTSEC-2026-0370",
-            "--ignore",
-            "RUSTSEC-2026-0371",
-            "--ignore",
-            "RUSTSEC-2026-0372",
-            "--ignore",
-            "RUSTSEC-2023-0086",
-        ],
-    ),
+    # Advisory gate (RUSTSEC/OSV) with zero suppressions: the standing policy
+    # (docs/deepsource-dispositions.md) bans ignore constructs, and
+    # tests/release/test_no_advisory_suppressions.py enforces that ban. The
+    # former ignored advisories disappeared at the source when their
+    # dependency paths left the graph. Any advisory must block this gate
+    # until it is fixed at source or recorded in the open-risk register.
+    ("cargo audit (advisories)", ["cargo", "audit", "--deny", "warnings"]),
 ]
 
 # Transient network fetches must not flip the gate: per-gate retry budget.
 GATE_ATTEMPTS = {"cargo audit (advisories)": 3}
 
-# Ruff lint lanes are xfail-style until the pending ruff format pass: the
-# Python tree predates the FlitzZip-mirrored .ruff.toml profile, so findings
-# are expected today. The lanes run and print counts but must NOT flip the
-# gate on red. TODO(pending format pass): after the one-time
-# `ruff check --fix` + `ruff format` pass over training/, tools/ and tests/,
-# flip RUFF_LANES_ENFORCING to True so red becomes red.
-RUFF_LANES_ENFORCING = False
+# Ruff lint lanes are enforcing: the one-time `ruff check --fix` + `ruff
+# format` pass over training/, tools/ and tests/ is complete (2026-10-30), so
+# red is red. The never-suppress policy covers Python lint findings like every
+# other static-analysis class: fix at source, never silence.
+RUFF_LANES_ENFORCING = True
 
 
 def find_ruff() -> str | None:

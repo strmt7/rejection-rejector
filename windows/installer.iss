@@ -1,15 +1,17 @@
 ; Rejection Rejector — component-selectable Windows installer (Inno Setup 6)
 ;
-; Three installable components, all selected by default; the wizard refuses
-; to continue when none is selected. Every path is a build input: the build
-; system passes /AppVersion and /SourceDir; nothing is machine-specific.
+; Two installable components, both selected by default; the wizard refuses
+; to continue when none is selected. The product surface is the command-line
+; toolchain and the local web console (rr web): there is no desktop
+; application UI. Every path is a build input: the build system passes
+; /AppVersion and /SourceDir; nothing is machine-specific.
 
 #define AppName "Rejection Rejector"
 #ifndef AppVersion
   #define AppVersion "0.2.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\\target\\release"
+  #define SourceDir "..\target\release"
 #endif
 
 [Setup]
@@ -31,24 +33,19 @@ WizardStyle=modern
 Name: "custom"; Description: "Custom installation"; Flags: iscustom
 
 [Components]
-Name: "desktop"; Description: "Desktop application (rejection-rejector.exe)"; Types: custom
-Name: "cli"; Description: "Command-line tools (rr.exe, including rr tui and rr web)"; Types: custom
-Name: "web"; Description: "Local web interface (served by rr web on the loopback address)"; Types: custom
+Name: "cli"; Description: "Command-line tools (rr.exe, including rr tui)"; Types: custom
+Name: "web"; Description: "Local web console (served by rr web on the loopback address)"; Types: custom
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut for the application"; Components: desktop
-Name: "webicon"; Description: "Create a Start-menu shortcut for the local web interface"; Components: web
+Name: "webicon"; Description: "Create a Start-menu shortcut for the local web console"; Components: web
 
 [Files]
-Source: "{#SourceDir}\rejection-rejector.exe"; DestDir: "{app}"; Components: desktop
 Source: "{#SourceDir}\rr.exe"; DestDir: "{app}"; Components: cli
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\rejection-rejector.exe"; Components: desktop
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\rejection-rejector.exe"; Components: desktop; Tasks: desktopicon
-Name: "{group}\Local web interface"; Filename: "{app}\rr.exe"; Parameters: "web"; Components: web
-Name: "{autodesktop}\Local web interface"; Filename: "{app}\rr.exe"; Parameters: "web"; Components: web; Tasks: webicon
+Name: "{group}\Local web console"; Filename: "{app}\rr.exe"; Parameters: "web"; Components: web
+Name: "{autodesktop}\Local web console"; Filename: "{app}\rr.exe"; Parameters: "web"; Components: web; Tasks: webicon
 Name: "{group}\Command-line tools"; Filename: "{app}\rr.exe"; Components: cli
 
 [Run]
@@ -62,10 +59,9 @@ begin
   Result := True;
   if CurPageID = wpSelectComponents then
   begin
-    if not (WizardIsComponentSelected('desktop') or WizardIsComponentSelected('cli')
-        or WizardIsComponentSelected('web')) then
+    if not (WizardIsComponentSelected('cli') or WizardIsComponentSelected('web')) then
     begin
-      MsgBox('Select at least one component (Desktop, Command-line tools, or Local web interface).', mbError, MB_OK);
+      MsgBox('Select at least one component (Command-line tools or Local web console).', mbError, MB_OK);
       Result := False;
     end;
   end;

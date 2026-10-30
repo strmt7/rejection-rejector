@@ -52,9 +52,6 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest discover -s tests/release -v 2>&1 | tee artifacts/operator-tools.log
-      - name: Linux desktop dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev xvfb openbox scrot dbus-x11
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Core tests
@@ -75,7 +72,7 @@ jobs:
           if (-not $mt) { throw 'Windows SDK mt.exe was not found' }
 
           New-Item -ItemType Directory -Force artifacts/manifests | Out-Null
-          foreach ($binary in @('target/debug/rejection-rejector.exe','target/debug/rr.exe')) {
+          foreach ($binary in @('target/debug/rr.exe')) {
             $name = [IO.Path]::GetFileNameWithoutExtension($binary)
             $out = "artifacts/manifests/$name.manifest.xml"
             & $mt.FullName -nologo "-inputresource:$binary;#1" "-out:$out"
@@ -114,9 +111,6 @@ jobs:
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/rejection-rejector-doctor"
           cargo run --locked --no-default-features --bin rr -- --data-dir "$RUNNER_TEMP/rejection-rejector-doctor" doctor 2>&1 | tee artifacts/doctor.log
-      - name: Six native GUI captures and review geometry
-        if: runner.os == 'Linux'
-        run: timeout 120s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' bash scripts/gui-smoke.sh
       - name: Verify tracked source was not modified
         run: git diff --exit-code HEAD
       - name: Source and toolchain evidence

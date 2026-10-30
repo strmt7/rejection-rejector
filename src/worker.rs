@@ -83,12 +83,6 @@ pub struct Snapshot {
     pub page: u32,
     /// Whether the worker is restricted to review-only operation.
     pub review_only: bool,
-    /// Revealed API token, when requested.
-    pub api_token: Option<Zeroizing<String>>,
-    /// Revealed read-scope integration token, when requested.
-    pub api_read_token: Option<Zeroizing<String>>,
-    /// Instant the revealed token stops being shown.
-    pub api_token_expires: Option<Instant>,
     /// Whether the local API listener is running.
     pub api_listening: bool,
 }
@@ -300,12 +294,6 @@ pub enum Command {
     Reconcile(String),
     /// Purge items past the retention window.
     Purge,
-    /// Reveal the local API token.
-    RevealApiToken,
-    /// Hide the local API token.
-    HideApiToken,
-    /// Rotate the local API token.
-    RotateApiToken,
     /// Answer a read-only API query over the bounded reply channel.
     Api { path: String, reply: Sender<Value> },
     /// Answer the OpenMetrics exposition query over the bounded reply channel.
@@ -375,9 +363,6 @@ impl Command {
             Self::VerifyRecoveryKey { .. } => OperationKind::RecoveryKeyVerify,
             Self::Diagnostics { .. } => OperationKind::Diagnostics,
             Self::Purge => OperationKind::PurgeRetention,
-            Self::RevealApiToken => OperationKind::RevealApiToken,
-            Self::HideApiToken => OperationKind::HideApiToken,
-            Self::RotateApiToken => OperationKind::RotateApiToken,
             Self::Api { .. } | Self::OpenMetrics { .. } => OperationKind::ApiRequest,
             Self::ApiWrite { request, .. } => request.operation_kind(),
             _ => unreachable!("every Command variant is mapped by kind"),
@@ -863,35 +848,6 @@ fn report_silent_success(
             finished_at: Some(Utc::now()),
         };
     }
-}
-
-/// Rotate the API bearer token and publish the replacement once.
-///
-/// Inputs: `e` — engine whose store holds the verifier material; `shared` —
-/// shared snapshot carrying the exposed token; `api_disabled` — flag that
-/// disables the API while rotation runs. Output: `Result<()>` — `Ok` once the
-/// rotated plaintext is exposed for the operator exactly once.
-fn rotate_api_token(
-    e: &mut Engine,
-    shared: &Arc<Mutex<Snapshot>>,
-    api_disabled: &Arc<AtomicBool>,
-) -> Result<()> {
-    let write = api_auth::rotate(&mut e.db, api_auth::TokenScope::Write)?;
-    let read = api_auth::rotate(&mut e.db, api_auth::TokenScope::Read)?;
-    let replacement = write
-        .plaintext_once
-        .context("Rotated API credential did not return one-time plaintext")?;
-    let read_replacement = read
-        .plaintext_once
-        .context("Rotated API credential did not return one-time plaintext")?;
-    api_disabled.store(true, Ordering::SeqCst);
-    if let Ok(mut snapshot) = shared.lock() {
-        snapshot.api_listening = false;
-        snapshot.api_token = Some(replacement);
-        snapshot.api_read_token = Some(read_replacement);
-        snapshot.api_token_expires = Some(Instant::now() + Duration::from_secs(60));
-    }
-    Ok(())
 }
 
 /// Read the shared snapshot's current operation status.
@@ -1541,7 +1497,6 @@ fn run(
                         &shared,
                         &pulse,
                         &journal,
-                        &api_disabled,
                         &mut gmail_gate,
                         selected,
                         review,
@@ -1556,7 +1511,6 @@ fn run(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
-        expire_api_token(&shared);
         run_maintenance_operations(
             &mut e,
             &shared,
@@ -1597,7 +1551,6 @@ fn run(
 /// Start the integration API listener when settings enable it.
 ///
 /// Inputs: `e` — engine; `sender` — command channel handle for API requests;
-/// `api_disabled` — flag that disables the API under enterprise policy;
 /// `pulse` — worker pulse; `journal` — runtime journal, when enabled;
 /// `shared` — shared snapshot. Output: `Result<()>` — `Ok` once the listener
 /// state is published; error when API credential material cannot be created.
@@ -1610,21 +1563,14 @@ fn start_api_listener(
     shared: &Arc<Mutex<Snapshot>>,
 ) -> Result<()> {
     if e.settings.api_enabled && !e.demo {
+        // First-run credential plaintexts are surfaced by the CLI pre-flight
+        // before this worker starts — never through logs or UI state. Any
+        // leftover one-time material is dropped unread (zeroizing on drop).
         let mut tokens = api_auth::load_or_create(&mut e.db)?;
-        let write_once = tokens.plaintext_write_once.take();
-        let read_once = tokens.plaintext_read_once.take();
-        if let Ok(mut snapshot) = shared.lock() {
-            if let Some(token) = write_once {
-                snapshot.api_token = Some(token);
-                snapshot.api_token_expires =
-                    Some(Instant::now() + worker_interval(Duration::from_secs(60)));
-            }
-            if let Some(token) = read_once {
-                snapshot.api_read_token = Some(token);
-                snapshot.api_token_expires =
-                    Some(Instant::now() + worker_interval(Duration::from_secs(60)));
-            }
-        }
+        let _dropped_once = (
+            tokens.plaintext_read_once.take(),
+            tokens.plaintext_write_once.take(),
+        );
         match crate::api::start_with_tokens(
             e.settings.api_port,
             tokens,
@@ -1705,7 +1651,6 @@ fn handle_worker_command(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
     journal: &Option<RuntimeJournal>,
-    api_disabled: &Arc<AtomicBool>,
     gmail_gate: &mut RetryGate,
     selected: Option<String>,
     review: bool,
@@ -1722,16 +1667,7 @@ fn handle_worker_command(
         review,
         page,
     } = execute_command(
-        command,
-        e,
-        shared,
-        pulse,
-        journal,
-        api_disabled,
-        gmail_gate,
-        selected,
-        review,
-        page,
+        command, e, shared, pulse, journal, gmail_gate, selected, review, page,
     )?;
     let result = protect_audit_boundary(&e, operation_result);
     if settings_changed {
@@ -1750,7 +1686,7 @@ fn handle_worker_command(
 ///
 /// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
 /// snapshot; `pulse` — worker pulse; `journal` — runtime journal, when
-/// enabled; `api_disabled` — API disable flag; `gmail_gate` — Gmail retry
+/// enabled; `gmail_gate` — Gmail retry
 /// gate; `selected`/`review`/`page` — current list view. Output:
 /// `Result<CommandOutcome>` — the operation outcome and possibly updated list
 /// view.
@@ -1762,7 +1698,6 @@ fn execute_command(
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
     journal: &Option<RuntimeJournal>,
-    api_disabled: &Arc<AtomicBool>,
     gmail_gate: &mut RetryGate,
     mut selected: Option<String>,
     mut review: bool,
@@ -1844,7 +1779,7 @@ fn execute_command(
             selected = Some(id);
             Ok(())
         }
-        other => execute_item_ops(other, e, shared, pulse, api_disabled)?,
+        other => execute_item_ops(other, e, shared, pulse)?,
     };
     Ok(CommandOutcome {
         result,
@@ -1858,7 +1793,7 @@ fn execute_command(
 /// Execute the item-lifecycle and API-token worker commands.
 ///
 /// Inputs: `command` — command to execute; `e` — engine; `shared` — shared
-/// snapshot; `pulse` — worker pulse; `api_disabled` — API disable flag.
+/// snapshot; `pulse` — worker pulse.
 /// Output: `Result<Result<()>>` — the outer `Result` carries the fatal
 /// dispatch escapes that bypass the operation report exactly like the
 /// original `?` sites; the inner `Result<()>` is the operation outcome
@@ -1866,10 +1801,9 @@ fn execute_command(
 #[allow(clippy::needless_borrow)]
 fn execute_item_ops(
     command: Command,
-    mut e: &mut Engine,
+    e: &mut Engine,
     shared: &Arc<Mutex<Snapshot>>,
     pulse: &WorkerPulse,
-    api_disabled: &Arc<AtomicBool>,
 ) -> Result<Result<()>> {
     Ok(match command {
         Command::Edit { id, revision, body } => e.edit(&id, revision, body),
@@ -1889,20 +1823,6 @@ fn execute_item_ops(
         }
         Command::Reconcile(id) => e.reconcile(&id),
         Command::Purge => e.db.purge(e.settings.retention_days).map(|_| ()),
-        // A rejected reveal is a typed operation failure, never a
-        // reason to tear down the whole background worker.
-        Command::RevealApiToken => Err(anyhow::anyhow!(
-            "Existing API credentials are intentionally non-recoverable. Rotate the API token to receive a new plaintext credential once."
-        )),
-        Command::HideApiToken => {
-            if let Ok(mut s) = shared.lock() {
-                s.api_token = None;
-                s.api_read_token = None;
-                s.api_token_expires = None;
-            }
-            Ok(())
-        }
-        Command::RotateApiToken => rotate_api_token(&mut e, &shared, &api_disabled),
         other => execute_model_ops(other, e, shared, pulse)?,
     })
 }
@@ -2092,21 +2012,6 @@ fn execute_vault_ops(
         ),
         _ => unreachable!("every Command variant is dispatched in execute_command"),
     })
-}
-
-/// Expire the one-time API token in the shared snapshot when due.
-///
-/// Inputs: `shared` — shared snapshot. Output: none — the exposed token is
-/// cleared once its one-time window closes.
-fn expire_api_token(shared: &Arc<Mutex<Snapshot>>) {
-    if let Ok(mut snapshot) = shared.lock()
-        && snapshot
-            .api_token_expires
-            .is_some_and(|until| Instant::now() >= until)
-    {
-        snapshot.api_token = None;
-        snapshot.api_token_expires = None;
-    }
 }
 
 /// Whether scheduled model work must wait this loop iteration.
@@ -3359,83 +3264,6 @@ mod tests {
     }
 
     #[test]
-    fn api_token_rotation_revokes_listener_and_never_logs_secret() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut engine = Engine::open(
-            dir.path().into(),
-            true,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .unwrap();
-        let old = "OLD_API_TOKEN_CANARY_SHOULD_NOT_SURVIVE_1234567890".to_string();
-        engine.db.set_meta("api_token", &old).unwrap();
-
-        let shared = Arc::new(Mutex::new(Snapshot {
-            api_listening: true,
-            ..Snapshot::default()
-        }));
-        let disabled = Arc::new(AtomicBool::new(false));
-        rotate_api_token(&mut engine, &shared, &disabled).unwrap();
-
-        assert!(disabled.load(Ordering::SeqCst));
-        assert!(
-            engine
-                .db
-                .meta::<String>(api_auth::LEGACY_TOKEN_META)
-                .unwrap()
-                .is_none()
-        );
-        let stored_read: String = engine.db.meta(api_auth::TOKEN_HASH_META).unwrap().unwrap();
-        assert_eq!(stored_read.len(), 64);
-        let stored_write: String = engine
-            .db
-            .meta(api_auth::TOKEN_WRITE_HASH_META)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored_write.len(), 64);
-
-        let snapshot = shared.lock().unwrap();
-        assert!(!snapshot.api_listening);
-        let displayed = snapshot
-            .api_token
-            .as_ref()
-            .map(|token| token.as_str().to_owned())
-            .unwrap();
-        let displayed_read = snapshot
-            .api_read_token
-            .as_ref()
-            .map(|token| token.as_str().to_owned())
-            .unwrap();
-        drop(snapshot);
-
-        assert_ne!(displayed, old);
-        assert!(displayed.len() >= 40);
-        assert!(displayed_read.len() >= 40);
-        let write_verifier =
-            api_auth::ApiTokenVerifier::from_hex(api_auth::TokenScope::Write, &stored_write)
-                .unwrap();
-        assert!(write_verifier.verify_token(&displayed));
-        assert!(!write_verifier.verify_token(&old));
-        let read_verifier =
-            api_auth::ApiTokenVerifier::from_hex(api_auth::TokenScope::Read, &stored_read).unwrap();
-        assert!(read_verifier.verify_token(&displayed_read));
-        // The scopes never cross: the write plaintext is not the read one.
-        assert!(!read_verifier.verify_token(&displayed));
-
-        let events = engine.db.events(0, 100).unwrap();
-        let event = events
-            .iter()
-            .find(|event| event.kind == "security.api_token_rotated")
-            .unwrap();
-        assert_eq!(event.domain, AuditDomain::Security);
-        assert_eq!(event.severity, AuditSeverity::Security);
-        assert!(!event.detail.contains(&old));
-        assert!(!event.detail.contains(&displayed));
-        assert!(!event.detail.contains(&displayed_read));
-    }
-
-    #[test]
     fn result_state_mapping_is_consistent_for_scheduled_and_user_operations() {
         let ok: Result<bool> = Ok(false);
         let err: Result<bool> = Err(anyhow::anyhow!("synthetic failure"));
@@ -4058,9 +3886,6 @@ mod orchestration_tests {
             Command::PullModel,
             Command::PullVerifierModel,
             Command::StartOllama,
-            Command::RevealApiToken,
-            Command::HideApiToken,
-            Command::RotateApiToken,
             Command::Disconnect,
             Command::Connect {
                 path: dir.path().join("missing-oauth.json"),
@@ -5654,7 +5479,6 @@ mod orchestration_tests {
         );
         report_silent_success(&shared, &pulse, OperationKind::Refresh, "quiet");
         record_current_operation(&None, &shared);
-        expire_api_token(&shared);
 
         // Reads degrade to the documented default instead of propagating.
         assert_eq!(
@@ -5774,7 +5598,6 @@ mod orchestration_tests {
         let shared = Arc::new(Mutex::new(Snapshot::default()));
         let pulse = WorkerPulse::default();
         let journal = None;
-        let api_disabled = Arc::new(AtomicBool::new(false));
         let mut gmail_gate = RetryGate::new(
             Instant::now(),
             Duration::from_secs(30),
@@ -5802,7 +5625,6 @@ mod orchestration_tests {
             &shared,
             &pulse,
             &journal,
-            &api_disabled,
             &mut gmail_gate,
             None,
             true,
@@ -5835,7 +5657,6 @@ mod orchestration_tests {
         let shared = Arc::new(Mutex::new(Snapshot::default()));
         let pulse = WorkerPulse::default();
         let journal = None;
-        let api_disabled = Arc::new(AtomicBool::new(false));
         let mut gmail_gate = RetryGate::new(
             Instant::now(),
             Duration::from_secs(30),
@@ -5852,7 +5673,6 @@ mod orchestration_tests {
             &shared,
             &pulse,
             &journal,
-            &api_disabled,
             &mut gmail_gate,
             None,
             true,

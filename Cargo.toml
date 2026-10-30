@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.99"
 publish = false
 autobins = false
-default-run = "rejection-rejector"
+default-run = "rr"
 description = "Native local-first AI job rejection review and controlled replies"
 license = "MIT"
 repository = "https://github.com/strmt7/rejection-rejector"
@@ -15,17 +15,11 @@ name = "rejection_rejector"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rejection-rejector"
-path = "src/bin/desktop.rs"
-required-features = ["gui"]
-
-[[bin]]
 name = "rr"
 path = "src/bin/rr.rs"
 
 [features]
-default = ["gui"]
-gui = ["dep:eframe", "dep:rfd", "dep:image"]
+default = []
 
 [dependencies]
 anyhow = "1"
@@ -74,9 +68,6 @@ webbrowser = "1"
 which = "8"
 zeroize = "1"
 yoke-derive = "0.8.4"
-eframe = { version = "0.37.0", optional = true, default-features = false, features = ["default_fonts", "glow", "x11", "wayland", "accesskit"] }
-rfd = { version = "0.17.2", optional = true }
-image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
@@ -99,8 +90,3 @@ strip = true
 overflow-checks = true
 
 # This Cargo.toml follows the 2024 edition and requires Rust 1.99.0 or newer
-
-[[bin]]
-name = "rr-train-monitor"
-path = "src/bin/rr-train-monitor.rs"
-required-features = ["gui"]

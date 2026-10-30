@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+Web-console pivot and advisory-suppression elimination (2026-10-30). Changed:
+
+- **The desktop UI is gone**: `src/gui.rs`, `src/gui/`, `src/bin/desktop.rs`,
+  the `gui` feature and the `eframe`/`rfd`/`image` dependencies are deleted;
+  the product surface is now the `rr` CLI, `rr tui`, and the local web
+  console (`rr web`) with its installer component. This also fixes security
+  review finding 12 at the source: the unmaintained `zvariant`/`zbus_names`/
+  `zvariant_derive` crates entered only through the `eframe` stack
+  (`accesskit`→`zbus`), so the dependency graph now carries zero advisories
+  (`cargo tree --target all -i zvariant` reports absence; `cargo audit --deny
+  warnings` and `cargo deny check advisories` pass with zero ignores).
+- **Every advisory suppression is removed** (`deny.toml` ignore array,
+  `osv-scanner.toml` `IgnoredVulns` blocks, the `supply-chain.yml`
+  `--ignore` flags and their triage comments) per the standing
+  never-suppress policy, and `tests/release/test_no_advisory_suppressions.py`
+  fails the repository if any suppression construct reappears in a tracked
+  policy file. `cargo-audit` bumps to 0.23.1 in the pinned audit lane.
+- The redundant `rr-train-monitor`/`src/train_monitor.rs` GUI twin dies; the
+  GPU duty-cycle ceiling stays enforced by `training/duty_cycle.py` and
+  `tools/gpu_util_watchdog.py` unchanged.
+- First-run API credentials are surfaced exactly once by a CLI pre-flight in
+  `rr run`/`rr web` (printed like `rr rotate-api-token`), replacing the
+  deleted GUI snapshot reveal/hide flow — plaintexts never pass through logs
+  or UI state (security review finding 1 remediation follow-through).
+- The Windows installer ships two selectable components (command-line tools
+  and the local web console); the package verifier requires one signing
+  record per packaged executable instead of a hardcoded count.
+
 Findings-policy wave (2026-10-29). Changed:
 
 - Owner policy adopted and enforced: **static-analysis findings are fixed at

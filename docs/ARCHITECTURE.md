@@ -1,7 +1,8 @@
 # Architecture
 
-Rejection Rejector is a native desktop application: a Rust GUI (egui/eframe) and the
-`rr` command-line tool both submit work to **one worker process** that owns the
+Rejection Rejector is a local-first application: the `rr` command-line
+toolchain and the local web console (`rr web`) both submit work to
+**one worker process** that owns the
 workspace. That worker talks to exactly two external systems: the Gmail REST API
 (Google's HTTP interface for mailbox access) and a local Ollama server (the local
 model runtime, reached only over the loopback network address `127.0.0.1`). An

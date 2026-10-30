@@ -91,17 +91,14 @@ jobs:
           }
 
           Invoke-ReproBuild $targetA 'First'
-          $aDesktop = Join-Path $targetA 'release/rejection-rejector.exe'
           $aCli = Join-Path $targetA 'release/rr.exe'
           & $aCli build-info | Set-Content artifacts/build-info-a.json -Encoding utf8
 
           Invoke-ReproBuild $targetB 'Second'
-          $bDesktop = Join-Path $targetB 'release/rejection-rejector.exe'
           $bCli = Join-Path $targetB 'release/rr.exe'
           & $bCli build-info | Set-Content artifacts/build-info-b.json -Encoding utf8
 
           $pairs = @(
-            @{ Name = 'rejection-rejector.exe'; A = $aDesktop; B = $bDesktop },
             @{ Name = 'rr.exe'; A = $aCli; B = $bCli }
           )
           $lines = @()

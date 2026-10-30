@@ -64,8 +64,6 @@ jobs:
           tool: cargo-nextest@0.9.146
           checksum: true
           fallback: none
-      - name: Linux desktop dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev
       - name: Prepare evidence directory
         run: mkdir -p artifacts
       - name: Full all-feature suite with nextest

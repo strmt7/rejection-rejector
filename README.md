@@ -5,7 +5,7 @@
 [![caveman](https://img.shields.io/static/v1?label=&message=caveman&color=555&logo=github&logoColor=white)](https://github.com/JuliusBrussee/caveman)
 [![crawl4ai](https://img.shields.io/static/v1?label=&message=crawl4ai&color=555&logo=github&logoColor=white)](https://github.com/unclecode/crawl4ai)
 
-**Are you tired of countless rejections? Do you demand some answers? Time to fight back recruiters!** A standalone native Rust desktop application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending replies.
+**Are you tired of countless rejections? Do you demand some answers? Time to fight back recruiters!** A standalone local Rust application for detecting job-application rejections, generating assertive responses with a local Ollama model, and reviewing or automatically sending replies — operated through the `rr` command-line toolchain and the local web console.
 
 > Early release. Sending starts **disabled** and **Human review** is the default. No real emails or credentials are bundled. Validate the model on your own mailbox (ideally a test mailbox) before enabling Automatic.
 
@@ -13,7 +13,7 @@
 
 | Component | Version 0.3 |
 |---|---|
-| Desktop | Native Rust egui/eframe: Overview, Review, Activity, Local AI, Settings |
+| Interfaces | `rr` CLI + `rr tui` + local web console (`rr web`): Overview, Review, Activity, Local AI, Settings |
 | Mail | Gmail app-password login (IMAP/SMTP, no Cloud Console) or Desktop OAuth with PKCE; explicit read/send consent |
 | AI | Local Ollama classification/drafting plus same-model or optional sequential independent-model verification; structured outputs and deterministic safety gates |
 | Model | `granite4.2:8b-q8_0` default (verified to pass the self-verification qualification gate); `qwen3.5:4b` default independent verifier; Qwen3.5, MiMo, Gemma 4 12B Q8, Ministral 3 14B and other curated challengers can be compared locally on the full task pipeline |
@@ -33,7 +33,7 @@
 
 ## Windows
 
-Development CI compiles and tests the Windows desktop/CLI on every `main` commit, but **does not publish a user-facing Windows package on normal pushes**. Packaging is gated behind the manual **Attested Windows package** workflow and an explicit `PACKAGE` confirmation. The workflow produces an explicitly named `unsigned` package by default or, when administrator-provisioned Azure Artifact Signing/OIDC configuration is present, a `signed` flavor. Signed mode fails closed unless both executables are successfully signed and independently report `Valid` Authenticode status. No production package should be described as publisher-signed until that signed workflow path has actually completed successfully.
+Development CI compiles and tests the Windows CLI on every `main` commit, but **does not publish a user-facing Windows package on normal pushes**. Packaging is gated behind the manual **Attested Windows package** workflow and an explicit `PACKAGE` confirmation. The workflow produces an explicitly named `unsigned` package by default or, when administrator-provisioned Azure Artifact Signing/OIDC configuration is present, a `signed` flavor. Signed mode fails closed unless every packaged executable is successfully signed and independently reports `Valid` Authenticode status. No production package should be described as publisher-signed until that signed workflow path has actually completed successfully.
 
 Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributable (x64)** if it is missing. Do not download individual DLLs. See [Windows runtime setup](docs/WINDOWS-RUNTIME.md).
 

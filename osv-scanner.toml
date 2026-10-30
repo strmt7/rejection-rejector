@@ -1,33 +1,7 @@
 # OSV-Scanner / OpenSSF Scorecard vulnerability triage.
 #
-# The three ignores below are the Linux-only accessibility stack of
-# egui-winit: accesskit_winit -> accesskit_unix -> atspi -> zvariant 5 /
-# zbus_names 4. These crates are unreachable in the shipped Windows binary
-# (the Windows build compiles accesskit_windows, not accesskit_unix), and
-# the advisories are "unmaintained" notices with no patched version inside
-# our semver-compatible range - verified on 2026-10-19 against crates.io:
-# the whole upstream accesskit/atspi ecosystem (incl. the newest
-# accesskit_atspi_common 0.21.0 and accesskit_unix 0.23.0) still requires
-# zvariant ^5.15 / zbus ^5.5, so no upgrade exists yet. Disabling the
-# Linux accessibility feature to silence them would remove screen-reader
-# support (a functional regression).
-#
-# `ignoreUntil` is deliberate: when it passes, osv-scanner re-surfaces
-# these findings so the migration is re-checked instead of forgotten.
-# Re-check: when accesskit_unix/atspi publish a release on zvariant 6 /
-# zbus 6, remove these ignores and `cargo update` the stack.
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0370"
-ignoreUntil = "2027-04-01T00:00:00Z"
-reason = "zvariant 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zvariant 6 exists (verified against crates.io 2026-10-19); migration required upstream"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0371"
-ignoreUntil = "2027-04-01T00:00:00Z"
-reason = "zbus_names 4 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zbus 6 exists (verified against crates.io 2026-10-19); migration required upstream"
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0372"
-ignoreUntil = "2027-04-01T00:00:00Z"
-reason = "zvariant_derive 5 unmaintained; Linux-only a11y stack (accesskit_unix -> atspi), unreachable in the Windows binary; no upstream release on zvariant 6 exists (verified against crates.io 2026-10-19); migration required upstream"
+# No suppressions exist here by standing policy: advisories are fixed at
+# source, and anything genuinely unfixable stays visibly open in scanner
+# output and the in-repo open-risk register. The former ignored advisories
+# (the egui-winit accessibility stack and lexical-core) disappeared when
+# their dependency paths left the graph.

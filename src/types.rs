@@ -655,12 +655,6 @@ pub enum OperationKind {
     ReconcileDelivery,
     /// Purge items past the retention window.
     PurgeRetention,
-    /// Reveal the local API token.
-    RevealApiToken,
-    /// Hide the local API token.
-    HideApiToken,
-    /// Rotate the local API token.
-    RotateApiToken,
     /// Serve a local API request.
     ApiRequest,
     /// Reload the enterprise policy.
@@ -723,9 +717,6 @@ impl OperationKind {
             Self::SendReply => "reply_send_failed",
             Self::ReconcileDelivery => "delivery_reconciliation_failed",
             Self::PurgeRetention => "retention_purge_failed",
-            Self::RevealApiToken => "api_token_reveal_failed",
-            Self::HideApiToken => "api_token_hide_failed",
-            Self::RotateApiToken => "api_token_rotation_failed",
             Self::ApiRequest => "integration_api_request_failed",
             Self::EnterprisePolicyReload => "enterprise_policy_reload_failed",
             Self::AnalyzeQueuedMail => "mail_analysis_failed",
@@ -794,9 +785,6 @@ impl OperationKind {
             | Self::EditDraft
             | Self::RegenerateDraft
             | Self::DismissItem
-            | Self::RevealApiToken
-            | Self::HideApiToken
-            | Self::RotateApiToken
             | Self::ApiRequest => 30,
             Self::UpdateSettings | Self::DisconnectGmail => 60,
             Self::StartOllama | Self::InspectModel | Self::EnterprisePolicyReload => 120,
@@ -1398,9 +1386,6 @@ mod stable_string_mapping_tests {
                 "delivery_reconciliation_failed",
             ),
             (OperationKind::PurgeRetention, "retention_purge_failed"),
-            (OperationKind::RevealApiToken, "api_token_reveal_failed"),
-            (OperationKind::HideApiToken, "api_token_hide_failed"),
-            (OperationKind::RotateApiToken, "api_token_rotation_failed"),
             (OperationKind::ApiRequest, "integration_api_request_failed"),
             (
                 OperationKind::EnterprisePolicyReload,

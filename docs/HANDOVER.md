@@ -1,5 +1,18 @@
 # Handover: state and operating guide for automated contributors
 
+> **State update (2026-10-30, web-console pivot).** Since the 2026-10-28
+> handover: the desktop GUI (`src/gui.rs`, `src/gui/`, `src/bin/desktop.rs`,
+> the `gui` feature, `eframe`/`rfd`/`image`) and the redundant
+> `rr-train-monitor`/`src/train_monitor.rs` twin were deleted; the product
+> surfaces are the `rr` CLI, `rr tui`, and the local web console (`rr web`).
+> All advisory suppressions were removed (deny.toml/osv-scanner.toml/
+> supply-chain.yml) and the graph carries zero advisories — F12 closed at
+> the source. `tests/release/test_no_advisory_suppressions.py` enforces the
+> suppression ban permanently. First-run API credentials now surface via a
+> CLI pre-flight in `rr run`/`rr web`. Security review findings F1–F5, F8,
+> F11, F12, F13, F15 are fixed at source; F2/F6/F7/F9/F10/F14 remain in
+> `docs/HANDOVER.md`'s open work below and the report.
+
 State as of 2026-10-28, commit `5aba8d4` and the follow-up documentation
 batch. Read together with `AGENTS.md` (operational map and definition of
 done) and `docs/LESSONS.md` (failure-derived rules). This file records what

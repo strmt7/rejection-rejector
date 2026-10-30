@@ -165,7 +165,7 @@ mailbox. Demo content and responses are synthetic, not claims about real model b
 
 ## Model evaluation and task-specific model selection
 
-With the desktop application closed, run the configured model through the complete
+With no worker running, run the configured model through the complete
 synthetic recruiting pipeline:
 
 ```powershell

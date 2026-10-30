@@ -951,63 +951,6 @@ fn model_commands_fail_closed_without_the_local_runtime() {
     assert!(!sync.status.success(), "sync needs a connected mailbox");
 }
 
-/// The desktop launcher completes its screenshot flow and exits.
-///
-/// Why: the native launcher must open the demo workspace, capture the
-/// requested screen and close itself — hanging past the capture would hang
-/// every scripted screenshot run. Genuinely display-bound: winit needs a
-/// display server (DISPLAY/WAYLAND_DISPLAY) and aborts before any app code
-/// runs on a headless host, so the flow is exercised on Windows desktop
-/// sessions only while the `rr` fleet surface stays covered everywhere.
-#[cfg(all(feature = "gui", windows))]
-#[test]
-fn desktop_launcher_completes_the_screenshot_flow() {
-    let _serialize = lock_credstore();
-    for extra in [vec![], vec!["--data-dir", "placeholder"]] {
-        let guard_dir =
-            std::env::temp_dir().join(format!("rr-cli-desktop-{}", uuid::Uuid::new_v4()));
-        let shot = guard_dir.join("shot.png");
-        std::fs::create_dir_all(&guard_dir).unwrap();
-        let mut args = vec![
-            "--demo",
-            "--demo-view",
-            "overview",
-            "--demo-width",
-            "1180",
-            "--demo-height",
-            "760",
-            "--screenshot",
-            shot.to_str().unwrap(),
-        ];
-        if extra.len() == 2 {
-            args.push("--data-dir");
-            args.push(guard_dir.to_str().unwrap());
-        }
-        let mut child = Command::new(env!("CARGO_BIN_EXE_rejection-rejector"))
-            .args(&args)
-            .stdin(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn desktop");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-        let status = loop {
-            if let Some(status) = child.try_wait().expect("wait desktop") {
-                break status;
-            }
-            if std::time::Instant::now() > deadline {
-                let _ = child.kill();
-                panic!("the desktop screenshot flow did not self-terminate");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        };
-        if status.success() {
-            assert!(
-                shot.is_file() || extra.len() == 2,
-                "the screenshot flow writes its PNG"
-            );
-        }
-    }
-}
-
 /// The terminal interface starts and stops cleanly in demo mode.
 ///
 /// Why: `rr tui` must always leave the terminal usable — the process has to

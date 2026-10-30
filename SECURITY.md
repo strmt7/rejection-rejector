@@ -69,37 +69,26 @@ physical access to the machine, and memory extraction from a running process. Se
 
 ## Known supply-chain advisories (triaged)
 
-The dependency tree carries the following RustSec advisories. None is a
-remotely-triggerable code-execution bug in this application's own logic; each is
-triaged here with its reachability and remediation so operators can judge the
-residual risk.
+The dependency tree carries no RustSec advisories. The historical entries
+below are kept as resolved records so the remediation trail stays auditable.
 
-- **RUSTSEC-2023-0086 — `lexical-core` 0.7.6 (Unsound)** — reached transitively
-  via `nom` 5 ← `imap` 2 (the IMAP client). The soundness flaws (`assume_init`
-  on uninitialized data, out-of-bounds `BytesIter`) sit in number parsing, so a
-  *malicious IMAP server* could in principle trigger undefined behaviour in the
-  response parser. The app connects only to a trusted provider (Gmail) or the
-  operator's own IMAP host, so practical exposure is low, but the dependency is
-  unsound. **Remediation (planned, verified to build):** replace `imap` 2 with
-  `io-imap` (Pimalaya), which parses via `nom` 7 + `minimal-lexical` and carries
-  no `lexical-core`. `io-imap` compiles with a `nom`-`alloc` feature unification
-  (see the migration note); the swap is an in-progress refactor of
-  `src/imap_smtp.rs`.
+- **RUSTSEC-2023-0086 — `lexical-core` 0.7.6 (Unsound)** — RESOLVED at the
+  source: the `imap` 2 dependency path left `Cargo.lock` in the `io-imap`
+  migration; `cargo audit --deny warnings` and `cargo deny check advisories`
+  both pass with zero ignores.
 - **RUSTSEC-2026-0370 / -0371 / -0372 — `zvariant` / `zbus_names` /
-  `zvariant_derive` (Unmaintained)** — pulled only by the Linux accessibility
-  stack (`accesskit`→`zbus`); not compiled into the Windows/MSVC target this
-  app ships. No active vulnerability, and the crates are Linux-a11y-only.
+  `zvariant_derive` (Unmaintained)** — RESOLVED at the source: they entered
+  only through the `eframe` GUI stack (`accesskit`→`zbus`), and the desktop
+  UI was deleted in the web-console pivot. `cargo tree --target all -i
+  zvariant` reports the crate is absent from the graph.
 
-Each triage entry above is owned by strmt7 (sole maintainer). Review date:
-2026-10-28 (record created); re-review whenever the dependency graph changes
-and at the next policy review (2027-04-28). Removal criterion: drop the
-ignore when the advisory is fixed in range, the dependency path disappears
-(as planned for RUSTSEC-2023-0086 via the `io-imap` migration), or the stated
-reachability reasoning stops being true; a bare ignore without a current
-reason is itself a defect.
-
-These are accepted-by-triage in `deny.toml` and `tools/local_ci.py` with the
-reasons above; re-review whenever the dependency graph changes.
+Standing policy (owner-set, 2026-10-29): advisory suppressions are never
+used. `deny.toml`, `osv-scanner.toml`, and the `supply-chain.yml` audit lane
+carry zero `ignore` constructs, and
+`tests/release/test_no_advisory_suppressions.py` fails the repository if any
+suppression construct reappears in a tracked policy file. Any future advisory
+fails the gate until it is fixed at source; anything genuinely unfixable
+stays visibly open in scanner output and the in-repo open-risk register.
 
 ## Sources (checked 2026-10-12)
 

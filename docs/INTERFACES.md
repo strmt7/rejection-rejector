@@ -1,19 +1,18 @@
-# Interfaces: Desktop, Terminal, and Local Web
+# Interfaces: Terminal and Local Web
 
 Every user-facing surface is a thin presentation shell over the same core.
 No interface owns business logic: the `Engine`/`Worker`/`Snapshot` trio in the
 library is the single source of truth for queue state, safety gates, and
 dispatch, and every interface drives it through the same `Command` channel.
 
-## The three surfaces
+## The surfaces
 
 | Surface | Entry point | Rendering | Intended use |
 |---|---|---|---|
-| Desktop GUI | `rejection-rejector.exe` | native egui/eframe | primary daily driver |
+| Web console | `rr web` | local web console on the loopback API | primary daily driver |
 | Interactive CLI | `rr tui` | ratatui (full-screen terminal) | servers, SSH, keyboard-first workflows |
-| Local web UI | `rr web` | embedded static page on the loopback API | browsers, remote-desktop convenience |
 
-All three implement the same workflow: Overview → Review (original + editable
+All surfaces implement the same workflow: Overview → Review (original + editable
 reply) → confirm exact reply → send; Activity; Settings (including the four
 tones, reply-language policy, and the cooldown-gated Automatic arming); Local
 AI actions (qualify, compare, evaluate).
@@ -36,9 +35,9 @@ AI actions (qualify, compare, evaluate).
 
 - Key-driven panes: Queue list, Review (original left / editor right),
   Activity log, Settings; `?` opens help; `q` quits with the same
-  unsaved-work close confirmation as the desktop app.
+  unsaved-work close confirmation as the web console.
 - The TUI never talks to the database or Gmail directly; it issues
-  `Command`s and renders `Snapshot`s like the desktop UI.
+  `Command`s and renders `Snapshot`s like the web console.
 - Pure presentation-state helpers (selection movement, action enablement,
   editor dirty tracking) live in testable functions, not in the draw loop.
 
@@ -77,17 +76,16 @@ Usage: `rr web` starts the worker and prints the page URL
 API must be enabled in Settings first. The operator pastes the local API
 bearer token into the page (kept in page memory only); every queue, review,
 activity and settings action then travels through the same `Command` channel
-as the desktop and terminal interfaces, including the mandatory
+as the terminal and web interfaces, including the mandatory
 confirm-exact-reply dialog and the cooldown-gated Automatic arming.
 
 ## Windows installer (component selection)
 
-Inno Setup script (`windows/installer.iss`) with three tasks, all selected by
-default, at least one required:
+Inno Setup script (`windows/installer.iss`) with two components, both selected
+by default, at least one required:
 
-- `[x] Desktop application` — `rejection-rejector.exe` + Start-menu shortcut.
-- `[x] Command-line tools` — `rr.exe` (includes `rr tui` and `rr web`).
-- `[x] Local web interface` — Start-menu shortcut for `rr web` plus loopback
+- `[x] Command-line tools` — `rr.exe` (includes `rr tui`).
+- `[x] Local web console` — Start-menu shortcut for `rr web` plus loopback
   firewall note (loopback needs no rule; documented, not configured).
 
 The script refuses to continue with zero tasks selected (Wizard script check),

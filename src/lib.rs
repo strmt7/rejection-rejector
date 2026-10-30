@@ -81,12 +81,10 @@ pub mod evaluation;
 /// Inputs: none (module). Output: message, profile and history fetching and
 /// reply submission over the hardened HTTP client.
 pub mod gmail;
-/// Native desktop UI (feature `gui`).
+/// Structural current-versus-quoted extraction for HTML mail bodies.
 ///
-/// Inputs: none (module). Output: the egui/eframe presentation shell; all
-/// network, database and model work stays on the background worker.
-#[cfg(feature = "gui")]
-pub mod gui;
+/// Inputs: none (module). Output: quote-history pruning before text
+/// flattening so stale quoted language never reads as current evidence.
 mod html_quote;
 /// IMAP/SMTP app-password mail transport (the [`mail_transport::MailTransport`]
 /// backend).
@@ -182,7 +180,6 @@ pub(crate) mod test_support;
 ///
 /// Inputs: none (module). Output: progress parsing, duty-file handling and
 /// the pacing math for the utilization ceiling.
-pub mod train_monitor;
 /// Interactive terminal interface (`rr tui`).
 ///
 /// Inputs: none (module). Output: a thin presentation shell rendering

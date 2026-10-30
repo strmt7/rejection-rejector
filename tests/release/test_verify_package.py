@@ -364,7 +364,7 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_missing_or_duplicate_signing_record_fails(self):
         """Missing or duplicate signing records fail."""
-        for edit in (lambda x: x["files"].pop(), lambda x: x["files"].__setitem__(1, x["files"][0])):
+        for edit in (lambda x: x["files"].pop(), lambda x: x["files"].append(x["files"][0])):
             self.files = fixture_files()
             self.change("signing.json", edit)
             self.write()

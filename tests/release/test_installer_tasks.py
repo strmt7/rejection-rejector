@@ -1,9 +1,9 @@
 """Enforce the component-selectable installer contract.
 
-The Windows installer must offer the three interface components as
-independent, default-checked choices and must refuse to continue with none
-selected. These tests pin that contract so the installer cannot silently
-lose a component or the at-least-one rule.
+The Windows installer must offer the two interface components (command-line
+tools and the local web console) as independent, default-checked choices and
+must refuse to continue with none selected. These tests pin that contract so
+the installer cannot silently lose a component or the at-least-one rule.
 """
 
 import re
@@ -15,7 +15,7 @@ ISS = ROOT / "windows" / "installer.iss"
 
 
 class InstallerTasksTest(unittest.TestCase):
-    """The installer ships all three surfaces with user-selectable ticks."""
+    """The installer ships both surfaces with user-selectable ticks."""
 
     def setUp(self):
         """Load the installer script source once per test."""
@@ -27,11 +27,12 @@ class InstallerTasksTest(unittest.TestCase):
         self.assertIsNotNone(match, "missing [Components] section")
         return match.group(1)
 
-    def test_three_interface_components_exist_and_are_user_selectable(self):
-        """desktop, cli and web components exist and can be deselected."""
+    def test_two_interface_components_exist_and_are_user_selectable(self):
+        """Both interface components exist and can be deselected."""
         section = self.components_section()
-        for name in ('"desktop"', '"cli"', '"web"'):
+        for name in ('"cli"', '"web"'):
             self.assertIn(f"Name: {name};", section, f"missing component {name}")
+        self.assertNotIn('"desktop"', section, "the removed desktop UI must stay gone")
         # Fixed components cannot be unticked; the requirement is ticks the
         # user can change, so no component may carry Flags: fixed.
         for line in section.splitlines():
@@ -52,16 +53,21 @@ class InstallerTasksTest(unittest.TestCase):
         self.assertIn("Select at least one component", self.text)
         self.assertRegex(
             self.text,
-            r"WizardIsComponentSelected\('desktop'\)",
-            "the at-least-one rule must enumerate the desktop component",
+            r"WizardIsComponentSelected\('cli'\)",
+            "the at-least-one rule must enumerate the cli component",
+        )
+        self.assertRegex(
+            self.text,
+            r"WizardIsComponentSelected\('web'\)",
+            "the at-least-one rule must enumerate the web component",
         )
 
     def test_least_privilege_posture_holds(self):
         """The installer stays lowest-privilege and launches nothing."""
         self.assertIn("PrivilegesRequired=lowest", self.text)
         self.assertRegex(self.text, r"\[Run\]\s*\n; Nothing", "install time must launch nothing")
-        self.assertIn('Source: "{#SourceDir}\\rejection-rejector.exe"', self.text)
         self.assertIn('Source: "{#SourceDir}\\rr.exe"', self.text)
+        self.assertIn('Source: "..\LICENSE"', self.text)
 
 
 if __name__ == "__main__":

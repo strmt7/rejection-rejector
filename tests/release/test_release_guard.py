@@ -298,7 +298,7 @@ class BinaryAuditTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.paths = [self.root / "rejection-rejector.exe", self.root / "rr.exe"]
+        self.paths = [self.root / "rr.exe", self.root / "rr-extra.exe"]
         for path in self.paths:
             path.write_bytes(b"synthetic")
 
@@ -314,7 +314,7 @@ class BinaryAuditTests(unittest.TestCase):
         with self.assertRaises(gate.GateError):
             gate.audit_binaries(self.paths, self.root / "out", run)
         self.assertEqual(len(calls), 1)
-        self.assertEqual((self.root / "out/rejection-rejector-binary-audit.txt").read_text(), "audit failed")
+        self.assertEqual((self.root / "out/rr-binary-audit.txt").read_text(), "audit failed")
 
     def test_second_failure_blocks_release(self):
         """A failing second audit blocks release too."""

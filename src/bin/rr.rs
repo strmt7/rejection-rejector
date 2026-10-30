@@ -737,12 +737,43 @@ fn dispatch_audit(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Execute the `rr run` scheduler daemon subcommand.
+/// Display any first-run API credentials exactly once before a worker starts.
+///
+/// The worker's local listener mints verifier material on first load; the
+/// minted plaintexts must reach the operator exactly once without passing
+/// through logs, API responses, or UI state. Opening the workspace briefly
+/// first guarantees the mint happens here, where the plaintexts print like
+/// `rr rotate-api-token`, and the worker later loads nothing to display.
+///
+/// Inputs: `dir` — workspace directory. Output: `Result<()>` — prints
+/// `read:`/`write:` lines when this call minted credentials.
+fn display_first_run_credentials(dir: PathBuf) -> Result<()> {
+    let mut e = open_engine(dir, false, true)?;
+    let tokens = api_auth::load_or_create(&mut e.db)?;
+    let read_once = tokens.plaintext_read_once;
+    let write_once = tokens.plaintext_write_once;
+    let minted = read_once.is_some() || write_once.is_some();
+    if let Some(token) = read_once {
+        println!("read: {}", token.as_str());
+    }
+    if let Some(token) = write_once {
+        println!("write: {}", token.as_str());
+    }
+    if minted {
+        eprintln!(
+            "First-run API credentials were minted and printed once. The read credential is for machine integrations (query-only); the write credential is for the web console. Store both in the consuming application's OS-protected secret store. They cannot be revealed again; rotate if lost."
+        );
+    }
+    Ok(())
+}
+
+/// Execute the `rr run` worker daemon command.
 ///
 /// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
 /// unit on clean shutdown; propagated startup/worker failure.
 fn cmd_run(data_dir: &Option<PathBuf>) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
+    display_first_run_credentials(dir.clone())?;
     let worker = Worker::spawn(dir, false);
     run_daemon(&worker, |handler| {
         ctrlc::set_handler(handler).map_err(Into::into)
@@ -767,6 +798,7 @@ fn cmd_tui(demo: bool, data_dir: &Option<PathBuf>) -> Result<()> {
 /// unit on stop; propagated listener failure.
 fn cmd_web(data_dir: &Option<PathBuf>) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
+    display_first_run_credentials(dir.clone())?;
     let worker = Worker::spawn(dir, false);
     web_serve(&worker, |handler| {
         ctrlc::set_handler(handler).map_err(Into::into)

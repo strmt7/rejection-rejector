@@ -3,6 +3,7 @@
 Standard-library CI/operator tooling only; never executes repository source,
 rewrites history, changes tracked files, publishes releases or sends emails.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,10 +18,25 @@ import tomllib
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-TEXT_SUFFIXES = frozenset({
-    ".rs", ".toml", ".md", ".json", ".yml", ".yaml", ".ps1", ".sh", ".py",
-    ".xml", ".manifest", ".txt", ".lock", ".wxs", ".wxi",
-})
+TEXT_SUFFIXES = frozenset(
+    {
+        ".rs",
+        ".toml",
+        ".md",
+        ".json",
+        ".yml",
+        ".yaml",
+        ".ps1",
+        ".sh",
+        ".py",
+        ".xml",
+        ".manifest",
+        ".txt",
+        ".lock",
+        ".wxs",
+        ".wxi",
+    }
+)
 TEXT_NAMES = frozenset({".gitignore", ".gitattributes", ".editorconfig", "LICENSE", ".env.example"})
 MAX_TEXT_BYTES = 8 * 1024 * 1024
 REVISION = re.compile(r"(?:[0-9a-f]{40}|HEAD(?:\^|~[0-9]{1,3})?)\Z")
@@ -38,7 +54,10 @@ def git(root: Path, *args: str) -> bytes:
         raise AuditError("Git audit command did not complete")
     try:
         result = subprocess.run(
-            [executable, "-C", str(root), *args], capture_output=True, timeout=120, check=False,
+            [executable, "-C", str(root), *args],
+            capture_output=True,
+            timeout=120,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise AuditError("Git audit command did not complete") from error
@@ -51,9 +70,7 @@ def resolve(root: Path, revision: str) -> str:
     """Verify and resolve one bounded revision to a complete lowercase SHA."""
     if not REVISION.fullmatch(revision):
         raise AuditError("Expected an exact commit SHA or a bounded HEAD revision")
-    value = git(
-        root, "rev-parse", "--verify", "--end-of-options", revision + "^{commit}"
-    ).decode("ascii").strip()
+    value = git(root, "rev-parse", "--verify", "--end-of-options", revision + "^{commit}").decode("ascii").strip()
     if not SHA.fullmatch(value):
         raise AuditError("Git returned an invalid commit identity")
     return value
@@ -75,9 +92,7 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _add_finding(
-    findings: list[dict[str, str]], path: str, code: str, severity: str = "error"
-) -> None:
+def _add_finding(findings: list[dict[str, str]], path: str, code: str, severity: str = "error") -> None:
     """Append one finding for the inspected path.
 
     Inputs: `findings` - accumulator; `path` - repository-relative path;
@@ -108,9 +123,7 @@ def _decode_text(path: str, data: bytes, findings: list[dict[str, str]]) -> str 
         return None
 
 
-def _check_control_characters(
-    path: str, text: str, findings: list[dict[str, str]]
-) -> None:
+def _check_control_characters(path: str, text: str, findings: list[dict[str, str]]) -> None:
     """Record unescaped control characters hidden in valid UTF-8.
 
     Inputs: `path` - repository-relative path; `text` - decoded text;
@@ -140,9 +153,7 @@ def _check_summary_language(path: str, text: str, findings: list[dict[str, str]]
     Inputs: `path` - repository-relative path; `text` - decoded text;
     `findings` - accumulator. Output: none.
     """
-    if PurePosixPath(path).suffix.lower() == ".md" and re.search(
-        r"(?m)^#\s+Commit\s+\d+\s*$", text
-    ):
+    if PurePosixPath(path).suffix.lower() == ".md" and re.search(r"(?m)^#\s+Commit\s+\d+\s*$", text):
         _add_finding(findings, path, "commit_count_padding")
 
 
@@ -160,9 +171,7 @@ def _check_structure(path: str, text: str, findings: list[dict[str, str]]) -> No
             json.loads(
                 text,
                 object_pairs_hook=unique_object,
-                parse_constant=lambda _: (_ for _ in ()).throw(
-                    ValueError("nonfinite JSON")
-                ),
+                parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")),
             )
         elif suffix == ".py":
             ast.parse(text, filename=path)
@@ -223,18 +232,16 @@ def audit_history(root: Path, revision: str, count: int) -> list[dict[str, Any]]
     if not 1 <= count <= 100:
         raise AuditError("History count must be 1 through 100")
     resolved = resolve(root, revision)
-    commits = git(
-        root, "rev-list", "--first-parent", f"--max-count={count}", resolved
-    ).decode("ascii").splitlines()
+    commits = git(root, "rev-list", "--first-parent", f"--max-count={count}", resolved).decode("ascii").splitlines()
     if len(commits) != count:
-        raise AuditError(
-            "Full requested history is unavailable; use a full checkout or a smaller count"
-        )
+        raise AuditError("Full requested history is unavailable; use a full checkout or a smaller count")
     records = []
     for sha in commits:
-        raw = git(
-            root, "show", "-s", "--format=%H%x00%P%x00%cI%x00%B%x00%T", sha
-        ).decode("utf-8", errors="replace").rstrip("\n")
+        raw = (
+            git(root, "show", "-s", "--format=%H%x00%P%x00%cI%x00%B%x00%T", sha)
+            .decode("utf-8", errors="replace")
+            .rstrip("\n")
+        )
         identity, parents, date, message, tree = raw.split("\0", 4)
         subject = message.splitlines()[0] if message else ""
         if identity != sha:
@@ -242,25 +249,58 @@ def audit_history(root: Path, revision: str, count: int) -> list[dict[str, Any]]
         parent_list = parents.split()
         changes = []
         if parent_list:
-            stats = git(root, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff",
-                        "--no-textconv", parent_list[0], sha, "--")
+            stats = git(
+                root,
+                "diff",
+                "--numstat",
+                "-z",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                parent_list[0],
+                sha,
+                "--",
+            )
         else:
-            stats = git(root, "diff-tree", "--no-commit-id", "--numstat", "-z", "--no-renames",
-                        "--no-ext-diff", "--no-textconv", "--root", "-r", sha)
+            stats = git(
+                root,
+                "diff-tree",
+                "--no-commit-id",
+                "--numstat",
+                "-z",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--root",
+                "-r",
+                sha,
+            )
         for row in stats.split(b"\0"):
             if not row:
                 continue
             added, removed, path = row.decode("utf-8", errors="replace").split("\t", 2)
-            changes.append({"path": path, "added": None if added == "-" else int(added),
-                            "removed": None if removed == "-" else int(removed)})
-        records.append({
-            "commit": sha, "parents": parent_list, "committed_at": date,
-            "subject": subject, "message": message.rstrip("\n"), "tree": tree,
-            "changed_files": changes, "empty_change": not changes,
-            "commit_count_language": bool(re.search(
-                r"commit (?:count|counting|goal|\d+ marker)|goal of \d+ commits",
-                message, re.I)),
-        })
+            changes.append(
+                {
+                    "path": path,
+                    "added": None if added == "-" else int(added),
+                    "removed": None if removed == "-" else int(removed),
+                }
+            )
+        records.append(
+            {
+                "commit": sha,
+                "parents": parent_list,
+                "committed_at": date,
+                "subject": subject,
+                "message": message.rstrip("\n"),
+                "tree": tree,
+                "changed_files": changes,
+                "empty_change": not changes,
+                "commit_count_language": bool(
+                    re.search(r"commit (?:count|counting|goal|\d+ marker)|goal of \d+ commits", message, re.I)
+                ),
+            }
+        )
     return records
 
 
@@ -274,7 +314,8 @@ def main() -> int:
     parser.add_argument("--patch-file", type=Path)
     parser.add_argument("--snapshot-file", type=Path)
     parser.add_argument(
-        "--bundle-file", type=Path,
+        "--bundle-file",
+        type=Path,
         help="Optional standalone Git history for a reproducible offline audit",
     )
     args = parser.parse_args()
@@ -284,20 +325,32 @@ def main() -> int:
         findings, inspected = inspect_tree(args.root, head)
         history = audit_history(args.root, history_head, args.history_count)
         report = {
-            "schema_version": 1, "source_commit": head, "history_head": history_head,
-            "history_count": len(history), "text_files_inspected": inspected,
-            "findings": findings, "commits": history,
-            "scope": ("Encoding/syntax checks and full commit inventory are not a "
-                      "semantic security review."),
+            "schema_version": 1,
+            "source_commit": head,
+            "history_head": history_head,
+            "history_count": len(history),
+            "text_files_inspected": inspected,
+            "findings": findings,
+            "commits": history,
+            "scope": ("Encoding/syntax checks and full commit inventory are not a semantic security review."),
         }
         for path in (args.report, args.patch_file, args.snapshot_file, args.bundle_file):
             if path is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)
         if args.patch_file is not None:
             patch = git(
-                args.root, "log", "--first-parent", f"--max-count={args.history_count}",
-                "--format=fuller", "--patch", "--binary", "--no-renames",
-                "--no-ext-diff", "--no-textconv", history_head, "--",
+                args.root,
+                "log",
+                "--first-parent",
+                f"--max-count={args.history_count}",
+                "--format=fuller",
+                "--patch",
+                "--binary",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                history_head,
+                "--",
             )
             args.patch_file.write_bytes(patch)
             report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
@@ -307,16 +360,11 @@ def main() -> int:
         if args.bundle_file is not None:
             git(args.root, "bundle", "create", str(args.bundle_file.resolve()), "HEAD")
             report["bundle_sha256"] = hashlib.sha256(args.bundle_file.read_bytes()).hexdigest()
-        args.report.write_text(
-            json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
-        )
+        args.report.write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
         for finding in findings:
             print(json.dumps(finding, ensure_ascii=True))
         errors = sum(f["severity"] == "error" for f in findings)
-        print(
-            f"Inspected {inspected} committed text files and {len(history)} commits:"
-            f" {errors} errors"
-        )
+        print(f"Inspected {inspected} committed text files and {len(history)} commits: {errors} errors")
         return 1 if errors else 0
     except (AuditError, OSError, ValueError) as error:
         print(f"Repository audit incomplete: {error}", file=sys.stderr)

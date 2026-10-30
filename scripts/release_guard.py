@@ -3,6 +3,7 @@
 This is CI/operator tooling, not a runtime dependency of the Rust application.
 Never dispatch workflows, enable sending, or manufacture acceptance evidence.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -11,9 +12,10 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlencode
 
 EXACT = {
@@ -34,15 +36,32 @@ DEEP = {
 }
 # Keep this conservative; workflow-trigger tests ensure it cannot outgrow CI.
 INPUT_PREFIXES = (
-    "src/", "tests/", "fuzz/", "scripts/", "config/", ".cargo/", ".github/", "windows/",
+    "src/",
+    "tests/",
+    "fuzz/",
+    "scripts/",
+    "config/",
+    ".cargo/",
+    ".github/",
+    "windows/",
 )
-INPUT_FILES = frozenset({
-    "Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml",
-    "rustfmt.toml", ".rustfmt.toml", "deny.toml",
-    ".gitattributes", ".gitignore", ".editorconfig",
-    "docs/openapi-v1.json", "docs/openapi-v1-baseline.json",
-    "docs/enterprise-policy.schema.json",
-})
+INPUT_FILES = frozenset(
+    {
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+        "rust-toolchain.toml",
+        "rustfmt.toml",
+        ".rustfmt.toml",
+        "deny.toml",
+        ".gitattributes",
+        ".gitignore",
+        ".editorconfig",
+        "docs/openapi-v1.json",
+        "docs/openapi-v1-baseline.json",
+        "docs/enterprise-policy.schema.json",
+    }
+)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+\Z")
 MAX_EVIDENCE_AGE = timedelta(days=8)
@@ -64,8 +83,9 @@ class PendingEvidence(GateError):
 def checked_output(args: list[str], timeout: int = 60) -> str:
     """Run one trusted argv and return its stdout; raise GateError on any failure."""
     try:
-        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                                errors="strict", timeout=timeout, check=False)
+        result = subprocess.run(
+            args, capture_output=True, text=True, encoding="utf-8", errors="strict", timeout=timeout, check=False
+        )
     except (OSError, UnicodeError, subprocess.TimeoutExpired) as error:
         raise GateError(f"Could not complete {args[0]} safely") from error
     if result.returncode:
@@ -88,7 +108,7 @@ def parse_time(value: Any) -> datetime:
         raise GateError("Evidence timestamp is invalid") from error
     if parsed.utcoffset() is None:
         raise GateError("Evidence timestamp has no timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _validate_run_identity(run: dict[str, Any], workflow: str, repository: str) -> None:
@@ -97,21 +117,20 @@ def _validate_run_identity(run: dict[str, Any], workflow: str, repository: str) 
     Raises GateError on any identity mismatch or malformed run identity.
     """
     expected_name = {**EXACT, **DEEP}[workflow]
-    if (run.get("name") != expected_name
-            or run.get("path") != f".github/workflows/{workflow}"
-            or run.get("head_branch") != "main"
-            or run.get("head_repository") != repository
-            or run.get("event") not in {"push", "schedule", "workflow_dispatch"}):
+    if (
+        run.get("name") != expected_name
+        or run.get("path") != f".github/workflows/{workflow}"
+        or run.get("head_branch") != "main"
+        or run.get("head_repository") != repository
+        or run.get("event") not in {"push", "schedule", "workflow_dispatch"}
+    ):
         raise GateError(f"{workflow}: untrusted workflow/repository/ref/event identity")
     run_id, attempt = run.get("id"), run.get("run_attempt")
-    if (type(run_id) is not int or run_id <= 0
-            or type(attempt) is not int or attempt <= 0):
+    if type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0:
         raise GateError(f"{workflow}: invalid run identity")
 
 
-def _validate_run_outcome(
-    run: dict[str, Any], workflow: str, commit: str, now: datetime
-) -> None:
+def _validate_run_outcome(run: dict[str, Any], workflow: str, commit: str, now: datetime) -> None:
     """Reject runs with the wrong commit, state, conclusion or timestamp.
 
     Raises PendingEvidence while incomplete and GateError otherwise.
@@ -130,8 +149,7 @@ def _validate_run_outcome(
         raise GateError(f"{workflow}: evidence timestamp is stale or in the future")
 
 
-def validate_run(run: dict[str, Any], workflow: str, repository: str,
-                 commit: str, now: datetime) -> None:
+def validate_run(run: dict[str, Any], workflow: str, repository: str, commit: str, now: datetime) -> None:
     """Accept exactly one trusted, green, fresh workflow run; raise otherwise.
 
     Raises PendingEvidence when the latest run is still in progress.
@@ -140,8 +158,7 @@ def validate_run(run: dict[str, Any], workflow: str, repository: str,
     _validate_run_outcome(run, workflow, commit, now)
 
 
-def assert_unchanged_inputs(base: str, head: str,
-                            execute: Callable[[list[str]], str] = checked_output) -> None:
+def assert_unchanged_inputs(base: str, head: str, execute: Callable[[list[str]], str] = checked_output) -> None:
     """Fail closed when build/test inputs changed between base and head."""
     if not SHA.fullmatch(base) or not SHA.fullmatch(head):
         raise GateError("Invalid commit for source comparison")
@@ -150,13 +167,12 @@ def assert_unchanged_inputs(base: str, head: str,
     changed = execute(["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"])
     invalidating = [p for p in changed.split("\0") if p and affects_evidence(p)]
     if invalidating:
-        raise GateError(
-            "Deep evidence predates changed build/test inputs; rerun the workflow on main"
-        )
+        raise GateError("Deep evidence predates changed build/test inputs; rerun the workflow on main")
 
 
-def latest_run(repository: str, workflow: str, commit: str,
-               execute: Callable[[list[str]], str] = checked_output) -> dict[str, Any]:
+def latest_run(
+    repository: str, workflow: str, commit: str, execute: Callable[[list[str]], str] = checked_output
+) -> dict[str, Any]:
     """Return the newest workflow run row (even a failure), or raise."""
     params = {"branch": "main", "per_page": "1"}
     if workflow in EXACT:
@@ -177,8 +193,7 @@ def latest_run(repository: str, workflow: str, commit: str,
     return rows[0]
 
 
-def check_main(repository: str, commit: str,
-               execute: Callable[[list[str]], str] = checked_output) -> None:
+def check_main(repository: str, commit: str, execute: Callable[[list[str]], str] = checked_output) -> None:
     """Verify clean checkout, HEAD, and remote main all equal the release commit."""
     if execute(["git", "rev-parse", "HEAD"]).strip() != commit:
         raise GateError("Checkout does not match the release commit")
@@ -189,11 +204,11 @@ def check_main(repository: str, commit: str,
         raise GateError("main moved during release validation; use the new head")
 
 
-def collect_evidence(repository: str, commit: str, now: datetime,
-                     execute: Callable[[list[str]], str] = checked_output) -> dict[str, Any]:
+def collect_evidence(
+    repository: str, commit: str, now: datetime, execute: Callable[[list[str]], str] = checked_output
+) -> dict[str, Any]:
     """Collect green evidence for every required workflow bound to the commit."""
-    if (not REPO.fullmatch(repository) or repository.split("/")[-1] in {".", ".."}
-            or not SHA.fullmatch(commit)):
+    if not REPO.fullmatch(repository) or repository.split("/")[-1] in {".", ".."} or not SHA.fullmatch(commit):
         raise GateError("Invalid repository or release commit")
     check_main(repository, commit, execute)
     evidence = []
@@ -202,29 +217,46 @@ def collect_evidence(repository: str, commit: str, now: datetime,
         validate_run(run, workflow, repository, commit, now)
         if workflow in DEEP:
             assert_unchanged_inputs(run["head_sha"], commit, execute)
-        evidence.append({"workflow": workflow, "run_id": run["id"],
-                         "run_attempt": run["run_attempt"], "commit": run["head_sha"],
-                         "updated_at": run["updated_at"], "conclusion": "success"})
+        evidence.append(
+            {
+                "workflow": workflow,
+                "run_id": run["id"],
+                "run_attempt": run["run_attempt"],
+                "commit": run["head_sha"],
+                "updated_at": run["updated_at"],
+                "conclusion": "success",
+            }
+        )
     check_main(repository, commit, execute)
-    return {"schema_version": 1, "repository": repository, "source_commit": commit,
-            "checked_at": now.isoformat(), "automated_evidence": evidence,
-            "owner_environment_acceptance": "not established by automated workflow evidence"}
+    return {
+        "schema_version": 1,
+        "repository": repository,
+        "source_commit": commit,
+        "checked_at": now.isoformat(),
+        "automated_evidence": evidence,
+        "owner_environment_acceptance": "not established by automated workflow evidence",
+    }
 
 
-def audit_binaries(paths: list[Path], output: Path,
-                   run: Callable[..., Any] = subprocess.run) -> None:
+def audit_binaries(paths: list[Path], output: Path, run: Callable[..., Any] = subprocess.run) -> None:
     """Audit each release executable independently; retain the audit output."""
     output.mkdir(parents=True, exist_ok=True)
     for path in paths:
         if not path.is_file() or path.is_symlink():
             raise GateError(f"Expected regular release executable: {path.name}")
         try:
-            result = run(["cargo", "audit", "bin", str(path)], capture_output=True,
-                         text=True, encoding="utf-8", errors="strict", timeout=300, check=False)
+            result = run(
+                ["cargo", "audit", "bin", str(path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                timeout=300,
+                check=False,
+            )
         except (OSError, UnicodeError, subprocess.TimeoutExpired) as error:
             raise GateError(f"Binary audit did not complete: {path.name}") from error
-        (output / f"{path.stem}-binary-audit.txt").write_text(
-            result.stdout + result.stderr, encoding="utf-8")
+        (output / f"{path.stem}-binary-audit.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
         if result.returncode != 0:
             raise GateError(f"Binary audit failed: {path.name} (exit {result.returncode})")
 
@@ -251,7 +283,7 @@ def main() -> int:
         deadline = time.monotonic() + args.wait_seconds
         while True:
             try:
-                report = collect_evidence(args.repository, args.commit, datetime.now(timezone.utc))
+                report = collect_evidence(args.repository, args.commit, datetime.now(UTC))
                 break
             except PendingEvidence as error:
                 if time.monotonic() >= deadline:

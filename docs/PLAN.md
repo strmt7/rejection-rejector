@@ -1,5 +1,13 @@
 # Rejection Rejector — v0.1 plan
 
+> **Revision note (2026-10-30, web-console pivot).** This is the historical
+> v0.1 plan and is kept as originally written. The product contract changed
+> afterwards: the native desktop GUI was deleted and the surfaces are the
+> `rr` CLI, `rr tui`, and the local web console (`rr web`). Milestone 5's
+> "native desktop GUI" item is superseded by the web console; everything
+> else stands. See `docs/ARCHITECTURE.md` and `docs/INTERFACES.md` for the
+> current state.
+
 ## Product contract
 
 A standalone, local-first Windows 11 desktop application. Application logic and GUI are Rust. Gmail is the first mail provider; the UI is not a browser wrapper. No mailbox credentials, messages, candidate information or model weights belong in this repository.

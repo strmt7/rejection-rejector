@@ -39,7 +39,7 @@ fixture = ["tests/fixtures", "training/data"]
 id = "cargo-lock"
 kind = "lock"
 path = "Cargo.lock"
-sha256 = "5c5e6ba1dfa330aaf2aaff131d38de95ad9b92e027c73a22c252abfb2e15ae6d"
+sha256 = "60e3be54fc78bc9ec80f7c21bf98c97dce673e37e4a980d3e68ddf7e2fbbace7"
 
 [[input_files]]
 id = "rust-toolchain"
@@ -139,10 +139,10 @@ reason = "Operator/release-tool regression suite (scripts/, tools/, training/ he
 
 [[commands]]
 id = "audit"
-command = "cargo audit --deny warnings --ignore RUSTSEC-2026-0370 --ignore RUSTSEC-2026-0371 --ignore RUSTSEC-2026-0372 --ignore RUSTSEC-2023-0086"
+command = "cargo audit --deny warnings"
 environment = "rust-linux-gnu"
 applicable = true
-reason = "Advisory gate with the documented triage from SECURITY.md/deny.toml/osv-scanner.toml; any new advisory must fail until fixed or re-triaged"
+reason = "Advisory gate with zero suppressions (standing policy); any advisory fails the gate until fixed at source or recorded in the open-risk register"
 
 [[commands]]
 id = "audit-policy"
