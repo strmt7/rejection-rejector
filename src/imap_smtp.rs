@@ -13,7 +13,7 @@
 //! IMAP/SMTP endpoints. Endpoints default to Gmail but are configurable so the
 //! transport is host-agnostic.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{TimeZone, Utc};
 use io_imap::client::{ImapClient, ImapClientStd, ImapClientStdConnectOptions};
@@ -119,6 +119,133 @@ pub struct ImapSmtp {
     config: ImapSmtpConfig,
 }
 
+/// Hard bound on UIDs one IMAP search may return before the provider refuses
+/// to fetch anything at all (security review finding 15): a hostile or broken
+/// server cannot make the client materialize an unbounded result set.
+///
+/// Inputs: none (constant). Output: `usize` — the maximum accepted search
+/// result size.
+const MAX_SEARCH_UIDS: usize = 5000;
+/// Hard bound on one message's raw RFC-5322 bytes while streaming.
+///
+/// Inputs: none (constant). Output: `usize` — the per-message retention cap.
+const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+/// Hard bound on the aggregate raw bytes one fetch batch may stream.
+///
+/// Inputs: none (constant). Output: `usize` — the batch-wide byte budget.
+const MAX_AGGREGATE_BYTES: usize = 64 * 1024 * 1024;
+/// Review items served per list page.
+///
+/// Inputs: none (constant). Output: `usize` — the page size behind the
+/// continuation cursor.
+const MAX_PAGE_REFS: usize = 250;
+/// Header bytes retained for thread derivation. RFC-5322 headers lead the
+/// message, so this window covers the full header block of any message the
+/// per-message bound accepts; anything beyond it is never retained.
+///
+/// Inputs: none (constant). Output: `usize` — the thread-header window.
+const THREAD_HEADER_WINDOW: usize = 64 * 1024;
+
+/// What a [`BoundedSink`] does when its retention window fills.
+///
+/// Inputs: none (plain enum). Output: the overflow policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Overflow {
+    /// Refuse further bytes: the whole-message capture must fit or fail.
+    Error,
+    /// Keep counting toward the aggregate budget but retain nothing beyond
+    /// the window (thread-header capture).
+    Truncate,
+}
+
+/// A streaming write sink bounded per message and across the batch, so
+/// oversized literals are refused during streaming — before anything is
+/// stored or parsed (security review finding 15).
+///
+/// Inputs: none (plain struct). Output: the retained bytes under the policy.
+struct BoundedSink {
+    /// Bytes retained so far.
+    buf: Vec<u8>,
+    /// Per-message retention window.
+    limit: usize,
+    /// Policy once the window fills.
+    overflow: Overflow,
+    /// Batch-wide received-byte counter shared across every sink of one
+    /// fetch, enforcing the aggregate budget mid-message.
+    shared: std::rc::Rc<std::cell::Cell<u64>>,
+    /// Batch-wide received-byte budget enforced against `shared`.
+    aggregate_limit: usize,
+}
+
+impl BoundedSink {
+    /// Create one sink under the shared batch counter.
+    ///
+    /// Inputs: `limit` — retention window; `overflow` — window policy;
+    /// `shared` — batch counter; `aggregate_limit` — batch-wide byte budget.
+    /// Output: `Self`.
+    fn new(
+        limit: usize,
+        overflow: Overflow,
+        shared: std::rc::Rc<std::cell::Cell<u64>>,
+        aggregate_limit: usize,
+    ) -> Self {
+        Self {
+            buf: Vec::new(),
+            limit,
+            overflow,
+            shared,
+            aggregate_limit,
+        }
+    }
+
+    /// Consume the sink, returning only the retained bytes.
+    ///
+    /// Inputs: none beyond the sink. Output: `Vec<u8>`.
+    fn into_inner(self) -> Vec<u8> {
+        self.buf
+    }
+}
+
+impl std::io::Write for BoundedSink {
+    /// Accept one streamed chunk under the per-message and aggregate bounds.
+    ///
+    /// Inputs: `data` — the next contiguous bytes of one message. Output:
+    /// `Ok(data.len())` when accepted; `Err` when either budget would be
+    /// exceeded under [`Overflow::Error`] (the batch aborts).
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let aggregate = self.shared.get() + data.len() as u64;
+        if aggregate > self.aggregate_limit as u64 {
+            return Err(std::io::Error::other(
+                "IMAP fetch exceeded the aggregate byte budget; nothing further is accepted",
+            ));
+        }
+        self.shared.set(aggregate);
+        match self.overflow {
+            Overflow::Error if self.buf.len() + data.len() > self.limit => {
+                Err(std::io::Error::other(
+                    "IMAP message exceeded the per-message byte budget; nothing further is accepted",
+                ))
+            }
+            Overflow::Error => {
+                self.buf.extend_from_slice(data);
+                Ok(data.len())
+            }
+            Overflow::Truncate => {
+                let room = self.limit.saturating_sub(self.buf.len());
+                self.buf.extend_from_slice(&data[..room.min(data.len())]);
+                Ok(data.len())
+            }
+        }
+    }
+
+    /// Flush is a no-op: bytes are retained in memory under the bounds.
+    ///
+    /// Inputs: none. Output: `Ok(())`.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl ImapSmtp {
     /// Construct an IMAP/SMTP transport.
     ///
@@ -135,12 +262,62 @@ impl ImapSmtp {
         &self.creds.email
     }
 
-    /// Fetch raw RFC822 bodies from the mailbox over IMAP.
+    /// Fetch raw RFC822 bodies from the mailbox over IMAP under the fixed
+    /// streaming bounds.
     ///
-    /// Inputs: `uid_filter` — an IMAP `UID` search term (e.g. `"124:*"`).
-    /// Output: `Result<Vec<(u32, Vec<u8>)>>` — `(UID, raw RFC822 bytes)` per
-    /// message. Connects, selects INBOX, searches, and fetches `RFC822`.
+    /// Inputs: `search` — typed IMAP search keys. Output:
+    /// `Result<Vec<(u32, Vec<u8>)>>` — `(UID, raw RFC822 bytes)` per message,
+    /// each message capped at [`MAX_MESSAGE_BYTES`] and the batch at
+    /// [`MAX_AGGREGATE_BYTES`] while streaming; a search above
+    /// [`MAX_SEARCH_UIDS`] aborts before any fetch. Connects, selects INBOX,
+    /// searches, and fetches `RFC822`.
     fn fetch_bodies(&self, search: Vec1<SearchKey<'static>>) -> Result<Vec<(u32, Vec<u8>)>> {
+        self.fetch_streamed(
+            search,
+            MAX_MESSAGE_BYTES,
+            Overflow::Error,
+            MAX_AGGREGATE_BYTES,
+        )
+    }
+
+    /// Fetch only the leading header window of each matching message, for
+    /// thread derivation.
+    ///
+    /// Inputs: `search` — typed IMAP search keys. Output:
+    /// `Result<Vec<(u32, Vec<u8>)>>` — `(UID, leading bytes)` per message with
+    /// at most [`THREAD_HEADER_WINDOW`] bytes retained each (RFC-5322 headers
+    /// lead the message); bodies beyond the window are never retained.
+    fn fetch_thread_headers(
+        &self,
+        search: Vec1<SearchKey<'static>>,
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
+        self.fetch_streamed(
+            search,
+            THREAD_HEADER_WINDOW,
+            Overflow::Truncate,
+            MAX_AGGREGATE_BYTES,
+        )
+    }
+
+    /// Stream one bounded batch of raw RFC-5322 captures from the mailbox.
+    ///
+    /// The provider-level budgets run at the protocol boundary (security
+    /// review finding 15): the search result is capped before any fetch, each
+    /// message is streamed into a [`BoundedSink`] that refuses or truncates
+    /// past its window, and a shared counter enforces the batch budget
+    /// mid-message. Nothing oversized is ever stored or parsed.
+    ///
+    /// Inputs: `search` — typed IMAP search keys; `limit` — per-message
+    /// retention window; `overflow` — window policy; `aggregate_limit` —
+    /// batch-wide byte budget. Output: `Result<Vec<(u32, Vec<u8>)>>` — the
+    /// captured bytes per UID in ascending UID order.
+    fn fetch_streamed(
+        &self,
+        search: Vec1<SearchKey<'static>>,
+        limit: usize,
+        overflow: Overflow,
+        aggregate_limit: usize,
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
         let scheme = if self.config.imap_secure {
             "imaps"
         } else {
@@ -173,23 +350,38 @@ impl ImapSmtp {
         let uids = client
             .search(search, ImapMessageSearchOptions { uid: true })
             .map_err(|e| anyhow!("IMAP search failed: {e:?}"))?;
+        ensure!(
+            uids.len() <= MAX_SEARCH_UIDS,
+            "IMAP search returned {} UIDs, above the {}-UID safety bound; nothing was fetched (cursor retained)",
+            uids.len(),
+            MAX_SEARCH_UIDS
+        );
         if uids.is_empty() {
             let _ = client.logout();
             return Ok(Vec::new());
         }
         // One batched `UID FETCH <set> (UID BODY.PEEK[])` (read-only: never
-        // sets \Seen). Bodies stream into a map keyed by the server-reported
-        // UID; any fetch failure is propagated, never silently dropped.
+        // sets \Seen). Bodies stream into bounded sinks keyed by the
+        // server-reported UID; any fetch failure is propagated, never silently
+        // dropped.
         let seq =
             SequenceSet::try_from(uids.clone()).map_err(|e| anyhow!("invalid UID set: {e:?}"))?;
+        let shared = std::rc::Rc::new(std::cell::Cell::new(0u64));
         let mut bodies: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
         client
             .fetch_bodies_stream(
                 seq,
                 true,
-                |_u| -> std::io::Result<Vec<u8>> { Ok(Vec::new()) },
-                |u, body: Vec<u8>| -> std::io::Result<()> {
-                    bodies.insert(u, body);
+                |_u| -> std::io::Result<BoundedSink> {
+                    Ok(BoundedSink::new(
+                        limit,
+                        overflow,
+                        shared.clone(),
+                        aggregate_limit,
+                    ))
+                },
+                |u, sink: BoundedSink| -> std::io::Result<()> {
+                    bodies.insert(u, sink.into_inner());
                     Ok(())
                 },
             )
@@ -207,7 +399,7 @@ impl ImapSmtp {
     /// thread key would fail provider-id validation and abort the sync.
     fn fetch_refs(&self, search: Vec1<SearchKey<'static>>) -> Result<Vec<MessageRef>> {
         Ok(self
-            .fetch_bodies(search)?
+            .fetch_thread_headers(search)?
             .into_iter()
             .filter_map(|(uid, bytes)| {
                 let mime = String::from_utf8_lossy(&bytes);
@@ -218,6 +410,32 @@ impl ImapSmtp {
             })
             .collect())
     }
+}
+
+/// Slice one page of review refs behind an exclusive UID-floor continuation
+/// cursor.
+///
+/// Inputs: `refs` — threadable refs; `floor` — exclusive lower UID bound from
+/// the previous page's token (0 = first page). Output:
+/// `(Vec<MessageRef>, Option<String>)` — at most [`MAX_PAGE_REFS`] refs in
+/// ascending UID order with UIDs at or above the floor, and the next token
+/// (the last served UID plus one), or `None` when the feed is exhausted.
+fn page_refs(refs: Vec<MessageRef>, floor: u32) -> (Vec<MessageRef>, Option<String>) {
+    let mut eligible: Vec<MessageRef> = refs
+        .into_iter()
+        .filter(|r| r.id.parse::<u32>().is_ok_and(|u| u >= floor))
+        .collect();
+    eligible.sort_by_key(|r| r.id.parse::<u32>().unwrap_or_default());
+    let next_page_token = (eligible.len() > MAX_PAGE_REFS).then(|| {
+        (eligible[MAX_PAGE_REFS - 1]
+            .id
+            .parse::<u32>()
+            .unwrap_or_default()
+            + 1)
+        .to_string()
+    });
+    eligible.truncate(MAX_PAGE_REFS);
+    (eligible, next_page_token)
 }
 
 /// Translate a sync query into typed IMAP search keys.
@@ -475,17 +693,27 @@ impl crate::sync::Provider for ImapSmtp {
     ///
     /// Inputs: `_query`, `_page`. Output: always `Err` until the IMAP read
     /// session is connected; callers treat this as "no transport".
-    fn list(&mut self, query: &str, _page: Option<&str>) -> Result<MessagePage> {
+    fn list(&mut self, query: &str, page: Option<&str>) -> Result<MessagePage> {
         let Some(search) = gmail_query_to_imap_search(query) else {
             return Ok(MessagePage {
                 messages: Vec::new(),
                 next_page_token: None,
             });
         };
+        // A continuation token is the exclusive UID floor for the next page
+        // (security review finding 15). A malformed token fails closed instead
+        // of silently restarting the feed.
+        let floor = match page {
+            None => 0,
+            Some(token) => token
+                .parse::<u32>()
+                .map_err(|_| anyhow!("Invalid IMAP page token: {token:?}"))?,
+        };
         let refs = self.fetch_refs(search)?;
+        let (messages, next_page_token) = page_refs(refs, floor);
         Ok(MessagePage {
-            messages: refs,
-            next_page_token: None,
+            messages,
+            next_page_token,
         })
     }
 
@@ -1540,6 +1768,132 @@ mod tests {
             .expect("message present");
         assert_eq!(email.subject, "Two");
         assert_eq!(email.message_id, "<m2@x.com>");
+    }
+
+    // why (security review finding 15): a hostile server search result above
+    // the UID safety bound must abort before any body fetch — the provider
+    // refuses to materialize an unbounded result set at all.
+    #[test]
+    fn hostile_search_results_abort_before_any_fetch() {
+        let messages: Vec<(u32, String)> = (1..=5001)
+            .map(|u| {
+                (
+                    u,
+                    format!("From: a@x.com\r\nMessage-ID: <m{u}@x.com>\r\n\r\nbody {u}"),
+                )
+            })
+            .collect();
+        let fake = FakeImap::start(messages);
+        let client = fake.client();
+        let error = client.fetch_bodies(Vec1::from(SearchKey::All)).unwrap_err();
+        assert!(error.to_string().contains("safety bound"), "{error}");
+    }
+
+    // why (security review finding 15): a single oversized message literal is
+    // refused while streaming — nothing above the per-message budget is ever
+    // stored or parsed.
+    #[test]
+    fn oversized_messages_are_refused_while_streaming() {
+        let body = format!(
+            "From: a@x.com\r\nMessage-ID: <big@x.com>\r\nSubject: Big\r\n\r\n{}",
+            "x".repeat(MAX_MESSAGE_BYTES + 1024)
+        );
+        let fake = FakeImap::start(vec![(7, body)]);
+        let client = fake.client();
+        let error = client.fetch_bodies(Vec1::from(SearchKey::All)).unwrap_err();
+        assert!(error.to_string().contains("byte budget"), "{error}");
+    }
+
+    // why (security review finding 15): the batch-wide byte budget is
+    // enforced mid-stream by the shared counter, not after everything lands.
+    #[test]
+    fn aggregate_byte_budget_aborts_the_batch_mid_stream() {
+        let messages = vec![(1u32, "x".repeat(1000)), (2u32, "y".repeat(1000))];
+        let fake = FakeImap::start(messages);
+        let client = fake.client();
+        let error = client
+            .fetch_streamed(Vec1::from(SearchKey::All), 1024, Overflow::Error, 1536)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("aggregate byte budget"),
+            "{error}"
+        );
+    }
+
+    // why (security review finding 15): thread derivation must never retain
+    // message bodies — only the leading header window, and it must still
+    // thread.
+    #[test]
+    fn thread_derivation_retains_only_the_header_window() {
+        let body = format!(
+            "From: a@x.com\r\nMessage-ID: <win@x.com>\r\n\r\n{}",
+            "z".repeat(THREAD_HEADER_WINDOW * 2)
+        );
+        let fake = FakeImap::start(vec![(3, body)]);
+        let client = fake.client();
+        let captures = client
+            .fetch_thread_headers(Vec1::from(SearchKey::All))
+            .expect("fetch");
+        assert_eq!(captures.len(), 1);
+        assert!(captures[0].1.len() <= THREAD_HEADER_WINDOW);
+        let mime = String::from_utf8_lossy(&captures[0].1);
+        assert!(
+            thread_key(&mime).is_some(),
+            "the header window still threads"
+        );
+    }
+
+    // why (security review finding 15): continuation cursors are real —
+    // bounded pages behind an exclusive UID floor, with unsorted server order
+    // normalized and no feed restart.
+    #[test]
+    fn page_refs_serve_bounded_pages_behind_uid_floor_cursors() {
+        let refs: Vec<MessageRef> = (1..=300)
+            .map(|u| MessageRef {
+                id: u.to_string(),
+                thread_id: format!("t{u}"),
+            })
+            .collect();
+        let (first, token) = page_refs(refs.clone(), 0);
+        assert_eq!(first.len(), MAX_PAGE_REFS);
+        assert_eq!(token.as_deref(), Some("251"));
+        let (second, end) = page_refs(refs, token.unwrap().parse().unwrap());
+        assert_eq!(second.len(), 50);
+        assert!(end.is_none());
+        let mixed = vec![
+            MessageRef {
+                id: "30".into(),
+                thread_id: "c".into(),
+            },
+            MessageRef {
+                id: "10".into(),
+                thread_id: "a".into(),
+            },
+            MessageRef {
+                id: "20".into(),
+                thread_id: "b".into(),
+            },
+        ];
+        let (page, _) = page_refs(mixed, 20);
+        assert_eq!(
+            page.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["20", "30"]
+        );
+    }
+
+    // why (security review finding 15): a malformed continuation token fails
+    // closed instead of silently restarting the feed from the beginning.
+    #[test]
+    fn malformed_page_tokens_fail_closed() {
+        let (fake, _messages) = two_message_mailbox();
+        let mut client = fake.client();
+        let Err(error) = crate::sync::Provider::list(&mut client, "", Some("junk")) else {
+            panic!("a malformed page token must fail closed");
+        };
+        assert!(
+            error.to_string().contains("Invalid IMAP page token"),
+            "{error}"
+        );
     }
 
     #[test]
