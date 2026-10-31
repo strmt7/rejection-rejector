@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+Windows tray shell, web-console redesign and the crawler/tool integration
+(2026-10-31). Changed:
+
+- New `rr-tray` binary: the product's only native UI is a system-tray icon
+  (tooltip "Rejection Rejector") with Open console / Check mail now /
+  Pause-Resume dispatch / Exit. No desktop window exists. It reuses the
+  shared startup path (`src/startup.rs`) with `rr web`/`rr run`, keeps the
+  first-run credential display, and reaches the tray API through the safe
+  `tray-icon`/`winit` wrappers (the `windows` crate exposes
+  `Shell_NotifyIconW` only as an `unsafe fn`, which the workspace forbids).
+  The installer gains a third component (Tray app) with a Start-menu
+  shortcut, pinned by `tests/release/test_tray_contract.py` and the
+  extended installer contract tests.
+- `src/web_ui.html` is rebuilt in the product's design language (deep
+  teal/navy workspace, queue rail + review workspace) and surfaces every
+  API route: the automatic-policy "why" view, model facts, qualification
+  with the optional independent verifier, mailbox connect/disconnect and
+  workspace maintenance (integrity, compact, checksum-bound backup,
+  purge). The security invariants are unchanged: content reaches the DOM
+  only through `textContent`, the bearer token stays in page memory, and
+  the send confirmation and 30-second automatic-mode cooldown are intact.
+- The FlitzZip crawl4ai/cocoindex tool integration is ported (adjusted to
+  this repository): the reviewed source-build chain (`tools/python_wheel.py`,
+  `crawl4ai_source_build.py`, `crawl4ai_download_opener.py`,
+  `crawl4ai_tool.py`, `crawl4ai_research.py`), the pinned 264 KB build
+  lock, the provenance records under `third_party/upstream/crawl4ai/0.9.5/`
+  and `docs/crawl4ai.md`. The wheel sidecar pins the first real build,
+  `crawl4ai-0.9.5+rejection.rejector.portable2-py3-none-any.whl`
+  (sha256 `6560c4e086a03722c5073df4ee3a1dcc1b2a8b7c1aa3e29f93e5ddfd92c7f08a`),
+  and the requirements lock carries the same digest; the gated
+  `ensure_wheel` admission verifies it end to end.
+- `tools/child_containment.py` ports the owned-child containment surface
+  (`CREATE_SUSPENDED` acquisition, memory admission, job-object
+  containment) from the FlitzZip MCP host, byte-faithful with
+  attribution; the crawler tool chain loads it for Windows child
+  acquisition.
+- The NLTK provenance companion is ported too: `tools/nltk_distribution.py`,
+  the pinned source archive and release records under
+  `third_party/upstream/nltk/`, and the model-security contract. The rebuilt
+  wheel `nltk-3.10.3+rejection.rejector.security1.g1bd574cfd-py3-none-any.whl`
+  is pinned in its sidecar (sha256
+  `2d080911d49a150b59fcf3943dc641551f9bd8e73085bd881d2025a2785adf7e`,
+  reproduced by two independent builds).
+- The Python suites are now explicitly layered: `tests/release/` (ambient
+  contracts) plus `tests/integration/` (installed-runtime contracts) which
+  run inside the provisioned interpreter through
+  `python -B -m tools.crawl4ai_tool selftest` — a gate lane that provisions
+  the runtime first and fails on any contract failure. Nothing is skipped.
+- Three ported validation functions were decomposed at source (`read_sites`,
+  `json_report`, `installed_runtime_sha256`) to satisfy the repository
+  complexity budget; the behavior-pinning tests pass unchanged. Two
+  Windows-only code paths in
+  `src/peer_identity.rs` are now precisely `cfg`-gated so non-Windows
+  builds carry zero warnings.
+
 Loopback peer identity for the local model runtime (2026-10-31, security
 review finding 7). Changed:
 
