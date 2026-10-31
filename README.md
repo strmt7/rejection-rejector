@@ -13,7 +13,7 @@
 
 | Component | Version 0.3 |
 |---|---|
-| Interfaces | `rr` CLI + `rr tui` + local web console (`rr web`): Overview, Review, Activity, Local AI, Settings |
+| Interfaces | `rr` CLI + `rr tui` + local web console (`rr web`): Overview, Review, Activity, Local AI, Settings; `rr-tray` (Windows tray shell) |
 | Mail | Gmail app-password login (IMAP/SMTP, no Cloud Console) or Desktop OAuth with PKCE; explicit read/send consent |
 | AI | Local Ollama classification/drafting plus same-model or optional sequential independent-model verification; structured outputs and deterministic safety gates |
 | Model | `granite4.2:8b-q8_0` default (verified to pass the self-verification qualification gate); `qwen3.5:4b` default independent verifier; Qwen3.5, MiMo, Gemma 4 12B Q8, Ministral 3 14B and other curated challengers can be compared locally on the full task pipeline |
@@ -43,7 +43,7 @@ Safe offline preview:
 .\rejection-rejector.exe --demo
 ```
 
-After configuring the real workspace, run the non-sensitive readiness check with the GUI closed. The app requires Ollama 0.35.1 or newer. It enforces the capability boundary between local chat-generation models and decision-only models; Ollama 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
+After configuring the real workspace, run the non-sensitive readiness check with the console closed and no worker running. The app requires Ollama 0.35.1 or newer. It enforces the capability boundary between local chat-generation models and decision-only models; Ollama 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
 
 ```powershell
 .\rr.exe doctor
@@ -94,9 +94,9 @@ No Node.js, Electron, Docker, Python backend or PostgreSQL service is needed. SQ
 
 ## Important boundaries
 
-The GUI or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether the GUI stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Reply language follows the first substantive language of the rejection (or English on request). Twelve languages are explicitly guaranteed in the prompt contract and evaluation fixtures: English, Mandarin Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Urdu, German and Greek; other languages are attempted best-effort. A deterministic language detector sets the reply language and verifies the drafted reply before it can proceed, so a language mismatch holds the message instead of sending it.
+The `rr web` console or `rr run` must own the workspace for scheduled checks. On Windows 11, `rr autostart install` can register the headless worker to start 30 seconds after the current user logs on using Task Scheduler with InteractiveToken + LeastPrivilege; this preserves access to the user's Credential Manager vault while decoupling scheduling from whether a console session stays open. One process and one connected Gmail account per data directory. Outlook/IMAP and attachment analysis are not implemented. Reply language follows the first substantive language of the rejection (or English on request). Twelve languages are explicitly guaranteed in the prompt contract and evaluation fixtures: English, Mandarin Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, Urdu, German and Greek; other languages are attempted best-effort. A deterministic language detector sets the reply language and verifies the drafted reply before it can proceed, so a language mismatch holds the message instead of sending it.
 
-Managed deployments can additionally configure an out-of-band emergency-stop sentinel (a stop file managed outside the application) that blocks every outbound Gmail write independently of the GUI/model/settings and is rechecked immediately before dispatch.
+Managed deployments can additionally configure an out-of-band emergency-stop sentinel (a stop file managed outside the application) that blocks every outbound Gmail write independently of the console/model/settings and is rechecked immediately before dispatch.
 
 Automatic deliberately holds ambiguous, truncated, changed, non-replyable or unverifiable messages. It also requires an independent deterministic rejection phrase in the current, de-quoted message; model output alone cannot authorize unattended sending. As a containment rule that users cannot raise, unattended mode allows at most two reply attempts to the same normalized recipient mailbox in any rolling 24 hours; only an explicit Human Review action can bypass that burst ceiling. Verification may use the primary model in the base configuration or an optional **sequential independent pinned local model**; enterprise policy v3 can require that independent verifier and constrain its exact tag. The models are intentionally loaded sequentially so only one is targeted for GPU residency at a time. Model diversity reduces correlated semantic error but does not eliminate it, and scores are not calibrated probabilities. A strongly worded reply does not overturn an employer's decision.
 
