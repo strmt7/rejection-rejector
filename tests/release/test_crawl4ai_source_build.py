@@ -376,6 +376,137 @@ class SourceContracts(unittest.TestCase):
         opened.assert_called_once_with("owned", 3 | platform.O_NOFOLLOW)
 
 
+class _FakeResponse:
+    """Purpose: Stand in for an HTTPS response body. Inputs: status/headers/payload; Output: read/close response."""
+
+    def __init__(self, status, payload=b"", location=None):
+        """Purpose: Bind the canned response. Inputs: status code, payload, optional Location header; Output: none."""
+        self.status = status
+        self._payload = payload
+        self._location = location
+        self.closed = False
+
+    def getheader(self, name):
+        """Purpose: Return one response header. Inputs: Header name; Output: the canned value or None."""
+        return self._location if name == "Location" else None
+
+    def read(self, amount=-1):
+        """Purpose: Consume payload bytes. Inputs: Optional byte count; Output: the next bytes."""
+        if amount is None or amount < 0:
+            data, self._payload = self._payload, b""
+            return data
+        data, self._payload = self._payload[:amount], self._payload[amount:]
+        return data
+
+    def close(self):
+        """Purpose: Mark the response closed. Inputs: none; Output: none."""
+        self.closed = True
+
+
+class _FakeConnection:
+    """Purpose: Stand in for a scripted connection.
+
+    Inputs: response script;
+    Output: request/getresponse/connection fakes.
+    """
+
+    script = []
+    instances = []
+
+    def __init__(self, host, port=None, timeout=None):
+        """Purpose: Record the connection. Inputs: host/port/timeout; Output: none."""
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.requested = None
+        self.closed = False
+        type(self).instances.append(self)
+
+    def request(self, method, path, headers=None):
+        """Purpose: Record the request. Inputs: method/path/headers; Output: none."""
+        self.requested = (method, path, headers)
+
+    def getresponse(self):
+        """Purpose: Pop the next canned response. Inputs: none; Output: the response."""
+        return type(self).script.pop(0)
+
+    def close(self):
+        """Purpose: Mark the connection closed. Inputs: none; Output: none."""
+        self.closed = True
+
+
+class HttpsTransportContracts(unittest.TestCase):
+    """Pin the HTTPS-only download seam (_https_response) failure modes."""
+
+    def setUp(self):
+        """Purpose: Reset the connection script per test. Inputs: none; Output: none."""
+        _FakeConnection.script = []
+        _FakeConnection.instances = []
+
+    def _open(self, url, hops):
+        """Purpose: Drive the seam against the scripted fake.
+
+        Inputs: URL and canned responses;
+        Output: the returned body.
+        """
+        _FakeConnection.script = list(hops)
+        with patch.object(build.http.client, "HTTPSConnection", _FakeConnection):
+            return build._https_response(url, 30)
+
+    def test_non_https_and_credential_urls_refused(self):
+        """Why (security review BAN-B310): only credential-free https URLs may
+        be opened; other schemes must be unreachable at the seam.
+        """
+        for url in (
+            "http://example.com/x",
+            "ftp://example.com/x",
+            "https://user:pass@example.com/x",
+            "file:///etc/passwd",
+        ):
+            with self.assertRaisesRegex(ValueError, "credential-free https"):
+                self._open(url, [])
+
+    def test_redirect_chain_followed_with_budget(self):
+        """https->https redirects follow within the budget to a 200 body."""
+        body = self._open(
+            "https://example.com/a",
+            [
+                _FakeResponse(302, location="https://example.com/b"),
+                _FakeResponse(302, location="https://example.com/c"),
+                _FakeResponse(200, payload=b"payload"),
+            ],
+        )
+        self.assertEqual(body.read(7), b"payload")
+        connection = _FakeConnection.instances[-1]
+        self.assertEqual(connection.host, "example.com")
+        body.close()
+        self.assertTrue(_FakeConnection.instances[-1].closed)
+
+    def test_redirect_without_location_refused(self):
+        """A redirect with no destination fails closed."""
+        with self.assertRaisesRegex(ValueError, "no destination"):
+            self._open("https://example.com/a", [_FakeResponse(302, location=None)])
+
+    def test_redirect_budget_and_status_refused(self):
+        """Redirect overflow and non-200 statuses fail closed."""
+        with self.assertRaisesRegex(ValueError, "redirect budget"):
+            self._open("https://example.com/a", [_FakeResponse(302, location="https://example.com/a")] * 4)
+        with self.assertRaisesRegex(ValueError, "refused"):
+            self._open("https://example.com/a", [_FakeResponse(404)])
+
+    def test_body_close_releases_response_and_connection(self):
+        """Why (owned-resource contract): closing the body closes both the
+        response and its connection; a leak here accumulates sockets across
+        cache misses.
+        """
+        response = _FakeResponse(200, payload=b"x")
+        body = self._open("https://example.com/a", [response])
+        connection = _FakeConnection.instances[-1]
+        body.close()
+        self.assertTrue(response.closed)
+        self.assertTrue(connection.closed)
+
+
 class ReservedNameContracts(unittest.TestCase):
     """Pin the locally owned Windows reserved-name predicate."""
 

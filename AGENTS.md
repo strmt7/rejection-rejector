@@ -1,231 +1,158 @@
 # AGENTS.md
 
-Operational map for automated contributors. Read this first; do not re-derive
-the layout. The in-repo skill `.agents/skills/rr-engineering/SKILL.md` holds the
-full engineering discipline. `docs/HANDOVER.md` records the current verified
-state, open items and the exact operating recipes (commits, gate, DeepSource,
-manifest) - read it before non-trivial work.
+Operational doctrine for automated contributors. Judgment rules only —
+derivable facts live in the repo. Read this first, then
+`docs/HANDOVER.md` (verified state + operating recipes) before non-trivial
+work, and `.agents/skills/rr-engineering/SKILL.md` for the full engineering
+discipline. Enforced rules also live as executable checks in
+`tests/release/test_agent_doctrine.py` — prose is not enforcement.
 
 ## What this is
 
-Native Rust (egui/eframe) desktop app: job-rejection detection, local Ollama
-drafting, human-review or gated automatic Gmail replies. Safety invariants:
-at-most-once delivery, deterministic rejection gate (model output alone never
-authorizes sending), fail-closed emergency stop, encrypted SQLite payloads.
+Rejection Rejector: local-first email-rejection detection and reply engine.
+Surface: `rr` CLI, `rr tui`, `rr web` (loopback console), `rr-tray`
+(Windows tray shell). Safety invariants: at-most-once delivery, the
+deterministic rejection gate (model output alone never authorizes sending),
+fail-closed emergency stop, encrypted SQLite payloads, human review as the
+default mode.
 
-## Layout
+## Layout and commands
 
-| Path | Contents |
-|---|---|
-| `src/` | library + `bin/` CLIs; `store.rs` delivery state machine, `vault.rs` crypto, `policy.rs` enterprise policy, `recovery.rs` + `recovery/` restore, `gui/` screens |
-| `tests/` | integration tests; `tests/release/` Python operator-tool tests |
-| `scripts/` | `build-windows.ps1`, `release_guard.py`, `repository_integrity.py`, `verify_package.py` |
-| `docs/` | SETUP, ARCHITECTURE, TESTING, INTEGRATION, ENTERPRISE_POLICY, THREAT_MODEL |
-| `fuzz/` | cargo-fuzz targets |
-
-## Commands
-
-```text
-cargo fmt --all --check
-cargo test --locked --lib --no-default-features
-cargo test --locked
-cargo clippy --locked --all-targets --all-features -- -D warnings
-python3 -m unittest discover -s tests/release -v
-```
-
-After any edit under `src/`, always run `cargo fmt --all` before committing.
+Discoverable from the tree and `docs/ARCHITECTURE.md`; do not re-derive
+from memory. The single gate is `python tools/local_ci.py` (read its
+printed verdict; run it AFTER the last edit). After any `src/` edit run
+`cargo fmt --all` before committing. Commits go through
+`tools/connector_commit.py` or `tools/commit_wave.py`.
 
 ## Conventions
 
-- Actions pinned by full commit SHA with `# vX.Y.Z` comments; `persist-credentials: false`.
-- Workflow-level `permissions` are read-only; write scopes live at job level.
+- Actions pinned by full commit SHA with `# vX.Y.Z` comments;
+  `persist-credentials: false`; workflow-level `permissions` read-only.
 - Every function carries a doc comment stating its input/output contract.
-- `finish_send`-style writes use state+revision CAS guards and affected-row checks.
-- No new web stack, hosted inference, or Python in the product; keep it local-first.
-- Commit style: conventional commits (`fix:`, `ci:`, `docs:`, `refactor:`, `test:`).
+- `finish_send`-style writes use state+revision CAS guards and
+  affected-row checks. No new web stack, hosted inference, or Python in
+  the product; keep it local-first. Conventional commit style.
 
 ## Research-first mandate (all AI agents) — non-negotiable
 
-Before implementing ANY new feature, library, tool, protocol, or non-trivial
-logic — even when the operator did not ask — NEVER start by writing code.
-Search in this order and stop at the first hit that fits:
-
-1. **Harness capabilities first.** Enumerate the tools, skills, and plugins
-   already available to the coding agent (tool catalog, skills list, installed
-   CLIs, MCP servers) and use one if it fits — even if it must first be
-   installed or enabled. Reusing the harness beats adding a new dependency.
-2. **Community / online research next.** Search for existing crates, libraries,
-   CLIs, or community tools that already do it. Prefer a mature, well-maintained
-   dependency over hand-rolling.
-3. **Build from scratch only as a last resort** when nothing suitable exists —
-   and record why.
-
-This is a hard rule: it saves tokens, reuses battle-tested code, and yields more
-stable, professional results than reinventing it badly. Verify the chosen
-tool/crate's real API and current version before use (Verification discipline
-§2), and name the alternatives you rejected when the choice is non-obvious.
+Before implementing ANY new feature, library, tool, protocol, or
+non-trivial logic — even when unasked — never start by writing code.
+Search in order, stopping at the first fit: (1) harness capabilities
+(tools, skills, plugins, MCP servers; install/enable if needed), (2)
+community crates/CLIs (a mature dependency beats hand-rolling), (3) build
+from scratch only as a last resort and record why. Verify the chosen
+tool's real API and current version before use, and name rejected
+alternatives when the choice is non-obvious.
 
 ## Tool-call economy (all AI agents) — monitor, learn, promote
 
-Owner-set practice (2026-10-31): continuously watch your own tool calls,
-repetitive actions, and mistakes, and turn the recurring ones into durable
-assets instead of re-deriving them at model-token cost every session.
+Continuously watch your own tool calls, repetitive actions and mistakes;
+turn the recurring ones into durable assets instead of re-deriving them at
+model-token cost.
 
-1. **Search before building.** Before writing any helper, probe `tools/` and
-   `tests/release/` for an existing one (`search_files` by name and by the
-   action's keywords). A scratch client re-derived while a repo tool already
-   covered the need is pure waste — the repo's operator tools are the
-   canonical implementations.
-2. **Promote at the third occurrence.** A mechanical action performed
-   repeatedly (roughly 3+ times in a session, or re-created across sessions
-   as a near-identical scratch script) becomes a small script under
-   `tools/` with a focused test in `tests/release/`. Promote the ACTIONS,
-   not the accidents: exact command sequences, classification/decision
-   rules, polling/verdict logic.
-3. **Never ship one-off tools.** A tool that will realistically run once is
-   repo clutter — keep it in scratch space (which self-prunes) and let it
-   die. When unsure whether an action will recur, leave it in scratch;
-   promote only after the second re-derivation.
-4. **Promoted tools obey every standing rule**: host-agnostic, docstrings
-   with Inputs/Output, behavior-pinning tests, ruff clean, zero secrets or
-   account identifiers (they read credentials from env/config at runtime,
-   never embedded), and they must not weaken any gate.
-5. **Record the mistake class, not the incident.** When a recurring action
-   keeps causing the same failure (transport corruption, stale paths,
-   length limits), add the generic rule to `docs/LESSONS.md` so the mistake
-   stops happening even without the tool.
-6. **Snapshot first, reason second, tools on demand.** Before reasoning
-   about repository/CI/analyzer state, gather everything needed in ONE
-   batched deterministic pass (one `execute_code` running several reads, or
-   a promoted tool), then reason over the gathered state. Serial
-   probe-think-probe loops make the LLM reconstruct state one call at a
-   time and burn tokens on re-derivation. Software retrieves, joins,
-   filters and calculates; the LLM interprets.
-7. **A new fast path REPLACES the old slow path — it never stacks in front
-   of it.** When a snapshot or promoted tool supersedes a multi-call habit,
-   rewrite the instruction so only the fast path remains; an agent shown
-   both paths reliably runs both and ends up slower than before.
-8. **Output discipline: report findings, anomalies, implications and
-   decisions — never restate the data the reader just received.** Restating
-   fetched tables or logs is the dominant avoidable token cost.
+1. **Search `tools/` and `tests/` before building anything.** Existing
+   repo tools are canonical; a re-derived client beside one is waste.
+2. **Promote at the third occurrence** (3+ times per session, or the
+   second cross-session scratch re-derivation) into a small tested
+   `tools/` script. Promote actions, not accidents.
+3. **Never ship one-off tools.** Single-use helpers stay in scratch.
+   Promoted tools obey every standing rule (host-agnostic, Inputs/Output
+   docstrings, pinning tests, ruff clean, zero embedded secrets or account
+   identifiers — credentials come from env/config at runtime) and must be
+   referenced by a test (enforced).
+4. **Record the mistake class in `docs/LESSONS.md`**, not the incident.
+5. **Snapshot first, reason second, tools on demand.** Batch state
+   gathering into ONE deterministic pass, then reason. Software retrieves,
+   joins, filters and calculates; the LLM interprets.
+6. **A new fast path REPLACES the old slow path** — never stacks in front
+   of it (an agent shown both runs both).
+7. **Output discipline:** findings, anomalies, implications and decisions
+   — never restate data the reader just received.
 
 ## Token-efficiency contract (all AI agents)
 
-1. Read `AGENTS.md` and `.agents/skills/rr-engineering/SKILL.md` first; never
-   walk the tree to re-derive structure. Mandatory skills: `caveman` (lite
-   compression), `cocoindex-code-search` (semantic search discipline),
-   `crawl4ai-research` (web research grounding), `rr-engineering` (safety).
-2. Batch independent tool calls into one turn; prefer grep/search over full
-   file reads; keep any single read under 200 lines unless editing that file.
-3. Keep tool outputs small: filter with grep/awk before printing; never dump
-   raw build logs; print only error lines and counts.
-4. Make targeted edits (patch-style) instead of rewriting whole files.
-5. Do not re-read a file to verify an edit a tool already confirmed.
-6. Root-cause once, then scan sibling code paths for the same pattern instead
-   of rediscovering the bug file by file.
+Read this file and the skill first; never walk the tree to re-derive
+structure. Mandatory skills: `caveman`, `cocoindex-code-search`,
+`crawl4ai-research`, `rr-engineering`. Batch independent tool calls; prefer
+grep/search over full reads (keep single reads under 200 lines unless
+editing); filter tool outputs to error lines and counts; make targeted
+edits; never re-read what a tool already confirmed; root-cause once, then
+scan sibling code paths for the same pattern.
 
 ## Verification discipline (all AI agents)
 
 Never assume — verify against live sources, then re-verify after changes.
 
 1. State facts only from tool output run this turn (CI status, versions,
-   signatures, file contents) — never from memory, training data, or a
-   stale result from an earlier turn.
+   signatures, contents) — never from memory or stale results.
 2. Check the ACTUAL API signature / package index / upstream issue thread
-   before using or installing anything. Assumed shapes break builds
-   (two Trainer API breaks this way).
-3. Version families: read the upstream issue tracker before debugging a
-   failure. Known-broken families get swapped, not patched with flags.
-4. After every push: confirm which workflows ran AND why any were skipped
-   (path filters). A skipped lane is not a green lane — a change outside a
-   lane's paths needs that lane's equivalent verified locally or by a lane
-   that does cover those paths.
-5. Platform-gated code needs platform-gated imports; verify with the CI's
+   before using or installing anything. Version families: read the
+   upstream issue tracker before debugging; known-broken families get
+   swapped, not patched with flags.
+3. After every push: confirm which workflows ran AND why any were
+   skipped (path filters). A skipped lane is not a green lane.
+4. Platform-gated code needs platform-gated imports; verify with the CI's
    view (warnings denied, Linux + Windows) before claiming green.
-6. Every claim in a report carries its evidence (SHA, run id, count).
-   One verified fact beats ten plausible sentences; skip restating context.
-   Caution costs one tool call — assumptions cost a crash.
-7. Hardware-API thread affinity: accelerator/GPU APIs are called only from
-   the thread that owns the workload. Probe from a side thread and the
-   driver bridge races you (flaky probes, teardown hangs). Sample in a
-   per-step callback on the owner thread and share the reading as data.
-8. Read correction/withdrawn comments in issue threads before concluding —
-   the scariest report may be retracted as the reporter's own harness bug.
-   And `merged` != `shipped in your release`: verify the fix commit is in
-   the tag/branch you actually run.
-9. Programmatic (regex/generated) edits are untrusted until re-read: they
-   can silently no-op or swallow a neighboring definition. After every one,
-   grep the result and confirm definition-before-use order by line number.
-10. `cmd | tail` reports tail's exit code, not cmd's. Run verification
-    commands un-piped (or check PIPESTATUS) before claiming green.
+5. Every claim carries its evidence (SHA, run id, count). One verified
+   fact beats ten plausible sentences; caution costs one tool call while
+   assumptions cost a crash.
+6. Accelerator/GPU APIs are called only from the thread that owns the
+   workload; sample in a per-step callback and share readings as data.
+7. Read correction/withdrawn comments before concluding; `merged` is not
+   `shipped` — verify the fix commit is in the tag/branch you run.
+8. Programmatic edits are untrusted until re-read (silent no-ops,
+   swallowed neighbors); grep the result and confirm definition-before-use.
+9. `cmd | tail` reports tail's exit code — verify un-piped.
+10. Self-reported completion (yours or a subagent's) is a hypothesis:
+    require harness-executed evidence after the last edit (command, exit
+    code, output) and read remote state back after every mutation.
 
 ## Coverage doctrine (all AI agents)
 
-The goal is **not a single uncovered line of product code** — 100% line
-coverage of the measured areas (Rust src/ and the Python operator tooling in
-scripts/). This is a standing goal, not a CI gate: `--fail-under` thresholds
-exist only as regression floors. Rules:
-
-1. Only logical product code is measured and tested — never test code, never
-   tests of tests.
-2. Tests must be meaningful: they should fail if the code becomes subtly
-   wrong (wrong order, off-by-one, dropped validation), not merely execute
-   lines.
-3. Every uncovered line left in a changed area must have a written reason
-   (unreachable, platform-gated, or rendering glue).
+Standing goal: not a single uncovered line of product code (Rust `src/`
+and the Python tooling), never a CI gate — thresholds are regression
+floors. Measure only logical product code. Tests must fail when code
+becomes subtly wrong, not merely execute lines. Every uncovered line left
+in a changed area carries a written reason.
 
 ## Findings policy (all AI agents) — fix at source, never suppress
 
-Non-negotiable, owner-set policy (`docs/deepsource-dispositions.md` is the
-full statement):
+Non-negotiable, owner-set (`docs/deepsource-dispositions.md` is the full
+statement):
 
-1. Every static-analysis finding (DeepSource, code scanning, linters) is
-   fixed at source by a complete, professional rewrite — the rule's pattern
-   must stop existing because the code became better.
-2. **Never create a suppression of any kind**: no DeepSource ignore rules,
-   no `report_false_positive` dispositions, no code-scanning dismissals
-   ("false positive" or "won't fix"), no analyzer-silencing attributes.
-   A previous suppression found anywhere is deleted on sight.
-3. A finding that genuinely cannot be solved (external registration,
-   deliberate governance decision) stays **open and listed** in
-   `docs/deepsource-dispositions.md` — never hidden. Two or three such
-   findings are acceptable.
-4. Analyzer outages and slow analysis are waited out. Poll patiently; never
-   escalate to support and never compensate with a suppression.
+1. Every static-analysis finding is fixed at source by a complete,
+   professional rewrite — the pattern must stop existing.
+2. **Never create a suppression of any kind** (ignore rules, false-positive
+   dispositions, dismissals, silencing attributes); an existing one is
+   deleted on sight.
+3. Genuinely unsolvable findings stay **open and listed** in the
+   dispositions doc — never hidden; two or three are acceptable.
+4. Analyzer outages and slow analysis are waited out patiently; never
+   escalate and never compensate with a suppression.
 
 ## Dependency maintenance (all AI agents) — dependabot alerts and PRs
 
-Owner-set policy: every dependabot alert and dependabot PR is checked and
-applied/addressed — but only after verifying it introduces no dependency
-conflicts and no other problems in the repository. Concretely:
-
-1. **Security alerts** (`gh api repos/<owner>/<repo>/dependabot/alerts`):
-   triage every open alert. Apply the patched version (or the documented
-   remediation) only after confirming compatibility with the pinned
-   toolchain and the rest of the graph. If the fix collides with another
-   pin or breaks the build, resolve the conflict first and apply the alert
-   fix together with the conflict resolution — never drop an alert.
-2. **Version-bump PRs**: verify the bump is genuine (action SHAs must
-   resolve to the claimed tag; package bumps must match the registry),
-   apply the change on top of current `main`, and run the full gate before
-   pushing. When the identical change lands on `main` directly, let
-   dependabot close its PR automatically (or close it with a comment
-   referencing the landed commit) — do not merge stale duplicate diffs.
-3. Every applied bump is validated like any other change: gate green
-   before push and remote workflows green after. A bump that turns a lane
-   red is root-caused and fixed at source (the findings policy applies to
-   dependency code paths too), never reverted silently and never merged red.
+Every dependabot alert and PR is checked and applied/addressed — but only
+after verifying it introduces no dependency conflicts and no other
+problems in the repository. Triage every open security alert; apply the
+patched version only after confirming compatibility with the pinned
+toolchain and the graph, resolving conflicts first. Verify version bumps
+are genuine (action SHAs resolve to the claimed tag; packages match the
+registry), apply on top of current `main`, and gate-validate like any
+change; when the identical change lands on `main` directly, let dependabot
+close its PR (or close it citing the landed commit) — never merge stale
+duplicates, never merge red, never drop an alert.
 
 ## Lessons learned (all AI agents)
 
-Read `docs/LESSONS.md` before starting non-trivial work. It is a sanitized,
-repo-wide record of generic engineering rules distilled from past failures —
-each rule exists because it previously caused a real defect. Update it when
-a genuinely new failure class appears (generic rules only: never incident
-detail, personal data, or machine specifics — this repository is public).
+Read `docs/LESSONS.md` before non-trivial work: generic rules distilled
+from real defects. Update it when a genuinely new failure class appears
+(generic rules only — never incident detail, personal data, or machine
+specifics; this repository is public).
 
 ## Definition of done
 
-Local suite green (fmt, clippy, all tests, `tests/release`) AND pushed AND remote
-workflows green on `main` AND CodeQL/Scorecard alerts re-checked via `gh api`.
-Never report completion from local results alone.
+Local gate green AND pushed AND remote workflows green on `main` (counted
+from the complete listing) AND CodeQL/Scorecard/DeepSource re-checked.
+Completion claims carry the evidence; never report done from local results
+alone.

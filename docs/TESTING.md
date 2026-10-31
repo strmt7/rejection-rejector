@@ -280,6 +280,46 @@ stays off (per-SHA evidence groups are never superseded). Timed-out mutants
 are inconclusive and cannot satisfy the gate; surviving viable mutants fail
 it.
 
+## Practice validation (2026-10-31 research review)
+
+A four-stream review of ~250 recent sources (agent efficiency, evaluation
+science, CI/CD quality, agent design) was adjudicated against this
+repository's actual configuration. Verdicts:
+
+- **Confirmed in place**: hash-pinned actions and dependencies; trunk-based
+  direct-to-main with per-SHA evidence; mutation testing as the test-suite
+  quality signal (correlates with real-fault detection independent of
+  coverage) on a bounded scope and schedule, not per-PR (Facebook-scale
+  studies find >50% of mutants survive strong suites; per-PR blocking runs
+  are infeasible); change-aware `paths` filters on heavy lanes with the
+  scheduled deep pass covering skipped scope; per-lane `timeout-minutes`
+  budgets; human-review default with the deterministic policy gate as final
+  authority ("model proposes, gate disposes" — the strongest
+  prompt-injection defense pattern in the OWASP/AgentDojo evidence);
+  behavior-pinning tests and the never-suppress findings policy.
+- **Adopted from the review**: deterministic doctrine enforcement in
+  `tests/release/test_agent_doctrine.py` (instruction files decay in
+  adherence with size and prompt prose is not enforcement); exact
+  email-token-set pinning as the leakage checkpoint; harness-executed
+  evidence for completion claims (self-reported success is unreliable:
+  measured studies find most failed agent runs still claim success);
+  the `AGENTS.md` 200-line judgment-only budget; batched
+  snapshot-first state gathering.
+- **Deliberately not adopted, with reasons**: cargo-nextest as the blocking
+  test runner (its process-per-test model breaks in-process synchronization;
+  our suite uses in-process credential-store locks — a separate validated
+  migration is required); ML predictive test selection (needs Meta-scale
+  training data; deterministic path filters capture most of the benefit);
+  per-PR mutation gates (compute cost vs evidence); LLM-as-judge in any
+  acceptance path (judge instability measured: preference flips on repeated
+  identical judgments); learned prompt compression (small end-to-end
+  gains, risk of dropping code constraints); general multi-agent
+  orchestration for code work (~15x token multiplier, coding tasks are
+  poorly parallelizable per both pro- and anti-multi-agent sources).
+- Coverage thresholds stay regression floors only; the research consensus
+  (Microsoft/OSS studies) finds no strong coverage-defect correlation, so
+  per-diff quality signals and mutation scores carry the evidence weight.
+
 ## Sources (checked 2026-10-12)
 
 - Rust toolchain pin and components: `rust-toolchain.toml` in this repository.
