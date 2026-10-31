@@ -178,3 +178,37 @@ rule exists because it previously caused a real defect or delay.
   growing log before trusting it; re-launch through a known-good wrapper
   (e.g. tools/train_guarded.sh) rather than hand-rolled nohup lines.
 
+## Tool-call economy and recurring-action hygiene (2026-10-31)
+
+- Before writing ANY helper, search the repo's `tools/` first. A complete
+  DeepSource inventory client already existed while a fresh API client was
+  being re-derived from scratch in the same session — the second
+  implementation is pure token waste and drifts from the canonical one.
+- One-line `Purpose: ... Inputs: ... Output: ...` docstrings over the line
+  budget trip E501, which ruff cannot auto-fix (it cannot split string
+  literals), and the wrap/fix cycle costs a round trip every time. Write
+  such docstrings multi-line from the start when the single line would
+  exceed the limit.
+- Actions repeated 3+ times per session (or re-created as near-identical
+  scratch scripts across sessions) are promoted to small tested tools under
+  `tools/` — the wave-commit and CI-verdict drivers are the worked
+  examples. One-off helpers stay in scratch and die there; the repo must
+  not accumulate single-use tooling (owner rule).
+- A classifier's guard must test what its name claims: a "control
+  characters" check implemented as `strip() != path` catches trailing
+  whitespace but lets embedded NUL bytes through. The behavior-pinning
+  test caught it — name the predicate after the property it checks and
+  test the boundary that motivated it.
+- "No rows yet" is never green: an empty evidence listing (runs not
+  created yet, listing lag) must read as pending, not as an all-pass.
+- Snapshot fast paths must REPLACE the old slow-path instructions, not
+  stack in front of them (community-verified, 2026-10-31): an agent shown
+  both a snapshot tool and the old gather-by-query instruction runs the
+  snapshot AND then gathers anyway — strictly slower and pricier than
+  either path alone. When promoting a batched/snapshot tool, rewrite the
+  governing instructions so only the fast path remains.
+- Serial probe-think-probe state reconstruction is the default token sink:
+  gather the needed state in one batched deterministic pass first, then
+  reason (software retrieves/joins/filters; the LLM interprets), and report
+  findings/decisions instead of restating the gathered data.
+

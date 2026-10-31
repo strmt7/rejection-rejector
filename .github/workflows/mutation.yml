@@ -47,13 +47,126 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  safety-critical:
-    name: Safety-critical mutation evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+  push-evidence:
+    name: Push mutation evidence (${{ matrix.os }})
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both platforms: platform-gated code is first-class test surface, and
+        # a mutant of a #[cfg(windows)] line can only be caught by the
+        # Windows suite (an Ubuntu-only run churns through full-suite
+        # survivor confirmations for mutants no Ubuntu test can kill).
+        os: [ubuntu-latest, windows-latest]
+    # Push evidence is fast feedback and must stay bounded (minutes, never
+    # hours); the weekly deep pass earns its long budget off the push path.
+    timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: never
       MUTATION_SINCE: ${{ github.event.before }}
+    steps:
+      - name: Checkout exact main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.99.1
+      - name: Install pinned cargo-mutants
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-mutants@27.1.0
+          checksum: true
+          fallback: none
+      - name: Mutate only the Rust lines the push changed
+        id: mutants
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          set -o pipefail
+          since="${MUTATION_SINCE:-}"
+          if [ -z "$since" ] || [ "$since" = "0000000000000000000000000000000000000000" ]; then
+            since="HEAD~1"
+          fi
+          git diff "$since"...HEAD -- '*.rs' > artifacts/mutation.diff
+          if [ ! -s artifacts/mutation.diff ]; then
+            echo "No Rust lines changed since $since; nothing to mutate."
+            echo "status=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo mutants \
+            --all-features \
+            --timeout-multiplier 2 \
+            --minimum-test-timeout 15 \
+            --jobs 4 \
+            --output artifacts/mutants \
+            --in-diff artifacts/mutation.diff \
+            2>&1 | tee artifacts/mutation-run.log
+          status=${PIPESTATUS[0]}
+          set +o pipefail
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          case "$status" in
+            0)
+              echo "All viable tested mutants were caught."
+              ;;
+            2)
+              echo "::error::Mutation testing found surviving mutants; all viable tested mutants must be caught."
+              exit 2
+              ;;
+            3)
+              echo "::error::Mutation testing exceeded its per-mutant budget; inconclusive results cannot satisfy the release gate."
+              exit 3
+              ;;
+            1|4|5|6|70)
+              echo "::error::Mutation infrastructure/baseline failed with exit code $status"
+              exit "$status"
+              ;;
+            *)
+              echo "::error::Unexpected cargo-mutants exit code $status"
+              exit "$status"
+              ;;
+          esac
+      - name: Summarize mutation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f artifacts/mutants/outcomes.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("artifacts/mutants/outcomes.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          summary = data.get("summary", data)
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+          fi
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rejection-rejector-mutants-${{ github.sha }}-${{ matrix.os }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
+
+  deep-pass:
+    name: Deep mutation evidence (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    # The weekly deep pass earns a long budget off the push path.
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: never
       SCOPE_INPUT: ${{ inputs.scope }}
     steps:
       - name: Checkout exact main source
@@ -71,7 +184,7 @@ jobs:
           tool: cargo-mutants@27.1.0
           checksum: true
           fallback: none
-      - name: Run safety-critical mutation suite
+      - name: Run deep mutation suite
         id: mutants
         shell: bash
         run: |
@@ -79,27 +192,10 @@ jobs:
           set +e
           set -o pipefail
           scope_args=()
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
-            # Push runs mutate only the lines changed by the push
-            # (cargo-mutants --in-diff): per-SHA evidence in minutes instead
-            # of hours. The weekly schedule keeps the full safety-critical
-            # core as the deep evidence pass.
-            since="${MUTATION_SINCE:-}"
-            if [ -z "$since" ] || [ "$since" = "0000000000000000000000000000000000000000" ]; then
-              since="HEAD~1"
-            fi
-            git diff "$since"...HEAD > artifacts/mutation.diff
-            if [ -s artifacts/mutation.diff ]; then
-              scope_args+=(--in-diff artifacts/mutation.diff)
-            else
-              echo "No code lines changed since $since; no mutants to run."
-            fi
-          fi
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
-            # Weekly schedule = the deep safety-critical-core pass. On push this
-            # list must NOT be added: combining --in-diff with the whole core
-            # made cargo-mutants mutate the entire core on every push (2.5h for
-            # a non-Rust diff), instead of only the changed lines.
+          if [ "${SCOPE_INPUT:-safety-critical}" = "safety-critical" ]; then
+            # The safety-critical core. Dispatch with scope=full leaves the
+            # list off, producing the deliberate manual-only exhaustive
+            # whole-workspace pass.
             scope_args+=(
               --file src/store.rs
               --file src/vault.rs
@@ -128,11 +224,11 @@ jobs:
               echo "All viable tested mutants were caught."
               ;;
             2)
-              echo "::error::Safety-critical mutation testing found surviving mutants; all viable tested mutants must be caught."
+              echo "::error::Mutation testing found surviving mutants; all viable tested mutants must be caught."
               exit 2
               ;;
             3)
-              echo "::error::Safety-critical mutation testing timed out; inconclusive results cannot satisfy the release gate."
+              echo "::error::Mutation testing exceeded its per-mutant budget; inconclusive results cannot satisfy the release gate."
               exit 3
               ;;
             1|4|5|6|70)
@@ -150,7 +246,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f artifacts/mutants/outcomes.json ]; then
-            python3 - <<'PY'
+            python - <<'PY'
           import json
           from pathlib import Path
           path = Path("artifacts/mutants/outcomes.json")
@@ -163,7 +259,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: rejection-rejector-mutants-${{ github.sha }}
+          name: rejection-rejector-mutants-${{ github.sha }}-${{ matrix.os }}
           path: artifacts/
           if-no-files-found: warn
           retention-days: 30

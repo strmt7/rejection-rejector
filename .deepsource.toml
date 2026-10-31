@@ -1,0 +1,53 @@
+# DeepSource analysis configuration — whole-repository code coverage.
+#
+# Owner directive (2026-10-31): DeepSource must cover the whole repository,
+# not a narrow category, as long as it is safe and makes sense. This file
+# makes the analyzer set explicit and reproducible for every analysis run.
+#
+# Coverage mapping (tracked inventory at the time of writing: 66 Rust,
+# 65 Python, 1 Shell source files):
+#   - python: every tracked .py file (tools/, training/, tests/, scripts/)
+#   - rust:   every tracked .rs file (src/, fuzz/, benches/)
+#   - shell:  every tracked .sh file and shell entry points
+# Secrets detection and license compliance are always-on platform engines
+# for this repository (they run on every commit and are not TOML analyzer
+# entries), so nothing is lost by listing only the code analyzers here.
+#
+# Exclusions are limited to code this repository does not author or
+# maintain; everything else is analyzed in full:
+#   - third_party/**  — byte-pinned upstream evidence snapshots whose bytes
+#                       are fixed by their sha256 sidecars; analyzer-driven
+#                       edits would break the pinned provenance.
+#   - tools/contract/** — the vendored byte-exact reference package whose
+#                       hashes are pinned by PACKAGE-MANIFEST.json (frozen
+#                       by policy; see docs/TESTING.md).
+version = 1
+
+test_patterns = [
+  "tests/**",
+  "training/tests/**",
+]
+
+exclude_patterns = [
+  "third_party/**",
+  "tools/contract/**",
+]
+
+[[analyzers]]
+name = "python"
+enabled = true
+
+  [analyzers.meta]
+  runtime_version = "3.x.x"
+  max_line_length = 120
+
+[[analyzers]]
+name = "rust"
+enabled = true
+
+  [analyzers.meta]
+  msrv = "stable"
+
+[[analyzers]]
+name = "shell"
+enabled = true

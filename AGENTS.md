@@ -65,6 +65,50 @@ stable, professional results than reinventing it badly. Verify the chosen
 tool/crate's real API and current version before use (Verification discipline
 §2), and name the alternatives you rejected when the choice is non-obvious.
 
+## Tool-call economy (all AI agents) — monitor, learn, promote
+
+Owner-set practice (2026-10-31): continuously watch your own tool calls,
+repetitive actions, and mistakes, and turn the recurring ones into durable
+assets instead of re-deriving them at model-token cost every session.
+
+1. **Search before building.** Before writing any helper, probe `tools/` and
+   `tests/release/` for an existing one (`search_files` by name and by the
+   action's keywords). A scratch client re-derived while a repo tool already
+   covered the need is pure waste — the repo's operator tools are the
+   canonical implementations.
+2. **Promote at the third occurrence.** A mechanical action performed
+   repeatedly (roughly 3+ times in a session, or re-created across sessions
+   as a near-identical scratch script) becomes a small script under
+   `tools/` with a focused test in `tests/release/`. Promote the ACTIONS,
+   not the accidents: exact command sequences, classification/decision
+   rules, polling/verdict logic.
+3. **Never ship one-off tools.** A tool that will realistically run once is
+   repo clutter — keep it in scratch space (which self-prunes) and let it
+   die. When unsure whether an action will recur, leave it in scratch;
+   promote only after the second re-derivation.
+4. **Promoted tools obey every standing rule**: host-agnostic, docstrings
+   with Inputs/Output, behavior-pinning tests, ruff clean, zero secrets or
+   account identifiers (they read credentials from env/config at runtime,
+   never embedded), and they must not weaken any gate.
+5. **Record the mistake class, not the incident.** When a recurring action
+   keeps causing the same failure (transport corruption, stale paths,
+   length limits), add the generic rule to `docs/LESSONS.md` so the mistake
+   stops happening even without the tool.
+6. **Snapshot first, reason second, tools on demand.** Before reasoning
+   about repository/CI/analyzer state, gather everything needed in ONE
+   batched deterministic pass (one `execute_code` running several reads, or
+   a promoted tool), then reason over the gathered state. Serial
+   probe-think-probe loops make the LLM reconstruct state one call at a
+   time and burn tokens on re-derivation. Software retrieves, joins,
+   filters and calculates; the LLM interprets.
+7. **A new fast path REPLACES the old slow path — it never stacks in front
+   of it.** When a snapshot or promoted tool supersedes a multi-call habit,
+   rewrite the instruction so only the fast path remains; an agent shown
+   both paths reliably runs both and ends up slower than before.
+8. **Output discipline: report findings, anomalies, implications and
+   decisions — never restate the data the reader just received.** Restating
+   fetched tables or logs is the dominant avoidable token cost.
+
 ## Token-efficiency contract (all AI agents)
 
 1. Read `AGENTS.md` and `.agents/skills/rr-engineering/SKILL.md` first; never

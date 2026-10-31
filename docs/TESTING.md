@@ -253,18 +253,32 @@ not be reported as passed tests.
 
 ## Mutation testing scope
 
-The mutation gate (`.github/workflows/mutation.yml`) examines the safety-critical core
-only — `store.rs` (delivery state machine), `vault.rs` (crypto), `emergency.rs`
-(outbound stop), `decision.rs` (deterministic rejection gate), `audit_anchor.rs`,
-`policy.rs`, and `recovery.rs`/`recovery/` (restore integrity). This bounds the run so
-it completes as evidence instead of timing out mid-suite: an unscoped full-tree `cargo
-mutants` run over the whole crate exceeded the previous 45-minute job ceiling and was
-cancelled, which yielded no evidence at all. The job ceiling is now 180 minutes and
-`cancel-in-progress` is off so queued evidence runs are never dropped.
+The mutation gate (`.github/workflows/mutation.yml`) runs two explicit lanes,
+each with its own honest budget, on both `ubuntu-latest` and `windows-latest`
+(platform-gated code is first-class test surface: a mutant of a
+`#[cfg(windows)]` line can only be caught by the Windows suite):
 
-Full-tree mutation is available on demand via **Run workflow** with `scope: full`.
-Timed-out mutants are inconclusive and cannot satisfy the gate; surviving viable
-mutants fail it.
+- **`push-evidence`** (every code push, `timeout-minutes: 45`): mutates only
+  the Rust lines the push changed (`cargo-mutants --in-diff` over a
+  `*.rs`-filtered diff) with tighter per-mutant budgets
+  (`--timeout-multiplier 2 --minimum-test-timeout 15 --jobs 4`). A push with
+  no changed Rust lines exits green immediately — an empty diff must never
+  fall through to an unscoped whole-workspace run.
+- **`deep-pass`** (weekly schedule and manual dispatch,
+  `timeout-minutes: 180`): the safety-critical core — `store.rs` (delivery
+  state machine), `vault.rs` (crypto), `emergency.rs` (outbound stop),
+  `decision.rs` (deterministic rejection gate), `audit_anchor.rs`,
+  `policy.rs`, and `recovery.rs`/`recovery/` (restore integrity).
+  Full-tree mutation is available on demand via **Run workflow** with
+  `scope: full` (the deliberate manual-only exhaustive pass).
+
+Earlier designs mixed these scopes: a push run carrying the core `--file`
+list mutated the entire core on every push, and an Ubuntu-only lane churned
+through full-suite survivor confirmations for mutants no Ubuntu test could
+kill — hours of wall time per push and no usable evidence. `cancel-in-progress`
+stays off (per-SHA evidence groups are never superseded). Timed-out mutants
+are inconclusive and cannot satisfy the gate; surviving viable mutants fail
+it.
 
 ## Sources (checked 2026-10-12)
 
