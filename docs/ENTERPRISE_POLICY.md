@@ -168,7 +168,7 @@ without exposing secrets; policy files must not contain secrets.
 - A new `policy_id` intentionally starts a new rollback namespace; administrators should not rotate IDs merely to change settings.
 - Policy status reports whether digest pin enforcement is active and whether the loaded bytes match.
 - Policy application is re-run on every settings mutation and hot-reload.
-- Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by avoiding the desktop UI.
+- Recovery-key export checks the machine policy directly in the CLI path, so administrators cannot bypass the restriction by staying headless.
 
 This is an enforcement mechanism, not full Windows Group Policy/MDM integration.
 Ed25519 signatures authenticate policy provenance when the public-key provisioning

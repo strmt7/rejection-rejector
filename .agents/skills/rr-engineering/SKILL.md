@@ -13,7 +13,7 @@ description: Use when changing rejection-rejector source, workflows, or release 
    rejection phrase in the current de-quoted message; model output never
    authorizes dispatch alone.
 3. **Fail-closed emergency stop**: the outbound sentinel blocks every Gmail
-   write independent of GUI/model/settings and is rechecked pre-dispatch.
+   write independent of console/model/settings and is rechecked pre-dispatch.
 4. **Encrypted payloads**: `vault.rs` is the only crypto boundary; nonces come
    from `fresh_nonce()` (OS CSPRNG), never literals.
 

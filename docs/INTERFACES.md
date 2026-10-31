@@ -22,9 +22,9 @@ AI actions (qualify, compare, evaluate).
 
 - `send_gate` (library) computes whether a job is a valid send candidate
   (exact persisted draft, bound editor revision, no hard blocks, sending
-  enabled, not demo, not paused). GUI, TUI and web all call it; none
-  reimplements the logic. The confirm-exact-reply modal is mandatory in all
-  three before any send command is issued.
+  enabled, not demo, not paused). TUI and web both call it; none
+  reimplements the logic. The confirm-exact-reply modal is mandatory in
+  both before any send command is issued.
 - The 30-second Automatic-arm cooldown (`AutomaticArmGate`) is a library
   state machine; every surface renders its own confirmation affordance but
   none can bypass the timer.

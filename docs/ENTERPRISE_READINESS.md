@@ -15,7 +15,7 @@ record).
 - Automatic dispatch requires model/digest/context/source/draft identity, complete input, model verification, full reported GPU residency, deterministic current-message rejection evidence, cooldown, rolling send cap and a fresh Gmail conversation preflight. Optional sequential independent verification can use a different pinned local model; policy v3 can require it and restrict verifier tags.
 - Ambiguous network delivery is never blindly retried. Delivery enters an Uncertain state and requires reconciliation.
 - SQLite uses WAL, FULL synchronization, foreign keys, secure-delete and authenticated encrypted payloads. Database migrations authenticate the existing vault marker before mutating old schemas.
-- CI builds/tests Windows and Linux, treats clippy warnings as errors, runs native GUI smoke captures, and checks that validation does not modify tracked source.
+- CI builds/tests Windows and Linux, treats clippy warnings as errors, runs headless offline and readiness smoke tests, and checks that validation does not modify tracked source.
 - Supply-chain CI runs pinned cargo-audit, cargo-deny and cargo-cyclonedx tooling, produces a CycloneDX 1.5 SBOM artifact, and runs a full-history Gitleaks scan.
 - OpenSSF Scorecard runs independently with least-privilege workflow permissions.
 - CodeQL scans Rust source, scheduled fuzzing exercises bounded parsers/policy surfaces, and coverage evidence is generated separately from correctness gates.

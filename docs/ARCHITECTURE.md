@@ -13,13 +13,13 @@ model and database work never runs on the UI thread; the UI posts typed commands
 a bounded channel and renders typed results. Atomic Pause/Stop flags gate dispatch.
 The worker keeps its thread handle for **bounded graceful shutdown**: operations that
 touch the outside world (send, backup, restore) are surfaced as typed operation state
-so the GUI can warn before closing without ever waiting indefinitely.
+so the console can warn before closing without ever waiting indefinitely.
 
 ## Component map
 
 | Path | Role |
 |---|---|
-| `src/gui/`, `src/gui.rs`, `src/tui.rs`, `src/web.rs` | Native GUI, terminal UI and embedded local web page |
+| `src/tui.rs`, `src/web.rs`, `src/bin/rr-tray.rs` | Terminal UI, embedded local web page and Windows tray shell |
 | `src/engine.rs`, `src/background.rs`, `src/session.rs` | Worker loop, scheduling, command channel |
 | `src/sync.rs`, `src/gmail.rs` | Incremental Gmail synchronization and provider calls |
 | `src/ollama.rs`, `src/evaluation.rs` | Local model inference and task evaluation |
