@@ -137,7 +137,13 @@ class AgentContextReportTests(unittest.TestCase):
 class NltkRuntimeMeasurementTests(unittest.TestCase):
     """Pin the installed-runtime measurement refusals."""
 
-    def _tree(self, root: Path, name: str, content: bytes) -> Path:
+    @staticmethod
+    def _tree(root: Path, name: str, content: bytes) -> Path:
+        """Purpose: Build a minimal NLTK-like package tree for measurement.
+
+        Inputs: `root` -- directory to populate; `name` -- leaf file name;
+        `content` -- leaf file bytes; Output: the populated root.
+        """
         package = root / "nltk"
         package.mkdir(parents=True, exist_ok=True)
         (package / "__init__.py").write_bytes(b"")

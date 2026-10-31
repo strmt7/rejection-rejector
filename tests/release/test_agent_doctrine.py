@@ -71,7 +71,7 @@ class AgentFileDoctrineTests(unittest.TestCase):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, ValueError, OSError):
+            except (ValueError, OSError):
                 continue
             tokens.update(match.group(0) for match in EMAIL_PATTERN.finditer(text))
         reviewed = {

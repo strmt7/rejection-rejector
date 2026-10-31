@@ -221,4 +221,3 @@ new value), and mechanically identical in strength.
   gather the needed state in one batched deterministic pass first, then
   reason (software retrieves/joins/filters; the LLM interprets), and report
   findings/decisions instead of restating the gathered data.
-
