@@ -34,7 +34,7 @@ class SourceContracts(unittest.TestCase):
             with (
                 patch.object(build, "recipe", return_value=data),
                 patch.object(build.packaging, "expected_digest", return_value=digest),
-                patch.object(build.urllib.request, "urlopen", return_value=io.BytesIO(payload)) as download,
+                patch.object(build, "_https_response", return_value=io.BytesIO(payload)) as download,
             ):
                 archive = build.source_archive(home)
                 self.assertEqual(archive.read_bytes(), payload)
@@ -53,7 +53,7 @@ class SourceContracts(unittest.TestCase):
                     self.subTest(payload=payload),
                     patch.object(build, "recipe", return_value=data),
                     patch.object(build.packaging, "expected_digest", return_value=digest),
-                    patch.object(build.urllib.request, "urlopen", return_value=io.BytesIO(payload)),
+                    patch.object(build, "_https_response", return_value=io.BytesIO(payload)),
                     self.assertRaises(ValueError),
                 ):
                     build.source_archive(home)
@@ -64,7 +64,7 @@ class SourceContracts(unittest.TestCase):
             with (
                 patch.object(build, "recipe", return_value=data),
                 patch.object(build.packaging, "expected_digest", return_value=digest),
-                patch.object(build.urllib.request, "urlopen") as download,
+                patch.object(build, "_https_response") as download,
                 self.assertRaisesRegex(ValueError, "cached source differs"),
             ):
                 build.source_archive(home)
@@ -207,15 +207,30 @@ class SourceContracts(unittest.TestCase):
             commands = []
 
             def create_builder(directory):
+                """Purpose: Stand in for builder provisioning.
+
+                Inputs: builder directory;
+                Output: inert interpreter file.
+                """
                 python = Path(directory) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
                 python.parent.mkdir(parents=True)
                 python.write_bytes(b"inert interpreter fixture")
 
             def extract(_archive, destination):
+                """Purpose: Stand in for source extraction.
+
+                Inputs: archive/destination;
+                Output: the prepared destination.
+                """
                 destination.mkdir(parents=True)
                 return destination
 
             def canonical(_built, destination, _data, *, project):
+                """Purpose: Stand in for wheel canonicalization.
+
+                Inputs: built wheel/destination/recipe;
+                Output: asserted, written destination.
+                """
                 self.assertEqual(project, "crawl4ai")
                 destination.write_bytes(b"canonical wheel")
 
@@ -403,9 +418,6 @@ class ReservedNameContracts(unittest.TestCase):
         """Where the stdlib helper exists (Python 3.13+), our predicate must
         agree with it exactly across the same table.
         """
-        import os.path
-        import sys
-
         if not hasattr(os.path, "isreserved"):
             return
         table = [

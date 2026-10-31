@@ -297,6 +297,11 @@ def installation_lock(directory: Path, timeout: float = 900):
             import fcntl
 
         def acquire():
+            """Purpose: Take the one-byte cache lock without waiting.
+
+            Inputs: none (file position preserved);
+            Output: lock held; raises on contention.
+            """
             lock.seek(0)
             if os.name == "nt":
                 msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)

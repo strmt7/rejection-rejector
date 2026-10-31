@@ -149,6 +149,29 @@ full statement):
 4. Analyzer outages and slow analysis are waited out. Poll patiently; never
    escalate to support and never compensate with a suppression.
 
+## Dependency maintenance (all AI agents) — dependabot alerts and PRs
+
+Owner-set policy: every dependabot alert and dependabot PR is checked and
+applied/addressed — but only after verifying it introduces no dependency
+conflicts and no other problems in the repository. Concretely:
+
+1. **Security alerts** (`gh api repos/<owner>/<repo>/dependabot/alerts`):
+   triage every open alert. Apply the patched version (or the documented
+   remediation) only after confirming compatibility with the pinned
+   toolchain and the rest of the graph. If the fix collides with another
+   pin or breaks the build, resolve the conflict first and apply the alert
+   fix together with the conflict resolution — never drop an alert.
+2. **Version-bump PRs**: verify the bump is genuine (action SHAs must
+   resolve to the claimed tag; package bumps must match the registry),
+   apply the change on top of current `main`, and run the full gate before
+   pushing. When the identical change lands on `main` directly, let
+   dependabot close its PR automatically (or close it with a comment
+   referencing the landed commit) — do not merge stale duplicate diffs.
+3. Every applied bump is validated like any other change: gate green
+   before push and remote workflows green after. A bump that turns a lane
+   red is root-caused and fixed at source (the findings policy applies to
+   dependency code paths too), never reverted silently and never merged red.
+
 ## Lessons learned (all AI agents)
 
 Read `docs/LESSONS.md` before starting non-trivial work. It is a sanitized,

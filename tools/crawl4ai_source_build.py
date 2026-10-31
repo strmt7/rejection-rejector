@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import tarfile
 import tempfile
-import urllib.request
+import urllib.parse
 import venv
 from pathlib import Path, PurePosixPath
 
@@ -16,6 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = ROOT / "third_party/upstream/crawl4ai/0.9.5"
 OPENER = ROOT / "tools/crawl4ai_download_opener.py"
 BUILD_LOCK = packaging.BUILD_LOCK
+# The one admitted origin for the upstream source archive (Pypi release file,
+# pinned additionally by digest and exact byte length below).
+PINNED_SOURCE_URL = (
+    "https://files.pythonhosted.org/packages/ea/ad/"
+    "44b57b650c3c0afaeea917bd7e6b87a64cd1108be53431690483cde0eb2d/"
+    "crawl4ai-0.9.5.tar.gz"
+)
 
 
 def recipe() -> dict:
@@ -42,12 +50,75 @@ def recipe() -> dict:
         or type(data.get("source_bytes")) is not int
         or data["source_bytes"] != 577411
         or data.get("source_date_epoch") != 1791973529
-        or data.get("source_url")
-        != "https://files.pythonhosted.org/packages/ea/ad/44b57b650c3c0afaeea917bd7e6b87a64cd1108be53431690483cde0eb2d/crawl4ai-0.9.5.tar.gz"
+        or data.get("source_url") != PINNED_SOURCE_URL
     ):
         raise ValueError("Unsupported Crawl4AI source build recipe")
     packaging.expected_digest(SOURCE_ROOT / (data["source"] + ".sha256"))
     return data
+
+
+class _Body:
+    """Purpose: Own one HTTPS response and its connection.
+
+    Inputs: open connection/response pair;
+    Output: read/close body handle.
+    """
+
+    def __init__(self, connection, response):
+        """Purpose: Bind the owned pair. Inputs: Open HTTPSConnection/HTTPSResponse; Output: none."""
+        self._connection = connection
+        self._response = response
+
+    def read(self, amount=-1):
+        """Purpose: Read response bytes. Inputs: Optional byte count; Output: The next bytes of the body."""
+        return self._response.read(amount)
+
+    def close(self):
+        """Purpose: Release the response and connection. Inputs: none; Output: none."""
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+
+def _https_response(url: str, timeout: float):
+    """Purpose: Open a response body over HTTPS only.
+
+    Inputs: absolute URL and per-hop timeout seconds;
+    Output: a body handle with read()/close(); follows at most three
+    https-to-https redirects and refuses every other scheme, credential
+    bearing URL, redirect shape or status. HTTPS-only is enforced by using
+    the HTTPS-only client API, so no other scheme can be reached at all.
+    """
+    for _hop in range(4):
+        parsed = urllib.parse.urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("Crawl4AI source download requires a credential-free https URL")
+        connection = http.client.HTTPSConnection(parsed.hostname, port=parsed.port, timeout=timeout)
+        path = parsed.path + ("?" + parsed.query if parsed.query else "")
+        connection.request(
+            "GET",
+            path,
+            headers={"Accept": "application/octet-stream", "User-Agent": "rejection-rejector-source-build"},
+        )
+        response = connection.getresponse()
+        if response.status in (301, 302, 303, 307, 308):
+            location = response.getheader("Location")
+            connection.close()
+            if not location:
+                raise ValueError("Crawl4AI source redirect has no destination")
+            url = urllib.parse.urljoin(url, location)
+            continue
+        if response.status != 200:
+            connection.close()
+            raise ValueError("Crawl4AI source download was refused")
+        return _Body(connection, response)
+    raise ValueError("Crawl4AI source download exceeded its redirect budget")
 
 
 def source_archive(home: Path | None = None) -> Path:
@@ -70,16 +141,18 @@ def source_archive(home: Path | None = None) -> Path:
         try:
             with tempfile.NamedTemporaryFile(prefix="source-", suffix=".part", dir=directory, delete=False) as stage:
                 temporary = Path(stage.name)
-                request = urllib.request.Request(data["source_url"], headers={"Accept": "application/octet-stream"})
-                with urllib.request.urlopen(request, timeout=60) as response:
+                body = _https_response(data["source_url"], 60)
+                try:
                     remaining = data["source_bytes"]
-                    while chunk := response.read(min(65536, remaining + 1)):
+                    while chunk := body.read(min(65536, remaining + 1)):
                         remaining -= len(chunk)
                         if remaining < 0:
                             raise ValueError("Crawl4AI source download exceeds pinned length")
                         stage.write(chunk)
                     if remaining != 0:
                         raise ValueError("Crawl4AI source download is incomplete")
+                finally:
+                    body.close()
             if packaging.digest(temporary) != expected:
                 raise ValueError("Crawl4AI source download differs from pinned digest")
             os.replace(temporary, destination)
@@ -108,35 +181,57 @@ def identity() -> str:
     return hashlib.sha256("\n".join(values).encode("ascii")).hexdigest()
 
 
+def _read_extent(source) -> list:
+    """Purpose: Collect bounded archive members before extraction.
+
+    Inputs: the open tar stream;
+    Output: the admitted member list; raises ValueError past the reviewed
+    extent (negative size, over 2000 members, over the byte budget, or an
+    over-long member name).
+    """
+    entries = []
+    total = 0
+    for item in source:
+        total += item.size
+        if item.size < 0 or len(entries) >= 2000 or total > packaging.MAX_SOURCE_BYTES or len(item.name) > 4096:
+            raise ValueError("Crawl4AI source exceeds its reviewed extent")
+        entries.append(item)
+    return entries
+
+
+def _admit_member(item, seen: set) -> None:
+    """Purpose: Validate one archive member shape.
+
+    Inputs: the member and the casefolded name set (mutated on admission);
+    Output: None; raises ValueError on any unsafe, foreign or duplicate
+    member.
+    """
+    path = PurePosixPath(item.name)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or path.parts[0] != "crawl4ai-0.9.5"
+        or ".." in path.parts
+        or "\\" in item.name
+        or ":" in item.name
+        or "\0" in item.name
+        or not (item.isfile() or item.isdir())
+        or item.name.casefold() in seen
+    ):
+        raise ValueError("Unsafe or duplicate Crawl4AI source member")
+    seen.add(item.name.casefold())
+
+
 def extract_source(archive: Path, destination: Path) -> Path:
     """Purpose: Extract owned bounded regular source. Inputs: Verified tar/destination. Outputs: Source tree."""
     if destination.exists() or destination.is_symlink():
         raise ValueError("Crawl4AI source destination must be new and unredirected")
     with tarfile.open(archive, "r:gz") as source:
-        entries: list[tarfile.TarInfo] = []
-        total = 0
-        for item in source:
-            total += item.size
-            if item.size < 0 or len(entries) >= 2000 or total > packaging.MAX_SOURCE_BYTES or len(item.name) > 4096:
-                raise ValueError("Crawl4AI source exceeds its reviewed extent")
-            entries.append(item)
+        entries = _read_extent(source)
         seen = set()
         # Validate the complete archive before publishing any member to the owned tree.
         for item in entries:
-            path = PurePosixPath(item.name)
-            if (
-                path.is_absolute()
-                or not path.parts
-                or path.parts[0] != "crawl4ai-0.9.5"
-                or ".." in path.parts
-                or "\\" in item.name
-                or ":" in item.name
-                or "\0" in item.name
-                or not (item.isfile() or item.isdir())
-                or item.name.casefold() in seen
-            ):
-                raise ValueError("Unsafe or duplicate Crawl4AI source member")
-            seen.add(item.name.casefold())
+            _admit_member(item, seen)
         for item in entries:
             target = destination.joinpath(*PurePosixPath(item.name).parts[1:])
             if item.isdir():
