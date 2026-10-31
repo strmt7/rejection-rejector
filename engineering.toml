@@ -39,7 +39,7 @@ fixture = ["tests/fixtures", "training/data"]
 id = "cargo-lock"
 kind = "lock"
 path = "Cargo.lock"
-sha256 = "60e3be54fc78bc9ec80f7c21bf98c97dce673e37e4a980d3e68ddf7e2fbbace7"
+sha256 = "5841e0816a8c1db6aaa9195cf0654aae7e14e9349fa4ebbe496fbfa8ff395ff5"
 
 [[input_files]]
 id = "fuzz-cargo-lock"

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "project": "nltk",
+  "upstream_version": "3.10.3",
+  "version": "3.10.3+rejection.rejector.security1.g1bd574cfd",
+  "commit": "1bd574cfd4e3bca82c6b145d9271a646df410707",
+  "source": "nltk-source.zip",
+  "url": "https://codeload.github.com/nltk/nltk/zip/1bd574cfd4e3bca82c6b145d9271a646df410707",
+  "source_date_epoch": 1791168836,
+  "advisories": [
+    "GHSA-8mgp-746c-j5xp"
+  ],
+  "merged_repairs": [
+    3757,
+    3759,
+    3813
+  ]
+}

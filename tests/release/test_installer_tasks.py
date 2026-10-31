@@ -1,9 +1,10 @@
 """Enforce the component-selectable installer contract.
 
-The Windows installer must offer the two interface components (command-line
-tools and the local web console) as independent, default-checked choices and
-must refuse to continue with none selected. These tests pin that contract so
-the installer cannot silently lose a component or the at-least-one rule.
+The Windows installer must offer the three interface components (command-line
+tools, the local web console and the tray app) as independent, default-checked
+choices and must refuse to continue with none selected. These tests pin that
+contract so the installer cannot silently lose a component or the at-least-one
+rule.
 """
 
 import re
@@ -15,7 +16,7 @@ ISS = ROOT / "windows" / "installer.iss"
 
 
 class InstallerTasksTest(unittest.TestCase):
-    """The installer ships both surfaces with user-selectable ticks."""
+    """The installer ships every surface with user-selectable ticks."""
 
     def setUp(self):
         """Load the installer script source once per test."""
@@ -27,10 +28,10 @@ class InstallerTasksTest(unittest.TestCase):
         self.assertIsNotNone(match, "missing [Components] section")
         return match.group(1)
 
-    def test_two_interface_components_exist_and_are_user_selectable(self):
-        """Both interface components exist and can be deselected."""
+    def test_interface_components_exist_and_are_user_selectable(self):
+        """All interface components exist and can be deselected."""
         section = self.components_section()
-        for name in ('"cli"', '"web"'):
+        for name in ('"cli"', '"web"', '"tray"'):
             self.assertIn(f"Name: {name};", section, f"missing component {name}")
         self.assertNotIn('"desktop"', section, "the removed desktop UI must stay gone")
         # Fixed components cannot be unticked; the requirement is ticks the
@@ -51,23 +52,30 @@ class InstallerTasksTest(unittest.TestCase):
         self.assertIn("function NextButtonClick", self.text)
         self.assertIn("wpSelectComponents", self.text)
         self.assertIn("Select at least one component", self.text)
-        self.assertRegex(
-            self.text,
-            r"WizardIsComponentSelected\('cli'\)",
-            "the at-least-one rule must enumerate the cli component",
-        )
-        self.assertRegex(
-            self.text,
-            r"WizardIsComponentSelected\('web'\)",
-            "the at-least-one rule must enumerate the web component",
-        )
+        for component in ("cli", "web", "tray"):
+            self.assertRegex(
+                self.text,
+                rf"WizardIsComponentSelected\('{component}'\)",
+                f"the at-least-one rule must enumerate the {component} component",
+            )
 
     def test_least_privilege_posture_holds(self):
         """The installer stays lowest-privilege and launches nothing."""
         self.assertIn("PrivilegesRequired=lowest", self.text)
         self.assertRegex(self.text, r"\[Run\]\s*\n; Nothing", "install time must launch nothing")
         self.assertIn('Source: "{#SourceDir}\\rr.exe"', self.text)
-        self.assertIn('Source: "..\LICENSE"', self.text)
+        self.assertIn('Source: "..\\LICENSE"', self.text)
+
+    def test_tray_binary_and_start_menu_shortcut_ship(self):
+        """The tray binary ships in its own component with its shortcut."""
+        self.assertIn(
+            'Source: "{#SourceDir}\\rr-tray.exe"; DestDir: "{app}"; Components: tray',
+            self.text,
+        )
+        self.assertIn(
+            'Name: "{group}\\Rejection Rejector (tray)"; Filename: "{app}\\rr-tray.exe"; Components: tray',
+            self.text,
+        )
 
 
 if __name__ == "__main__":

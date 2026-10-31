@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "project": "crawl4ai",
+  "upstream_version": "0.9.5",
+  "version": "0.9.5+rejection.rejector.portable2",
+  "source": "crawl4ai-0.9.5.tar.gz",
+  "source_bytes": 577411,
+  "source_date_epoch": 1791973529,
+  "source_url": "https://files.pythonhosted.org/packages/ea/ad/44b57b650c3c0afaeea917bd7e6b87a64cd1108be53431690483cde0eb2d/crawl4ai-0.9.5.tar.gz"
+}

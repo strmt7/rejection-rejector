@@ -43,6 +43,21 @@ Attested Windows package workflow, with explicit PACKAGE confirmation and all re
 gates. Local build scripts and the separate reproducibility job remain available for
 development verification; their output is not a certified release.
 
+### Test layers
+
+The Python suites run in two layers, and every layer runs on every gate:
+
+- `tests/release/` — ambient contracts (release, policy, vendored tooling).
+  Collected by `unittest discover` in the gate's "python release suites" lane.
+- `tests/integration/` — installed-runtime contracts (`test_crawl4ai_downloads`,
+  `test_nltk_model_security`) whose assertions describe the provisioned
+  Crawl4AI/NLTK runtime. They run inside that interpreter through the tool's
+  own provisioning path (`python -B -m tools.crawl4ai_tool selftest`, the
+  gate's "installed runtime contracts" lane), so the environment under test
+  is exactly the environment their assertions name. Nothing is skipped:
+  a missing runtime provisions it first, and any contract failure fails the
+  gate.
+
 ## Change-aware deep verification
 
 All five deep workflows share a conservative invalidation boundary: source, tests, fuzz

@@ -38,7 +38,7 @@ GATES = [
 ]
 
 # Transient network fetches must not flip the gate: per-gate retry budget.
-GATE_ATTEMPTS = {"cargo audit (advisories)": 3}
+GATE_ATTEMPTS = {"cargo audit (advisories)": 3, "installed runtime contracts": 2}
 
 # Ruff lint lanes are enforcing: the one-time `ruff check --fix` + `ruff
 # format` pass over training/, tools/ and tests/ is complete (2026-10-30), so
@@ -188,6 +188,16 @@ def main(argv: list[str] | None = None) -> int:
         run(
             "python release suites",
             [sys.executable, "-m", "unittest", "discover", "-s", "tests/release", "-p", "test_*.py"],
+        )
+    )
+    # Installed-runtime contracts (tests/integration/) assert against the
+    # provisioned Crawl4AI/NLTK runtime, so they run inside that interpreter
+    # through the tool's own provisioning path — the same environment their
+    # assertions describe. Ambient discovery (above) covers everything else.
+    results.append(
+        run(
+            "installed runtime contracts",
+            [sys.executable, "-B", "-m", "tools.crawl4ai_tool", "selftest"],
         )
     )
     if all(results):

@@ -22,6 +22,7 @@ Output:
 """
 
 import argparse
+import base64
 import json
 import subprocess
 import sys
@@ -81,6 +82,31 @@ def parse_set(spec):
         return path, normalize_text(handle.read())
 
 
+def parse_set_bytes(spec):
+    """Parse one --set PATH=FILE argument with binary support.
+
+    Inputs: `spec` -- "path=file" string (file may be "-" for stdin).
+    Output: (path, content, encoding) where text payloads are UTF-8 with
+    line endings normalized to LF and binary payloads are base64-encoded
+    for the blob API's binary encoding.
+    """
+    if "=" not in spec:
+        raise ValueError(f"--set expects PATH=FILE, got {spec!r}")
+    path, source = spec.split("=", 1)
+    if not path:
+        raise ValueError(f"--set path is empty in {spec!r}")
+    if source == "-":
+        raw = sys.stdin.buffer.read()
+    else:
+        with open(source, "rb") as handle:
+            raw = handle.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return path, base64.b64encode(raw).decode("ascii"), "base64"
+    return path, normalize_text(text), "utf-8"
+
+
 def build_entries(sets, deletes, blobs):
     """Assemble git tree entries for the requested file operations.
 
@@ -89,13 +115,13 @@ def build_entries(sets, deletes, blobs):
     Output: list of tree entry dicts with path, mode, type and sha fields.
     """
     entries = []
-    for path, _content in sets:
+    for item in sets:
         entries.append(
             {
-                "path": path,
+                "path": item[0],
                 "mode": "100644",
                 "type": "blob",
-                "sha": blobs[path],
+                "sha": blobs[item[0]],
             }
         )
     for path in deletes:
@@ -139,13 +165,13 @@ def main():
     if not args.set and not args.delete:
         parser.error("at least one --set or --delete is required")
 
-    sets = [parse_set(spec) for spec in args.set]
+    sets = [parse_set_bytes(spec) for spec in args.set]
     base = f"repos/{args.repo}"
     head = gh_api(f"{base}/git/ref/heads/{args.branch}")["object"]["sha"]
     parent = gh_api(f"{base}/git/commits/{head}")
     blobs = {}
-    for path, content in sets:
-        blob = gh_api(f"{base}/git/blobs", "POST", {"content": content, "encoding": "utf-8"})
+    for path, content, encoding in sets:
+        blob = gh_api(f"{base}/git/blobs", "POST", {"content": content, "encoding": encoding})
         blobs[path] = blob["sha"]
     entries = build_entries(sets, args.delete, blobs)
     tree = gh_api(f"{base}/git/trees", "POST", {"base_tree": parent["tree"]["sha"], "tree": entries})

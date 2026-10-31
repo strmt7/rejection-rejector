@@ -5,9 +5,12 @@ argument parsing, tree-entry assembly and the contributor-identity policy
 check without any network access.
 """
 
+import base64
 import io
 import os
+import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -35,6 +38,26 @@ class ParseSetTests(unittest.TestCase):
         with mock.patch("sys.stdin", io.StringIO("a\r\nb\rc\n")):
             _path, content = connector_commit.parse_set("docs/x.md=-")
         self.assertEqual(content, "a\nb\nc\n")
+
+    def test_set_bytes_encodes_binary_as_base64(self):
+        """Why (connector binary support): provenance archives are binary; a
+        PATH=FILE spec must reach the blob API as base64 with the matching
+        encoding flag, never as mangled text.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = pathlib.Path(temporary) / "asset.zip"
+            binary.write_bytes(b"PK\x03\x04\xbc\xff\x00\x01")
+            path, content, encoding = connector_commit.parse_set_bytes("third_party/asset.zip=" + str(binary))
+        self.assertEqual(path, "third_party/asset.zip")
+        self.assertEqual(encoding, "base64")
+        self.assertEqual(base64.b64decode(content), b"PK\x03\x04\xbc\xff\x00\x01")
+
+    def test_set_bytes_keeps_text_contract(self):
+        """Text files keep the utf-8 LF-normalized contract unchanged."""
+        stdin = mock.Mock(buffer=io.BytesIO(b"a\r\nb\r\n"))
+        with mock.patch("sys.stdin", stdin):
+            path, content, encoding = connector_commit.parse_set_bytes("docs/x.md=-")
+        self.assertEqual((path, content, encoding), ("docs/x.md", "a\nb\n", "utf-8"))
 
     def test_normalize_text_is_idempotent(self):
         """Normalizing LF text leaves it byte-identical."""

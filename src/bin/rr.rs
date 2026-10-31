@@ -10,20 +10,13 @@
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use rejection_rejector::{
-    api_auth, audit_anchor, background, build_info, config, contracts, decision,
-    engine::{self, Engine},
+    api_auth, audit_anchor, background, build_info, config, contracts, decision, engine,
     ollama::Ollama,
     policy, recovery, shadow,
+    startup::{self, open_engine},
     worker::Worker,
 };
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(version, about = "Rejection Rejector headless tools")]
@@ -333,20 +326,6 @@ fn evaluate_decision(
     print_decision_summary(&decision::evaluate(settings, model, out)?, model, out)
 }
 
-/// Open the workspace engine for one command-line action.
-///
-/// Inputs: `dir` — workspace directory; `demo` — seed synthetic data;
-/// `paused` — start paused (command surfaces never dispatch). Output: the
-/// opened engine; workspace or vault failures propagate.
-fn open_engine(dir: PathBuf, demo: bool, paused: bool) -> Result<Engine> {
-    Engine::open(
-        dir,
-        demo,
-        Arc::new(AtomicBool::new(paused)),
-        Arc::new(AtomicBool::new(false)),
-    )
-}
-
 /// Print the machine-readable summary of a decision-model comparison.
 ///
 /// Inputs: `report` — comparison report JSON; `out` — report path.
@@ -416,30 +395,6 @@ fn autostart_report(
     }
 }
 
-/// Wait until the background worker reports its startup state.
-///
-/// Inputs: `worker` — spawned worker; `deadline` — startup deadline.
-/// Output: the initialized `Snapshot`; `Err` when the workspace failed to
-/// open or initialization exceeded the deadline.
-fn wait_for_ready(
-    worker: &Worker,
-    deadline: std::time::Instant,
-) -> Result<rejection_rejector::worker::Snapshot> {
-    loop {
-        let snapshot = worker.view();
-        if snapshot.fatal {
-            anyhow::bail!("{}", snapshot.error);
-        }
-        if snapshot.initialized {
-            return Ok(snapshot);
-        }
-        if std::time::Instant::now() >= deadline {
-            anyhow::bail!("The workspace did not initialize before the startup deadline");
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// Serve the local web interface until the worker stops.
 ///
 /// Inputs: `worker` — spawned worker; `install_ctrlc` — Ctrl+C handler
@@ -456,17 +411,8 @@ fn web_serve(
         stop.store(true, Ordering::SeqCst);
     });
     install_ctrlc(handler)?;
-    wait_for_ready(worker, std::time::Instant::now() + Duration::from_secs(30))?;
-    let snapshot = worker.view();
-    if !snapshot.api_listening {
-        anyhow::bail!(
-            "rr web is served by the local integration API. Enable the API in Settings, save, and run rr web again (enterprise policy may also prohibit the API)."
-        );
-    }
-    println!(
-        "Local web interface: http://127.0.0.1:{}/",
-        snapshot.settings.api_port
-    );
+    let url = startup::console_base_url(worker)?;
+    println!("Local web interface: {url}");
     println!(
         "Enter the local API bearer token in the page. It is kept in page memory only. Ctrl+C stops the worker."
     );
@@ -737,44 +683,13 @@ fn dispatch_audit(command: Action, data_dir: &Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Display any first-run API credentials exactly once before a worker starts.
-///
-/// The worker's local listener mints verifier material on first load; the
-/// minted plaintexts must reach the operator exactly once without passing
-/// through logs, API responses, or UI state. Opening the workspace briefly
-/// first guarantees the mint happens here, where the plaintexts print like
-/// `rr rotate-api-token`, and the worker later loads nothing to display.
-///
-/// Inputs: `dir` — workspace directory. Output: `Result<()>` — prints
-/// `read:`/`write:` lines when this call minted credentials.
-fn display_first_run_credentials(dir: PathBuf) -> Result<()> {
-    let mut e = open_engine(dir, false, true)?;
-    let tokens = api_auth::load_or_create(&mut e.db)?;
-    let read_once = tokens.plaintext_read_once;
-    let write_once = tokens.plaintext_write_once;
-    let minted = read_once.is_some() || write_once.is_some();
-    if let Some(token) = read_once {
-        println!("read: {}", token.as_str());
-    }
-    if let Some(token) = write_once {
-        println!("write: {}", token.as_str());
-    }
-    if minted {
-        eprintln!(
-            "First-run API credentials were minted and printed once. The read credential is for machine integrations (query-only); the write credential is for the web console. Store both in the consuming application's OS-protected secret store. They cannot be revealed again; rotate if lost."
-        );
-    }
-    Ok(())
-}
-
 /// Execute the `rr run` worker daemon command.
 ///
 /// Inputs: `data_dir` — optional workspace override. Output: `Result<()>` —
 /// unit on clean shutdown; propagated startup/worker failure.
 fn cmd_run(data_dir: &Option<PathBuf>) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
-    display_first_run_credentials(dir.clone())?;
-    let worker = Worker::spawn(dir, false);
+    let worker = startup::start_api_worker(dir)?;
     run_daemon(&worker, |handler| {
         ctrlc::set_handler(handler).map_err(Into::into)
     })?;
@@ -798,8 +713,7 @@ fn cmd_tui(demo: bool, data_dir: &Option<PathBuf>) -> Result<()> {
 /// unit on stop; propagated listener failure.
 fn cmd_web(data_dir: &Option<PathBuf>) -> Result<()> {
     let dir = resolve_dir(data_dir)?;
-    display_first_run_credentials(dir.clone())?;
-    let worker = Worker::spawn(dir, false);
+    let worker = startup::start_api_worker(dir)?;
     web_serve(&worker, |handler| {
         ctrlc::set_handler(handler).map_err(Into::into)
     })?;
@@ -1746,33 +1660,6 @@ mod tests {
         }
         let error = web_serve(&worker, |_| Ok(())).expect_err("no API, no web interface");
         assert!(error.to_string().contains("Enable the API in Settings"));
-    }
-
-    /// The startup deadline is enforced even when the worker never comes up.
-    ///
-    /// Why: a wedged startup must fail with the deadline error instead of
-    /// waiting forever behind a load screen.
-    #[test]
-    fn wait_for_ready_enforces_the_startup_deadline() {
-        let dir = tempfile::tempdir().unwrap();
-        let worker = Worker::spawn(dir.path().to_path_buf(), true);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !worker.view().initialized {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "worker never initialized"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        // Park the worker in "still starting" so the poll loop has to wait.
-        worker.snapshot.lock().unwrap().initialized = false;
-        let error = wait_for_ready(
-            &worker,
-            std::time::Instant::now() + std::time::Duration::from_millis(150),
-        )
-        .err()
-        .expect("an expired deadline refuses to wait");
-        assert!(error.to_string().contains("did not initialize"));
     }
 
     /// The daemon installs the pause-and-stop handler and exits through it.

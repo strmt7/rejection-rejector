@@ -164,6 +164,11 @@ mod session;
 /// Inputs: none (module). Output: the per-job block reasons and queue
 /// classification shown before anything is sent.
 pub mod shadow;
+/// Shared local-console startup for `rr web`, `rr run` and `rr-tray`.
+///
+/// Inputs: none (module). Output: the first-run API credential pre-flight
+/// and the worker + loopback API server bring-up every console shell shares.
+pub mod startup;
 /// Storage headroom and health checks.
 ///
 /// Inputs: none (module). Output: [`storage::StorageHealth`] — free-space

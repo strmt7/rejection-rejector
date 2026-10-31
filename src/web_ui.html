@@ -3,224 +3,400 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rejection Rejector — local web interface</title>
+<title>Rejection Rejector — local console</title>
 <style>
   :root {
-    --bg: #14161a; --panel: #1c1f26; --panel-2: #22262e; --line: #323845;
-    --text: #e8eaf0; --muted: #9aa3b2; --accent: #6ea8fe; --warn: #e6c07b;
-    --danger: #e06c75; --ok: #7fd18a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #14263a;
+    background: #f4f6f4;
+    scroll-behavior: smooth;
+    --ink: #14263a;
+    --ink-strong: #101f34;
+    --muted: #5c6d7d;
+    --teal: #167a70;
+    --teal-deep: #147a7b;
+    --teal-text: #176b62;
+    --teal-soft: #edf6f3;
+    --line: #e2e7e7;
+    --line-strong: #d2ded9;
+    --panel: #ffffff;
+    --side: #f4f6f4;
+    --chip-green-bg: #e7f5ee;
+    --chip-green: #197257;
+    --chip-amber-bg: #fff1d8;
+    --chip-amber: #805514;
+    --chip-violet-bg: #eaeafa;
+    --chip-violet: #4b4685;
+    --ring: #68bfc1;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.5 system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
+  body { margin: 0; background: var(--side); color: var(--ink); font-size: 14px; line-height: 1.55; }
+  h1, h2, h3 { color: var(--ink-strong); margin: 0; }
+  h1 { font-size: 28px; letter-spacing: -.025em; }
+  h2 { font-size: 20px; letter-spacing: -.015em; }
+  h3 { font-size: 15px; }
+  p { margin: 4px 0; color: var(--muted); }
+  a { color: #137b70; }
+  :focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+
   header {
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-    padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--line);
+    height: 64px; display: flex; align-items: center; gap: 16px;
+    padding: 0 32px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
   }
-  header h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
-  .chip {
-    font-size: 12px; padding: 2px 10px; border: 1px solid var(--line);
-    border-radius: 999px; color: var(--muted); background: var(--panel-2);
+  .brand { display: flex; align-items: center; gap: 9px; font-size: 21px; font-weight: 700;
+    letter-spacing: -.035em; color: #13263b; }
+  .brand-mark { width: 25px; height: 23px; flex: none; color: #194a59; }
+  .brand span { font-size: 12px; font-weight: 400; color: #596a79;
+    border-left: 1px solid #d7dedf; padding-left: 16px; margin-left: 10px; letter-spacing: 0; }
+  .chips { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 20px;
+    background: #edf0f0; color: #52646d; white-space: nowrap; }
+  .chip.ok { background: var(--chip-green-bg); color: var(--chip-green); }
+  .chip.warn { background: var(--chip-amber-bg); color: var(--chip-amber); }
+  .chip.ai { background: var(--chip-violet-bg); color: var(--chip-violet); }
+
+  main { display: grid; grid-template-columns: minmax(340px, 30%) minmax(0, 1fr);
+    height: calc(100dvh - 64px); min-height: 0; overflow: hidden; }
+
+  /* Left rail: the queue. */
+  .rail { background: var(--panel); border-right: 1px solid var(--line);
+    overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; min-height: 0; }
+  .rail-heading { padding: 20px 26px 4px; display: flex; justify-content: space-between;
+    align-items: baseline; gap: 12px; }
+  .rail-heading h1 { font-size: 19px; }
+  .count-pill { background: var(--chip-green-bg); color: #41746a; border-radius: 20px;
+    padding: 6px 11px; font-size: 12px; font-weight: 600; }
+  .rail-hint { padding: 2px 26px 12px; font-size: 12px; color: var(--muted); margin: 0; }
+  .job {
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px; padding: 15px 26px; border-bottom: 1px solid #e8ecec; cursor: pointer;
   }
-  .chip b { color: var(--text); font-weight: 600; }
-  .chip.warn b { color: var(--warn); }
-  .chip.ok b { color: var(--ok); }
-  nav { display: flex; gap: 4px; padding: 10px 20px 0; }
-  nav button {
-    background: var(--panel); color: var(--muted); border: 1px solid var(--line);
-    border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 18px;
-    font: inherit; cursor: pointer;
+  .job:hover { background: #fafcfa; }
+  .job.selected { background: #e6f2f2; border-left: 3px solid var(--teal-deep); padding-left: 23px; }
+  .job h3 { font-size: 14px; line-height: 1.35; margin: 0 0 3px; font-weight: 600;
+    overflow-wrap: anywhere; }
+  .job p { font-size: 13px; margin: 1px 0; overflow-wrap: anywhere; }
+  .job .state { font-size: 11px; color: #52646d; text-transform: capitalize;
+    background: #edf0f0; border-radius: 16px; padding: 4px 9px; white-space: nowrap;
+    align-self: start; }
+  .job .state.review { background: var(--chip-amber-bg); color: var(--chip-amber); }
+  .job .flags { font-size: 11px; color: var(--chip-amber); font-weight: 600; margin-top: 6px; }
+  .rail-foot { display: flex; gap: 8px; align-items: center; padding: 14px 26px 26px;
+    font-size: 12px; color: var(--muted); }
+
+  /* Right workspace. */
+  .workspace { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+    padding: 22px 30px 60px; min-height: 0; background: var(--side); }
+  .workspace > nav { position: sticky; top: -22px; z-index: 3; display: flex; gap: 26px;
+    background: var(--side); border-bottom: 1px solid var(--line); margin: -4px 0 20px;
+    padding-top: 6px; flex-wrap: wrap; }
+  .workspace > nav button {
+    border: 0; background: transparent; padding: 12px 0; font: 600 13px inherit;
+    color: #6a7d7a; cursor: pointer; border-bottom: 2px solid transparent;
   }
-  nav button.active { color: var(--text); background: var(--panel-2); }
-  main { padding: 16px 20px 40px; }
-  section { display: none; }
-  section.visible { display: block; }
-  .panel {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 0 8px 8px 8px; padding: 16px;
+  .workspace > nav button.active { color: #136b63; border-bottom-color: var(--teal); }
+  .pane { display: none; }
+  .pane.visible { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px; margin-bottom: 16px; box-shadow: 0 4px 20px rgba(25, 48, 61, .025); }
+  .card > h2 { font-size: 21px; margin-bottom: 4px; }
+  .card > p.lead { margin: 4px 0 16px; }
+
+  .review-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px; align-items: start; }
+  .mail { white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fbfa;
+    border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+    max-height: 52vh; overflow: auto; font-size: 13px; line-height: 1.6; color: #33474f; }
+  textarea { display: block; width: 100%; min-height: 320px; resize: vertical;
+    border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px;
+    font: 14px/1.6 "Segoe UI", system-ui, sans-serif; color: var(--ink); background: #fff; }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 0; }
+  button.action, .selected-actions button {
+    border: 1px solid #b9cbcb; border-radius: 6px; background: #fff; color: #17525e;
+    padding: 9px 13px; font: 600 13px "Segoe UI", system-ui, sans-serif; cursor: pointer;
   }
-  h2 { font-size: 15px; margin: 0 0 4px; }
-  h3 { font-size: 13px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
-  .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-size: 12px; font-weight: 600; }
-  tr.item { cursor: pointer; }
-  tr.item:hover td { background: var(--panel-2); }
-  tr.item.selected td { background: #2a3140; }
-  .state { font-size: 12px; color: var(--warn); }
-  .review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 900px) { .review-grid { grid-template-columns: 1fr; } }
-  .mail {
-    white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
-    border: 1px solid var(--line); border-radius: 8px; padding: 12px;
-    max-height: 480px; overflow-y: auto;
-  }
-  textarea {
-    width: 100%; min-height: 320px; resize: vertical; background: var(--panel-2);
-    color: var(--text); border: 1px solid var(--line); border-radius: 8px;
-    padding: 12px; font: 14px/1.5 inherit;
-  }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
-  button.action {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer;
-  }
-  button.action:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #10131a; font-weight: 600; }
-  button.danger { color: var(--danger); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .dirty { color: var(--warn); font-size: 12px; }
-  .error { color: var(--danger); font-size: 12px; white-space: pre-wrap; }
-  .settings-row {
-    display: grid; grid-template-columns: 260px 1fr; gap: 12px; align-items: center;
-    padding: 10px 0; border-bottom: 1px solid var(--line);
-  }
-  .settings-row .label { color: var(--muted); }
+  button.action:hover:not(:disabled), .selected-actions button:hover:not(:disabled) { background: #eef7f6; }
+  button.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+  button.primary:hover:not(:disabled) { filter: brightness(.94); background: var(--teal); }
+  button.soft { background: var(--teal-soft); border-color: transparent; color: var(--teal-text); }
+  button.quiet { background: #f8faf9; border-color: #d7e1e1; color: #173944; }
+  button.danger { color: #8a3b3b; }
+  button:disabled { opacity: .5; cursor: default; }
+  .dirty { font-size: 12px; color: var(--chip-amber); }
+  .error { font-size: 12px; color: #8a3b3b; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ok-note { font-size: 12px; color: var(--chip-green); }
+
+  /* Settings-style rows and forms. */
+  .settings-row { display: grid; grid-template-columns: 240px 1fr; gap: 14px;
+    align-items: center; padding: 12px 0; border-bottom: 1px solid #eef1f0; }
+  .settings-row:last-child { border-bottom: 0; }
+  .settings-row .label { font-size: 13px; font-weight: 600; color: #425a59; }
+  .settings-row small { display: block; font-weight: 400; color: var(--muted); }
   select, input[type="password"], input[type="text"] {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 8px 10px; font: inherit;
+    border: 1px solid var(--line-strong); border-radius: 8px; background: #fff;
+    color: var(--ink); padding: 10px 12px; font: 14px inherit; width: 100%; max-width: 420px;
   }
-  .risk { color: var(--warn); }
-  .overlay {
-    position: fixed; inset: 0; background: rgba(8, 10, 14, .72);
-    display: none; align-items: center; justify-content: center; padding: 20px;
-    z-index: 10;
-  }
-  .overlay.visible { display: flex; }
-  .dialog {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    max-width: 720px; width: 100%; max-height: 86vh; overflow-y: auto; padding: 20px;
-  }
-  .dialog h2 { margin-bottom: 8px; }
-  .exact {
-    white-space: pre-wrap; word-break: break-word; background: var(--panel-2);
-    border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0;
-    max-height: 320px; overflow-y: auto;
-  }
-  .countdown { font-variant-numeric: tabular-nums; }
-  .log-entry { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--teal); }
+
+  .pill-note { display: inline-flex; gap: 8px; align-items: baseline; background: var(--teal-soft);
+    border: 1px solid #c8e1db; color: #1c5c5d; border-radius: 10px; padding: 11px 14px;
+    font-size: 13px; margin: 10px 0; }
+  .review-note { border-left: 3px solid #c88923; background: #fff8e9; color: #785008;
+    padding: 10px 12px; border-radius: 0 5px 5px 0; margin: 10px 0; font-size: 13px;
+    white-space: pre-line; overflow-wrap: anywhere; }
+
+  details.disclosure { border: 1px solid var(--line); border-radius: 12px; background: #f7faf8;
+    padding: 12px 14px; margin: 12px 0; }
+  details.disclosure > summary { cursor: pointer; font-weight: 650; color: #156c64; font-size: 13px; }
+  details.disclosure[open] > summary { margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); gap: 6px 18px;
+    font-size: 13px; margin: 8px 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+
+  .log-entry { padding: 10px 0; border-top: 1px solid #e8eeee; font-size: 13px; }
   .log-entry .meta { color: var(--muted); font-size: 12px; }
-  .token-gate { max-width: 520px; margin: 10vh auto; }
-  .token-gate .panel { border-radius: 12px; }
+  .log-entry .detail { overflow-wrap: anywhere; color: #33474f; }
+
+  .empty { padding: 34px 8px; color: #697d89; text-align: center; font-size: 13px; }
+
+  /* Dialogs. */
+  .overlay { position: fixed; inset: 0; display: none; align-items: center;
+    justify-content: center; padding: 20px; background: rgba(18, 39, 38, .5); z-index: 10; }
+  .overlay.visible { display: flex; }
+  .dialog { width: min(680px, calc(100vw - 32px)); max-height: min(80vh, 720px);
+    overflow: auto; background: #fff; color: var(--ink); border: 1px solid #dbe7e1;
+    border-radius: 14px; padding: 24px; box-shadow: 0 24px 80px rgba(15, 38, 35, .25); }
+  .dialog h2 { margin-bottom: 6px; }
+  .exact { white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fbfa;
+    border: 1px solid var(--line); border-radius: 8px; padding: 13px; margin: 12px 0;
+    max-height: 320px; overflow: auto; font-size: 13px; line-height: 1.6; }
+  .countdown { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+  .token-gate { max-width: 560px; margin: 8vh auto; }
+  .token-gate .card { border-radius: 16px; }
+
+  @media (prefers-reduced-motion: reduce) { :root { scroll-behavior: auto; } }
+  @media (max-width: 980px) {
+    .review-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 850px) {
+    main { grid-template-columns: 1fr; height: auto; overflow: visible; }
+    .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+    .workspace { overflow: visible; }
+    .settings-row { grid-template-columns: 1fr; }
+    header { padding: 0 16px; }
+    .brand span { display: none; }
+    .workspace > nav { top: 0; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Rejection Rejector</h1>
-  <span class="sub">local web interface &middot; loopback only &middot; email shown as plain text</span>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 25 23" fill="none" aria-hidden="true">
+      <rect x="1" y="3" width="23" height="17" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M2 5l10.5 7.2L23 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M18.5 15.5l2 2 3.5-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Rejection Rejector
+    <span>local console &middot; loopback only &middot; email shown as plain text</span>
+  </div>
   <div class="chips" id="status-chips"></div>
 </header>
-<nav id="tabs">
-  <button data-tab="queue" class="active">Queue</button>
-  <button data-tab="review">Review</button>
-  <button data-tab="activity">Activity</button>
-  <button data-tab="settings">Settings</button>
-</nav>
+
 <main>
-  <div id="page-error" class="error"></div>
-
-  <section id="tab-queue" class="visible">
-    <div class="panel">
-      <h2>Queue</h2>
-      <p class="hint">Reviewable messages first. Click a row to open it in Review.</p>
-      <table>
-        <thead>
-          <tr><th>Message</th><th>From</th><th>State</th><th>Flags</th></tr>
-        </thead>
-        <tbody id="queue-body"></tbody>
-      </table>
-      <div class="row">
-        <button class="action" id="queue-prev">Previous page</button>
-        <button class="action" id="queue-next">Next page</button>
-        <span class="hint" id="queue-page"></span>
-      </div>
+  <aside class="rail" id="rail">
+    <div class="rail-heading">
+      <h1>Queue</h1>
+      <span class="count-pill" id="queue-count">0 messages</span>
     </div>
-  </section>
+    <p class="rail-hint">Reviewable messages first. Select one to open it in Review.</p>
+    <div id="queue-list"></div>
+    <div class="rail-foot">
+      <button class="quiet" id="queue-prev">Previous page</button>
+      <button class="quiet" id="queue-next">Next page</button>
+      <span id="queue-page"></span>
+    </div>
+  </aside>
 
-  <section id="tab-review">
-    <div class="panel">
-      <h2>Review</h2>
-      <p class="hint">Original message left (plain text), editable reply right. Sending always shows the exact persisted reply first.</p>
-      <div class="review-grid">
-        <div>
-          <h3>Original</h3>
-          <div class="mail" id="review-original">Select a message in the Queue.</div>
-        </div>
-        <div>
-          <h3>Reply</h3>
-          <textarea id="review-editor" spellcheck="true"></textarea>
-          <div class="row">
-            <button class="action" id="review-save">Save changes</button>
-            <button class="action" id="review-regenerate">Regenerate with local AI</button>
-            <button class="action danger" id="review-dismiss">Dismiss</button>
-            <button class="action primary" id="review-send">Review &amp; send</button>
-            <span class="dirty" id="review-dirty"></span>
+  <section class="workspace" id="workspace">
+    <nav id="panes">
+      <button data-pane="review" class="active">Review</button>
+      <button data-pane="overview">Overview</button>
+      <button data-pane="activity">Activity</button>
+      <button data-pane="settings">Settings</button>
+      <button data-pane="local-ai">Local AI</button>
+      <button data-pane="tools">Account &amp; tools</button>
+    </nav>
+
+    <div class="pane visible" id="pane-review">
+      <div class="card">
+        <h2 id="review-title">Review</h2>
+        <p class="lead" id="review-sub">Select a message in the queue to review its draft reply.</p>
+        <div class="review-grid">
+          <div>
+            <h3>Original message</h3>
+            <div class="mail" id="review-original">Nothing selected yet.</div>
+            <details class="disclosure" id="policy-disclosure">
+              <summary>Why the model classified it this way</summary>
+              <div id="policy-body" class="kv"></div>
+            </details>
           </div>
-          <div class="row"><span class="error" id="review-error"></span></div>
+          <div>
+            <h3>Draft reply</h3>
+            <textarea id="review-editor" spellcheck="true"></textarea>
+            <div class="actions">
+              <button class="action soft" id="review-save">Save changes</button>
+              <button class="action soft" id="review-regenerate">Regenerate with local AI</button>
+              <button class="action danger" id="review-dismiss">Dismiss</button>
+              <button class="action primary" id="review-send">Review &amp; send…</button>
+              <span class="dirty" id="review-dirty"></span>
+            </div>
+            <div class="actions"><span class="error" id="review-error"></span></div>
+          </div>
         </div>
       </div>
     </div>
-  </section>
 
-  <section id="tab-activity">
-    <div class="panel">
-      <h2>Activity</h2>
-      <p class="hint">Newest events last; the same tamper-evident journal the desktop shows.</p>
-      <div id="activity-body"></div>
+    <div class="pane" id="pane-overview">
+      <div class="card">
+        <h2>Overview</h2>
+        <p class="lead">Live worker state and the next scheduled checks.</p>
+        <div class="kv" id="overview-facts"></div>
+        <div class="actions">
+          <button class="action soft" id="ov-check-now">Check mail now</button>
+          <button class="action quiet" id="ov-refresh">Refresh</button>
+          <span class="ok-note" id="ov-note"></span>
+        </div>
+        <div class="actions"><span class="error" id="ov-error"></span></div>
+      </div>
+      <div class="card">
+        <h2>Recent activity</h2>
+        <p class="lead">Newest first; the same tamper-evident journal as the Activity pane.</p>
+        <div id="ov-events"></div>
+      </div>
     </div>
-  </section>
 
-  <section id="tab-settings">
-    <div class="panel">
-      <h2>Settings</h2>
-      <p class="hint">Changes save immediately through the worker, exactly like the desktop settings rows.</p>
-      <div class="settings-row">
-        <span class="label">Mode</span>
-        <span>
-          <select id="setting-mode">
-            <option value="human_review">Human review</option>
-            <option value="automatic">Automatic</option>
-          </select>
-        </span>
+    <div class="pane" id="pane-activity">
+      <div class="card">
+        <h2>Activity</h2>
+        <p class="lead">Every event, newest first, exactly as the worker records it.</p>
+        <div id="activity-list"></div>
       </div>
-      <div class="settings-row">
-        <span class="label">Reply tone</span>
-        <span>
-          <select id="setting-tone">
-            <option value="professional">Professional (soft)</option>
-            <option value="assertive">Assertive</option>
-            <option value="hardline">Hardline (harsh)</option>
-            <option value="insane">Insane (offensive)</option>
-          </select>
-        </span>
+    </div>
+
+    <div class="pane" id="pane-settings">
+      <div class="card">
+        <h2>Settings</h2>
+        <p class="lead">Changes save immediately through the worker.</p>
+        <div class="settings-row">
+          <span class="label">Mode<small>Human review holds every reply for your approval.</small></span>
+          <span>
+            <select id="setting-mode">
+              <option value="human_review">Human review</option>
+              <option value="automatic">Automatic</option>
+            </select>
+          </span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Reply tone</span>
+          <span>
+            <select id="setting-tone">
+              <option value="professional">Professional (soft)</option>
+              <option value="assertive">Assertive</option>
+              <option value="hardline">Hardline (harsh)</option>
+              <option value="insane">Insane (offensive)</option>
+            </select>
+          </span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Reply language</span>
+          <span>
+            <select id="setting-language">
+              <option value="auto">Match the email's first language (all languages)</option>
+              <option value="english">Always English</option>
+            </select>
+          </span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Sending<small>Turning this off makes every action review-only.</small></span>
+          <span><label><input type="checkbox" id="setting-sending"> sending enabled</label></span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Automatic arming<small>30-second risk acknowledgment; can always return to Human review.</small></span>
+          <span class="actions">
+            <button class="action" id="setting-arm">Arm Automatic mode…</button>
+            <button class="action danger" id="setting-disarm">Return to Human review</button>
+            <span class="ok-note" id="setting-arm-state"></span>
+          </span>
+        </div>
+        <div class="actions"><span class="error" id="settings-error"></span></div>
       </div>
-      <div class="settings-row">
-        <span class="label">Reply language</span>
-        <span>
-          <select id="setting-language">
-            <option value="auto">Match the email's first language (all languages)</option>
-            <option value="english">Always English</option>
-          </select>
-        </span>
+    </div>
+
+    <div class="pane" id="pane-local-ai">
+      <div class="card">
+        <h2>Local AI</h2>
+        <p class="lead">Qualification runs the synthetic recruiting pipeline against the pinned local model before any real use.</p>
+        <div class="kv" id="model-facts"></div>
+        <div class="settings-row">
+          <span class="label">Independent verifier<small>Also qualify the optional second model used for reply verification.</small></span>
+          <span><label><input type="checkbox" id="qualify-verifier"> qualify the verifier too</label></span>
+        </div>
+        <div class="actions">
+          <button class="action primary" id="ai-qualify">Run qualification</button>
+          <span class="ok-note" id="ai-note"></span>
+        </div>
+        <div class="actions"><span class="error" id="ai-error"></span></div>
       </div>
-      <div class="settings-row">
-        <span class="label">Enable sending from this application</span>
-        <span><label><input type="checkbox" id="setting-sending"> sending enabled</label></span>
+    </div>
+
+    <div class="pane" id="pane-tools">
+      <div class="card">
+        <h2>Mailbox account</h2>
+        <p class="lead">Connect a Gmail mailbox with an app password. Credentials are encrypted at rest and never logged.</p>
+        <div class="settings-row">
+          <span class="label">Mailbox address</span>
+          <span><input type="text" id="connect-email" autocomplete="off" placeholder="you@example.com"></span>
+        </div>
+        <div class="settings-row">
+          <span class="label">App password<small>16 characters; spaces are ignored.</small></span>
+          <span><input type="password" id="connect-password" autocomplete="off"></span>
+        </div>
+        <div class="actions">
+          <button class="action primary" id="tools-connect">Connect mailbox</button>
+          <button class="action danger" id="tools-disconnect">Disconnect and drop credentials</button>
+          <span class="ok-note" id="account-note"></span>
+        </div>
+        <div class="actions"><span class="error" id="account-error"></span></div>
       </div>
-      <div class="settings-row">
-        <span class="label">Automatic arming</span>
-        <span>
-          <button class="action" id="setting-arm">Arm Automatic mode…</button>
-          <button class="action danger" id="setting-disarm">Return to Human review</button>
-          <span class="hint" id="setting-arm-state"></span>
-        </span>
+      <div class="card">
+        <h2>Workspace maintenance</h2>
+        <p class="lead">Encrypted-database hygiene. Every action reports its outcome here.</p>
+        <div class="settings-row">
+          <span class="label">Integrity check<small>Verify the encrypted database and audit chain.</small></span>
+          <span><button class="action soft" id="tools-integrity">Run integrity check</button></span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Compact<small>Checkpoint, compact and re-verify the workspace.</small></span>
+          <span><button class="action soft" id="tools-compact">Compact workspace</button></span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Backup destination<small>A new, not-yet-existing directory for a checksum-bound backup.</small></span>
+          <span class="actions">
+            <input type="text" id="tools-backup-path" autocomplete="off" placeholder="C:/path/to/new-backup-dir">
+            <button class="action soft" id="tools-backup">Create backup</button>
+          </span>
+        </div>
+        <div class="settings-row">
+          <span class="label">Retention purge<small>Delete retained records past the policy window.</small></span>
+          <span><button class="action danger" id="tools-purge">Purge expired records</button></span>
+        </div>
+        <div class="actions"><span class="error" id="tools-error"></span></div>
+        <div class="actions"><span class="ok-note" id="tools-note"></span></div>
       </div>
-      <div class="row"><span class="error" id="settings-error"></span></div>
     </div>
   </section>
 </main>
@@ -230,8 +406,8 @@
     <h2>Confirm this exact reply</h2>
     <p class="hint" id="confirm-target"></p>
     <div class="exact" id="confirm-body"></div>
-    <p class="risk">Sending cannot be undone by this application. Gmail and the current conversation will be rechecked first.</p>
-    <div class="row">
+    <p class="review-note">Sending cannot be undone by this application. Gmail and the current conversation are rechecked first.</p>
+    <div class="actions">
       <button class="action primary" id="confirm-send">Send this exact reply now</button>
       <button class="action" id="confirm-cancel">Cancel</button>
       <span class="error" id="confirm-error"></span>
@@ -242,10 +418,10 @@
 <div class="overlay" id="arm-overlay">
   <div class="dialog">
     <h2>Enable Automatic mode?</h2>
-    <p class="risk">Warning: in Automatic mode the AI sends replies without your review.</p>
+    <p class="review-note">Warning: in Automatic mode the AI sends replies without your review.</p>
     <p>The model can be wrong. A wrongly sent reply can damage real job applications and your standing with recruiters. Ambiguous, truncated or unverifiable messages are deliberately held, but no automated check is perfect and mistakes do happen.</p>
     <p>This confirmation unlocks in <span class="countdown" id="arm-countdown">30</span> second(s). Use the pause to read this warning in full.</p>
-    <div class="row">
+    <div class="actions">
       <button class="action primary" id="arm-confirm" disabled>I understand the risks — enable Automatic mode</button>
       <button class="action" id="arm-cancel">Cancel (stay in Human review)</button>
       <span class="error" id="arm-error"></span>
@@ -253,15 +429,15 @@
   </div>
 </div>
 
-<div class="token-gate overlay visible" id="token-overlay">
-  <div class="panel">
+<div class="overlay visible token-gate" id="token-overlay">
+  <div class="card">
     <h2>Connect to the local API</h2>
-    <p class="hint">Paste the local API bearer token (Settings → API token, or <code>rr rotate-api-token</code>). The token stays in this page's memory only and is never stored or logged.</p>
-    <div class="row">
-      <input type="password" id="token-input" size="48" autocomplete="off">
+    <p class="lead">Paste the local API credential printed at first run (or by <code>rr rotate-api-token</code> — the <code>write:</code> line). The token stays in this page's memory only and is never stored or logged.</p>
+    <div class="actions">
+      <input type="password" id="token-input" autocomplete="off" placeholder="local API bearer token">
       <button class="action primary" id="token-connect">Connect</button>
     </div>
-    <div class="row"><span class="error" id="token-error"></span></div>
+    <div class="actions"><span class="error" id="token-error"></span></div>
   </div>
 </div>
 
@@ -272,12 +448,13 @@
 // content can never become markup.
 const state = {
   token: null,
-  tab: "queue",
+  pane: "review",
   items: [],
   selected: null,
   events: [],
   settings: null,
   status: null,
+  capabilities: null,
   page: 0,
   dirty: false,
   confirmBody: "",
@@ -296,6 +473,8 @@ function showError(id, error) {
   if (error.message) parts.push(error.message);
   node.textContent = parts.join(": ") || String(error);
 }
+
+function showNote(id, text) { setText(id, text || ""); }
 
 async function api(path, options) {
   const init = Object.assign({ headers: {} }, options || {});
@@ -323,16 +502,15 @@ async function api(path, options) {
   return payload;
 }
 
-async function refreshStatus() {
-  const status = await api("/v1/status");
-  state.status = status;
-  renderChips();
+async function command(name, body) {
+  return api("/v1/commands/" + name, {
+    method: "POST",
+    body: JSON.stringify(body || {}),
+  });
 }
 
-async function refreshSettings() {
-  const settings = await api("/v1/settings");
-  state.settings = settings;
-  renderSettings();
+function stateLabel(job) {
+  return String(job.state || "").replaceAll("_", " ");
 }
 
 function renderChips() {
@@ -359,30 +537,42 @@ function renderChips() {
   }
 }
 
-function stateLabel(job) {
-  return String(job.state || "").replaceAll("_", " ");
-}
-
 function renderQueue() {
-  const body = el("queue-body");
-  body.replaceChildren();
-  for (const job of state.items) {
-    const row = document.createElement("tr");
-    row.className = "item" + (state.selected && state.selected.id === job.id ? " selected" : "");
-    const subject = document.createElement("td");
-    subject.textContent = (job.email && job.email.subject) || job.id.slice(0, 12);
-    const from = document.createElement("td");
-    from.textContent = (job.email && job.email.from) || "unknown";
-    const status = document.createElement("td");
-    status.className = "state";
-    status.textContent = stateLabel(job);
-    const flags = document.createElement("td");
-    flags.textContent = (job.flags || []).length ? String(job.flags.length) : "—";
-    row.append(subject, from, status, flags);
-    row.addEventListener("click", () => selectJob(job.id));
-    body.append(row);
+  const list = el("queue-list");
+  list.replaceChildren();
+  if (!state.items.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No messages on this page. Check mail from Overview or Tools.";
+    list.append(empty);
   }
-  setText("queue-page", "page " + (state.page + 1) + " · " + state.items.length + " message(s)");
+  for (const job of state.items) {
+    const row = document.createElement("article");
+    row.className = "job" + (state.selected && state.selected.id === job.id ? " selected" : "");
+    const main = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = (job.email && job.email.subject) || job.id.slice(0, 12);
+    const from = document.createElement("p");
+    from.textContent = (job.email && job.email.from) || "unknown sender";
+    main.append(title, from);
+    const side = document.createElement("div");
+    const pill = document.createElement("span");
+    const label = stateLabel(job);
+    pill.className = "state" + (job.state === "needs_review" ? " review" : "");
+    pill.textContent = label;
+    side.append(pill);
+    if ((job.flags || []).length) {
+      const flags = document.createElement("div");
+      flags.className = "flags";
+      flags.textContent = String(job.flags.length) + " flag(s)";
+      side.append(flags);
+    }
+    row.append(main, side);
+    row.addEventListener("click", () => selectJob(job.id));
+    list.append(row);
+  }
+  setText("queue-count", String(state.items.length) + " on this page");
+  setText("queue-page", "page " + (state.page + 1));
 }
 
 async function loadQueue() {
@@ -396,7 +586,7 @@ function renderOriginal() {
   target.replaceChildren();
   const job = state.selected;
   if (!job || !job.email) {
-    target.textContent = "Select a message in the Queue.";
+    target.textContent = "Nothing selected yet.";
     return;
   }
   const lines = [
@@ -410,14 +600,43 @@ function renderOriginal() {
   target.textContent = lines.join("\n");
 }
 
+async function renderPolicy() {
+  const body = el("policy-body");
+  body.replaceChildren();
+  const job = state.selected;
+  if (!job) return;
+  try {
+    const policy = await api("/v1/items/" + job.id + "/automatic-policy");
+    const entries = Object.entries(policy.decision || policy);
+    for (const [key, value] of entries) {
+      const dt = document.createElement("dt");
+      dt.textContent = key.replaceAll("_", " ");
+      const dd = document.createElement("dd");
+      dd.textContent = typeof value === "object" ? JSON.stringify(value) : String(value);
+      body.append(dt, dd);
+    }
+  } catch (error) {
+    const dt = document.createElement("dt");
+    dt.textContent = "unavailable";
+    const dd = document.createElement("dd");
+    dd.textContent = (error.code || "") + " " + (error.message || "");
+    body.append(dt, dd);
+  }
+}
+
 function renderReview() {
   renderOriginal();
+  renderPolicy();
   const editor = el("review-editor");
   const job = state.selected;
   if (job && !state.dirty) {
     editor.value = (job.draft && job.draft.body) || "";
   }
   const clean = job && job.draft && editor.value === job.draft.body;
+  setText("review-title", job && job.email ? job.email.subject : "Review");
+  setText("review-sub", job
+    ? ((job.email && job.email.from) || "unknown") + " · " + stateLabel(job)
+    : "Select a message in the queue to review its draft reply.");
   setText("review-dirty", state.dirty ? "unsaved changes — save before sending" : "");
   for (const id of ["review-save", "review-regenerate", "review-dismiss", "review-send"]) {
     el(id).disabled = !job;
@@ -430,18 +649,23 @@ async function selectJob(id) {
     state.selected = await api("/v1/items/" + id);
     state.dirty = false;
     showError("review-error", null);
-    switchTab("review");
+    switchPane("review");
   } catch (error) {
-    showError("page-error", error);
+    showError("review-error", error);
   }
 }
 
-async function refreshActivity() {
-  const feed = await api("/v1/events?after=0");
-  state.events = feed.events || [];
-  const target = el("activity-body");
+function renderEvents(targetId, events) {
+  const target = el(targetId);
   target.replaceChildren();
-  for (const event of state.events) {
+  if (!events.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No events recorded yet.";
+    target.append(empty);
+    return;
+  }
+  for (const event of events) {
     const entry = document.createElement("div");
     entry.className = "log-entry";
     const meta = document.createElement("div");
@@ -449,9 +673,73 @@ async function refreshActivity() {
     meta.textContent = "#" + String(event.seq) + " · " + String(event.at || "") + " · " +
       String(event.kind) + " · " + String(event.domain || "") + " · " + String(event.severity || "");
     const detail = document.createElement("div");
+    detail.className = "detail";
     detail.textContent = String(event.detail || "");
     entry.append(meta, detail);
     target.append(entry);
+  }
+}
+
+async function refreshActivity() {
+  const feed = await api("/v1/events?after=0");
+  state.events = feed.events || [];
+  renderEvents("activity-list", state.events);
+  renderEvents("ov-events", state.events.slice(0, 8).reverse());
+}
+
+function renderOverview() {
+  const facts = el("overview-facts");
+  facts.replaceChildren();
+  const status = state.status || {};
+  const rows = [
+    ["account", status.account || "not connected"],
+    ["mode", status.mode === "automatic" ? "Automatic" : "Human review"],
+    ["sending", status.sending_enabled ? "enabled" : "disabled"],
+    ["dispatch", status.paused ? "paused (emergency stop active)" : "running"],
+    ["operation", status.operation
+      ? (status.operation.state + " — " + (status.operation.message || String(status.operation.kind)))
+      : "idle"],
+  ];
+  for (const [key, value] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = key;
+    const dd = document.createElement("dd");
+    dd.textContent = String(value);
+    facts.append(dt, dd);
+  }
+  const caps = state.capabilities;
+  if (caps) {
+    for (const [key, value] of Object.entries(caps)) {
+      const dt = document.createElement("dt");
+      dt.textContent = "capability: " + key.replaceAll("_", " ");
+      const dd = document.createElement("dd");
+      dd.textContent = typeof value === "object" ? JSON.stringify(value) : String(value);
+      facts.append(dt, dd);
+    }
+  }
+}
+
+function renderModelFacts() {
+  const facts = el("model-facts");
+  facts.replaceChildren();
+  const caps = state.capabilities;
+  const source = caps || state.status || {};
+  const entries = Object.entries(source).filter(([key]) =>
+    /model|runtime|version|residen|verifier|qualif/.test(key));
+  if (!entries.length) {
+    const dt = document.createElement("dt");
+    dt.textContent = "status";
+    const dd = document.createElement("dd");
+    dd.textContent = "Model details appear after the first status refresh.";
+    facts.append(dt, dd);
+    return;
+  }
+  for (const [key, value] of entries) {
+    const dt = document.createElement("dt");
+    dt.textContent = key.replaceAll("_", " ");
+    const dd = document.createElement("dd");
+    dd.textContent = typeof value === "object" ? JSON.stringify(value) : String(value);
+    facts.append(dt, dd);
   }
 }
 
@@ -462,7 +750,7 @@ function renderSettings() {
   el("setting-tone").value = settings.tone;
   el("setting-language").value = settings.reply_language;
   el("setting-sending").checked = !!settings.sending_enabled;
-  setText("setting-arm-state",
+  showNote("setting-arm-state",
     settings.automatic_confirmed ? "Automatic mode is armed." : "Automatic mode is not armed.");
   el("setting-disarm").disabled = settings.mode !== "automatic";
 }
@@ -470,10 +758,7 @@ function renderSettings() {
 async function saveSettings(edit) {
   showError("settings-error", null);
   try {
-    const result = await api("/v1/commands/update-settings", {
-      method: "POST",
-      body: JSON.stringify(edit),
-    });
+    const result = await command("update-settings", edit);
     if (result.settings) state.settings = result.settings;
     await Promise.all([refreshSettings(), refreshStatus()]);
   } catch (error) {
@@ -484,7 +769,7 @@ async function saveSettings(edit) {
 
 function openArmDialog() {
   el("arm-overlay").classList.add("visible");
-  el("arm-error").textContent = "";
+  showError("arm-error", null);
   el("arm-confirm").disabled = true;
   setText("arm-countdown", "…");
 }
@@ -500,10 +785,7 @@ function closeArmDialog() {
 async function beginArm() {
   openArmDialog();
   try {
-    const result = await api("/v1/commands/automatic-arm", {
-      method: "POST",
-      body: JSON.stringify({ action: "open" }),
-    });
+    const result = await command("automatic-arm", { action: "open" });
     const arm = result.arm || { remaining_seconds: 30, confirm_enabled: false };
     let remaining = Math.max(0, Number(arm.remaining_seconds) || 0);
     setText("arm-countdown", String(remaining));
@@ -540,36 +822,76 @@ function closeConfirmDialog() {
   state.confirmBody = "";
 }
 
-async function refreshAll() {
-  await refreshStatus();
-  if (state.tab === "queue") await loadQueue();
-  else if (state.tab === "activity") await refreshActivity();
-  else if (state.tab === "settings") await refreshSettings();
+async function refreshStatus() {
+  const status = await api("/v1/status");
+  state.status = status;
+  renderChips();
+  renderOverview();
+  renderModelFacts();
 }
 
-function switchTab(tab) {
-  state.tab = tab;
-  for (const button of document.querySelectorAll("#tabs button")) {
-    button.classList.toggle("active", button.dataset.tab === tab);
+async function refreshSettings() {
+  const settings = await api("/v1/settings");
+  state.settings = settings;
+  renderSettings();
+}
+
+async function refreshCapabilities() {
+  try {
+    state.capabilities = await api("/v1/capabilities");
+    renderOverview();
+    renderModelFacts();
+  } catch (error) {
+    state.capabilities = null;
   }
-  for (const section of document.querySelectorAll("main section")) {
-    section.classList.toggle("visible", section.id === "tab-" + tab);
+}
+
+async function refreshAll() {
+  await refreshStatus();
+  if (state.pane === "review") await loadQueue();
+  else if (state.pane === "activity") await refreshActivity();
+  else if (state.pane === "settings") await refreshSettings();
+  else if (state.pane === "overview") {
+    await Promise.all([loadQueue(), refreshActivity(), refreshCapabilities()]);
+  } else if (state.pane === "local-ai") await refreshCapabilities();
+  else await loadQueue();
+}
+
+function switchPane(pane) {
+  state.pane = pane;
+  for (const button of document.querySelectorAll("#panes button")) {
+    button.classList.toggle("active", button.dataset.pane === pane);
   }
-  if (tab === "review") renderReview();
-  refreshAll().catch((error) => showError("page-error", error));
+  for (const section of document.querySelectorAll(".pane")) {
+    section.classList.toggle("visible", section.id === "pane-" + pane);
+  }
+  if (pane === "review") renderReview();
+  refreshAll().catch((error) => showError("review-error", error));
+}
+
+async function runTool(name, body, noteId, errorId, message) {
+  showError(errorId, null);
+  showNote(noteId, "working…");
+  try {
+    await command(name, body);
+    showNote(noteId, message || "done.");
+    await refreshStatus();
+  } catch (error) {
+    showNote(noteId, "");
+    showError(errorId, error);
+  }
 }
 
 function wire() {
-  for (const button of document.querySelectorAll("#tabs button")) {
-    button.addEventListener("click", () => switchTab(button.dataset.tab));
+  for (const button of document.querySelectorAll("#panes button")) {
+    button.addEventListener("click", () => switchPane(button.dataset.pane));
   }
   el("token-connect").addEventListener("click", async () => {
     showError("token-error", null);
     state.token = el("token-input").value.trim();
     if (!state.token) { showError("token-error", { message: "Enter the local API bearer token" }); return; }
     try {
-      await refreshStatus();
-      await refreshSettings();
+      await Promise.all([refreshStatus(), refreshSettings(), refreshCapabilities()]);
       el("token-overlay").classList.remove("visible");
       await refreshAll();
     } catch (error) {
@@ -580,11 +902,11 @@ function wire() {
 
   el("queue-prev").addEventListener("click", () => {
     if (state.page > 0) state.page -= 1;
-    loadQueue().catch((error) => showError("page-error", error));
+    loadQueue().catch((error) => showError("review-error", error));
   });
   el("queue-next").addEventListener("click", () => {
     if (state.items.length) state.page += 1;
-    loadQueue().catch((error) => showError("page-error", error));
+    loadQueue().catch((error) => showError("review-error", error));
   });
 
   el("review-editor").addEventListener("input", () => {
@@ -596,13 +918,10 @@ function wire() {
     if (!job) return;
     showError("review-error", null);
     try {
-      await api("/v1/commands/edit-draft", {
-        method: "POST",
-        body: JSON.stringify({
-          id: job.id,
-          revision: job.revision,
-          body: el("review-editor").value,
-        }),
+      await command("edit-draft", {
+        id: job.id,
+        revision: job.revision,
+        body: el("review-editor").value,
       });
       state.selected = await api("/v1/items/" + job.id);
       state.dirty = false;
@@ -616,10 +935,7 @@ function wire() {
     if (!job) return;
     showError("review-error", null);
     try {
-      await api("/v1/commands/regenerate", {
-        method: "POST",
-        body: JSON.stringify({ id: job.id, revision: job.revision }),
-      });
+      await command("regenerate", { id: job.id, revision: job.revision });
       state.selected = await api("/v1/items/" + job.id);
       state.dirty = false;
       renderReview();
@@ -632,14 +948,11 @@ function wire() {
     if (!job) return;
     showError("review-error", null);
     try {
-      await api("/v1/commands/dismiss", {
-        method: "POST",
-        body: JSON.stringify({ id: job.id, revision: job.revision }),
-      });
+      await command("dismiss", { id: job.id, revision: job.revision });
       state.selected = null;
       state.dirty = false;
       renderReview();
-      switchTab("queue");
+      await loadQueue();
     } catch (error) {
       showError("review-error", error);
     }
@@ -652,13 +965,10 @@ function wire() {
     if (!job) return;
     showError("confirm-error", null);
     try {
-      await api("/v1/commands/send", {
-        method: "POST",
-        body: JSON.stringify({
-          id: job.id,
-          revision: job.revision,
-          confirm_reply: state.confirmBody,
-        }),
+      await command("send", {
+        id: job.id,
+        revision: job.revision,
+        confirm_reply: state.confirmBody,
       });
       closeConfirmDialog();
       state.selected = await api("/v1/items/" + job.id);
@@ -697,10 +1007,7 @@ function wire() {
   el("arm-cancel").addEventListener("click", async () => {
     closeArmDialog();
     try {
-      await api("/v1/commands/automatic-arm", {
-        method: "POST",
-        body: JSON.stringify({ action: "cancel" }),
-      });
+      await command("automatic-arm", { action: "cancel" });
     } catch (error) {
       showError("settings-error", error);
     }
@@ -708,10 +1015,7 @@ function wire() {
   el("arm-confirm").addEventListener("click", async () => {
     showError("arm-error", null);
     try {
-      const result = await api("/v1/commands/automatic-arm", {
-        method: "POST",
-        body: JSON.stringify({ action: "confirm" }),
-      });
+      const result = await command("automatic-arm", { action: "confirm" });
       if (result.settings) state.settings = result.settings;
       closeArmDialog();
       await Promise.all([refreshSettings(), refreshStatus()]);
@@ -719,12 +1023,58 @@ function wire() {
       showError("arm-error", error);
     }
   });
+
+  el("ov-check-now").addEventListener("click", () =>
+    runTool("check-now", {}, "ov-note", "ov-error", "mailbox check queued."));
+  el("ov-refresh").addEventListener("click", async () => {
+    showError("ov-error", null);
+    try {
+      await Promise.all([refreshStatus(), refreshActivity(), refreshCapabilities()]);
+      showNote("ov-note", "refreshed.");
+    } catch (error) {
+      showError("ov-error", error);
+    }
+  });
+
+  el("ai-qualify").addEventListener("click", () =>
+    runTool("qualify", { verifier: el("qualify-verifier").checked }, "ai-note", "ai-error",
+      "qualification finished — see Activity for the evidence."));
+
+  el("tools-connect").addEventListener("click", async () => {
+    showError("account-error", null);
+    showNote("account-note", "connecting…");
+    try {
+      await command("connect-app-password", {
+        email: el("connect-email").value.trim(),
+        app_password: el("connect-password").value,
+      });
+      el("connect-password").value = "";
+      showNote("account-note", "mailbox connected.");
+      await refreshStatus();
+    } catch (error) {
+      showNote("account-note", "");
+      showError("account-error", error);
+    }
+  });
+  el("tools-disconnect").addEventListener("click", () =>
+    runTool("disconnect", {}, "account-note", "account-error",
+      "mailbox disconnected and credentials dropped."));
+
+  el("tools-integrity").addEventListener("click", () =>
+    runTool("integrity-check", {}, "tools-note", "tools-error", "integrity verified."));
+  el("tools-compact").addEventListener("click", () =>
+    runTool("compact", {}, "tools-note", "tools-error", "workspace compacted and re-verified."));
+  el("tools-backup").addEventListener("click", () =>
+    runTool("backup", { out: el("tools-backup-path").value.trim() }, "tools-note", "tools-error",
+      "backup written and checksum-bound."));
+  el("tools-purge").addEventListener("click", () =>
+    runTool("purge", {}, "tools-note", "tools-error", "expired records purged."));
 }
 
 wire();
 setInterval(() => {
   if (state.token) {
-    refreshAll().catch((error) => showError("page-error", error));
+    refreshAll().catch((error) => showError("review-error", error));
   }
 }, 5000);
 </script>

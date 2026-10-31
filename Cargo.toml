@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "rr"
 path = "src/bin/rr.rs"
 
+[[bin]]
+name = "rr-tray"
+path = "src/bin/rr-tray.rs"
+
 [features]
 default = []
 
@@ -71,6 +75,14 @@ yoke-derive = "0.8.4"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# System-tray shell (`rr-tray`): `tray-icon` wraps Shell_NotifyIconW behind a
+# safe builder/event-channel API (the bare `windows`/`windows-sys` binding is
+# an FFI call this workspace's forbid(unsafe_code) lint cannot call directly),
+# and `winit` supplies the documented message-loop pairing for it. Both are
+# MIT/Apache-2.0 and carry the safe abstraction internally, so `rr-tray`
+# stays free of raw FFI. Linux-only tray backends are not enabled here.
+tray-icon = { version = "0.26", default-features = false }
+winit = { version = "0.30", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 

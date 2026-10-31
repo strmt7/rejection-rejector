@@ -11,6 +11,7 @@ dispatch, and every interface drives it through the same `Command` channel.
 |---|---|---|---|
 | Web console | `rr web` | local web console on the loopback API | primary daily driver |
 | Interactive CLI | `rr tui` | ratatui (full-screen terminal) | servers, SSH, keyboard-first workflows |
+| System tray | `rr-tray` | notification-area icon + menu (Windows) | taskbar-visible presence over the web console |
 
 All surfaces implement the same workflow: Overview → Review (original + editable
 reply) → confirm exact reply → send; Activity; Settings (including the four
@@ -79,14 +80,35 @@ activity and settings action then travels through the same `Command` channel
 as the terminal and web interfaces, including the mandatory
 confirm-exact-reply dialog and the cooldown-gated Automatic arming.
 
+## Windows tray shell (`rr-tray`)
+
+- The only native UI is the system-tray icon (tooltip "Rejection Rejector");
+  no desktop application window is ever shown. Started from the Start-menu
+  shortcut "Rejection Rejector (tray)", it brings up the exact worker +
+  loopback API lifecycle `rr web` starts (shared `startup` module), including
+  the first-run API credential display on the console.
+- Menu: `Open console` (default browser to the console URL from the saved
+  settings), `Check mail now` (the loopback API's own parser and write
+  pipeline — the same request an authenticated `POST /v1/commands/check-now`
+  delivers), `Pause/Resume dispatch` (the same pause flag the `rr tui` `p`
+  key toggles), and `Exit` (stop accepting, drain the worker, remove the
+  icon).
+- The workspace directory comes from `config::data_dir()` (or `--data-dir`)
+  and the API port from the saved settings — nothing is machine-specific.
+  All operating-system access goes through the safe `tray-icon` wrapper over
+  Shell_NotifyIconW plus the `winit` message loop; the tray source contains
+  no raw FFI (pinned by `tests/release/test_tray_contract.py`).
+
 ## Windows installer (component selection)
 
-Inno Setup script (`windows/installer.iss`) with two components, both selected
+Inno Setup script (`windows/installer.iss`) with three components, all selected
 by default, at least one required:
 
 - `[x] Command-line tools` — `rr.exe` (includes `rr tui`).
 - `[x] Local web console` — Start-menu shortcut for `rr web` plus loopback
   firewall note (loopback needs no rule; documented, not configured).
+- `[x] Tray app` — `rr-tray.exe` and the Start-menu shortcut
+  "Rejection Rejector (tray)".
 
 The script refuses to continue with zero tasks selected (Wizard script check),
 installs the shared library prerequisites documentation (VC++ runtime note),
@@ -101,3 +123,7 @@ existing least-privilege posture).
   write routes reject without token, CSP headers present).
 - Installer: a release-tool test parses the `.iss` and asserts the three
   tasks exist, are default-checked, and the at-least-one rule is present.
+- Tray: `tests/release/test_tray_contract.py` pins the `[[bin]]` target, the
+  installer shipment and the raw-FFI ban in `src/bin/rr-tray.rs`; the shared
+  startup has its own smoke test (`startup::tests`) that builds the worker +
+  API server state without any tray code.

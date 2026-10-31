@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "project": "nltk",
+  "version": "3.10.4",
+  "tag": "v3.10.4-rc1",
+  "release_kind": "release_candidate",
+  "release_url": "https://github.com/nltk/nltk/releases/tag/v3.10.4-rc1",
+  "filename": "nltk-3.10.4-py3-none-any.whl",
+  "url": "https://github.com/nltk/nltk/releases/download/v3.10.4-rc1/nltk-3.10.4-py3-none-any.whl",
+  "sha256": "7b81857ad9cdbfa6d04ceccdfd7a3379fbd2bf4b5368334bd8c9b0dacec48c30",
+  "size": 1722611,
+  "license": "Apache-2.0",
+  "license_member": "nltk-3.10.4.dist-info/licenses/LICENSE.txt",
+  "advisories": [
+    "GHSA-8mgp-746c-j5xp"
+  ]
+}

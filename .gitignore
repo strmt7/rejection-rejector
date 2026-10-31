@@ -18,6 +18,10 @@ recovery-key*.json
 recovery-passphrase*
 *.log
 *.zip
+# Tracked provenance archives are the reviewed upstream source snapshots
+# pinned by their sha256 sidecars (see third_party/upstream/*/); they are
+# evidence, not build output, and must stay in the tree.
+!third_party/upstream/**/*.zip
 *.pem
 *.key
 Thumbs.db

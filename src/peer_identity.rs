@@ -18,6 +18,7 @@
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::Command;
 
 /// Resolve the process id owning the listening socket on `port`.
@@ -242,6 +243,7 @@ pub(crate) fn process_image(pid: u32) -> Result<Option<PathBuf>> {
 /// Inputs: `text` — netstat output; `port` — loopback port. Output:
 /// `Option<u32>` — the owning pid of the LISTENING row for 127.0.0.1 or
 /// [::1] on `port`.
+#[cfg(any(windows, test))]
 fn parse_netstat_owner(text: &str, port: u16) -> Option<u32> {
     let v4 = format!("127.0.0.1:{port}");
     let v6 = format!("[::1]:{port}");

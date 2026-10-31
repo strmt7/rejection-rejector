@@ -11,5 +11,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Clippy failed.' }
 & cargo build --locked --release --bins
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-Write-Host 'Built target\release\rejection-rejector.exe and target\release\rr.exe.'
-Write-Host 'Safe preview: .\target\release\rejection-rejector.exe --demo'
+Write-Host 'Built target\release\rr.exe and target\release\rr-tray.exe.'
+Write-Host 'Safe preview: .\target\release\rr.exe demo'
