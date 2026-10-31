@@ -190,6 +190,14 @@ def main(argv: list[str] | None = None) -> int:
             [sys.executable, "-m", "unittest", "discover", "-s", "tests/release", "-p", "test_*.py"],
         )
     )
+    # Mirror of the release-tooling workflow lane so the local gate stays a
+    # runnable byte-for-byte mirror of the remote lanes.
+    results.append(
+        run(
+            "training suites",
+            [sys.executable, "-m", "unittest", "discover", "-s", "training/tests", "-p", "test_*.py"],
+        )
+    )
     # Installed-runtime contracts (tests/integration/) assert against the
     # provisioned Crawl4AI/NLTK runtime, so they run inside that interpreter
     # through the tool's own provisioning path — the same environment their
