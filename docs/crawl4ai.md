@@ -14,10 +14,10 @@ The installed crawler is the explicitly identified `0.9.5+rejection.rejector.por
 source build. It repairs the upstream HTTP download opener on Windows while
 preserving POSIX no-follow behavior. The [source builder](../tools/crawl4ai_source_build.py),
 [provenance](../third_party/upstream/crawl4ai/0.9.5/README.md) and
-[regressions](../tools/test_crawl4ai_source_build.py) define the current repair.
+[regressions](../tests/release/test_crawl4ai_source_build.py) define the current repair.
 NLTK uses the unmodified official stable `v3.10.4` asset, with unchanged
 package version `3.10.4`, to address the model-artifact sandbox advisory. See
-[dependency remediation](security-reviews/dependency-risk-acceptance.md).
+[dependency remediation](../third_party/upstream/crawl4ai/0.9.5/README.md) and its pinned provenance.
 
 Normal research invokes Crawl4AI's own `crwl crawl` command, forwarding its
 documented options without an alternative URL parser or extraction pipeline.
@@ -202,7 +202,7 @@ its inherited `model_dump_json()` does not in the pinned version.
 [The input file](../tools/requirements/crawl4ai.in) declares the admitted crawler,
 official NLTK distribution and advisory floors. Its adjacent `.txt` file locks
 the complete dependency graph. Refresh with the reviewed uv version described
-in [tooling lock maintenance](../.github/requirements/README.md#refresh), passing
+in [tooling lock maintenance](../tools/requirements/crawl4ai.in), passing
 `--find-links` for the exact wheel directory returned by
 `tools.crawl4ai_source_build.ensure_wheel`. Keep that directory outside the
 checkout and do not emit its host path into the lock.
@@ -217,7 +217,7 @@ or relax upstream requirements simply to select a newer version.
 
 ## Access Failures And Alternatives
 
-Follow the [operating guide's research rules](agent-operating-guide.md#agent-workflow).
+Follow the [operating guide's research rules](../AGENTS.md).
 Crawl4AI is mandatory as the first provider; a verified website restriction or
 unsupported content permits a justified alternative. Retain both the failed
 attempt and the alternative's actual source evidence. Do not change a working

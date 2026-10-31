@@ -173,6 +173,42 @@ class InstructionDeliveryContractTests(unittest.TestCase):
         self.assertIn("Crawl4AI research tool", result["research"]["instructions"])
 
 
+class DocLinkIntegrityTests(unittest.TestCase):
+    """Pin link integrity across the tracked documentation.
+
+    Why (release readiness): a restructure that moves or prunes a file
+    silently breaks every markdown link to it — found 2026-10-31 with
+    four stale links in docs/crawl4ai.md. Relative links must resolve
+    from their document's location; external URLs are out of scope.
+    """
+
+    LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+    def test_relative_doc_links_resolve(self):
+        """Every relative link in tracked markdown resolves to an existing
+        path (anchors and query strings stripped first).
+        """
+        git = shutil.which("git")
+        self.assertIsNotNone(git, "git is required for the doc scan")
+        listing = subprocess.run(
+            [git, "ls-files", "*.md"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO),
+            check=True,
+        ).stdout.splitlines()
+        broken = []
+        for rel in listing:
+            text = (REPO / rel).read_text(encoding="utf-8")
+            for target in self.LINK.findall(text):
+                target = target.split("#")[0].strip()
+                if not target or target.startswith(("http://", "https://", "mailto:", "tel:")):
+                    continue
+                if not (REPO / rel).parent.joinpath(target).resolve().exists():
+                    broken.append(f"{rel} -> {target}")
+        self.assertEqual(broken, [], f"broken relative doc links: {broken[:5]}")
+
+
 class ToolTestLinkageTests(unittest.TestCase):
     """Pin the anti-dead-tool rule."""
 
