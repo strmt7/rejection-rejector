@@ -59,6 +59,17 @@ class ParseSetTests(unittest.TestCase):
             path, content, encoding = connector_commit.parse_set_bytes("docs/x.md=-")
         self.assertEqual((path, content, encoding), ("docs/x.md", "a\nb\n", "utf-8"))
 
+    def test_set_and_delete_reject_control_characters_in_paths(self):
+        """Why (connector binary support): a CRLF-corrupted path list once
+        turned every --set into a --delete of a path carrying a CR, which the
+        trees API rejects only as a cryptic 422. Control characters in paths
+        must fail fast with a clear error.
+        """
+        with self.assertRaisesRegex(ValueError, "control characters"):
+            connector_commit.parse_set("docs/bad\rname.md=-")
+        with self.assertRaisesRegex(ValueError, "control characters"):
+            connector_commit.parse_set_bytes("docs/bad\nname.md=-")
+
     def test_normalize_text_is_idempotent(self):
         """Normalizing LF text leaves it byte-identical."""
         self.assertEqual(connector_commit.normalize_text("a\nb\n"), "a\nb\n")

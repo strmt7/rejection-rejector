@@ -361,5 +361,84 @@ class SourceContracts(unittest.TestCase):
         opened.assert_called_once_with("owned", 3 | platform.O_NOFOLLOW)
 
 
+class ReservedNameContracts(unittest.TestCase):
+    """Pin the locally owned Windows reserved-name predicate."""
+
+    def test_reserved_name_table(self):
+        """Why (portable admission): the stdlib isreserved helper only exists on
+        Python 3.13+; the documented reserved-name rule must hold identically
+        on every supported interpreter.
+        """
+        reserved = [
+            "CON",
+            "con",
+            "NUL",
+            "PRN",
+            "AUX",
+            "NUL .txt",
+            "nul.tar.gz",
+            "COM1",
+            "com9",
+            "LPT1",
+            "lpt9.txt",
+            "CONIN$",
+            "conout$",
+            "COM\u00b9",
+            "LPT\u00b3",
+            "trailing.",
+            "trailing ",
+            "has:stream",
+            "pipe|name",
+            "wild*card",
+            'quo"te',
+            "a<b",
+        ]
+        admitted = [".", "..", "CONS", "COM0", "LPT0", "console", "x.txt", "COM10"]
+        for name in reserved:
+            self.assertTrue(opener._is_reserved_name(name), name)
+        for name in admitted:
+            self.assertFalse(opener._is_reserved_name(name), name)
+
+    def test_reserved_name_matches_stdlib_when_available(self):
+        """Where the stdlib helper exists (Python 3.13+), our predicate must
+        agree with it exactly across the same table.
+        """
+        import os.path
+        import sys
+
+        if not hasattr(os.path, "isreserved"):
+            return
+        table = [
+            "CON",
+            "con",
+            "NUL .txt",
+            "COM1",
+            "LPT9.txt",
+            "COM\u00b9",
+            "trailing.",
+            "trailing ",
+            "has:stream",
+            "pipe|name",
+            ".",
+            "..",
+            "CONS",
+            "COM0",
+            "console",
+            "x.txt",
+            "C:\\temp\\CON.txt",
+            "C:\\temp\\y.txt",
+            "C:\\temp\\sub.\\x",
+            "relative\\NUL",
+            "a/b/COM1.txt",
+        ]
+        for name in table:
+            self.assertEqual(
+                opener._is_reserved_path(name),
+                os.path.isreserved(name),
+                name,
+            )
+        self.assertGreaterEqual(sys.version_info, (3, 13))
+
+
 if __name__ == "__main__":
     unittest.main()

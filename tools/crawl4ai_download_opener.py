@@ -12,9 +12,85 @@ import stat
 
 
 def validate_download_name(name: str) -> None:
-    """Purpose: Reject Windows aliases before Python selects an I/O class. Inputs: Basename. Outputs: None/error."""
-    if os.name == "nt" and os.path.isreserved(name):
+    """Purpose: Reject Windows aliases before Python selects an I/O class.
+
+    Inputs: path or basename;
+    Output: None; raises ValueError for reserved Windows destinations.
+    """
+    if os.name == "nt" and _is_reserved_path(name):
         raise ValueError("Reserved Windows download destination")
+
+
+# Windows reserved filename semantics, mirroring CPython's
+# ``os.path.isreserved`` / ``ntpath._isreservedname`` (PSF license). Kept as a
+# local predicate because the stdlib helper only exists on Python 3.13+, while
+# this tooling supports every supported interpreter.
+# Reference: "Naming Files, Paths, and Namespaces", Microsoft documentation.
+_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "CONIN$",
+        "CONOUT$",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+        "COM\u00b9",
+        "COM\u00b2",
+        "COM\u00b3",
+        "LPT\u00b9",
+        "LPT\u00b2",
+        "LPT\u00b3",
+    }
+)
+_RESERVED_CHARS = frozenset('<>:"/\\|?*') | {chr(code) for code in range(32)}
+
+
+def _is_reserved_name(name: str) -> bool:
+    """Purpose: Decide whether one Windows filename component is reserved.
+
+    Inputs: `name` -- one path component (no separators expected);
+    Output: True when the system reserves the name: a trailing dot or space
+    (except "." and ".."), any reserved character (wildcards, separators,
+    colon, pipe, ASCII control codes), or a DOS device name possibly followed
+    by an extension. Mirrors ntpath._isreservedname exactly.
+    """
+    if name[-1:] in (".", " "):
+        return name not in (".", "..")
+    if _RESERVED_CHARS.intersection(name):
+        return True
+    return name.partition(".")[0].rstrip(" ").upper() in _RESERVED_NAMES
+
+
+def _is_reserved_path(path: str) -> bool:
+    """Purpose: Decide whether any component of a Windows path is reserved.
+
+    Inputs: `path` -- a full path or basename;
+    Output: True when any path component is reserved. Mirrors
+    ``ntpath.isreserved`` exactly: strip the drive/root with ``splitroot``,
+    normalize the alternate separator, then test each component in reverse.
+    """
+    import ntpath
+
+    body = os.fsdecode(ntpath.splitroot(path)[2]).replace(ntpath.altsep, ntpath.sep)
+    return any(_is_reserved_name(name) for name in reversed(body.split(ntpath.sep)))
 
 
 def windows_handle(path: str, flags: int) -> int:

@@ -45,7 +45,7 @@ sha256 = "5841e0816a8c1db6aaa9195cf0654aae7e14e9349fa4ebbe496fbfa8ff395ff5"
 id = "fuzz-cargo-lock"
 kind = "lock"
 path = "fuzz/Cargo.lock"
-sha256 = "4af085053c5f45aef19a294156ab90878040938f9d62b43182bd015e4084a550"
+sha256 = "6309eafb670779a09b4e1ea1510f8f116b70ce82e23e5a5976b161024172ead4"
 
 [[input_files]]
 id = "rust-toolchain"

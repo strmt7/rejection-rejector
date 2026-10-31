@@ -672,8 +672,8 @@ cloudpickle==3.1.2 \
 colorama==0.4.6 \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
-crawl4ai==0.9.5+rejection.rejector.portable2 \
-    --hash=sha256:6560c4e086a03722c5073df4ee3a1dcc1b2a8b7c1aa3e29f93e5ddfd92c7f08a
+crawl4ai==0.9.5+rejection.rejector.portable3 \
+    --hash=sha256:1d5cceace94b0fc0554e49a2d3b54226bcaf0669b03175a1c08e006e9127c7ee
 cryptography==50.0.2 \
     --hash=sha256:0ddc924c04591c2811ca024d62ecad4f7f6f08af8939c211438f48a16bd23602 \
     --hash=sha256:0ec5f09541743261e66e291b4a0cbf0fb2997aeaab6d9e9c740b9dba1b58d1c2 \

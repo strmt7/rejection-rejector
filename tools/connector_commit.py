@@ -76,6 +76,8 @@ def parse_set(spec):
     path, source = spec.split("=", 1)
     if not path:
         raise ValueError(f"--set path is empty in {spec!r}")
+    if any(ord(character) < 32 for character in path):
+        raise ValueError(f"--set path contains control characters: {path!r}")
     if source == "-":
         return path, normalize_text(sys.stdin.read())
     with open(source, encoding="utf-8", newline="") as handle:
@@ -95,6 +97,8 @@ def parse_set_bytes(spec):
     path, source = spec.split("=", 1)
     if not path:
         raise ValueError(f"--set path is empty in {spec!r}")
+    if any(ord(character) < 32 for character in path):
+        raise ValueError(f"--set path contains control characters: {path!r}")
     if source == "-":
         raw = sys.stdin.buffer.read()
     else:
@@ -164,6 +168,9 @@ def main():
     args = parser.parse_args()
     if not args.set and not args.delete:
         parser.error("at least one --set or --delete is required")
+    for path in args.delete:
+        if not path or any(ord(character) < 32 for character in path):
+            parser.error(f"--delete path is empty or contains control characters: {path!r}")
 
     sets = [parse_set_bytes(spec) for spec in args.set]
     base = f"repos/{args.repo}"

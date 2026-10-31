@@ -2,7 +2,7 @@
 --only-binary=:all:
 
 # Resolve with the admitted source-built wheel from crawl4ai_source_build.py.
-crawl4ai==0.9.5+rejection.rejector.portable2
+crawl4ai==0.9.5+rejection.rejector.portable3
 nltk @ https://github.com/nltk/nltk/releases/download/v3.10.4/nltk-3.10.4-py3-none-any.whl
 
 # Preserve fixed-release floors when upstream requirements change.

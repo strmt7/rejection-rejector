@@ -121,6 +121,7 @@ mod tests {
     ///
     /// Why: the smoke test needs a port that is free at configuration time;
     /// binding port zero asks the OS for one nobody else holds.
+    #[cfg(windows)]
     fn free_loopback_port() -> u16 {
         std::net::TcpListener::bind("127.0.0.1:0")
             .expect("bind an ephemeral loopback port")
@@ -204,7 +205,10 @@ mod tests {
             worker.wait_for(|s| s.initialized, |s| s.fatal, Duration::from_secs(60)),
             "the worker initializes"
         );
-        assert!(worker.view().api_listening, "the loopback API is listening");
+        assert!(
+            worker.wait_for(|s| s.api_listening, |s| s.fatal, Duration::from_secs(60)),
+            "the loopback API is listening"
+        );
         assert_eq!(
             console_base_url(&worker).expect("the console URL resolves"),
             format!("http://127.0.0.1:{port}/"),

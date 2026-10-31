@@ -10,7 +10,7 @@ digest sidecar. The repaired wheel and dependency wheels have separate SHA-256
 pins in their own sidecars and [the installation lock](../tools/requirements/crawl4ai.txt).
 The installer fetches the original source into an ignored local tool cache and
 verifies it before extraction, so the upstream archive is not committed to Git.
-The installed crawler is the explicitly identified `0.9.5+rejection.rejector.portable2`
+The installed crawler is the explicitly identified `0.9.5+rejection.rejector.portable3`
 source build. It repairs the upstream HTTP download opener on Windows while
 preserving POSIX no-follow behavior. The [source builder](../tools/crawl4ai_source_build.py),
 [provenance](../third_party/upstream/crawl4ai/0.9.5/README.md) and

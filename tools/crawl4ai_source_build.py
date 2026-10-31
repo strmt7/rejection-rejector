@@ -37,7 +37,7 @@ def recipe() -> dict:
         or data["schema"] != 1
         or data.get("project") != "crawl4ai"
         or data.get("upstream_version") != "0.9.5"
-        or data.get("version") != "0.9.5+rejection.rejector.portable2"
+        or data.get("version") != "0.9.5+rejection.rejector.portable3"
         or data.get("source") != "crawl4ai-0.9.5.tar.gz"
         or type(data.get("source_bytes")) is not int
         or data["source_bytes"] != 577411

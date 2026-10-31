@@ -2,7 +2,7 @@
   "schema": 1,
   "project": "crawl4ai",
   "upstream_version": "0.9.5",
-  "version": "0.9.5+rejection.rejector.portable2",
+  "version": "0.9.5+rejection.rejector.portable3",
   "source": "crawl4ai-0.9.5.tar.gz",
   "source_bytes": 577411,
   "source_date_epoch": 1791973529,
