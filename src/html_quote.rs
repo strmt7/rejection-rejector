@@ -319,4 +319,69 @@ mod tests {
         assert!(before < after);
         assert!(!text.contains("history"));
     }
+
+    // why (state-machine arms): self-closing tags in current content pass
+    // through without disturbing the drop state, and text on both sides
+    // survives in order.
+    #[test]
+    fn self_closing_current_tags_keep_the_stream_intact() {
+        let html = "<p>a<br class=\"x\"/>b</p>";
+        let (text, confident) = current_html_to_text(html);
+        assert!(confident, "current content is never ambiguous");
+        let a = text.find('a').expect("a kept");
+        let b = text.find('b').expect("b kept");
+        assert!(a < b);
+    }
+
+    // why (state-machine arms): self-closing tags inside a removed quote are
+    // removed with the subtree — nothing leaks into the current message.
+    #[test]
+    fn self_closing_tags_inside_removed_quotes_never_leak() {
+        let html = "<blockquote class=\"gmail_quote\"><hr/></blockquote>after";
+        let (text, confident) = current_html_to_text(html);
+        assert!(confident);
+        assert!(text.contains("after"));
+        assert!(
+            !text.contains("hr"),
+            "quoted self-closing tags leak: {text}"
+        );
+    }
+
+    // why (state-machine arms): type="cite" removes the subtree exactly like
+    // the known client markers, and unrecognized attribute names pass through
+    // classification untouched.
+    #[test]
+    fn type_cite_removes_and_unknown_attributes_pass_through() {
+        let (text, confident) = current_html_to_text("<div type=\"cite\">old</div>new");
+        assert!(confident);
+        assert!(text.contains("new"), "{text}");
+        assert!(!text.contains("old"), "{text}");
+        let (text, confident) = current_html_to_text("<a data-x=\"1\" href=\"u\">t</a>");
+        assert!(confident);
+        assert!(text.contains("t"), "{text}");
+    }
+
+    // why (state-machine arms): an end tag with no matching open tag pops
+    // the whole stack without emitting anything and without dropping
+    // subsequent current text.
+    #[test]
+    fn orphan_end_tags_pop_silently() {
+        let (text, confident) = current_html_to_text("left</p></div>right");
+        assert!(confident);
+        assert!(text.contains("left") && text.contains("right"), "{text}");
+        assert!(!text.contains("</p>") && !text.contains("</div>"), "{text}");
+    }
+
+    // why (state-machine arms): an end tag that closes current text across
+    // a dropped subtree never re-emits the dropped interior's closing tag,
+    // and the surrounding current text survives.
+    #[test]
+    fn end_tag_across_a_dropped_subtree_stays_removed() {
+        let html = "<em>keep<blockquote>q</em>after";
+        let (text, confident) = current_html_to_text(html);
+        assert!(confident);
+        assert!(text.contains("keep") && text.contains("after"), "{text}");
+        assert!(!text.contains('q'), "{text}");
+        assert!(!text.contains("</em>"), "{text}");
+    }
 }
