@@ -76,13 +76,18 @@ class ChildMemoryAdmissionTests(unittest.TestCase):
     """Pin the owned-child memory admission rules."""
 
     def test_requested_budget_validation(self):
-        """Invalid requested budgets refuse before any launch."""
+        """Invalid requested budgets refuse before any launch. On non-Windows
+        the platform guard fires first — itself the fail-closed contract.
+        """
+        if os.name != "nt":
+            with self.assertRaises(RuntimeError):
+                containment.admit_child_memory_bytes(0)
+            return
         for bad in (0, -1, 1.5, "1024"):
             with self.assertRaises(ValueError):
                 containment.admit_child_memory_bytes(bad)
-        if os.name == "nt":
-            with self.assertRaisesRegex(ValueError, "exceeds"):
-                containment.admit_child_memory_bytes(2**62)
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            containment.admit_child_memory_bytes(2**62)
 
     def test_platform_contract(self):
         """Windows admits a positive integer ceiling; other platforms fail

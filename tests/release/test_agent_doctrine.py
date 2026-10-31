@@ -12,7 +12,6 @@ unbreakable.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import shutil
 import subprocess
@@ -22,13 +21,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent.parent
 
 # Every email-shaped token in the tracked tree is reviewed once and pinned
-# by digest: any addition (a new fixture) or removal changes the set and
-# fails this test, forcing a conscious re-review — the moment where a real
-# identifier would be caught. The current set is 2,166 synthetic fixture
-# addresses (RFC 2606 reserved domains, platform noreply identity, test
-# corpora in training/data/).
+# in the golden file tests/release/reviewed_email_tokens.txt: any addition
+# (a new fixture) or removal changes the set and fails the comparison,
+# forcing a conscious re-review — the moment where a real identifier would
+# be caught. The reviewed set is 2,166 synthetic fixture addresses (RFC
+# 2606 reserved domains, platform noreply identity, test corpora in
+# training/data/). The comparison is golden-file based rather than a
+# stored digest specifically so no secret-shaped literal exists in the
+# tree and every future token is reviewable in a diff.
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-REVIEWED_TOKEN_SET_SHA256 = "bad2301f6ad6d52e6416229ab122b04007e34184970982c0c77094d21ae1d27c"
+REVIEWED_TOKEN_FILE = REPO / "tests" / "release" / "reviewed_email_tokens.txt"
 
 
 class AgentFileDoctrineTests(unittest.TestCase):
@@ -48,9 +50,10 @@ class AgentFileDoctrineTests(unittest.TestCase):
 
     def test_email_token_set_is_the_reviewed_set(self):
         """Why (owner rule: no account leakage on GitHub): the exact set of
-        email-shaped tokens in the tracked tree is pinned by digest. A new
-        token (fixture or otherwise) fails here and must be reviewed before
-        the pin is updated — that review is the leakage checkpoint.
+        email-shaped tokens in the tracked tree must equal the reviewed
+        golden file. A new token (fixture or otherwise) fails here and must
+        be reviewed before the golden file is updated — that review is the
+        leakage checkpoint.
         """
         git = shutil.which("git")
         self.assertIsNotNone(git, "git is required for the tracked-file scan")
@@ -71,12 +74,18 @@ class AgentFileDoctrineTests(unittest.TestCase):
             except (UnicodeDecodeError, ValueError, OSError):
                 continue
             tokens.update(match.group(0) for match in EMAIL_PATTERN.finditer(text))
-        digest = hashlib.sha256("\n".join(sorted(tokens)).encode("utf-8")).hexdigest()
+        reviewed = {
+            line.strip() for line in REVIEWED_TOKEN_FILE.read_text(encoding="utf-8").splitlines() if line.strip()
+        }
+        added = sorted(tokens - reviewed)
+        removed = sorted(reviewed - tokens)
         self.assertEqual(
-            digest,
-            REVIEWED_TOKEN_SET_SHA256,
+            (added, removed),
+            ([], []),
             "email-shaped token set changed; review every new token for "
-            "account leakage before updating REVIEWED_TOKEN_SET_SHA256",
+            "account leakage (and every removal) before updating "
+            "tests/release/reviewed_email_tokens.txt. "
+            f"added={added[:5]} removed={removed[:5]}",
         )
 
 

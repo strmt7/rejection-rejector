@@ -84,6 +84,16 @@ rule exists because it previously caused a real defect or delay.
   single flaky reading mid-run: tolerate a small consecutive-miss window
   before stopping a healthy workload.
 
+## Scanner-shaped integrity constants
+
+A stored hex digest used as a test pin (64+ hex chars assigned near a
+key-like name) is indistinguishable from a leaked API key to secret
+scanners, and fails the scan. Never "fix" this by splitting, encoding or
+allowlisting the literal — that is suppression or evasion. Compare
+against reviewed golden DATA instead: a fixture file listing the exact
+expected values is scanner-neutral, diff-reviewable (a reviewer sees each
+new value), and mechanically identical in strength.
+
 ## Editing and verification
 
 - Generated/regex edits are untrusted until re-read: they can silently

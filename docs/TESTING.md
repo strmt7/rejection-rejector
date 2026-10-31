@@ -280,6 +280,28 @@ stays off (per-SHA evidence groups are never superseded). Timed-out mutants
 are inconclusive and cannot satisfy the gate; surviving viable mutants fail
 it.
 
+## Flaky-test quarantine policy (build the tool on first need)
+
+This repository currently has zero known flaky tests (verified 2026-10-31:
+existing skips are deliberate capability skips, not flakes), so the
+quarantine machinery is deliberately not built yet — code before need is
+stale code. When a test flakes, the mandatory process is:
+
+1. A test that fails non-deterministically TWICE in 30 days is quarantined
+   by registry entry, never by retry-in-CI: add it to
+   `tests/flaky_quarantine.json` with fields `test` (dotted id), `reason`
+   (observed failure signature), `added` (date), `expires` (no more than
+   30 days out), `owner` (accountable note). Skipping happens at the
+   loader via the registry — never `skipIf` attributes scattered in test
+   bodies.
+2. `tools/local_ci.py` validates the registry on every gate run: an
+   expired entry, a missing expiry, or a quarantined test that PASSES
+   while quarantined fails the gate (forcing removal or renewal with a
+   new reason). A quarantine is a blast-radius containment with a
+   deadline, not a parking lot.
+3. The flaky signature goes to `docs/LESSONS.md` as a generic rule only
+   once the root cause is understood.
+
 ## Practice validation (2026-10-31 research review)
 
 A four-stream review of ~250 recent sources (agent efficiency, evaluation
