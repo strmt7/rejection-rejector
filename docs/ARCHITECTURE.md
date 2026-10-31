@@ -137,10 +137,10 @@ that govern these runs.
 ## Sources (checked 2026-10-12)
 
 - SQLite, "Write-Ahead Logging" (WAL semantics used above):
-  https://sqlite.org/wal.html
+  <https://sqlite.org/wal.html>
 - Google, Gmail API (provider history/list/send semantics):
-  https://developers.google.com/gmail/api
+  <https://developers.google.com/gmail/api>
 - IETF RFC 8252 / RFC 7636 (loopback OAuth + PKCE used for Gmail authorization):
-  https://www.rfc-editor.org/rfc/rfc8252 and https://www.rfc-editor.org/rfc/rfc7636
+  <https://www.rfc-editor.org/rfc/rfc8252> and <https://www.rfc-editor.org/rfc/rfc7636>
 - OpenAPI Initiative, OpenAPI Specification (the served contract is version 3.1.0):
-  https://spec.openapis.org/oas/latest.html
+  <https://spec.openapis.org/oas/latest.html>

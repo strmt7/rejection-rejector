@@ -109,9 +109,9 @@ See [the operations runbook](docs/OPERATIONS.md), [threat model](docs/THREAT_MOD
 ## Sources (checked 2026-10-12)
 
 - Rust API Guidelines (naming, documentation and interoperability conventions for the
-  public Rust surface): https://rust-lang.github.io/api-guidelines/
-- Diátaxis documentation framework: https://diataxis.fr/
-- Google developer documentation style guide: https://developers.google.com/style
+  public Rust surface): <https://rust-lang.github.io/api-guidelines/>
+- Diátaxis documentation framework: <https://diataxis.fr/>
+- Google developer documentation style guide: <https://developers.google.com/style>
 
 ## Git Workflow (commit attribution and history policy)
 

@@ -82,9 +82,9 @@ the same evidence rules used elsewhere in this repository (see [TESTING.md](TEST
 ## Sources (checked 2026-10-12)
 
 - W3C, "Web Content Accessibility Guidelines (WCAG) 2.2" (W3C Recommendation 5 October
-  2023, updated 12 December 2024): https://www.w3.org/TR/WCAG22/
+  2023, updated 12 December 2024): <https://www.w3.org/TR/WCAG22/>
 - W3C, "Accessible Rich Internet Applications (WAI-ARIA) 1.2" (W3C Recommendation):
-  https://www.w3.org/TR/wai-aria-1.2/
+  <https://www.w3.org/TR/wai-aria-1.2/>
 - Microsoft, "Complete guide to Narrator":
-  https://support.microsoft.com/en-us/accessibility/windows/narrator/complete-guide-to-narrator
-- NV Access, "NVDA screen reader" documentation: https://www.nvaccess.org/
+  <https://support.microsoft.com/en-us/accessibility/windows/narrator/complete-guide-to-narrator>
+- NV Access, "NVDA screen reader" documentation: <https://www.nvaccess.org/>

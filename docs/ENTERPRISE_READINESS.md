@@ -84,10 +84,10 @@ The `Maintained` observation (alert 7) is age-gated, not suppressed: the Scoreca
 ## Sources (checked 2026-10-12)
 
 - SLSA, build provenance and levels (used by the attestation gates):
-  https://slsa.dev/spec/v1/provenance
+  <https://slsa.dev/spec/v1/provenance>
 - CycloneDX, SBOM specification (1.5 is the emitted format):
-  https://cyclonedx.org/specification/overview/
+  <https://cyclonedx.org/specification/overview/>
 - OpenSSF Scorecard checks (including the `Maintained` age gate):
-  https://securityscorecards.dev/#list-of-checks
+  <https://securityscorecards.dev/#list-of-checks>
 - NIST SP 800-63B-4 (authenticator/passphrase practice referenced by recovery-key
-  guidance): https://csrc.nist.gov/pubs/sp/800/63/b/4/final
+  guidance): <https://csrc.nist.gov/pubs/sp/800/63/b/4/final>

@@ -117,16 +117,20 @@ capabilities.
 1. Start from `config/enterprise-policy.example.json`.
 2. For v2, increment `revision` whenever the policy bytes/meaning change. Keep `policy_id` stable for the same deployment lineage.
 3. Export the exact machine-readable policy contract from the binary and validate before deployment:
+
    ```powershell
    rr.exe policy-schema > enterprise-policy.schema.json
    rr.exe contract-info
    rr.exe validate-policy C:\staging\policy.json
    ```
+
    The JSON Schema is also tracked as `docs/enterprise-policy.schema.json`; `contract-info` exposes its SHA-256 fingerprint so fleet tooling can detect schema drift before rollout.
 4. Compute the exact policy digest from the bytes that will be deployed:
+
    ```powershell
    (Get-FileHash C:\staging\policy.json -Algorithm SHA256).Hash.ToLowerInvariant()
    ```
+
 5. Deploy the policy to the machine-wide default path with administrator-controlled ACLs.
 6. For high-assurance environments, choose one or both independent authentication controls:
    - provision the exact digest as `RR_ENTERPRISE_POLICY_SHA256`; and/or
@@ -136,13 +140,16 @@ capabilities.
    - on Windows/macOS set `RR_OS_AUDIT_ANCHOR=required` to use the OS credential store as a monotonic checkpoint. The first successful protected startup bootstraps the OS anchor; later starts require the workspace to extend it.
 8. Restart Rejection Rejector.
 9. Verify the effective policy:
+
    ```powershell
    rr.exe policy-status
    ```
+
 10. Export redacted diagnostics if audit evidence is needed:
-   ```powershell
-   rr.exe diagnostics --out diagnostics.json
-   ```
+
+    ```powershell
+    rr.exe diagnostics --out diagnostics.json
+    ```
 
 Treat step 9 as required evidence, not a formality: record the policy digest reported
 by `policy-status` next to the digest you provisioned, exactly as release evidence
@@ -181,10 +188,10 @@ remains a separate enterprise packaging concern.
 ## Sources (checked 2026-10-12)
 
 - IETF RFC 8032, "Edwards-Curve Digital Signature Algorithm (EdDSA)":
-  https://www.rfc-editor.org/rfc/rfc8032
+  <https://www.rfc-editor.org/rfc/rfc8032>
 - NIST FIPS 180-4, Secure Hash Standard (SHA-256):
-  https://csrc.nist.gov/pubs/fips/180/4/final
+  <https://csrc.nist.gov/pubs/fips/180/4/final>
 - NIST SP 800-53 Rev. 5, controls CM-3 (Configuration Change Control) and CM-5
   (Access Restrictions for Change) as the general practice behind revision floors
   and signed configuration:
-  https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final
+  <https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final>

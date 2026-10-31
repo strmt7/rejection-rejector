@@ -28,6 +28,7 @@ description: Use when changing rejection-rejector source, workflows, or release 
 ## Push gate (from git-push-gate discipline)
 
 Before every push:
+
 1. `cargo fmt --all` (a missing-indent line once failed CI `fmt --check`).
 2. `cargo clippy --locked --all-targets --all-features -- -D warnings`.
 3. `cargo test --locked` and `python3 -m unittest discover -s tests/release`.
