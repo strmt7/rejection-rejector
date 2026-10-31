@@ -302,6 +302,11 @@ struct Progress {
 pub struct Ollama {
     settings: Settings,
     counters: Arc<Mutex<InferenceCounters>>,
+    /// Loopback peer-identity inspector (security review finding 7).
+    peer: crate::peer_identity::PeerVerifier,
+    /// Process id of the runtime this application launched (0 when the
+    /// runtime is external); used to attribute the model port.
+    runtime_pid: Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// Whether a pulled model name matches the configured name.
@@ -358,6 +363,15 @@ const TEMPLATE_MARGIN_BYTES: usize = 512;
 /// envelope when reserving output room before calling `chat_once`.
 const SYSTEM_PROMPT_BOUND_BYTES: usize = 1600;
 
+/// why (security review finding 7): unit tests drive mock servers that live
+/// inside the test process; OS socket-table inspection cannot attribute
+/// them in every sandbox, so tests may install one process-wide verifier
+/// (set by `test_support::MockServer::new`). This is compiled only under
+/// `cfg(test)`; production always uses the OS-backed inspector.
+#[cfg(test)]
+pub(crate) static TEST_PEER_OVERRIDE: std::sync::OnceLock<crate::peer_identity::PeerVerifier> =
+    std::sync::OnceLock::new();
+
 impl Ollama {
     /// Build a client for the configured local Ollama runtime.
     ///
@@ -365,10 +379,63 @@ impl Ollama {
     /// budgets). Output: `Result<Self>`; errors when the settings are invalid.
     pub fn new(settings: &Settings) -> Result<Self> {
         settings.validate()?;
+        #[cfg(test)]
+        let mut peer = crate::peer_identity::production();
+        #[cfg(test)]
+        if let Some(over) = TEST_PEER_OVERRIDE.get() {
+            peer = *over;
+        }
+        #[cfg(not(test))]
+        let peer = crate::peer_identity::production();
         Ok(Self {
             settings: settings.clone(),
             counters: Arc::new(Mutex::new(InferenceCounters::default())),
+            peer,
+            runtime_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         })
+    }
+
+    /// why (security review finding 7): tests inject a fake peer-identity
+    /// inspector so impersonation paths are exercisable without real
+    /// sockets owned by other processes.
+    #[cfg(test)]
+    pub(crate) fn with_peer_verifier(mut self, peer: crate::peer_identity::PeerVerifier) -> Self {
+        self.peer = peer;
+        self
+    }
+
+    /// Resolve the configured model port from the runtime URL.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<u16>` — the loopback
+    /// port the runtime URL targets.
+    fn settings_port(&self) -> Result<u16> {
+        let url = url::Url::parse(&self.settings.ollama_url)
+            .context("configured Ollama URL is not parseable")?;
+        url.port_or_known_default()
+            .context("configured Ollama URL carries no port")
+    }
+
+    /// Refuse private prompts until the model port's listener is attributable.
+    ///
+    /// why (security review finding 7): a cross-user prebound impostor must
+    /// never receive mailbox, candidate or signature material. This runs at
+    /// the prompt sink as well as at runtime start, so an impostor that
+    /// binds the port after startup cannot receive prompts either.
+    ///
+    /// Inputs: none beyond the client. Output: `Result<()>` — `Ok` only when
+    /// the listener is this process, the launched child, or the configured
+    /// runtime image; every unknown state fails closed.
+    fn ensure_trusted_peer(&self) -> Result<()> {
+        let port = self.settings_port()?;
+        let runtime_exe =
+            ollama_executable().unwrap_or_else(|_| std::path::PathBuf::from("ollama"));
+        crate::peer_identity::ensure_trusted_listener(
+            port,
+            &self.peer,
+            std::process::id(),
+            self.runtime_pid.load(std::sync::atomic::Ordering::SeqCst),
+            &runtime_exe,
+        )
     }
     /// Build one Ollama endpoint URL.
     ///
@@ -640,6 +707,9 @@ impl Ollama {
         schema: &Value,
         predict: u32,
     ) -> Result<T> {
+        // why (security review finding 7): private prompts are only sent to
+        // an attributable listener; an impersonating port owner fails here.
+        self.ensure_trusted_peer()?;
         let data = payload.to_string();
         // Conservative byte-based budget plus template allowance; never silently truncate a request.
         // `predict` is a stage-aware token budget: think-enabled models spend
@@ -1321,6 +1391,7 @@ impl Ollama {
             spawn_detached,
             30,
             Duration::from_millis(500),
+            crate::peer_identity::production(),
         )
     }
     /// Start the local runtime through an injected process launcher and
@@ -1339,10 +1410,21 @@ impl Ollama {
         launch: CommandRunner,
         ready_attempts: u32,
         ready_poll: Duration,
+        peer: crate::peer_identity::PeerVerifier,
     ) -> Result<()> {
+        let port = self.settings_port()?;
         if self.reachable() {
-            // A daemon already owns the configured port. Never attempt to launch a
-            // second process just because the existing runtime is obsolete.
+            // why (security review finding 7): reuse is only allowed when the
+            // answering listener is attributable to this process or to the
+            // configured runtime executable; anything else is refused and
+            // private inference stays disabled.
+            crate::peer_identity::ensure_trusted_listener(
+                port,
+                &peer,
+                std::process::id(),
+                0,
+                executable,
+            )?;
             self.runtime_version()?;
             return Ok(());
         }
@@ -1361,10 +1443,22 @@ impl Ollama {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        launch(executable, &mut command).context("Cannot start Ollama")?;
+        let pid = launch(executable, &mut command).context("Cannot start Ollama")?;
         for _ in 0..ready_attempts {
             std::thread::sleep(ready_poll);
             if self.healthy() {
+                // why (security review finding 7): the launched runtime must
+                // own the model port; a prebound impostor that kept our child
+                // from binding fails closed here.
+                crate::peer_identity::ensure_trusted_listener(
+                    port,
+                    &peer,
+                    std::process::id(),
+                    pid,
+                    executable,
+                )?;
+                self.runtime_pid
+                    .store(pid, std::sync::atomic::Ordering::SeqCst);
                 return Ok(());
             }
         }
@@ -1376,18 +1470,22 @@ impl Ollama {
 /// executable and the fully configured launch command. This mirrors
 /// `background::CommandRunner`: production runs [`spawn_detached`], tests
 /// inject fakes so no real process is ever spawned from the suite.
-pub type CommandRunner = fn(&Path, &mut Command) -> Result<()>;
+///
+/// why (security review finding 7): the runner returns the spawned process
+/// id so the caller can verify the launched runtime owns the model port.
+pub type CommandRunner = fn(&Path, &mut Command) -> Result<u32>;
 
 /// Launch one local-runtime process exactly as configured by
 /// `Ollama::start_with` (private, so referenced as code rather than a link).
 ///
 /// Inputs: `executable` — runtime executable (already resolved; echoed for
 /// runner-level inspection); `command` — fully configured launch command.
-/// Output: `Ok(())` once the OS accepted the spawn; spawn failures propagate
-/// so the caller can attribute them to `Cannot start Ollama`.
-pub fn spawn_detached(_executable: &Path, command: &mut Command) -> Result<()> {
-    command.spawn()?;
-    Ok(())
+/// Output: `Result<u32>` — the spawned process id once the OS accepted the
+/// spawn; spawn failures propagate so the caller can attribute them to
+/// `Cannot start Ollama`.
+pub fn spawn_detached(_executable: &Path, command: &mut Command) -> Result<u32> {
+    let pid = command.spawn()?.id();
+    Ok(pid)
 }
 
 /// Parse a semver-style version string into its numeric core.
@@ -1636,7 +1734,7 @@ mod tests {
                 num_ctx,
                 ..Settings::default()
             };
-            let local = Ollama::new(&settings).unwrap();
+            let local = crate::test_support::mock_client(&settings);
             assert_eq!(
                 local.structured_predict(),
                 structured,
@@ -1675,11 +1773,10 @@ mod tests {
                         "done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":100})
                 })
             });
-            let llm = Ollama::new(&Settings {
+            let llm = crate::test_support::mock_client(&Settings {
                 ollama_url: runtime.url.clone(),
                 ..Settings::default()
-            })
-            .unwrap();
+            });
             let email = sample_email("Status update", &body);
             let (verdict, complete) = llm
                 .classify(&email)
@@ -1747,7 +1844,7 @@ mod tests {
             ollama_url: runtime.url.clone(),
             ..Settings::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let email = sample_email(
             "您的申请结果",
             "尊敬的候选人，感谢您的申请。经过慎重评估，我们决定不继续推进您的申请。祝您求职顺利。",
@@ -1786,7 +1883,7 @@ mod tests {
             },
         );
         settings.ollama_url.clone_from(&runtime.url);
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let email = sample_email(
             "Your application",
             "We have decided not to move forward with your application.",
@@ -1923,7 +2020,7 @@ mod tests {
         // verifier preflight, then the two verifier residency reads.
         let runtime = scripted_verifier_runtime("failed", &[true, true, true, true, false, false]);
         let settings = verifier_settings(&runtime.url);
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let email = sample_email(
             "Your application",
             "We have decided not to move forward with your application.",
@@ -1955,7 +2052,7 @@ mod tests {
     fn independent_verifier_outage_holds_the_reply() {
         let runtime = scripted_verifier_runtime("error", &[]);
         let settings = verifier_settings(&runtime.url);
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let email = sample_email(
             "Your application",
             "We have decided not to move forward with your application.",
@@ -1985,7 +2082,7 @@ mod tests {
             ollama_url: runtime.url.clone(),
             ..Default::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let error = llm.qualify().unwrap_err().to_string();
         assert_eq!(
             error,
@@ -2001,7 +2098,7 @@ mod tests {
     fn runtime_profile_with_the_independent_verifier_measures_its_residency() {
         let runtime = scripted_verifier_runtime("ok", &[]);
         let settings = verifier_settings(&runtime.url);
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let profile = llm
             .profile_synthetic_runtime()
             .expect("profile is measured");
@@ -2137,7 +2234,7 @@ mod tests {
             model_digest: Some("a".repeat(64)),
             ..Settings::default()
         };
-        let primary = Ollama::new(&settings).unwrap();
+        let primary = crate::test_support::mock_client(&settings);
         let verifier = primary.verifier_client(true).unwrap();
         assert_eq!(
             verifier.settings.model,
@@ -2178,9 +2275,10 @@ mod tests {
     /// arguments and environment) and then accept or fail the spawn as armed.
     ///
     /// Inputs: `executable` — resolved runtime executable; `command` — the
-    /// launch command the product built. Output: `Ok(())` unless the fake is
-    /// armed to fail like an unspawnable binary.
-    fn recording_launch(executable: &Path, command: &mut Command) -> Result<()> {
+    /// launch command the product built. Output: `Ok(4242)` (the fake
+    /// spawned pid) unless the fake is armed to fail like an unspawnable
+    /// binary.
+    fn recording_launch(executable: &Path, command: &mut Command) -> Result<u32> {
         let program = command.get_program().to_string_lossy().into_owned();
         assert_eq!(
             program,
@@ -2207,7 +2305,7 @@ mod tests {
         if LAUNCH_FAIL.with(|f| f.get()) {
             anyhow::bail!("injected spawn failure");
         }
-        Ok(())
+        Ok(4242)
     }
 
     /// Fake [`InstallerRunner`]: record the submitted installer contract and
@@ -2243,13 +2341,25 @@ mod tests {
             ollama_url: serving.url.clone(),
             ..Settings::default()
         };
-        let client = Ollama::new(&settings).unwrap();
+        // why (security review finding 7): simulate a foreign-owned port by
+        // forgetting the in-process registration so the injected verdicts
+        // decide.
+        if let Some(port) = serving
+            .url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        {
+            crate::peer_identity::forget_local_listener(port);
+        }
+        let client = crate::test_support::mock_client(&settings);
         client
             .start_with(
                 Path::new("rr-fake-ollama"),
                 recording_launch,
                 3,
                 Duration::from_millis(1),
+                crate::test_support::trusting_self_verifier(),
             )
             .unwrap();
         assert!(
@@ -2264,13 +2374,14 @@ mod tests {
             ollama_url: obsolete.url.clone(),
             ..Settings::default()
         };
-        let client = Ollama::new(&settings).unwrap();
+        let client = crate::test_support::mock_client(&settings);
         let error = client
             .start_with(
                 Path::new("rr-fake-ollama"),
                 recording_launch,
                 3,
                 Duration::from_millis(1),
+                crate::test_support::trusting_self_verifier(),
             )
             .unwrap_err()
             .to_string();
@@ -2307,13 +2418,25 @@ mod tests {
             ollama_url: serving.url.clone(),
             ..Settings::default()
         };
-        let client = Ollama::new(&settings).unwrap();
+        // why (security review finding 7): simulate a foreign-owned port by
+        // forgetting the in-process registration so the injected verdicts
+        // decide.
+        if let Some(port) = serving
+            .url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        {
+            crate::peer_identity::forget_local_listener(port);
+        }
+        let client = crate::test_support::mock_client(&settings);
         client
             .start_with(
                 Path::new("rr-fake-ollama"),
                 recording_launch,
                 5,
                 Duration::from_millis(1),
+                crate::test_support::trusting_self_verifier(),
             )
             .unwrap();
         let launches = LAUNCHES.with(|l| l.borrow().clone());
@@ -2353,13 +2476,14 @@ mod tests {
             ollama_url: silent.url.clone(),
             ..Settings::default()
         };
-        let client = Ollama::new(&settings).unwrap();
+        let client = crate::test_support::mock_client(&settings);
         let error = client
             .start_with(
                 Path::new("rr-fake-ollama"),
                 recording_launch,
                 30,
                 Duration::from_secs(500),
+                crate::test_support::trusting_self_verifier(),
             )
             .unwrap_err();
         assert!(
@@ -2383,7 +2507,7 @@ mod tests {
             ollama_url: silent.url.clone(),
             ..Settings::default()
         };
-        let client = Ollama::new(&settings).unwrap();
+        let client = crate::test_support::mock_client(&settings);
         let started = std::time::Instant::now();
         let error = client
             .start_with(
@@ -2391,6 +2515,7 @@ mod tests {
                 recording_launch,
                 2,
                 Duration::from_millis(1),
+                crate::test_support::trusting_self_verifier(),
             )
             .unwrap_err()
             .to_string();
@@ -2528,8 +2653,7 @@ mod tests {
             ollama_url: failing.url.clone(),
             ..Default::default()
         };
-        let error = Ollama::new(&settings)
-            .unwrap()
+        let error = crate::test_support::mock_client(&settings)
             .qualify()
             .unwrap_err()
             .to_string();
@@ -2549,8 +2673,7 @@ mod tests {
             ollama_url: outage.url.clone(),
             ..Default::default()
         };
-        let error = Ollama::new(&settings)
-            .unwrap()
+        let error = crate::test_support::mock_client(&settings)
             .qualify()
             .unwrap_err()
             .to_string();
@@ -2591,7 +2714,7 @@ mod tests {
                 ollama_url: runtime.url.clone(),
                 ..Default::default()
             };
-            let llm = Ollama::new(&settings).unwrap();
+            let llm = crate::test_support::mock_client(&settings);
             let email = sample_email(
                 "Your application",
                 "We have decided not to move forward with your application.",
@@ -2638,8 +2761,7 @@ mod tests {
             signature: "Test Applicant".into(),
             ..Default::default()
         };
-        let error = Ollama::new(&settings)
-            .unwrap()
+        let error = crate::test_support::mock_client(&settings)
             .qualify_verifier()
             .unwrap_err()
             .to_string();
@@ -2687,7 +2809,9 @@ mod tests {
             ollama_url: runtime.url.clone(),
             ..Default::default()
         };
-        Ollama::new(&settings).unwrap().unload_and_wait().unwrap();
+        crate::test_support::mock_client(&settings)
+            .unload_and_wait()
+            .unwrap();
         assert_eq!(
             runtime.routes(),
             vec!["/api/ps".to_owned()],
@@ -2722,7 +2846,7 @@ mod tests {
             ollama_url: runtime.url.clone(),
             ..Default::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let status = llm.inspect_verifier().expect("unpinned inspect succeeds");
         assert_eq!(status.digest, "b".repeat(64));
         llm.pull_verifier(&std::sync::atomic::AtomicBool::new(false), |_| {})
@@ -2740,6 +2864,138 @@ mod tests {
             pulls[0].1.as_ref().unwrap()["model"],
             serde_json::json!(crate::config::DEFAULT_VERIFIER_MODEL),
             "the pull must target the verifier model tag"
+        );
+    }
+    // why (security review finding 7): a loopback listener owned by a
+    // distinct local user must neither satisfy runtime startup nor receive
+    // prompts; these tests pin the acceptance table end to end.
+    #[test]
+    fn chat_refuses_a_listener_owned_by_a_foreign_process() {
+        let settings = Settings {
+            ollama_url: "http://127.0.0.1:9".to_owned(),
+            ..Settings::default()
+        };
+        let client = crate::test_support::mock_client(&settings).with_peer_verifier(
+            crate::peer_identity::PeerVerifier {
+                owner: |_| Ok(Some(4242)),
+                image: |_| Ok(Some(std::path::PathBuf::from("/tmp/impostor"))),
+            },
+        );
+        let error = client
+            .chat_once::<serde_json::Value>(
+                "system",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                16,
+            )
+            .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(text.contains("refusing private inference"), "{text}");
+    }
+
+    #[test]
+    fn chat_refuses_an_unattributable_listener() {
+        let settings = Settings {
+            ollama_url: "http://127.0.0.1:9".to_owned(),
+            ..Settings::default()
+        };
+        let client = crate::test_support::mock_client(&settings).with_peer_verifier(
+            crate::peer_identity::PeerVerifier {
+                owner: |_| Ok(None),
+                image: |_| Ok(None),
+            },
+        );
+        let error = client
+            .chat_once::<serde_json::Value>(
+                "system",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                16,
+            )
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("no attributable listener"));
+    }
+
+    #[test]
+    fn start_reuse_refuses_a_foreign_listener() {
+        let serving = crate::test_support::MockServer::new(|route, _| {
+            (route == "/api/version").then(crate::test_support::version_ok)
+        });
+        let settings = Settings {
+            ollama_url: serving.url.clone(),
+            ..Settings::default()
+        };
+        // why (security review finding 7): simulate a foreign-owned port by
+        // forgetting the in-process registration so the injected verdicts
+        // decide.
+        if let Some(port) = serving
+            .url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        {
+            crate::peer_identity::forget_local_listener(port);
+        }
+        let client = crate::test_support::mock_client(&settings);
+        LAUNCHES.with(|l| l.borrow_mut().clear());
+        let error = client
+            .start_with(
+                &std::env::current_exe().unwrap(),
+                recording_launch,
+                3,
+                Duration::from_millis(1),
+                crate::peer_identity::PeerVerifier {
+                    owner: |_| Ok(Some(4242)),
+                    image: |_| Ok(Some(std::path::PathBuf::from("/tmp/impostor"))),
+                },
+            )
+            .unwrap_err();
+        let text = format!("{error:#}");
+        assert!(text.contains("refusing private inference"), "{text}");
+        assert!(
+            LAUNCHES.with(|l| l.borrow().is_empty()),
+            "an unverified listener must never trigger a launch"
+        );
+    }
+
+    #[test]
+    fn start_reuse_accepts_the_configured_runtime_image() {
+        let serving = crate::test_support::MockServer::new(|route, _| {
+            (route == "/api/version").then(crate::test_support::version_ok)
+        });
+        let settings = Settings {
+            ollama_url: serving.url.clone(),
+            ..Settings::default()
+        };
+        // why (security review finding 7): simulate a foreign-owned port by
+        // forgetting the in-process registration so the injected verdicts
+        // decide.
+        if let Some(port) = serving
+            .url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        {
+            crate::peer_identity::forget_local_listener(port);
+        }
+        let exe = std::env::current_exe().unwrap();
+        let client = crate::test_support::mock_client(&settings);
+        LAUNCHES.with(|l| l.borrow_mut().clear());
+        client
+            .start_with(
+                &exe,
+                recording_launch,
+                3,
+                Duration::from_millis(1),
+                crate::peer_identity::PeerVerifier {
+                    owner: |_| Ok(Some(4242)),
+                    image: |_| Ok(Some(std::env::current_exe().unwrap())),
+                },
+            )
+            .expect("the configured runtime image must be accepted");
+        assert!(
+            LAUNCHES.with(|l| l.borrow().is_empty()),
+            "a verified daemon must be reused, never replaced"
         );
     }
 }
@@ -2860,6 +3116,8 @@ mod runtime_contract_tests {
         Ollama {
             settings,
             counters: Arc::new(Mutex::new(InferenceCounters::default())),
+            peer: crate::test_support::trusting_self_verifier(),
+            runtime_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 
@@ -2897,7 +3155,7 @@ mod runtime_contract_tests {
             ollama_url: runtime.url.clone(),
             ..Settings::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let error = llm.unload_and_wait().unwrap_err();
         assert!(
             format!("{error:#}")
@@ -2933,7 +3191,7 @@ mod runtime_contract_tests {
             ollama_url: runtime.url.clone(),
             ..Settings::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let mut lines = Vec::new();
         llm.pull(&std::sync::atomic::AtomicBool::new(false), |progress| {
             lines.push(progress)
@@ -2957,7 +3215,7 @@ mod runtime_contract_tests {
             ollama_url: runtime.url.clone(),
             ..Settings::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         let error = llm
             .pull(&std::sync::atomic::AtomicBool::new(false), |_| {})
             .unwrap_err();
@@ -3219,7 +3477,7 @@ mod runtime_contract_tests {
             ollama_url: runtime.url.clone(),
             ..Settings::default()
         };
-        let llm = Ollama::new(&settings).unwrap();
+        let llm = crate::test_support::mock_client(&settings);
         // Larger than the 8192-tier classification budget (3500 bytes).
         let mut long_text = String::from(
             "Thank you for applying. We have decided not to move forward with your application. ",

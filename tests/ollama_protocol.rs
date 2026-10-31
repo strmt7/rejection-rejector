@@ -39,6 +39,12 @@ impl Fixture {
     fn new(scenario: Scenario) -> Self {
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+        rejection_rejector::peer_identity::register_local_listener(
+            url.rsplit(':')
+                .next()
+                .map(|p| p.parse::<u16>().expect("port"))
+                .expect("url carries a port"),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let chats = Arc::new(Mutex::new(Vec::new()));
         let warms = Arc::new(Mutex::new(Vec::new()));

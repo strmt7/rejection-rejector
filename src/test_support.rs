@@ -35,6 +35,11 @@ impl MockServer {
     pub(crate) fn new(
         responder: impl Fn(&str, Option<Value>) -> Option<Value> + Send + 'static,
     ) -> Self {
+        // why (security review finding 7): mock servers run inside the
+        // test process; install the trusting verifier once so the
+        // product gates pass deterministically in any sandbox.
+        let _ = crate::ollama::TEST_PEER_OVERRIDE.set(trusting_self_verifier());
+
         Self::new_raw(move |route, body| {
             responder(route, body).map(|value| (200, value.to_string()))
         })
@@ -51,8 +56,18 @@ impl MockServer {
     pub(crate) fn new_raw(
         responder: impl Fn(&str, Option<Value>) -> Option<(u16, String)> + Send + 'static,
     ) -> Self {
+        // why (security review finding 7): mock servers run inside the
+        // test process; install the trusting verifier once so the
+        // product gates pass deterministically in any sandbox.
+        let _ = crate::ollama::TEST_PEER_OVERRIDE.set(trusting_self_verifier());
+
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+        // why (security review finding 7): this process bound the listener,
+        // so register the port as in-process identity evidence.
+        if let Some(port) = url.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) {
+            crate::peer_identity::register_local_listener(port);
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let calls: Arc<Mutex<Vec<Call>>> = Arc::new(Mutex::new(Vec::new()));
         let flag = stop.clone();
@@ -845,4 +860,23 @@ pub(crate) fn ollama_runtime(
             _ => None,
         }
     })
+}
+
+/// why (security review finding 7): the suite's mock servers run inside the
+/// test process, which the product explicitly trusts as the listener owner;
+/// this verifier pins that trust set without OS inspection.
+pub(crate) fn trusting_self_verifier() -> crate::peer_identity::PeerVerifier {
+    crate::peer_identity::PeerVerifier {
+        owner: |_| Ok(Some(std::process::id())),
+        image: |_| Ok(None),
+    }
+}
+
+/// why (security review finding 7): unit tests run mock servers inside the
+/// test process and must not depend on OS socket-table inspection; this
+/// builds a client whose verifier trusts the test process explicitly.
+pub(crate) fn mock_client(settings: &crate::config::Settings) -> crate::ollama::Ollama {
+    crate::ollama::Ollama::new(settings)
+        .expect("test settings are valid")
+        .with_peer_verifier(trusting_self_verifier())
 }

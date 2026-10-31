@@ -127,6 +127,11 @@ pub mod oauth;
 /// Inputs: none (module). Output: chat/generate requests, model preflight
 /// and GPU-residency checks for the private inference path.
 pub mod ollama;
+/// Loopback listener peer identity for the local model runtime.
+///
+/// Inputs: none (module). Output: OS socket-ownership inspection so the
+/// model port is only ever used against an attributable runtime process.
+pub mod peer_identity;
 /// Enterprise policy documents and enforcement.
 ///
 /// Inputs: none (module). Output: policy parsing and validation

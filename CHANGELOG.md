@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Loopback peer identity for the local model runtime (2026-10-31, security
+review finding 7). Changed:
+
+- The model port is no longer trusted for being loopback: `src/peer_identity.rs`
+  attributes the listening socket through OS inspection (netstat/CIM on
+  Windows, procfs on Linux) and only this process, the runtime this
+  application launched, or the configured runtime executable image are
+  accepted. Everything else — including uninspectable sockets — fails
+  closed, disabling private inference and Automatic mode.
+- The prompt sink re-verifies listener identity on every model request, so
+  an impostor that binds the port after startup cannot receive prompts;
+  runtime reuse and launch are gated the same way (the launched pid must
+  own the port after readiness).
+
+With this, all fifteen security-review findings are fixed at source:
+F1-F15 (F12 via the GUI deletion) with behavior-pinning tests per finding.
+
 Enron-corpus privacy and containment hardening (2026-10-30, security review
 findings 2 and 9). Changed:
 
