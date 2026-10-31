@@ -211,7 +211,9 @@ def _drain_gpu_queue() -> None:
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-    except Exception:
+    except (ImportError, RuntimeError):
+        # The dependency is optional and a CUDA sync failure surfaces as
+        # RuntimeError; anything else is a real defect and must propagate.
         pass
 
 
@@ -376,8 +378,12 @@ def _append_pace_log(progress_path, step_index: int, measured: float, duty_path)
                 )
                 + "\n"
             )
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        # Evidence-only telemetry: disk and parse failures never break
+        # training (the documented contract), but they are reported so the
+        # operator knows the pace evidence is incomplete. Programming
+        # errors surface normally.
+        print(f"pace-log append skipped: {exc!r}", file=sys.stderr)
 
 
 def _make_paced_trainer(trainer_base):
