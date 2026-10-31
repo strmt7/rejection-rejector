@@ -203,6 +203,7 @@ c@d.com
 c@example.com
 candidate@example.com
 candidate@example.invalid
+careers@example.invalid
 careersarambig0001recruiting@example.invalid
 careersarambig0002recruiting@example.invalid
 careersarambig0003recruiting@example.invalid
