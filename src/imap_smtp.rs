@@ -921,6 +921,25 @@ impl MailTransport for ImapSmtp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // why (selftest routing + stream contract): the IMAP/SMTP relay carries
+    // arbitrary raw MIME so live probes are supported (the trait default
+    // refuses), and the bounded sink's flush is a no-op by contract — the
+    // bytes are already retained in memory under the budgets.
+    #[test]
+    fn imap_smtp_supports_probes_and_flush_is_a_noop() {
+        let creds = AppPasswordCredentials::new("user@example.com", "hunter2hunter2");
+        let imap = ImapSmtp::new(creds, ImapSmtpConfig::default());
+        assert!(imap.supports_selftest_probe());
+        use std::io::Write as _;
+        let mut sink = BoundedSink::new(
+            8,
+            Overflow::Error,
+            std::rc::Rc::new(std::cell::Cell::new(0)),
+            1024,
+        );
+        assert!(sink.flush().is_ok());
+    }
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     fn b64(s: &str) -> String {

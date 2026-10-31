@@ -396,6 +396,14 @@ pub fn rotate(store: &mut Store, scope: TokenScope) -> Result<ApiCredentialMater
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // why (CLI/audit contract): the scope names are the machine-readable
+    // surface printed in CLI output and audit details; they must not drift.
+    #[test]
+    fn token_scope_names_are_stable() {
+        assert_eq!(TokenScope::Read.name(), "read");
+        assert_eq!(TokenScope::Write.name(), "write");
+    }
     use crate::vault::Vault;
 
     #[test]

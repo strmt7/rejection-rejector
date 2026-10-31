@@ -139,6 +139,64 @@ impl crate::sync::Provider for Box<dyn MailTransport> {
 mod tests {
     use super::*;
 
+    // why (probe routing): a conversation-bound backend cannot start a new
+    // conversation, so the trait default must refuse live selftest probes;
+    // only relays that override it may participate.
+    #[test]
+    fn conversation_backends_refuse_selftest_probes_by_default() {
+        struct ConversationOnly;
+
+        impl crate::sync::Provider for ConversationOnly {
+            fn profile(&mut self) -> anyhow::Result<crate::gmail::Profile> {
+                anyhow::bail!("conversation-bound backend has no profile")
+            }
+
+            fn list(
+                &mut self,
+                _query: &str,
+                _page: Option<&str>,
+            ) -> anyhow::Result<crate::gmail::MessagePage> {
+                anyhow::bail!("conversation-bound backend cannot list")
+            }
+
+            fn history(
+                &mut self,
+                _start: &str,
+                _page: Option<&str>,
+            ) -> anyhow::Result<crate::gmail::HistoryResult> {
+                anyhow::bail!("conversation-bound backend has no history")
+            }
+        }
+
+        impl MailTransport for ConversationOnly {
+            fn can_send(&self) -> bool {
+                true
+            }
+
+            fn send(&mut self, _raw: &str, _thread_id: &str) -> Result<String, SendFailure> {
+                Err(SendFailure {
+                    kind: crate::gmail::SendFailureKind::NotAccepted,
+                    message: "conversation-bound backend cannot relay".to_owned(),
+                })
+            }
+
+            fn email(&mut self, _stub: &Stub) -> Result<Option<Email>, FetchFailure> {
+                Ok(None)
+            }
+
+            fn thread(&mut self, _id: &str) -> anyhow::Result<Thread> {
+                anyhow::bail!("conversation-bound backend has no threads")
+            }
+
+            fn find_sent(&mut self, _message_id: &str) -> anyhow::Result<Option<String>> {
+                Ok(None)
+            }
+        }
+
+        let backend = ConversationOnly;
+        assert!(!backend.supports_selftest_probe());
+    }
+
     #[test]
     fn debug_never_exposes_the_app_password() {
         // why: a leaked app password via Debug/logs compromises the mailbox;
