@@ -147,9 +147,14 @@ def verify_identity(commit):
     committer_id = f"{committer.get('name', '')} <{committer.get('email', '')}>"
     email = author.get("email", "")
     if not email or not email.endswith(EXPECTED_EMAIL_SUFFIX):
-        sys.exit(f"POLICY VIOLATION: connector did not assign the contributor identity: {author_id}")
+        print(
+            f"POLICY VIOLATION: connector did not assign the contributor identity: {author_id}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     if author_id != committer_id:
-        sys.exit(f"POLICY VIOLATION: author/committer mismatch: {author_id} vs {committer_id}")
+        print(f"POLICY VIOLATION: author/committer mismatch: {author_id} vs {committer_id}", file=sys.stderr)
+        raise SystemExit(2)
     return author_id, committer_id
 
 
@@ -191,8 +196,11 @@ def main():
             "parents": [head],
         },
     )
-    gh_api(f"{base}/git/refs/heads/{args.branch}", "PATCH", {"sha": commit["sha"]})
+    # Verify the connector-assigned identity BEFORE advancing the branch:
+    # a foreign identity must exit 2 without the ref ever moving (policy
+    # violation cannot land).
     author_id, committer_id = verify_identity(commit)
+    gh_api(f"{base}/git/refs/heads/{args.branch}", "PATCH", {"sha": commit["sha"]})
     print(commit["sha"])
     print(f"author   : {author_id}")
     print(f"committer: {committer_id}")
