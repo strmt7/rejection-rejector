@@ -220,7 +220,12 @@ pub enum Command {
     /// Poll the provider immediately.
     CheckNow,
     /// Import a Google Desktop OAuth client file and connect the account.
-    Connect { path: PathBuf, send: bool },
+    Connect {
+        /// Path to the Google Desktop OAuth client JSON file.
+        path: PathBuf,
+        /// Whether authorization should permit sending immediately.
+        send: bool,
+    },
     /// Connect with an IMAP/SMTP app password instead of OAuth.
     ConnectAppPassword(AppPasswordCredentials),
     /// Disconnect the Google account.
@@ -252,42 +257,78 @@ pub enum Command {
     /// Recheck stored evidence integrity.
     IntegrityCheck,
     /// Compact the SQLite database.
+    /// Compact the workspace database in place under the configured limit.
     CompactDatabase,
     /// Write an encrypted same-vault backup to the requested path.
-    Backup { out: PathBuf },
+    Backup {
+        /// Destination path for the backup archive.
+        out: PathBuf,
+    },
     /// Run the recovery drill against a backup without touching live state.
-    RecoveryDrill { backup: PathBuf },
+    RecoveryDrill {
+        /// Backup archive to drill against.
+        backup: PathBuf,
+    },
     /// Export a passphrase-wrapped recovery key for a backup.
     ExportRecoveryKey {
+        /// Backup archive the recovery key protects.
         out: PathBuf,
+        /// Passphrase that wraps the exported recovery key.
         passphrase: Zeroizing<String>,
     },
     /// Verify a backup against a passphrase-wrapped recovery key.
     VerifyRecoveryKey {
+        /// Backup archive to verify.
         backup: PathBuf,
+        /// Passphrase-wrapped recovery key to verify against.
         recovery_key: PathBuf,
+        /// Passphrase that unwraps the recovery key.
         passphrase: Zeroizing<String>,
     },
     /// Write the workspace diagnostics report to the requested path.
-    Diagnostics { out: PathBuf },
+    Diagnostics {
+        /// Destination path for the diagnostics report.
+        out: PathBuf,
+    },
     /// List one page of items (review queue or full feed).
-    List { review: bool, page: u32 },
+    List {
+        /// Whether the page covers the review queue or the full feed.
+        review: bool,
+        /// Zero-based page index within the bounded window.
+        page: u32,
+    },
     /// Make the addressed item the active selection.
     Select(String),
     /// Save an edited reply body for the pinned item revision.
     Edit {
+        /// Target item id.
         id: String,
+        /// Pinned item revision the edit applies to.
         revision: u64,
+        /// Edited reply body to store.
         body: String,
     },
     /// Regenerate the draft for the pinned item revision.
-    Regenerate { id: String, revision: u64 },
+    Regenerate {
+        /// Target item id.
+        id: String,
+        /// Pinned item revision the regeneration applies to.
+        revision: u64,
+    },
     /// Dismiss the pinned item revision.
-    Dismiss { id: String, revision: u64 },
+    Dismiss {
+        /// Target item id.
+        id: String,
+        /// Pinned item revision the dismissal applies to.
+        revision: u64,
+    },
     /// Send the confirmed reply whose body hash matches the pinned revision.
     Send {
+        /// Target item id.
         id: String,
+        /// Pinned item revision being confirmed.
         revision: u64,
+        /// SHA-256 of the confirmed body, matched before dispatch.
         body_hash: String,
     },
     /// Reconcile one provider message id against the delivery records.
@@ -295,16 +336,26 @@ pub enum Command {
     /// Purge items past the retention window.
     Purge,
     /// Answer a read-only API query over the bounded reply channel.
-    Api { path: String, reply: Sender<Value> },
+    Api {
+        /// Request path within the bounded API surface.
+        path: String,
+        /// Reply channel for the JSON answer.
+        reply: Sender<Value>,
+    },
     /// Answer the OpenMetrics exposition query over the bounded reply channel.
-    OpenMetrics { reply: Sender<String> },
+    OpenMetrics {
+        /// Reply channel for the exposition text.
+        reply: Sender<String>,
+    },
     /// State-changing web command received by the loopback API (`rr web`).
     ///
     /// The request is already payload-validated by [`web::parse_write_request`];
     /// the worker applies the shared safety gates and executes it against the
     /// engine exactly like the matching interactive command.
     ApiWrite {
+        /// The payload-validated write request to execute.
         request: WriteRequest,
+        /// Reply channel for the write outcome.
         reply: Sender<WriteOutcome>,
     },
 }

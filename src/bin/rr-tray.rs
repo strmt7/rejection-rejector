@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 //! Windows system-tray shell for the Rejection Rejector local web console.
 //!
 //! `rr-tray` is the product's only native UI: one notification-area icon

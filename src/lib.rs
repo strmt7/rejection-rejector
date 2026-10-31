@@ -1,4 +1,12 @@
+//! Rejection Rejector engine: local-first rejection detection, the
+//! deterministic send gate (model output alone never authorizes a send),
+//! and the worker, transport and API surfaces the product binaries drive.
+//!
+//! Every public and private item is documented at its definition; the
+//! lint below keeps it that way.
+
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 #![cfg_attr(
     not(test),
     deny(

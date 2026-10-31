@@ -93,6 +93,7 @@ pub struct HistoryPage {
 /// Inputs: none (plain enum). Output: the next [`HistoryPage`], or `Expired`
 /// when the stored history id is no longer servable.
 pub enum HistoryResult {
+    /// The listing succeeded and produced this page.
     Page(HistoryPage),
     /// The stored history token is expired; a full resync is required.
     Expired,

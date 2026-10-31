@@ -1,3 +1,8 @@
+//! The `rr` command-line binary: workspace commands, the `rr tui`
+//! terminal interface and the `rr web` local console launcher, driving
+//! the engine through the shared startup path.
+
+#![deny(missing_docs)]
 #![cfg_attr(
     not(test),
     deny(
