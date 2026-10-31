@@ -1399,8 +1399,8 @@ def gate_sync_report() -> dict[str, list[str]]:
     """Inputs: none. Output: phrases this corpus relies on that the live Rust
     gate lists are missing (empty lists on a fixed source tree).
     """
-    missing_clear = [p for p in CLEAR_PHRASES if p not in extract_rust_list("clear_rejection_language")]
-    missing_conflict = [p for p in CONFLICT_PHRASES if p not in extract_rust_list("auto_language_conflict")]
+    missing_clear = sorted(p for p in CLEAR_PHRASES if p not in extract_rust_list("clear_rejection_language"))
+    missing_conflict = sorted(p for p in CONFLICT_PHRASES if p not in extract_rust_list("auto_language_conflict"))
     return {"missing_clear_phrases": missing_clear, "missing_conflict_phrases": missing_conflict}
 
 
@@ -1416,20 +1416,19 @@ def walk_bank(node, path):
             yield from walk_bank(v, f"{path}.{k}")
 
 
-hits: list[str] = []
-
-
 def bank_overlap_report() -> list[str]:
-    """Inputs: none. Output: non-decision bank fragments that contain a clear
-    phrase (the literal gate cannot tell them apart from a rejection).
+    """Inputs: none. Output: sorted non-decision bank fragments that contain
+    a clear phrase (the literal gate cannot tell them apart from a
+    rejection). Call-local state: repeat calls must not accumulate.
     """
+    hits: list[str] = []
     for lang in LANGUAGES:
         bank = {k: v for k, v in BANKS[lang].items() if k != "decision"}
         for path, text in walk_bank(bank, lang):
             for phrase in CLEAR_PHRASES:
                 if phrase in text.lower():
                     hits.append(f"{lang} {path}: {text!r} matches {phrase!r}")
-    return hits
+    return sorted(hits)
 
 
 # --------------------------------------------------------------------------- #

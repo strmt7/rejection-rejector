@@ -2064,6 +2064,7 @@ ru-strong-0027@example.invalid
 ru-strong-0028@example.invalid
 ru-trunc-0001@example.invalid
 ru-trunc-0002@example.invalid
+sender@example.invalid
 someone-else@example.com
 someone@example.com
 synthetic@example.invalid
