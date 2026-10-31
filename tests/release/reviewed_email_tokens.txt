@@ -1,5 +1,6 @@
 .a@b.com
 28989754+strmt7@users.noreply.github.com
+A@B.co
 Do-Not-Reply@example.invalid
 HR@Example.com
 MAILER-DAEMON@example.invalid

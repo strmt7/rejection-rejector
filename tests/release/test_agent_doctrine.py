@@ -58,8 +58,12 @@ class AgentFileDoctrineTests(unittest.TestCase):
         """
         git = shutil.which("git")
         self.assertIsNotNone(git, "git is required for the tracked-file scan")
+        # Scan the EVENTUAL tree state (tracked plus untracked non-ignored):
+        # a tracked-only scan passes before a commit adds new fixture files
+        # and fails after it, which left the gate green on a tree that would
+        # immediately break CI (observed 2026-10-31).
         listing = subprocess.run(
-            [git, "ls-files"],
+            [git, "ls-files", "--cached", "--others", "--exclude-standard"],
             capture_output=True,
             text=True,
             cwd=str(REPO),
