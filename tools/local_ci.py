@@ -198,6 +198,16 @@ def main(argv: list[str] | None = None) -> int:
             [sys.executable, "-m", "unittest", "discover", "-s", "training/tests", "-p", "test_*.py"],
         )
     )
+    # The frozen contract package ships its own suite (its tests live beside
+    # the validator); without this lane those 48 tests run nowhere and can
+    # rot silently. Read-only unittest discovery — the package's
+    # record_checks.py is deliberately NOT run (it writes receipts).
+    results.append(
+        run(
+            "contract suites",
+            [sys.executable, "-m", "unittest", "discover", "-s", "tools/contract", "-p", "test_*.py"],
+        )
+    )
     # Installed-runtime contracts (tests/integration/) assert against the
     # provisioned Crawl4AI/NLTK runtime, so they run inside that interpreter
     # through the tool's own provisioning path — the same environment their

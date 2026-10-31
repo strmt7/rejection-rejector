@@ -81,6 +81,9 @@ jobs:
           # runs it); append it here too so the measured Python surface is the
           # whole tested surface, not just one suite root.
           python3 -m coverage run -a --source=scripts,tools,training --omit='*/tests/*' -m unittest discover -s training/tests
+          # The frozen contract package's own suite (beside the validator)
+          # is part of the measured tested surface too.
+          python3 -m coverage run -a --source=scripts,tools,training --omit='*/tests/*,tools/contract/test_*.py' -m unittest discover -s tools/contract
           python3 -m coverage xml -o artifacts/coverage.xml
           python3 -m coverage report | tee artifacts/coverage-python.txt
           test -s artifacts/lcov.info

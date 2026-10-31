@@ -41,3 +41,8 @@ jobs:
         run: python -m unittest discover -s tests/release -v
       - name: Model-free calibration and data-contract tests
         run: python -m unittest discover -s training/tests -v
+      - name: Frozen contract package suite
+        # The validator's own tests live beside it in the frozen package;
+        # read-only unittest discovery (record_checks.py writes receipts
+        # and is deliberately not run here).
+        run: python -m unittest discover -s tools/contract -p "test_*.py" -v

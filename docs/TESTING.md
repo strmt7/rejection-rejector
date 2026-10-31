@@ -49,6 +49,13 @@ The Python suites run in two layers, and every layer runs on every gate:
 
 - `tests/release/` — ambient contracts (release, policy, vendored tooling).
   Collected by `unittest discover` in the gate's "python release suites" lane.
+- `training/tests/` — model-free calibration and data-contract suites,
+  collected by the gate's "training suites" lane.
+- `tools/contract/test_validate_contract.py` — the frozen contract
+  package's own 48 tests, beside the validator. Collected read-only by the
+  gate's "contract suites" lane (and the release-tooling workflow and the
+  coverage measurement). The package's `record_checks.py` is deliberately
+  not run in CI: it writes report receipts into the frozen tree.
 - `tests/integration/` — installed-runtime contracts (`test_crawl4ai_downloads`,
   `test_nltk_model_security`) whose assertions describe the provisioned
   Crawl4AI/NLTK runtime. They run inside that interpreter through the tool's
