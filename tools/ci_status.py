@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 
 
@@ -48,17 +49,21 @@ def main() -> int:
     parser.add_argument("--repo", default="strmt7/rejection-rejector")
     args = parser.parse_args()
 
+    git = shutil.which("git")
+    gh = shutil.which("gh")
+    if git is None or gh is None:
+        raise ValueError("git and gh must be installed and on PATH")
     sha = args.sha
     if sha is None:
         sha = subprocess.run(
-            ["git", "rev-parse", f"origin/{args.branch}"],
+            [git, "rev-parse", f"origin/{args.branch}"],
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
     listing = subprocess.run(
         [
-            "gh",
+            gh,
             "run",
             "list",
             "--branch",

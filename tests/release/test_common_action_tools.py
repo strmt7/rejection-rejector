@@ -69,7 +69,13 @@ class CollectOperationsTests(unittest.TestCase):
 class VerdictTests(unittest.TestCase):
     """Pin the counted-CI-verdict rule."""
 
-    def _rows(self, *specs):
+    @staticmethod
+    def _rows(*specs):
+        """Purpose: Build verdict fixture rows.
+
+        Inputs: (name, status, conclusion) tuples;
+        Output: verdict-shaped row dicts.
+        """
         return [
             {"workflowName": name, "status": status, "conclusion": conclusion} for name, status, conclusion in specs
         ]

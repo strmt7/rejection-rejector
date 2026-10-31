@@ -283,10 +283,10 @@ it.
 ## Sources (checked 2026-10-12)
 
 - Rust toolchain pin and components: `rust-toolchain.toml` in this repository.
-- cargo-nextest (pinned test runner): https://nexte.st/
-- cargo-mutants (mutation testing): https://mutants.rs/
+- cargo-nextest (pinned test runner): <https://nexte.st/>
+- cargo-mutants (mutation testing): <https://mutants.rs/>
 - cargo-llvm-cov (coverage measurement):
-  https://github.com/taiki-e/cargo-llvm-cov
-- cargo-fuzz / libFuzzer: https://rust-fuzz.github.io/
+  <https://github.com/taiki-e/cargo-llvm-cov>
+- cargo-fuzz / libFuzzer: <https://rust-fuzz.github.io/>
 - OpenSSF Scorecard and SLSA provenance as referenced by the release evidence gates:
-  https://securityscorecards.dev/ and https://slsa.dev/spec/v1/provenance
+  <https://securityscorecards.dev/> and <https://slsa.dev/spec/v1/provenance>

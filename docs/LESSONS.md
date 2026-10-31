@@ -118,7 +118,7 @@ rule exists because it previously caused a real defect or delay.
 - A green run is evidence about one commit and one configuration. Quote the commit it
   measured; do not restate it as a property of the project.
 
-## Documentation
+## Documentation claims
 
 - Documentation claims about external systems carry a source and a date checked;
   vendor figures (model sizes, benchmark scores, versions) are snapshots, not standing
