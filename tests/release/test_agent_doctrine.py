@@ -97,7 +97,8 @@ class OneCopyRuleTests(unittest.TestCase):
 
     SHINGLE_WORDS = 12
 
-    def _instruction_surfaces(self) -> dict:
+    @staticmethod
+    def _instruction_surfaces() -> dict:
         """Collect the checked-in instruction files: AGENTS.md (always
         loaded) and every in-repo SKILL.md (loaded on demand).
         """
