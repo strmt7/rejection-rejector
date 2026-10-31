@@ -44,6 +44,10 @@ from scratch only as a last resort and record why. Verify the chosen
 tool's real API and current version before use, and name rejected
 alternatives when the choice is non-obvious.
 
+- Use the self-hosted [Crawl4AI research tool](docs/crawl4ai.md) for web
+  research: index and search for broad concepts first, then verify the
+  exact source before implementing.
+
 ## Tool-call economy (all AI agents) — monitor, learn, promote
 
 Continuously watch your own tool calls, repetitive actions and mistakes;
@@ -72,8 +76,11 @@ model-token cost.
 ## Token-efficiency contract (all AI agents)
 
 Read this file and the skill first; never walk the tree to re-derive
-structure. Mandatory skills: `caveman`, `cocoindex-code-search`,
-`crawl4ai-research`, `rr-engineering`. Batch independent tool calls; prefer
+structure. Caveman and CocoIndex are mandatory for every session: load
+`.agents/skills/caveman/SKILL.md` and
+`.agents/skills/cocoindex-code-search/SKILL.md` before work; also load
+the `crawl4ai-research` and `rr-engineering` skills when relevant.
+Batch independent tool calls; prefer
 grep/search over full reads (keep single reads under 200 lines unless
 editing); filter tool outputs to error lines and counts; make targeted
 edits; never re-read what a tool already confirmed; root-cause once, then

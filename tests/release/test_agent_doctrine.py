@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -137,6 +138,35 @@ class OneCopyRuleTests(unittest.TestCase):
             f"duplicated instruction blocks found ({len(duplicated)}); "
             f"keep one copy and cross-reference: {duplicated[:3]}",
         )
+
+
+class InstructionDeliveryContractTests(unittest.TestCase):
+    """Pin the agent_context startup() instruction-delivery contract.
+
+    Why (regression found 2026-10-31): an AGENTS.md restructure silently
+    dropped the mandatory-skill declarations and the research-route bullet
+    that tools/agent_context.py startup() delivers to every session — the
+    tool broke at runtime and no test noticed. The instruction file and the
+    tool's content contract must move together; this test is the joint.
+    """
+
+    def test_agents_md_satisfies_startup_delivery_contract(self):
+        """startup() must parse the real AGENTS.md and return the full
+        instruction payload (skills, research route, launcher).
+        """
+        sys.path.insert(0, str(REPO / "tools"))
+        try:
+            import agent_context
+
+            result = agent_context.startup(REPO)
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(
+            [entry["path"] for entry in result["skills"]],
+            [".agents/skills/caveman/SKILL.md", ".agents/skills/cocoindex-code-search/SKILL.md"],
+        )
+        self.assertEqual(result["research"]["launcher"], "tools/crawl4ai_tool.py")
+        self.assertIn("Crawl4AI research tool", result["research"]["instructions"])
 
 
 class ToolTestLinkageTests(unittest.TestCase):

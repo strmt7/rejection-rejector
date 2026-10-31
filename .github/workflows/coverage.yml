@@ -77,6 +77,10 @@ jobs:
           # scripts/.
           python3 -m pip install -q --require-hashes -r scripts/ci/requirements-coverage.txt
           python3 -m coverage run --source=scripts,tools,training --omit='*/tests/*' -m unittest discover -s tests/release
+          # training/tests is its own ambient suite root (release-tooling.yml
+          # runs it); append it here too so the measured Python surface is the
+          # whole tested surface, not just one suite root.
+          python3 -m coverage run -a --source=scripts,tools,training --omit='*/tests/*' -m unittest discover -s training/tests
           python3 -m coverage xml -o artifacts/coverage.xml
           python3 -m coverage report | tee artifacts/coverage-python.txt
           test -s artifacts/lcov.info
