@@ -89,6 +89,55 @@ class AgentFileDoctrineTests(unittest.TestCase):
         )
 
 
+class OneCopyRuleTests(unittest.TestCase):
+    """Pin the one-copy rule for instruction surfaces (research: duplicated
+    instruction blocks are silent-corruption hazards — every extra copy is
+    another thing to keep in sync, and they drift).
+    """
+
+    SHINGLE_WORDS = 12
+
+    def _instruction_surfaces(self) -> dict:
+        """Collect the checked-in instruction files: AGENTS.md (always
+        loaded) and every in-repo SKILL.md (loaded on demand).
+        """
+        surfaces = {"AGENTS.md": (REPO / "AGENTS.md").read_text(encoding="utf-8")}
+        for skill in sorted((REPO / ".agents" / "skills").rglob("SKILL.md")):
+            surfaces[str(skill.relative_to(REPO))] = skill.read_text(encoding="utf-8")
+        return surfaces
+
+    def _shingles(self, text: str) -> set:
+        """Word-level n-grams used for duplicate-block detection.
+
+        Inputs: document text; Output: the set of 12-word shingles.
+        """
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        size = self.SHINGLE_WORDS
+        return {" ".join(words[index : index + size]) for index in range(len(words) - size + 1)}
+
+    def test_no_duplicated_instruction_blocks_across_surfaces(self):
+        """Why (one-copy rule): a passage appearing in two instruction files
+        will drift between them and agents will follow both. Keep exactly
+        one copy — cross-reference instead of duplicating.
+        """
+        surfaces = self._instruction_surfaces()
+        self.assertGreaterEqual(len(surfaces), 2, "AGENTS.md and at least one skill must exist")
+        names = sorted(surfaces)
+        duplicated = []
+        shingle_sets = {name: self._shingles(text) for name, text in surfaces.items()}
+        for index, first in enumerate(names):
+            for second in names[index + 1 :]:
+                shared = sorted(shingle_sets[first] & shingle_sets[second])
+                for passage in shared:
+                    duplicated.append(f"{first} <-> {second}: {passage[:70]}")
+        self.assertEqual(
+            duplicated,
+            [],
+            f"duplicated instruction blocks found ({len(duplicated)}); "
+            f"keep one copy and cross-reference: {duplicated[:3]}",
+        )
+
+
 class ToolTestLinkageTests(unittest.TestCase):
     """Pin the anti-dead-tool rule."""
 

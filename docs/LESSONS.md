@@ -84,6 +84,14 @@ rule exists because it previously caused a real defect or delay.
   single flaky reading mid-run: tolerate a small consecutive-miss window
   before stopping a healthy workload.
 
+## Never chain a sync reset behind a commit step
+
+`git reset --hard origin/main` must never share a shell chain with the
+commit step that precedes it: if the commit fails while still exiting
+zero (or its output is swallowed by a pipe), the chain's reset silently
+discards the uncommitted work. Verify the commit landed (`git log -1`
+shows it) BEFORE any reset, and run the reset as its own call.
+
 ## Scanner-shaped integrity constants
 
 A stored hex digest used as a test pin (64+ hex chars assigned near a
