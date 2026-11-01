@@ -1896,6 +1896,7 @@ one@x.invalid
 orig@corp.com
 other@example.com
 other@example.invalid
+p@a.example
 pass@example.com
 postmaster@example.invalid
 priya.raghavan@northwind.example
