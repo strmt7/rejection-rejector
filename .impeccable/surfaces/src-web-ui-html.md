@@ -26,8 +26,8 @@ THESIS: the console is one continuous carbon-copy docket — every write is a
 docketed triplicate; it refuses the category's three-pane mail client and the
 card-dashboard rut.
 
-OWN-WORLD: NCR carbonless stock (bone #F4EFE2, pale pink #E9D8C6, pale green
-#DCE7D7) under process ink #26221D; rubber-stamp vermilion #B23A2E for
+OWN-WORLD: NCR carbonless stock (bone #F4EFE2, pale pink #E9D8C6,
+pale green #DCE7D7) under process ink #26221D; rubber-stamp vermilion #B23A2E for
 dispositions; ballpoint blue #33506E for human sign-off. Form-printed type:
 tracked small-caps box labels (Archivo), typewriter values (Courier Prime).
 Perforated stub rail; ruled boxes with corner labels; visible hairline
