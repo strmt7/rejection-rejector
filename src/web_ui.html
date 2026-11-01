@@ -36,6 +36,7 @@
     --pen: #33506e;
     --ink-70: rgba(38, 34, 29, .72);
     --ink-45: rgba(38, 34, 29, .5);
+    --ink-55: rgba(38, 34, 29, .55);
     --ink-12: rgba(38, 34, 29, .12);
     --ink-25: rgba(38, 34, 29, .25);
     --grid-faint: rgba(38, 34, 29, .055);
@@ -167,7 +168,7 @@
   }
   .workspace > nav button {
     border: 1.5px solid var(--ink); border-bottom: 0; background: var(--bone);
-    color: var(--ink-70); padding: 10px 16px 9px; cursor: pointer; margin-right: -1.5px;
+    color: var(--ink-70); padding: 12px 16px 11px; min-height: 44px; cursor: pointer; margin-right: -1.5px;
     font: 700 11px/1 "Archivo", "Segoe UI", system-ui, sans-serif;
     letter-spacing: .12em; text-transform: uppercase;
   }
@@ -199,7 +200,7 @@
   .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 14px 0 0; }
   button.action, .selected-actions button {
     border: 1.5px solid var(--ink); background: var(--bone); color: var(--ink);
-    padding: 9px 13px; cursor: pointer;
+    padding: 11px 13px; min-height: 44px; cursor: pointer;
     font: 700 11px/1.4 "Archivo", "Segoe UI", system-ui, sans-serif;
     letter-spacing: .1em; text-transform: uppercase;
   }
@@ -278,7 +279,7 @@
   /* Stamped dialogs */
   .overlay {
     position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-    padding: 20px; background: rgba(38, 34, 29, .55); z-index: 10;
+    padding: 20px; background: var(--ink-55); z-index: 10;
   }
   .overlay.visible { display: flex; }
   .dialog {
@@ -343,7 +344,7 @@
   <div class="docket-cells" aria-label="Docket record">
     <div class="cell"><span class="lbl">Docket</span><span class="typed" id="docket-id">— · —</span></div>
     <div class="cell"><span class="lbl">Gate posture</span><span class="typed" id="docket-gate">—</span></div>
-    <div class="cell"><span class="lbl">Last poll</span><span class="typed" id="docket-model">—</span></div>
+    <div class="cell"><span class="lbl">Last poll</span><span class="typed" id="docket-poll">—</span></div>
   </div>
   <div class="copies" aria-label="Triplicate record: gate, audit, backup">
     <span class="lbl">Triplicate</span>
@@ -357,7 +358,7 @@
 <main>
   <aside class="rail" id="rail">
     <div class="rail-heading">
-      <h1>Queue</h1>
+      <h2>Queue</h2>
       <span class="count-pill" id="queue-count">0 messages</span>
     </div>
     <p class="rail-hint">Reviewable messages first. Select one to open it in Review.</p>
@@ -400,11 +401,11 @@
               <button class="action soft" id="review-regenerate">Regenerate with local AI</button>
               <button class="action danger" id="review-dismiss">Dismiss</button>
               <button class="action primary" id="review-send">Review &amp; send…</button>
-              <span class="dirty" id="review-dirty"></span>
+              <span class="dirty" id="review-dirty" role="status"></span>
             </div>
             <div class="actions">
               <span class="void-stamp lbl" id="void-stamp" role="status">VOID — GATE BLOCKED</span>
-              <span class="error" id="review-error"></span>
+              <span class="error" id="review-error" role="alert"></span>
             </div>
             <div class="impressions" id="impressions" aria-label="Copy impressions">
               <span class="imp" id="imp-gate">1 GATE</span>
@@ -429,9 +430,9 @@
         <div class="actions">
           <button class="action soft" id="ov-check-now">Check mail now</button>
           <button class="action quiet" id="ov-refresh">Refresh</button>
-          <span class="ok-note" id="ov-note"></span>
+          <span class="ok-note" id="ov-note" role="status"></span>
         </div>
-        <div class="actions"><span class="error" id="ov-error"></span></div>
+        <div class="actions"><span class="error" id="ov-error" role="alert"></span></div>
       </div>
       <div class="card">
         <h2>Recent activity</h2>
@@ -490,10 +491,10 @@
           <span class="actions">
             <button class="action" id="setting-arm">Arm Automatic mode…</button>
             <button class="action danger" id="setting-disarm">Return to Human review</button>
-            <span class="ok-note" id="setting-arm-state"></span>
+            <span class="ok-note" id="setting-arm-state" role="status"></span>
           </span>
         </div>
-        <div class="actions"><span class="error" id="settings-error"></span></div>
+        <div class="actions"><span class="error" id="settings-error" role="alert"></span></div>
       </div>
     </div>
 
@@ -508,9 +509,9 @@
         </div>
         <div class="actions">
           <button class="action primary" id="ai-qualify">Run qualification</button>
-          <span class="ok-note" id="ai-note"></span>
+          <span class="ok-note" id="ai-note" role="status"></span>
         </div>
-        <div class="actions"><span class="error" id="ai-error"></span></div>
+        <div class="actions"><span class="error" id="ai-error" role="alert"></span></div>
       </div>
     </div>
 
@@ -529,9 +530,9 @@
         <div class="actions">
           <button class="action primary" id="tools-connect">Connect mailbox</button>
           <button class="action danger" id="tools-disconnect">Disconnect and drop credentials</button>
-          <span class="ok-note" id="account-note"></span>
+          <span class="ok-note" id="account-note" role="status"></span>
         </div>
-        <div class="actions"><span class="error" id="account-error"></span></div>
+        <div class="actions"><span class="error" id="account-error" role="alert"></span></div>
       </div>
       <div class="card">
         <h2>Workspace maintenance</h2>
@@ -555,8 +556,8 @@
           <span class="label">Retention purge<small>Delete retained records past the policy window.</small></span>
           <span><button class="action danger" id="tools-purge">Purge expired records</button></span>
         </div>
-        <div class="actions"><span class="error" id="tools-error"></span></div>
-        <div class="actions"><span class="ok-note" id="tools-note"></span></div>
+        <div class="actions"><span class="error" id="tools-error" role="alert"></span></div>
+        <div class="actions"><span class="ok-note" id="tools-note" role="status"></span></div>
       </div>
     </div>
   </section>
@@ -575,7 +576,7 @@
     <div class="actions">
       <button class="action primary" id="confirm-send">Send this exact reply now</button>
       <button class="action" id="confirm-cancel">Cancel</button>
-      <span class="error" id="confirm-error"></span>
+      <span class="error" id="confirm-error" role="alert"></span>
     </div>
   </div>
 </div>
@@ -589,7 +590,7 @@
     <div class="actions">
       <button class="action primary" id="arm-confirm" disabled>I understand the risks — enable Automatic mode</button>
       <button class="action" id="arm-cancel">Cancel (stay in Human review)</button>
-      <span class="error" id="arm-error"></span>
+      <span class="error" id="arm-error" role="alert"></span>
     </div>
   </div>
 </div>
@@ -602,7 +603,7 @@
       <input type="password" id="token-input" autocomplete="off" placeholder="local API bearer token" aria-label="Local API bearer token">
       <button class="action primary" id="token-connect">Connect</button>
     </div>
-    <div class="actions"><span class="error" id="token-error"></span></div>
+    <div class="actions"><span class="error" id="token-error" role="alert"></span></div>
   </div>
 </div>
 
@@ -879,7 +880,7 @@ function renderReview() {
   setText("docket-id", job ? String(job.id) + " \u00b7 r" + String(job.revision) : "\u2014 \u00b7 \u2014");
   {
     const status = state.status || {};
-    setText("docket-model", status.last_poll ? "polled " + String(status.last_poll) : "no poll yet");
+    setText("docket-poll", status.last_poll ? "polled " + String(status.last_poll) : "no poll yet");
   }
   for (const id of ["review-save", "review-regenerate", "review-dismiss", "review-send"]) {
     el(id).disabled = !job;
@@ -1012,6 +1013,7 @@ async function saveSettings(edit) {
 }
 
 function openArmDialog() {
+  setTimeout(() => { const b = el("arm-cancel"); if (b) b.focus(); }, 0);
   el("arm-overlay").classList.add("visible");
   showError("arm-error", null);
   el("arm-confirm").disabled = true;
@@ -1019,6 +1021,7 @@ function openArmDialog() {
 }
 
 function closeArmDialog() {
+  setTimeout(() => { const b = el("setting-arm"); if (b) b.focus(); }, 0);
   el("arm-overlay").classList.remove("visible");
   if (state.armTimer) {
     clearInterval(state.armTimer);
@@ -1048,6 +1051,8 @@ async function beginArm() {
 }
 
 function openConfirmDialog() {
+  // Focus moves into the dialog on open and returns to the trigger on close.
+  setTimeout(() => { const b = el("confirm-send"); if (b) b.focus(); }, 0);
   const job = state.selected;
   if (!job || !job.draft) return;
   // The dialog shows and confirms the exact persisted draft; the send
@@ -1062,6 +1067,7 @@ function openConfirmDialog() {
 }
 
 function closeConfirmDialog() {
+  setTimeout(() => { const b = el("review-send"); if (b) b.focus(); }, 0);
   el("confirm-overlay").classList.remove("visible");
   state.confirmBody = "";
 }
@@ -1224,9 +1230,11 @@ function wire() {
       renderReview();
       await refreshStatus();
     } catch (error) {
-      const serverRejection = error.code && error.code !== "network_error"
-        && !String(error.code).startsWith("http_");
-      if (serverRejection) stampGateVoid();
+      // The VOID stamp claims "gate blocked", so it fires only when the
+      // deterministic gate family actually rejected the send — never for
+      // transport failures or unrelated server errors.
+      const gateCodes = ["confirm_reply_mismatch", "send_gate_blocked", "stale_revision"];
+      if (gateCodes.includes(error.code)) stampGateVoid();
       showError("confirm-error", error);
     }
   });
