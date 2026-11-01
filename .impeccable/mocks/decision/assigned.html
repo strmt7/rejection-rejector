@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Carbon Copy Docket — Review</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bone:#F4EFE2;--pink:#E9D8C6;--green:#DCE7D7;--ink:#26221D;--stamp:#B23A2E;--pen:#33506E;}
+*{box-sizing:border-box;}
+html,body{width:1440px;height:900px;overflow:hidden;margin:0;}
+body{font-family:'Archivo',sans-serif;color:var(--ink);background:var(--bone);
+ background-image:repeating-linear-gradient(0deg,transparent 0 23px,rgba(38,34,29,.055) 23px 24px),repeating-linear-gradient(90deg,transparent 0 23px,rgba(38,34,29,.055) 23px 24px);}
+.lbl{font-size:9px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;}
+.val{font-family:'Courier Prime',monospace;font-size:13px;}
+/* docket header */
+header{display:flex;align-items:stretch;border-bottom:2px solid var(--ink);background:var(--bone);}
+.brand{padding:14px 22px 12px;border-right:1px solid var(--ink);}
+.brand h1{margin:0;font-size:19px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;}
+.meta{display:flex;flex:1;}
+.cell{padding:12px 18px;border-right:1px solid rgba(38,34,29,.35);min-width:130px;}
+.copies{display:flex;align-items:center;gap:8px;padding:0 18px;}
+.copy{border:1.5px solid var(--ink);border-radius:2px;padding:5px 9px 4px;text-align:center;}
+.copy i{display:block;width:26px;height:4px;margin:3px auto 2px;font-style:normal;}
+.c1{background:var(--bone);}.c2{background:var(--pink);}.c3{background:var(--green);}
+/* shell */
+.shell{display:flex;height:calc(900px - 74px);}
+/* perforated stub rail */
+.rail{width:196px;border-right:2px dashed var(--ink);padding:14px 0 0;position:relative;background:var(--bone);}
+.rail:before{content:"";position:absolute;right:-7px;top:0;bottom:0;width:12px;
+ background:radial-gradient(circle at 6px 8px,var(--bone) 4px,transparent 4.5px) 0 0/12px 16px repeat-y;}
+.stub{margin:0 14px 10px;border:1px solid var(--ink);padding:8px 9px;background:var(--bone);}
+.stub.sel{background:var(--pink);border-width:2px;}
+.stub .no{font-size:10px;letter-spacing:.12em;font-weight:700;}
+.stub .sub{font-family:'Courier Prime',monospace;font-size:10.5px;line-height:1.35;margin-top:3px;}
+.pin{display:inline-block;border:1px solid var(--pen);color:var(--pen);border-radius:2px;padding:1px 5px;font-size:9px;letter-spacing:.08em;margin-top:5px;}
+/* main form */
+main{flex:1;padding:16px 20px;display:flex;flex-direction:column;gap:12px;}
+.row{display:flex;gap:12px;}
+.box{border:1.5px solid var(--ink);background:var(--bone);position:relative;}
+.box>.lbl{position:absolute;top:-1px;left:-1px;background:var(--ink);color:var(--bone);padding:3px 8px 2px;}
+.box .in{padding:16px 14px 10px;}
+.grow{flex:1;}
+.conf{width:118px;}
+.bar{height:8px;border:1px solid var(--ink);margin:6px 0 4px;background:var(--bone);}
+.bar i{display:block;height:100%;background:var(--ink);}
+.reply{font-family:'Courier Prime',monospace;font-size:12.5px;line-height:1.55;}
+/* gate checklist */
+.gate{display:flex;gap:0;border:1.5px solid var(--ink);}
+.gl{flex:1;border-right:1px solid rgba(38,34,29,.4);padding:10px 12px;display:flex;align-items:center;gap:9px;}
+.gl:last-child{border-right:0;}
+.x\boxed{width:17px;height:17px;border:1.5px solid var(--ink);flex:none;text-align:center;line-height:14px;font-weight:700;font-family:'Courier Prime',monospace;}
+.ok{background:var(--green);}
+.no{background:var(--pink);color:var(--stamp);}
+/* action strip + stamps */
+.strip{display:flex;gap:12px;align-items:stretch;}
+.send{border:2px solid var(--ink);padding:12px 16px;display:flex;align-items:center;gap:14px;background:var(--bone);}
+button{font-family:'Archivo',sans-serif;font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;padding:11px 18px;border:1.5px solid var(--ink);cursor:pointer;}
+.pri{background:var(--ink);color:var(--bone);}
+.sec{background:transparent;color:var(--ink);}
+.stamps{flex:1;position:relative;border:1px solid rgba(38,34,29,.4);}
+.void{position:absolute;right:26px;top:12px;transform:rotate(-8deg);border:3px double var(--stamp);color:var(--stamp);
+ padding:6px 14px 4px;font-size:16px;font-weight:700;letter-spacing:.18em;}
+.sign{position:absolute;left:20px;bottom:10px;}
+.sign .lbl{color:var(--pen);}
+.sign .line{width:210px;border-bottom:1.5px solid var(--pen);margin-top:14px;}
+.sign svg{display:block;margin-top:-26px;}
+.trail{position:absolute;right:22px;bottom:12px;text-align:center;}
+.trail .lbl{color:var(--stamp);}
+.trail .imp{display:inline-block;border:1.5px solid var(--stamp);color:var(--stamp);border-radius:2px;
+ padding:2px 7px 1px;margin:4px 2px 0;font-family:'Courier Prime',monospace;font-size:10px;}
+</style>
+</head>
+<body>
+<header>
+ <div class="brand"><h1>Rejection Rejector</h1><div class="lbl" style="margin-top:5px">Daily dispatch docket · form RR-11 · rev 2026-11-01</div></div>
+ <div class="meta">
+  <div class="cell"><div class="lbl">Docket</div><div class="val">APP-2026-0412 · r7</div></div>
+  <div class="cell"><div class="lbl">Send cap today</div><div class="val">12 / 40</div></div>
+  <div class="cell"><div class="lbl">Model</div><div class="val">granite4.2:8b-q8_0</div></div>
+ </div>
+ <div class="copies"><div class="lbl" style="margin-right:4px">Triplicate</div>
+  <div class="copy c1"><i></i><div class="lbl">1 Gate</div></div>
+  <div class="copy c2"><i></i><div class="lbl">2 Audit</div></div>
+  <div class="copy c3"><i></i><div class="lbl">3 Backup</div></div>
+ </div>
+</header>
+<div class="shell">
+ <div class="rail">
+  <div class="lbl" style="margin:2px 14px 10px">Stub rail · queue</div>
+  <div class="stub sel"><div class="no">APP-2026-0412 · r7</div><div class="sub">Northwind Labs — SWE II</div><div class="pin">PINNED</div></div>
+  <div class="stub"><div class="no">APP-2026-0408 · r3</div><div class="sub">Auritec — Backend</div></div>
+  <div class="stub"><div class="no">APP-2026-0403 · r2</div><div class="sub">Kestrel Health — Data</div></div>
+  <div class="stub"><div class="no">APP-2026-0399 · r5</div><div class="sub">Bright Harbor — Platform</div></div>
+  <div class="stub"><div class="no">APP-2026-0391 · r1</div><div class="sub">Meridian OS — SRE</div></div>
+ </div>
+ <main>
+  <div class="row">
+   <div class="box grow"><div class="lbl">Detected rejection</div><div class="in">
+    <div class="val" style="font-weight:700">Northwind Labs — “SWE II application”</div>
+    <div class="lbl" style="margin:8px 0 3px">Classification</div>
+    <div class="val">rejection_detected · confidence 0.93 · en-US · imap/connected</div>
+   </div></div>
+   <div class="box conf"><div class="lbl">Confidence</div><div class="in">
+    <div class="val" style="font-size:22px;font-weight:700">0.93</div>
+    <div class="bar"><i style="width:93%"></i></div>
+    <div class="lbl">threshold 0.85</div>
+   </div></div>
+  </div>
+  <div class="box grow"><div class="lbl">Draft reply · pinned revision r7</div><div class="in reply">
+   Dear Ms. Okonkwo,<br><br>
+   Thank you for letting me know, and for the time your team spent with me across the
+   interviews. While I am naturally disappointed, I remain impressed by Northwind’s
+   platform work — I will keep following it, and I would welcome the chance to be
+   considered again as my experience grows.<br><br>
+   With appreciation,<br>A. Candidate
+  </div></div>
+  <div class="gate">
+   <div class="gl"><div class="xbox ok">✓</div><div><div class="lbl">Human confirmation</div><div class="val" style="font-size:11px">operator clicked confirm</div></div></div>
+   <div class="gl"><div class="xbox ok">✓</div><div><div class="lbl">Body hash</div><div class="val" style="font-size:11px">sha256:9f2c…e10d · matches r7</div></div></div>
+   <div class="gl"><div class="xbox no">✕</div><div><div class="lbl">Policy &amp; limits</div><div class="val" style="font-size:11px">send scope missing · paused</div></div></div>
+  </div>
+  <div class="strip">
+   <div class="send">
+    <div><div class="lbl">Execute send</div><div class="val" style="font-size:11px">requires all three layers</div></div>
+    <button class="pri" disabled style="opacity:.45">Send reply</button>
+    <button class="sec">Edit</button>
+    <button class="sec">Regenerate</button>
+    <button class="sec">Dismiss</button>
+   </div>
+   <div class="stamps">
+    <div class="void">VOID — GATE BLOCKED</div>
+    <div class="sign"><div class="lbl">Confirmed by operator</div>
+     <svg width="180" height="34" viewBox="0 0 180 34"><path d="M8 26 C 30 4, 46 34, 66 16 S 108 4, 130 22 S 162 30, 174 10" fill="none" stroke="#33506E" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </div>
+    <div class="trail"><div class="lbl">Copy impressions</div>
+     <div class="imp">2 AUDIT ✓ 14:02</div><div class="imp">3 BACKUP ✓ 14:02</div><div class="imp">1 GATE — VOID</div>
+    </div>
+   </div>
+  </div>
+ </main>
+</div>
+</body>
+</html>

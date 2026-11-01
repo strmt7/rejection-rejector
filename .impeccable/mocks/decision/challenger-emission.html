@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rejection Rejector — Emission-Line Rail</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Zilla+Slab:wght@400;500&display=swap">
+<style>
+  :root { --na:#E8C64A; --hb:#4C86C6; --li:#B5493C; --bone:#DDD8CC; --ash:#26282A; }
+  * { box-sizing:border-box; }
+  html, body { width:1440px; height:900px; overflow:hidden; margin:0; }
+  body { color:var(--bone); font-family:'Barlow Condensed',sans-serif;
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.020) 0 2px, transparent 2px 6px),
+      repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0 1px, transparent 1px 31px),
+      linear-gradient(168deg,#1c1e20 0%,#26282b 34%,#1e2022 63%,#282a2d 100%); }
+  .lbl { font-size:11px; letter-spacing:.14em; text-transform:uppercase; line-height:1.35; }
+  .num { font-family:'Zilla Slab',serif; letter-spacing:.02em; }
+  .dim { opacity:.58; }
+  header { position:absolute; inset:0 0 auto 0; height:40px; display:flex; align-items:center;
+    gap:22px; padding:0 56px; border-bottom:1px solid rgba(221,216,204,.18); }
+  header .brand { font-size:13px; letter-spacing:.22em; text-transform:uppercase; font-weight:600; }
+  header .grow { flex:1; }
+  /* ---- the plate: the open view bloomed above the rail ---- */
+  .plate { position:absolute; left:56px; top:50px; width:1328px; height:542px; color:var(--ash);
+    padding:14px 22px 12px; border:1px solid rgba(38,40,42,.6);
+    background:
+      repeating-linear-gradient(0deg, rgba(38,40,42,.05) 0 1px, transparent 1px 5px),
+      linear-gradient(180deg,#E4DFD3,#D6D0C3); }
+  .tabs { display:flex; gap:24px; align-items:baseline; border-bottom:1px solid rgba(38,40,42,.35); padding-bottom:7px; }
+  .tab { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:rgba(38,40,42,.62);
+    padding-bottom:6px; margin-bottom:-8px; border-bottom:2px solid transparent; }
+  .tab.on { color:var(--ash); border-bottom-color:var(--ash); font-weight:600; }
+  .dbl { display:inline-block; width:4px; height:10px; vertical-align:-1px;
+    background:linear-gradient(90deg,var(--na) 0 1px,transparent 1px 3px,var(--na) 3px 4px); }
+  .meta { display:flex; gap:22px; margin:9px 0 7px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:26px; }
+  .cap { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; }
+  .mail { border:1px solid rgba(38,40,42,.35); padding:9px 12px; height:350px; overflow:hidden;
+    white-space:pre-wrap; font:400 11.5px/1.6 'Zilla Slab',serif; }
+  .cues { margin-top:6px; padding-top:6px; border-top:1px solid rgba(38,40,42,.25); }
+  textarea { display:block; width:100%; height:300px; resize:none; border:1px solid rgba(38,40,42,.45);
+    background:rgba(255,255,255,.30); padding:8px 11px; color:var(--ash);
+    font:400 11.5px/1.6 'Zilla Slab',serif; }
+  .row { display:flex; gap:9px; align-items:center; margin-top:9px; flex-wrap:wrap; }
+  .btn { border:1px solid rgba(38,40,42,.55); background:transparent; color:var(--ash); cursor:default;
+    padding:5px 12px; font:500 11px 'Barlow Condensed',sans-serif; letter-spacing:.14em; text-transform:uppercase; }
+  .btn.pri { background:var(--ash); color:#E4DFD3; }
+  .btn.struck { text-decoration:line-through; opacity:.55; }
+  .gate { margin-top:8px; padding-top:8px; border-top:1px solid rgba(38,40,42,.3); }
+  .gate s { text-decoration-thickness:1px; }
+  .hash { border:1px solid rgba(38,40,42,.45); background:rgba(255,255,255,.30); color:var(--ash);
+    padding:5px 9px; width:230px; font:400 11px 'Zilla Slab',serif; }
+  /* ---- the rail: one off-centre calibrated axis ---- */
+  .band { position:absolute; left:56px; top:598px; width:1328px; height:230px; }
+  .bloom { position:absolute; left:250px; top:0; width:240px; height:178px;
+    background:linear-gradient(180deg,rgba(221,216,204,0),rgba(221,216,204,.13)); }
+  .ann { position:absolute; width:170px; margin-left:-85px; text-align:center; }
+  .ln { position:absolute; width:1px; background:var(--c); }
+  .ln.dash { background:repeating-linear-gradient(180deg,var(--c) 0 9px,transparent 9px 16px); }
+  .ln.struck::after { content:""; position:absolute; left:-5px; top:50%; width:11px; height:1px; background:var(--c); }
+  .ln.pin { width:4px; background:linear-gradient(90deg,var(--na) 0 1px,transparent 1px 3px,var(--na) 3px 4px); }
+  .c-na { --c:#E8C64A; } .c-h { --c:#4C86C6; } .c-l { --c:#B5493C; }
+  .axis { position:absolute; left:0; top:178px; width:100%; height:1px; background:rgba(221,216,204,.55); }
+  .minor { position:absolute; left:0; top:179px; width:100%; height:5px;
+    background:repeating-linear-gradient(90deg,rgba(221,216,204,.38) 0 1px,transparent 1px 22px); }
+  .scale { position:absolute; top:181px; width:170px; margin-left:-85px; text-align:center; font-size:10px; }
+  .nv { position:absolute; top:194px; width:150px; margin-left:-75px; text-align:center; }
+  .tk { width:1px; height:15px; background:rgba(221,216,204,.5); margin:0 auto; }
+  .tk.on { width:2px; height:22px; background:var(--bone); }
+  .nv .lbl { margin-top:4px; }
+  .nv .rule { width:44px; height:1px; background:var(--bone); margin:3px auto 0; }
+  footer { position:absolute; left:56px; top:836px; width:1328px; }
+  .keys { display:flex; justify-content:space-between; gap:28px; padding-top:9px;
+    border-top:1px solid rgba(221,216,204,.18); }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Rejection Rejector</span>
+  <span class="lbl dim">local console &middot; loopback only &middot; email shown as plain text</span>
+  <span class="grow"></span>
+  <span class="lbl">gmail connected &middot; human review &middot; sending enabled &middot; dispatch running</span>
+</header>
+
+<main class="plate">
+  <div class="tabs">
+    <span class="tab on">Review</span><span class="tab">Overview</span><span class="tab">Activity</span>
+    <span class="tab">Local AI</span><span class="tab">Settings</span>
+    <span class="grow" style="flex:1"></span>
+    <span class="lbl"><span class="dbl"></span>&nbsp; item app-2026-0412 &middot; rev r7 &middot; pinned</span>
+  </div>
+  <div class="meta">
+    <span class="lbl num">state: awaiting_confirm</span>
+    <span class="lbl num">detected: rejection_detected (conf .93)</span>
+    <span class="lbl num">draft: draft_ready &middot; rev r7</span>
+    <span class="lbl num">exact body sha256:9f2c&hellip;</span>
+    <span class="lbl num">send cap 12/40 today</span>
+  </div>
+  <div class="grid">
+    <div>
+      <div class="cap"><span class="lbl">Original message</span><span class="lbl dim">why the model classified it this way</span></div>
+      <div class="mail">From: Dana Whitfield &lt;d.whitfield@northbridge-talent.example&gt;
+Subject: Application update — Platform Engineer (req 4417)
+Received: 2026-04-12 09:41 CET
+
+Dear applicant,
+
+Thank you for your interest in the Platform Engineer role (req 4417).
+After careful review, we will not be progressing your application at
+this time. We received a large number of applications from other
+candidates whose experience more directly matches the role.
+
+We wish you every success in your search.
+
+Dana Whitfield — Talent Partner, Northbridge</div>
+      <div class="cues lbl dim">cues: &ldquo;not be progressing&rdquo; &middot; &ldquo;other candidates&rdquo; &middot; lang en &middot; verifier agree &middot; no follow-up ask detected</div>
+    </div>
+    <div>
+      <div class="cap"><span class="lbl">Draft reply — <span class="dbl"></span>&nbsp;rev r7 pinned</span><span class="lbl dim num">body sha256:9f2c&hellip;</span></div>
+      <textarea spellcheck="true">Dear Ms Whitfield,
+
+Thank you for letting me know, and for the clarity throughout the
+process. I remain genuinely interested in Northbridge, so if another
+role opens on the platform team I would welcome the chance to be
+considered.
+
+If you have a moment, I would value one piece of feedback on where my
+application fell short — it helps me focus the next round of work.
+
+Either way, thank you again for your time.
+
+Kind regards,
+M. Renner</textarea>
+      <div class="row">
+        <button class="btn">Save changes</button>
+        <button class="btn">Regenerate with local AI</button>
+        <button class="btn">Dismiss</button>
+        <button class="btn pri struck">Review &amp; send…</button>
+      </div>
+      <div class="gate">
+        <div class="row" style="margin:0">
+          <span class="lbl">confirm exact body hash</span>
+          <input class="hash" type="text" value="sha256:9f2c4a7e…" aria-label="exact body hash">
+          <button class="btn struck">Arm send</button>
+        </div>
+        <div class="lbl" style="margin-top:7px"><s>blocked: gate</s> &mdash; body edited after pin; digest mismatch vs pinned r7 &middot; re-pin r7 to arm exact-body send</div>
+      </div>
+    </div>
+  </div>
+  <div class="gate" style="margin-top:12px;display:flex;justify-content:space-between"><span class="lbl">deterministic send gate &mdash; revisions r5 &middot; r6 &middot; <span class="dbl"></span>&nbsp;r7 pinned &middot; every revision hashed</span><span class="lbl dim">send behind exact-body-hash confirmation &middot; cap 12/40 today &middot; block reason shown where it bites</span></div>
+</main>
+
+<section class="band">
+  <div class="bloom"></div>
+  <!-- queue state riding the rail as emission lines: form encodes state, hue is data -->
+  <div class="ann" style="left:130px;top:2px"><div class="lbl num">app-2026-0380</div><div class="lbl dim">stale &middot; 2d unscanned</div></div>
+  <div class="ln half c-h" style="left:130px;top:110px;height:68px"></div>
+  <div class="ann" style="left:326px;top:2px"><div class="lbl num">app-2026-0387</div><div class="lbl dim">awaiting_confirm</div></div>
+  <div class="ln dash c-h" style="left:326px;top:42px;height:136px"></div>
+  <div class="ann" style="left:438px;top:2px"><div class="lbl num">app-2026-0391</div><div class="lbl dim">blocked: gate</div></div>
+  <div class="ln struck c-l" style="left:438px;top:42px;height:136px"></div>
+  <div class="ann" style="left:642px;top:2px"><div class="lbl num">app-2026-0398</div><div class="lbl dim">stale &middot; sent 14:02</div></div>
+  <div class="ln half c-h" style="left:642px;top:110px;height:68px"></div>
+  <div class="ann" style="left:754px;top:2px"><div class="lbl num">app-2026-0402</div><div class="lbl dim">awaiting_confirm</div></div>
+  <div class="ln dash c-l" style="left:754px;top:42px;height:136px"></div>
+  <div class="ann" style="left:838px;top:2px"><div class="lbl num">app-2026-0405</div><div class="lbl dim">detected .93</div></div>
+  <div class="ln c-h" style="left:838px;top:42px;height:136px"></div>
+  <div class="ann" style="left:950px;top:2px"><div class="lbl num">app-2026-0409</div><div class="lbl dim">draft_ready</div></div>
+  <div class="ln c-h" style="left:950px;top:42px;height:136px"></div>
+  <div class="ann" style="left:1034px;top:2px"><div class="lbl num">app-2026-0412</div><div class="lbl"><span class="dbl"></span>&nbsp;pinned</div></div>
+  <div class="ln pin" style="left:1032px;top:42px;height:136px"></div>
+  <div class="axis"></div>
+  <div class="minor"></div>
+  <div class="scale num dim" style="left:130px">0380</div>
+  <div class="scale num dim" style="left:410px">0390</div>
+  <div class="scale num dim" style="left:690px">0400</div>
+  <div class="scale num dim" style="left:970px">0410</div>
+  <div class="scale num dim" style="left:1250px">0420</div>
+  <div class="nv" style="left:110px"><div class="tk"></div><div class="lbl dim">Overview</div></div>
+  <div class="nv" style="left:370px"><div class="tk on"></div><div class="lbl">Review — open</div><div class="rule"></div></div>
+  <div class="nv" style="left:650px"><div class="tk"></div><div class="lbl dim">Activity</div></div>
+  <div class="nv" style="left:930px"><div class="tk"></div><div class="lbl dim">Local AI</div></div>
+  <div class="nv" style="left:1210px"><div class="tk"></div><div class="lbl dim">Settings</div></div>
+</section>
+
+<footer>
+  <div class="keys">
+    <span class="lbl">line form &mdash; solid live/ready &middot; dashed pending &middot; half stale &middot; struck disabled/blocked</span>
+    <span class="lbl">emission data &mdash; na 589 pinned doublet &middot; h 486 detection &middot; li 671 manual hold &mdash; hue never encodes state</span>
+    <span class="lbl num">ollama 0.40.13 healthy &middot; granite4.2:8b-q8_0 digest pinned &middot; api 127.0.0.1:8787</span>
+  </div>
+  <div class="keys" style="border:0;padding-top:5px">
+    <span class="lbl dim">state is line form, not hue &middot; colour = data-viz only</span>
+    <span class="lbl dim">gate: send behind exact-body-hash confirmation &middot; block reasons stated where they bite</span>
+  </div>
+</footer>
+</body>
+</html>

@@ -84,6 +84,35 @@ rule exists because it previously caused a real defect or delay.
   single flaky reading mid-run: tolerate a small consecutive-miss window
   before stopping a healthy workload.
 
+## Resource discipline: agent fan-out and orphan processes (2026-11-01)
+
+- Measure free memory before raising concurrency. A six-way parallel
+  worker fan-out plus a local decision server was launched on a host
+  already at 95% RAM with no prior load measurement; the load starved
+  process creation until the agent's own shell could not spawn. Measure
+  first, cap fan-out at four while free memory is under 8 GB, and report
+  the measured load alongside any fan-out.
+- A dead browser backend leaves orphan processes, not clean failures.
+  Where a browser cannot start, every attempted launch can leave
+  automation processes running; repeated launch attempts (visual self-
+  checks of HTML artifacts) accumulated thousands of orphans, adding
+  tens of GB until the host was saturated. Verify browser health once
+  before any browser-based verification; if the backend is dead, verify
+  markup structurally (parse, lint, DOM assertions) — never by rendering
+  — and never ask parallel workers to verify visually on such a host.
+- A timed-out command may still have live children. Timeout is not
+  termination: a foreground launch that hit its timeout was re-launched,
+  producing two server instances and two auto-opened browser tabs.
+  Before relaunching a command that timed out, check whether its process
+  or listening port is already alive.
+- When RAM is exhausted, new-process creation fails first — including
+  the agent's own shell. An already-running interpreter kernel and
+  direct process APIs still work and are the recovery path: sweep the
+  orphan family with them (identified by name and full command line,
+  killing only tool-owned processes, never the user's applications),
+  then re-measure and watch an interval for respawn before declaring
+  recovery.
+
 ## Never chain a sync reset behind a commit step
 
 `git reset --hard origin/main` must never share a shell chain with the

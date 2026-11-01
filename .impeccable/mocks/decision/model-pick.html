@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rejection Rejector — Review — Par Avion Dispatch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600;700&family=Courier+Prime&display=swap" rel="stylesheet">
+<style>
+  :root{--paper:#F7F3EA;--card:#FCFAF4;--red:#C8102E;--blue:#003DA5;--ink:#1C1B18;--muted:#6E6A5E;--line:#DCD4C2;--edge:#C4B99F}
+  *{box-sizing:border-box}
+  html,body{width:1440px;height:900px;overflow:hidden;margin:0}
+  body{background:var(--paper);color:var(--ink);font:14px/1.5 "Libre Franklin",Arial,sans-serif}
+  h1,h2,h3,p{margin:0}
+  .mono{font-family:"Courier Prime",monospace}
+  .lbl{font:700 10px/1.2 "Libre Franklin";letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+  .meta{font-size:12px;line-height:1.7;color:#4C463A;white-space:pre-wrap}
+  .note{font-size:11px;line-height:1.6;color:var(--muted)}
+  header{height:62px;display:flex;align-items:center;gap:16px;padding:0 34px;border-bottom:1px solid var(--edge)}
+  .brand{font-size:19px;font-weight:700;letter-spacing:-.02em;white-space:nowrap}
+  .brand em{font:400 11px "Libre Franklin";font-style:normal;color:var(--muted);border-left:1px solid var(--edge);padding-left:14px;margin-left:14px}
+  .chips{margin-left:auto;display:flex;gap:8px}
+  .chip{font-size:11px;padding:5px 10px;border:1px solid var(--edge);background:var(--card);white-space:nowrap}
+  .chip b{font-family:"Courier Prime";font-weight:700}
+  .chip.ok{color:#2C6248;border-color:#93B2A0}
+  .chip.warn{color:var(--red);border-color:#D9A2AB}
+  nav{height:45px;display:flex;align-items:flex-end;gap:24px;padding:0 34px;border-bottom:1px solid var(--edge)}
+  nav button{border:0;background:none;padding:0 2px 11px;font:600 13px "Libre Franklin";color:var(--muted);cursor:pointer}
+  nav button.on{color:var(--ink);border-bottom:2px solid var(--blue)}
+  main{display:grid;grid-template-columns:318px 1fr;height:792px}
+  .rail{border-right:1px solid var(--edge);padding:18px 0 0;overflow:hidden}
+  .rail-head{display:flex;align-items:baseline;gap:10px;padding:0 22px 12px}
+  .rail-head h2{font-size:15px}
+  .count{margin-left:auto;font:12px "Courier Prime";color:var(--muted)}
+  .filter{width:272px;margin:0 22px 14px;padding:8px 10px;border:1px solid var(--edge);background:var(--card);font:12px "Libre Franklin";color:var(--muted)}
+  .q{padding:12px 22px;border-top:1px solid var(--line);cursor:pointer}
+  .q.sel{background:#F1ECDE;border-left:3px solid var(--blue);padding-left:19px}
+  .q h3{font-size:13px;line-height:1.35}
+  .q p{font-size:11px;color:var(--muted);margin-top:2px}
+  .st{display:inline-block;margin-top:6px;font:11px "Courier Prime";padding:3px 7px;border:1px solid var(--edge);color:#4C463A}
+  .st.red{color:var(--red);border-color:#D9A2AB}
+  .st.blue{color:var(--blue);border-color:#A8BBD8}
+  .ws{padding:18px 30px 24px;overflow:hidden}
+  .pin{display:flex;align-items:center;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--edge)}
+  .pin h2{font-size:16px}
+  .pin h2 span{font:400 12px "Libre Franklin";color:var(--muted)}
+  .review{display:grid;grid-template-columns:1fr 1.1fr;gap:18px;margin-top:16px}
+  .card{background:var(--card);border:1px solid var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+  .mail{font-size:12.5px;line-height:1.75;white-space:pre-wrap}
+  textarea{width:100%;height:206px;resize:none;border:1px solid var(--edge);background:#fff;padding:11px;font:12.5px/1.7 "Libre Franklin";color:var(--ink)}
+  .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  button{border:1px solid var(--edge);background:#fff;padding:8px 13px;font:600 12px "Libre Franklin";color:#3B362B;cursor:pointer}
+  button.soft{background:#EFE9DA}
+  button.danger{color:var(--red);border-color:#D9A2AB}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .gate{margin-top:16px;padding:14px 18px 16px;border:1px solid transparent;border-image:repeating-linear-gradient(45deg,var(--red) 0 1.5px,var(--paper) 1.5px 3px,var(--blue) 3px 4.5px,var(--paper) 4.5px 6px) 1;background:var(--card);background-clip:padding-box}
+  .gate-head{display:flex;align-items:baseline;gap:14px}
+  .gate-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:22px;margin-top:12px}
+  .exact{border:1px solid var(--line);background:#fff;padding:10px 12px;font:11.5px/1.75 "Courier Prime";white-space:pre-wrap}
+  .frank{display:flex;gap:14px;align-items:center;border:1px solid var(--line);background:#fff;padding:10px 12px}
+  .frank p{font-size:11.5px;line-height:1.65;color:#4C463A}
+  .stamp{width:108px;height:108px;flex:none;border:2px double var(--red);border-radius:50%;color:var(--red);transform:rotate(-12deg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;text-align:center;opacity:.85;font:700 8px "Libre Franklin";letter-spacing:.12em}
+  .stamp b{font:700 13px "Courier Prime";letter-spacing:.02em}
+  .stamp i{font:400 8px "Libre Franklin";font-style:normal;letter-spacing:.14em}
+  .stub{position:relative;margin-top:11px;background:var(--card);border:1px solid var(--line);border-top:0;padding:11px 12px;font:11px/1.7 "Courier Prime";color:#4C463A}
+  .stub::before{content:"";position:absolute;left:-1px;right:-1px;top:-8px;height:8px;background:radial-gradient(circle at 5px 4px,var(--paper) 0 3px,var(--card) 3.2px) 0 0/10px 8px repeat-x}
+  .stub .lbl{display:block;margin-bottom:3px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Rejection Rejector <em>local console &middot; loopback only &middot; email shown as plain text</em></div>
+  <div class="chips">
+    <span class="chip">Ollama <b>0.40.13</b> healthy</span>
+    <span class="chip">model <b>granite4.2:8b-q8_0</b></span>
+    <span class="chip ok">Human review</span>
+    <span class="chip warn">sending enabled</span>
+    <span class="chip">sends <b>12/40</b> today</span>
+  </div>
+</header>
+<nav>
+  <button class="on">Review</button><button>Overview</button><button>Activity</button><button>Local AI</button><button>Settings</button>
+</nav>
+<main>
+  <aside class="rail">
+    <div class="rail-head"><h2>Queue</h2><span class="count">4 messages</span></div>
+    <input class="filter" type="text" value="Filter queue — sender, subject, id" readonly>
+    <div class="q sel"><h3>Your application — Northwind Labs</h3><p>careers@northwindlabs.example · app-2026-0412 · r7</p><span class="st red">rejection_detected (conf .93)</span></div>
+    <div class="q"><h3>Thank you for applying — Helio Systems</h3><p>talent@heliosystems.example · app-2026-0408 · r2</p><span class="st">draft_ready</span></div>
+    <div class="q"><h3>Your candidacy — Quill &amp; Co</h3><p>hr@quillandco.example · app-2026-0401 · r5</p><span class="st blue">sent 14:02</span></div>
+    <div class="q"><h3>Application update — Bramble Health</h3><p>recruiting@bramblehealth.example · app-2026-0399 · r1</p><span class="st red">blocked: gate</span></div>
+    <div class="q"><h3>Platform Engineer role — Vellum AI</h3><p>jobs@vellum.example · app-2026-0396 · r3</p><span class="st">awaiting_confirm</span></div>
+  </aside>
+  <section class="ws">
+    <div class="pin">
+      <div>
+        <div class="lbl">Pinned item</div>
+        <h2 class="mono">app-2026-0412 <span>· revision r7 · draft body sha256:9f2c…</span></h2>
+      </div>
+      <div class="chips"><span class="chip warn">rejection_detected (conf .93)</span><span class="chip">draft_ready</span></div>
+    </div>
+    <div class="review">
+      <div class="card">
+        <div class="lbl">Original message</div>
+        <div class="meta mono">From: careers@northwindlabs.example
+Subject: Your application — Northwind Labs
+Received: 01 Nov 2026 09:41 · rejection_detected (conf .93)</div>
+        <p class="mail">Dear applicant,
+
+Thank you for applying to the Platform Engineer role at Northwind Labs. We received a large number of strong applications this cycle. After careful review, we have decided not to move forward with your candidacy at this time.
+
+We appreciate the time you invested in the process and wish you every success in your search.
+
+— Recruiting, Northwind Labs</p>
+        <p class="note">Why the model classified it this way — cues: “decided not to move forward”, “at this time”; confidence .93; language en.</p>
+      </div>
+      <div class="card">
+        <div class="lbl">Draft reply · revision r7</div>
+        <textarea readonly>Hello,
+
+Thank you for letting me know, and for the time your team spent reviewing my application. I understand the decision, and I genuinely appreciate the clear update.
+
+If you are able to share any feedback on my application, I would be glad to hear it. I remain very interested in Northwind Labs and would welcome the chance to apply again in the future.
+
+All the best,
+Alex Mercer</textarea>
+        <div class="actions">
+          <button class="soft">Save changes</button>
+          <button class="soft">Regenerate with local AI</button>
+          <button class="danger">Dismiss</button>
+          <button class="primary">Review &amp; send…</button>
+        </div>
+        <p class="note mono">draft body sha256:9f2c… · saved · granite4.2:8b-q8_0 · tone professional (soft)</p>
+      </div>
+    </div>
+    <section class="gate">
+      <div class="gate-head">
+        <div class="lbl">Send gate · exact-body-hash confirmation</div>
+        <p class="note">Model output never authorizes a send. Only a confirmed body hash crosses this boundary.</p>
+      </div>
+      <div class="gate-grid">
+        <div>
+          <div class="lbl">awaiting_confirm · app-2026-0412 · r7</div>
+          <div class="exact">To: careers@northwindlabs.example
+Re: Your application — Northwind Labs
+confirm_reply: the persisted body, byte-for-byte
+body hash sha256:9f2c… → r8 on send</div>
+          <div class="actions" style="margin-top:10px">
+            <button class="primary">Send this exact reply now</button>
+            <button>Cancel</button>
+          </div>
+          <p class="note" style="margin-top:8px">Sending cannot be undone by this application. Gmail and the current conversation are rechecked first. Send cap 12/40 today.</p>
+        </div>
+        <div>
+          <div class="lbl">Last confirmed dispatch</div>
+          <div class="frank">
+            <div class="stamp"><i>RR DISPATCH</i><b>01 NOV 2026</b><i>14:02 · CONFIRMED</i><i>app-2026-0401</i></div>
+            <div>
+              <p class="mono meta">app-2026-0401 · r4 → r5 · sent 14:02
+body sha256:7d41… · to: hr@quillandco.example</p>
+              <p>“…Thank you for the courtesy of a clear reply. I understand the decision, and I appreciate the time your team spent on my application…”</p>
+            </div>
+          </div>
+          <div class="stub mono"><span class="lbl">Registration stub · audit trail</span>#0399 · 01 Nov 2026 14:02:07 +01:00 · send_confirmed · app-2026-0401 · dispatch · severity info · 12/40 today</div>
+        </div>
+      </div>
+    </section>
+  </section>
+</main>
+</body>
+</html>

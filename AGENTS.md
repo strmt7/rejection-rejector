@@ -157,6 +157,23 @@ from real defects. Update it when a genuinely new failure class appears
 (generic rules only — never incident detail, personal data, or machine
 specifics; this repository is public).
 
+## Resource discipline (all AI agents)
+
+- Measure host memory before raising concurrency (fan-outs, build
+  parallelism); cap fan-out at four while free memory is under 8 GB and
+  report the measured load with every fan-out.
+- Verify browser health once before any browser-based verification. On a
+  dead browser backend, verify markup structurally (parse, lint, DOM
+  assertions) — never by rendering — and never ask parallel workers to
+  render on such a host (failed launches leave orphan processes that can
+  exhaust the host).
+- Timeout is not termination: confirm a timed-out command's process or
+  port is gone before relaunching it, or you will run two instances.
+- Under process starvation the shell dies first; an already-running
+  interpreter can still sweep tool-owned orphan processes (identify by
+  name and full command line; never kill the user's applications) and
+  re-measure. Full account in `docs/LESSONS.md` ("Resource discipline").
+
 ## Definition of done
 
 Local gate green AND pushed AND remote workflows green on `main` (counted

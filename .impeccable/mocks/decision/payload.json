@@ -1,0 +1,140 @@
+{
+  "title": "Choose the visual world for the rr web console",
+  "question": "The roll assigned Carbon Copy Docket (grounded candidate 7 of 7). Keep it, take an alternate, re-roll, or steer.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Carbon Copy Docket",
+      "kicker": "THE ROLL",
+      "lineage": "NCR triplicate carbon-copy business forms and dockets, 1950s–70s",
+      "thesis": "Every write is a docketed triplicate: the send gate, the audit anchor and the encrypted backup are the three copies you can see. The console is one continuous form: docketed, stamped, tearable.",
+      "palette": ["#F4EFE2", "#E9D8C6", "#DCE7D7", "#26221D", "#B23A2E", "#33506E"],
+      "materials": ["NCR carbonless stock (bone / pale pink / pale green copies)", "rubber stamps", "perforated tear-off stubs", "ballpoint blue signatures"],
+      "viewport": "A perforated stub rail on the left carries docket numbers and revision pins; the working form fills the centre as ruled boxes (the review queue); every confirmed action stamps its three copies — GATE, AUDIT, BACKUP — so evidence is visible, not promised.",
+      "risk": "Form density can tip into bureaucracy; the stamps must stay marks of control, never clutter.",
+      "raised": [
+        {
+          "from": "challenger-design-annual",
+          "raise": "Every confirmed send carries a human sign-off mark in the margin — the machine never signs for you."
+        },
+        {
+          "from": "challenger-crouwel",
+          "raise": "The construction grid stays visible as hairline ruling in empty areas — the machine shows its work."
+        }
+      ],
+      "html": ".impeccable/mocks/decision/assigned.html"
+    },
+    {
+      "id": "model-pick",
+      "label": "Par Avion Dispatch",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "registered airmail stationery: par-avion borders, franking marks, registration stubs",
+      "thesis": "The console as a registered dispatch desk: every outbound reply is tracked mail with its stub, and the confirmed-send boundary is a postal one.",
+      "palette": ["#F7F3EA", "#C8102E", "#003DA5", "#1C1B18"],
+      "materials": ["airmail barber-pole hairline borders", "franking marks", "registration stubs"],
+      "viewport": "The outbox as registered mail slots; red/blue hairline stripes mark only the confirmed-send boundary; each sent reply tears its registration stub into the audit trail.",
+      "risk": "Its decorative border is one hairline from costume; it must stay hairline weight and mark only the send boundary.",
+      "html": ".impeccable/mocks/decision/model-pick.html"
+    },
+    {
+      "id": "challenger-timetable",
+      "label": "Timetable Slide Rack",
+      "verdict": "competitive",
+      "lineage": "1971 pocket airline timetable as tinted glass slides on a lit goldenrod bed",
+      "thesis": "One single type size for the whole console; rank is carried by weight, case, reversal and rules alone.",
+      "palette": ["#D9A828", "#2F3A42", "#26221D", "#F2EAD8", "#C03A2B", "#2E5E4E"],
+      "materials": ["tinted glass slides", "lit goldenrod bed"],
+      "viewport": "The review queue as a raked rack of slides; one opaque reversed plate marks the item in focus; a tick rail shows position and extent at every width.",
+      "case": "Fuses cleanly: the queue becomes a rack of slides and the one-size discipline is superb for density; holds product clarity, loses identification — timetables are not the job seeker's artifact.",
+      "risk": "The 11-degree rake must never shear a text field or a form input.",
+      "html": ".impeccable/mocks/decision/challenger-timetable.html",
+      "hero": "https://impeccable.style/worlds/cards/rw-timetable-slide-rack-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/rw-timetable-slide-rack.webp"
+    },
+    {
+      "id": "challenger-jcard",
+      "label": "J-Card Ledger",
+      "verdict": "competitive",
+      "lineage": "hand-ruled mixtape j-cards: side a / side b tracklists timed to fill exactly forty-five minutes",
+      "thesis": "Send limits as timed sides: the day's budget fills exactly and physically cannot overflow.",
+      "palette": ["#F8F6F1", "#22304A", "#8A8A85", "#C13B2E"],
+      "materials": ["white lined inlay stock", "ballpoint blue ruling", "pencil-gray tentative entries"],
+      "viewport": "Daily sending shown as a ruled side that fills to its minute cap; tentative drafts are penciled, confirmed sends are inked; the flip between automatic and manual mode is a physical side flip.",
+      "case": "Holds product clarity through the capacity metaphor (send caps are literally fillable and non-overflowable); identification moderate — a personal artifact of careful planning.",
+      "risk": "Hand-lettering drifts into whimsy in a tool that sends real mail to real recruiters.",
+      "html": ".impeccable/mocks/decision/challenger-jcard.html",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-cassette-j-card-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/vernacular-ephemera-cassette-j-card.webp"
+    },
+    {
+      "id": "challenger-zoomap",
+      "label": "Guide-Map Lobes",
+      "verdict": "competitive",
+      "lineage": "zoo and gardens guide maps: flat colour lobes whose coastline does all the dividing",
+      "thesis": "One review item swells to dominate the workspace; its coastline, not a divider, separates work areas.",
+      "palette": ["#8ED462", "#F5F1E4", "#2C2E2A", "#F5E211", "#FF705D"],
+      "materials": ["flat unmodulated colour", "swelling coastline geometry"],
+      "viewport": "The active item is one lobe that swells until its coast leaves the frame on two sides; the queue shrinks to a coastline of pins; state is a capsule riding the coast's trailing edge.",
+      "case": "Holds clarity: one-review-item-at-a-time is the product's true rhythm and the lobe makes it spatial; loses identification (park maps belong to a day out).",
+      "risk": "A map is a picture before it is a tool; every control must stay a standard web control.",
+      "html": ".impeccable/mocks/decision/challenger-zoomap.html",
+      "hero": "https://impeccable.style/worlds/cards/aww2-zoo-gardens-guide-map-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/aww2-zoo-gardens-guide-map.webp"
+    },
+    {
+      "id": "challenger-emission",
+      "label": "Emission-Line Rail",
+      "verdict": "competitive",
+      "lineage": "a working spectrogram plate: one off-centre calibrated rail, colour as hairline emission lines only",
+      "thesis": "State is line form, not hue: solid is live, dashed is pending, struck is disabled; colour does data only.",
+      "palette": ["#232527", "#DDD8CC", "#E8C64A", "#4C86C6", "#B5493C"],
+      "materials": ["procedural charcoal continuum", "bone legends", "hairline emission lines"],
+      "viewport": "Every destination is a tick on one off-centre rail; the open view blooms into a bone-on-ash plate above it; queue state rides the rail as solid, dashed or struck hairlines.",
+      "case": "Holds product clarity, and its state discipline is the accessibility requirement itself (colorblind-safe, form-first state); identification low — an instrument's world, not the seeker's.",
+      "risk": "A one-rail topology can underuse the width of a review workspace.",
+      "html": ".impeccable/mocks/decision/challenger-emission.html",
+      "hero": "https://impeccable.style/worlds/cards/operate-c-emission-line-rail-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/operate-c-emission-line-rail.webp"
+    },
+    {
+      "id": "challenger-design-annual",
+      "label": "Design Annual Plate Section",
+      "verdict": "declined",
+      "lineage": "a design annual's plate section: registration crosshairs, hairline credits, one periwinkle sign-off stamp",
+      "palette": ["#F5F4F6", "#16181A", "#DCDDF3"],
+      "materials": ["uncoated near-white stock", "letterpressed attribution stamp"],
+      "case": "Fuses poorly: a design annual is not the job seeker's world; loses both axes to the docket.",
+      "kept": "Registration furniture and the human sign-off stamp: every confirmed send carries a margin mark proving a person approved it.",
+      "hero": "https://impeccable.style/worlds/cards/design-annual-s-plate-section-hero.webp"
+    },
+    {
+      "id": "challenger-crouwel",
+      "label": "Grid Specimen",
+      "verdict": "declined",
+      "lineage": "Wim Crouwel gridded type specimens: letterforms built cell by cell on a visible construction grid",
+      "palette": ["#FFFFFF", "#111111", "#F2C438"],
+      "materials": ["graph-paper construction grid", "cell-built letterforms"],
+      "case": "Fuses poorly: type-specimen culture is not the audience's; loses both axes to the docket.",
+      "kept": "The construction grid stays visible as design — the machine shows its own working.",
+      "hero": "https://impeccable.style/worlds/cards/crouwel-grid-specimen-hero.webp"
+    }
+  ],
+  "reroll": {
+    "registers": ["safer", "bolder"]
+  },
+  "buildPath": {
+    "value": "code",
+    "toggle": false
+  },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "The three-pane mail client with a settings dashboard — sidebar, list, reading pane — executed impeccably.",
+    "palette": ["#FFFFFF", "#111827", "#2563EB"],
+    "materials": ["clean grid", "product cards", "system UI type"],
+    "viewport": "The arrangement every mail-tool user expects, at full craft: navigation left, review queue centre, detail right.",
+    "risk": "Indistinguishable from the competition by design.",
+    "html": ".impeccable/mocks/decision/canon.html"
+  },
+  "steer": true
+}

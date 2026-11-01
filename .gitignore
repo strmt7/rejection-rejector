@@ -32,3 +32,10 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 .venv-lint/
+
+# Impeccable design-tool state (the design record under mocks/ is kept;
+# question servers, build state, review captures and live config are not)
+.impeccable/questions/
+.impeccable/build/
+.impeccable/review/
+.impeccable/live/

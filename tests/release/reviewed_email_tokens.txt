@@ -7,6 +7,7 @@ MAILER-DAEMON@example.invalid
 NO.REPLY@example.invalid
 a..b@c.com
 a.@b.com
+a.recruiter@kestrel.example
 a@-bad.com
 a@b..com
 a@b.com
@@ -198,12 +199,17 @@ bn-strong-0027@example.invalid
 bn-strong-0028@example.invalid
 bn-trunc-0001@example.invalid
 bn-trunc-0002@example.invalid
+bot@nimbuslabs.example
 bulk@example.invalid
 c@d.com
 c@example.com
 candidate@example.com
 candidate@example.invalid
+careers@cedarfinch.example
 careers@example.invalid
+careers@meridianhealth.example
+careers@northwind-labs.example
+careers@northwindlabs.example
 careersarambig0001recruiting@example.invalid
 careersarambig0002recruiting@example.invalid
 careersarambig0003recruiting@example.invalid
@@ -1236,6 +1242,7 @@ careerszhstrong0027recruiting@example.invalid
 careerszhstrong0028recruiting@example.invalid
 careerszhtrunc0001recruiting@example.invalid
 careerszhtrunc0002recruiting@example.invalid
+d.whitfield@northbridge-talent.example
 de-ambig-0001@example.invalid
 de-ambig-0002@example.invalid
 de-ambig-0003@example.invalid
@@ -1763,6 +1770,7 @@ hr5@example.invalid
 hr@corp.example
 hr@example.com
 hr@example.invalid
+hr@quillandco.example
 ja-ambig-0001@example.invalid
 ja-ambig-0002@example.invalid
 ja-ambig-0003@example.invalid
@@ -1849,6 +1857,11 @@ ja-strong-0027@example.invalid
 ja-strong-0028@example.invalid
 ja-trunc-0001@example.invalid
 ja-trunc-0002@example.invalid
+jobs@halcyonlabs.example
+jobs@vellum.example
+l.ortiz@brightpath.example
+m.feld@atlasrecruit.example
+m.fenwick@northwind-robotics.example
 m1@x.com
 m2@x.com
 m@co.com
@@ -1858,9 +1871,12 @@ me@example.invalid
 msg@example.com
 no-reply@example.com
 no-reply@example.invalid
+no-reply@vantageretail.example
+no-reply@workday.example
 nobody@example.com
 nope@x.com
 noreply@example.invalid
+notifications@greenhouse.example
 old@co.com
 oldthread-ar@example.invalid
 oldthread-bn@example.invalid
@@ -1882,6 +1898,7 @@ other@example.com
 other@example.invalid
 pass@example.com
 postmaster@example.invalid
+priya.raghavan@northwind.example
 pt-ambig-0001@example.invalid
 pt-ambig-0002@example.invalid
 pt-ambig-0003@example.invalid
@@ -1975,6 +1992,7 @@ r@co.com
 recruiter@corp.com
 recruiter@example.com
 recruiter@example.invalid
+recruiting@bramblehealth.example
 recruitment@example.com
 reply@x.com
 root@co.com
@@ -2069,6 +2087,9 @@ sender@example.invalid
 someone-else@example.com
 someone@example.com
 synthetic@example.invalid
+system@taleo.example
+talent@heliosystems.example
+talent@meridian-robotics.example
 test@example.invalid
 tester@example.com
 them@example.com

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rejection Rejector — Timetable Slide Rack</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@400;500;600;700&family=Archivo:wght@400;500;600;700&display=swap">
+<style>
+  :root{--bed:#D9A828;--glass:rgba(47,58,66,.16);--hair:rgba(38,34,29,.55);--slate:#2F3A42;--ink:#26221D;--ivory:#F2EAD8;--verm:#C03A2B;--green:#2E5E4E;}
+  *{box-sizing:border-box;}
+  html,body{width:1440px;height:900px;overflow:hidden;margin:0;}
+  body{background:var(--bed);color:var(--ink);font:400 12px/1.5 'Archivo',sans-serif;display:flex;flex-direction:column;}
+  .n{font-family:'Archivo Narrow',sans-serif;text-transform:uppercase;letter-spacing:.08em;font-weight:600;}
+  .r{color:var(--verm);}.g{color:var(--green);}
+  header{height:52px;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid var(--ink);}
+  .brand{letter-spacing:.16em;font-weight:700;}
+  .cells{margin-left:auto;display:flex;gap:8px;}
+  .cell{display:flex;align-items:center;gap:7px;border:1px solid var(--hair);background:var(--glass);padding:5px 10px;}
+  .mk{width:9px;height:9px;border:1px solid currentColor;flex:none;display:inline-block;position:relative;}
+  .mk.full{background:currentColor;}
+  .mk.strike{border-color:var(--verm);color:var(--verm);}
+  .mk.strike::after{content:"";position:absolute;left:-3px;right:-3px;top:3px;height:2px;background:var(--verm);transform:rotate(-22deg);}
+  .mk.ok{background:var(--green);border-color:var(--green);}
+  nav{height:40px;display:flex;align-items:stretch;padding:0 20px;border-bottom:1px solid var(--ink);}
+  .tab{border:0;border-right:1px solid var(--hair);background:transparent;padding:0 18px;cursor:pointer;font-family:'Archivo Narrow',sans-serif;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:var(--ink);}
+  .tab:first-child{border-left:1px solid var(--hair);}
+  .tab.on{background:var(--slate);color:var(--ivory);}
+  main{flex:1;display:grid;grid-template-columns:590px 1fr;gap:20px;padding:16px 20px 18px;min-height:0;}
+  /* ---- the rack: glass slides + tick rail (position and extent) ---- */
+  .rack{display:flex;flex-direction:column;min-height:0;}
+  .rack-head{display:flex;align-items:baseline;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--ink);}
+  .rack-head .sub{margin-left:auto;display:flex;gap:8px;align-items:center;}
+  .rack-body{display:grid;grid-template-columns:44px 1fr;gap:12px;padding-top:10px;}
+  .rail{position:relative;height:617px;border-right:1px solid var(--ink);
+    background-image:repeating-linear-gradient(to bottom,var(--ink) 0 1px,transparent 1px 140px),repeating-linear-gradient(to bottom,var(--ink) 0 1px,transparent 1px 28px);
+    background-size:20px 100%,9px 100%;background-position:right top,right top;background-repeat:no-repeat,no-repeat;}
+  .bracket{position:absolute;top:0;left:0;right:0;height:141px;border:1px solid var(--ink);border-right:0;}
+  .num{position:absolute;left:3px;}
+  .slides{display:flex;flex-direction:column;gap:8px;}
+  .slide{display:grid;grid-template-columns:22px 96px 1fr 138px 18px;align-items:center;gap:8px;height:96px;padding:0 12px;background:var(--glass);border:1px solid var(--hair);cursor:pointer;}
+  .slide:has(input:checked){background:var(--slate);border-color:var(--slate);color:var(--ivory);clip-path:polygon(9px 0,calc(100% - 9px) 0,100% 100%,0 100%);}
+  .slide .subj{font-weight:600;}
+  .slide .from{font-weight:400;}
+  .slide input{margin:0;accent-color:var(--slate);}
+  .rack-foot{display:flex;align-items:center;gap:14px;padding-top:12px;margin-top:auto;}
+  .lg{display:flex;align-items:center;gap:6px;}
+  /* ---- workspace: pinned item, panes, gate ---- */
+  .work{display:flex;flex-direction:column;gap:12px;min-height:0;}
+  .pin{display:flex;align-items:center;gap:12px;padding:6px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);}
+  .pin .tag{background:var(--slate);color:var(--ivory);padding:4px 12px;clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%);}
+  .cols{display:grid;grid-template-columns:1fr 420px;gap:14px;flex:1;min-height:0;}
+  .lab{padding:4px 8px;border:1px solid var(--hair);background:var(--glass);display:inline-block;}
+  .pane{background:var(--ivory);border:1px solid var(--ink);padding:12px 14px;max-height:360px;overflow:auto;white-space:pre-wrap;}
+  table.facts{width:100%;border-collapse:collapse;margin-top:10px;}
+  table.facts th,table.facts td{border:1px solid var(--hair);padding:5px 8px;text-align:left;}
+  table.facts th{width:150px;}
+  textarea{width:100%;height:318px;resize:none;border:1px solid var(--ink);background:var(--ivory);color:var(--ink);padding:12px 14px;font:inherit;}
+  .row{display:flex;gap:8px;align-items:center;margin-top:10px;}
+  select{border:1px solid var(--ink);background:var(--ivory);color:var(--ink);padding:5px 8px;font:inherit;}
+  button{border:1px solid var(--ink);background:var(--glass);color:var(--ink);padding:6px 12px;cursor:pointer;font-family:'Archivo Narrow',sans-serif;text-transform:uppercase;letter-spacing:.08em;font-weight:600;}
+  button:disabled{cursor:default;}
+  .send{position:relative;background:var(--slate);color:var(--ivory);border-color:var(--slate);padding:6px 22px;}
+  .send::after{content:"";position:absolute;left:6px;right:6px;top:50%;height:2px;background:var(--verm);transform:rotate(-3deg);}
+  .gate{display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center;border:1px solid var(--ink);background:var(--glass);padding:12px;}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand n">Rejection Rejector</span>
+  <span class="n">local console &middot; loopback only &middot; email shown as plain text</span>
+  <span class="cells">
+    <span class="cell n"><span class="mk full"></span>human review</span>
+    <span class="cell n"><span class="mk full"></span>sending enabled</span>
+    <span class="cell n">send cap 12/40 today</span>
+    <span class="cell n"><span class="mk ok"></span>ollama 0.40.13 healthy</span>
+    <span class="cell n">model granite4.2:8b-q8_0</span>
+  </span>
+</header>
+<nav>
+  <button class="tab on">Review</button><button class="tab">Overview</button><button class="tab">Activity</button><button class="tab">Local AI</button><button class="tab">Settings</button><button class="tab">Account &amp; tools</button>
+</nav>
+<main>
+  <section class="rack">
+    <div class="rack-head">
+      <span class="n">Review queue</span><span class="n">23 messages &middot; page 1</span>
+      <span class="sub"><label class="n" for="st">state</label>
+        <select id="st"><option>all states</option><option>awaiting_confirm</option><option>draft_ready</option><option>blocked: gate</option><option>sent</option><option>dismissed</option></select>
+        <span class="n">select a slide to pin it</span></span>
+    </div>
+    <div class="rack-body">
+      <div class="rail">
+        <div class="bracket"></div>
+        <span class="num n" style="top:2px">01</span><span class="num n" style="top:146px">06</span><span class="num n" style="bottom:2px">23</span>
+      </div>
+      <div class="slides">
+        <label class="slide"><span class="mk full"></span><span class="n">app-2026-0412 &middot; r7</span><span class="subj">Northwind Robotics — Backend Engineer (Platform)<br><span class="from">Maya Fenwick &lt;m.fenwick@northwind-robotics.example&gt;</span></span><span class="n">awaiting_confirm</span><input type="radio" name="pin" checked tabindex="-1" aria-hidden="true"></label>
+        <label class="slide"><span class="mk ok"></span><span class="n">app-2026-0409 &middot; r3</span><span class="subj">Meridian Health — Data Analyst<br><span class="from">careers@meridianhealth.example</span></span><span class="n g">sent 14:02</span><input type="radio" name="pin" tabindex="-1" aria-hidden="true"></label>
+        <label class="slide"><span class="mk strike"></span><span class="n">app-2026-0415 &middot; r5</span><span class="subj">Kestrel Bank — Risk Analytics<br><span class="from">a.recruiter@kestrel.example</span></span><span class="n r">blocked: gate</span><input type="radio" name="pin" tabindex="-1" aria-hidden="true"></label>
+        <label class="slide"><span class="mk"></span><span class="n">app-2026-0418 &middot; r2</span><span class="subj">Halcyon Labs — Site Reliability Engineer<br><span class="from">jobs@halcyonlabs.example</span></span><span class="n">draft_ready</span><input type="radio" name="pin" tabindex="-1" aria-hidden="true"></label>
+        <label class="slide"><span class="mk full"></span><span class="n">app-2026-0420 &middot; r1</span><span class="subj">Vantage Retail Group — Store Systems<br><span class="from">no-reply@vantageretail.example</span></span><span class="n">rejection_detected (conf .93)</span><input type="radio" name="pin" tabindex="-1" aria-hidden="true"></label>
+        <label class="slide"><span class="mk"></span><span class="n">app-2026-0421 &middot; r1</span><span class="subj">Cedar &amp; Finch — Office Manager<br><span class="from">careers@cedarfinch.example</span></span><span class="n">not a rejection &middot; dismissed</span><input type="radio" name="pin" tabindex="-1" aria-hidden="true"></label>
+      </div>
+    </div>
+    <div class="rack-foot">
+      <span class="lg n"><span class="mk full"></span>holds for you</span>
+      <span class="lg n"><span class="mk"></span>nothing held</span>
+      <span class="lg n"><span class="mk strike"></span>blocked / rejected</span>
+      <span class="lg n"><span class="mk ok"></span>confirmed send</span>
+      <span style="margin-left:auto;display:flex;gap:8px"><button>Previous page</button><button>Next page</button></span>
+    </div>
+  </section>
+  <section class="work">
+    <div class="pin">
+      <span class="tag n">pinned</span><span class="n">app-2026-0412 &middot; revision r7</span>
+      <span class="n">received 2026-04-12 09:41</span><span class="n">body sha256:9f2c&hellip;41ab</span>
+      <span class="cells" style="margin-left:auto">
+        <span class="cell n"><span class="mk full"></span>rejection_detected (conf .93)</span>
+        <span class="cell n"><span class="mk"></span>draft_ready</span>
+        <span class="cell n"><span class="mk full"></span>awaiting_confirm</span>
+      </span>
+    </div>
+    <div class="cols">
+      <div>
+        <span class="lab n">original message</span>
+        <div class="pane">From: Maya Fenwick &lt;m.fenwick@northwind-robotics.example&gt;
+Subject: Your application — Backend Engineer (Platform)
+Received: 2026-04-12 09:41
+
+Dear applicant,
+
+Thank you for taking the time to interview with us for the Backend Engineer (Platform) role. The team reviewed your work with real interest, and the decision was not straightforward.
+
+We have decided not to move forward with your application at this time. We had many strong candidates for a single opening, and we have chosen to continue with someone whose recent experience more closely matched our immediate needs.
+
+We will keep your details on file for future roles, and we genuinely wish you well in your search.
+
+Kind regards,
+Maya Fenwick
+Talent Acquisition, Northwind Robotics</div>
+        <table class="facts">
+          <tr><th class="n">classification</th><td>rejection_detected (conf .93)</td></tr>
+          <tr><th class="n">reply language</th><td>en — matched to the email's first language</td></tr>
+          <tr><th class="n">reply tone</th><td>professional (soft)</td></tr>
+          <tr><th class="n">model</th><td>granite4.2:8b-q8_0 &middot; ollama 0.40.13 healthy</td></tr>
+          <tr><th class="n">revision</th><td>r7 &middot; body sha256:9f2c&hellip;41ab</td></tr>
+        </table>
+      </div>
+      <div>
+        <span class="lab n">draft reply — revision r7</span>
+        <textarea spellcheck="true">Dear Ms Fenwick,
+
+Thank you for letting me know, and for the care the team took with my application. I appreciate the directness — it genuinely helps.
+
+I remain very interested in Northwind Robotics, and I would welcome being considered for future platform roles. Please do keep my details on file.
+
+Thank you again to you and the team for the time you gave me.
+
+Kind regards,
+Alex Rivera</textarea>
+        <div class="n r">unsaved changes — save before sending</div>
+        <div class="row">
+          <label class="n" for="tone">tone</label>
+          <select id="tone"><option>professional (soft)</option><option>assertive</option><option>hardline (harsh)</option><option>insane (offensive)</option></select>
+          <label class="n" for="lang">language</label>
+          <select id="lang"><option>match the email's first language</option><option>always english</option></select>
+        </div>
+        <div class="row">
+          <button>Save changes</button><button>Regenerate with local AI</button><button>Dismiss</button>
+        </div>
+      </div>
+    </div>
+    <div class="gate">
+      <span class="lab n">send gate — exact body hash</span>
+      <span class="n">confirm sha256:9f2c&hellip;41ab &middot; editor sha256:7be1&hellip;a02e &middot; mismatch — the model never authorizes a send; the gate re-checks the byte-exact body at send time</span>
+      <span class="n r" style="display:flex;align-items:center;gap:7px"><span class="mk strike"></span>blocked: gate</span>
+      <button class="send" disabled>Review &amp; send…</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

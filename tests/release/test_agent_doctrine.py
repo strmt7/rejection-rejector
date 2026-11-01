@@ -49,6 +49,21 @@ class AgentFileDoctrineTests(unittest.TestCase):
             f"AGENTS.md is {len(lines)} lines; move derivable content to docs/ or skills",
         )
 
+    def test_resource_discipline_mandate_is_present(self):
+        """Why (ram-exhaustion review 2026-11-01): the resource-discipline
+        mandate must survive future AGENTS.md edits; prose is not
+        enforcement, so its four rules are pinned here.
+        """
+        text = Path("AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("## Resource discipline (all AI agents)", text)
+        for phrase in (
+            "Measure host memory before raising concurrency",
+            "Verify browser health once before any browser-based verification",
+            "Timeout is not termination",
+            "sweep tool-owned orphan processes",
+        ):
+            self.assertIn(phrase, text)
+
     def test_email_token_set_is_the_reviewed_set(self):
         """Why (owner rule: no account leakage on GitHub): the exact set of
         email-shaped tokens in the tracked tree must equal the reviewed

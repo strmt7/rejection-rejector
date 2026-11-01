@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rejection Rejector — J-Card Ledger console sketch</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+html,body{width:1440px;height:900px;overflow:hidden;margin:0}
+*{box-sizing:border-box}
+:root{--stock:#F8F6F1;--ink:#22304A;--pen:#8A8A85;--red:#C13B2E;--rule:rgba(34,48,74,.32);--faint:rgba(34,48,74,.12)}
+body{background:var(--stock);color:var(--ink);font:13px/1.5 'IBM Plex Sans',sans-serif;display:flex;flex-direction:column;background-image:repeating-linear-gradient(transparent 0 27px,rgba(34,48,74,.05) 27px 28px)}
+.mono{font-family:'IBM Plex Mono',monospace}
+.caps{font:600 9.5px/1 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase}
+button{font:600 12px 'IBM Plex Sans',sans-serif;color:var(--ink);background:#fff;border:1px solid var(--rule);border-radius:3px;padding:7px 12px;cursor:pointer}
+button.red{background:var(--red);border-color:var(--red);color:#fff}
+header{height:62px;display:flex;align-items:center;gap:16px;padding:10px 22px 0;border-bottom:1px solid var(--ink)}
+.brand{font:700 15px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.brand i{font-style:normal;color:var(--red)}
+.chips{display:flex;gap:6px}
+.chip{border:1px solid var(--rule);border-radius:2px;padding:4px 8px;font:400 10px 'IBM Plex Mono',monospace;white-space:nowrap}
+.chip b{font-weight:600}
+.flip{display:flex;border:1px solid var(--ink);border-radius:3px;overflow:hidden;margin-left:auto}
+.flip input{position:absolute;opacity:0}
+.flip label{padding:9px 13px;font:600 9.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;color:var(--pen)}
+.flip label+label{border-left:1px solid var(--ink)}
+#flip:not(:checked)~.a{background:var(--ink);color:var(--stock)}
+#flip:checked~.b{background:var(--red);color:#fff}
+nav{height:40px;display:flex;align-items:stretch;gap:4px;padding:0 22px;border-bottom:1px solid var(--rule)}
+nav button{border:0;background:transparent;border-radius:0;padding:0 13px;color:var(--pen);border-bottom:2px solid transparent}
+nav button.on{color:var(--ink);border-bottom-color:var(--red)}
+nav .meta{margin-left:auto;align-self:center;font:400 10px 'IBM Plex Mono',monospace;color:var(--pen)}
+main{flex:1;display:grid;grid-template-columns:272px 1fr 372px;min-height:0}
+.rail{border-right:1px solid var(--ink);padding:14px 0 0;display:flex;flex-direction:column;min-height:0}
+.rail-head{display:flex;justify-content:space-between;align-items:baseline;padding:0 16px 2px}
+.rail-head h2{font:700 12px 'IBM Plex Mono',monospace;letter-spacing:.16em;text-transform:uppercase;margin:0}
+.count{font:600 10px 'IBM Plex Mono',monospace;border:1px solid var(--rule);border-radius:2px;padding:3px 7px}
+.hint{font:400 10px/1.6 'IBM Plex Mono',monospace;color:var(--pen);padding:2px 16px 10px}
+.q{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 16px;border-top:1px solid var(--faint);cursor:pointer}
+.q.sel{background:rgba(34,48,74,.07);border-left:3px solid var(--ink);padding-left:13px}
+.q-id{font:600 11px 'IBM Plex Mono',monospace}
+.q-sub{font-size:11px;color:#4c5a6d}
+.q-st{font:400 9px 'IBM Plex Mono',monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--pen);border:1px solid var(--faint);border-radius:2px;padding:3px 5px;align-self:start;white-space:nowrap}
+.q-st.hold{color:var(--red);border-color:rgba(193,59,46,.45)}
+.rail-foot{margin-top:auto;display:flex;gap:8px;align-items:center;padding:12px 16px;border-top:1px solid var(--faint);font:400 10px 'IBM Plex Mono',monospace;color:var(--pen)}
+.mid{border-right:1px solid var(--ink);padding:18px 24px;display:flex;flex-direction:column;min-height:0}
+h1{font:700 18px/1.3 'IBM Plex Sans',sans-serif;margin:0;display:flex;align-items:center;gap:10px}
+.pin{background:var(--red);color:#fff;font:600 9px 'IBM Plex Mono',monospace;letter-spacing:.12em;padding:4px 7px;border-radius:2px;white-space:nowrap}
+.meta{font:400 10.5px/1.7 'IBM Plex Mono',monospace;color:#59677a;margin:7px 0 14px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;min-height:0}
+h3{font:600 9.5px 'IBM Plex Mono',monospace;letter-spacing:.15em;text-transform:uppercase;margin:0 0 7px}
+.mail{border:1px solid var(--rule);background:#fff;padding:12px 14px;font:12px/1.75 'IBM Plex Sans',sans-serif;height:286px;overflow:hidden;background-image:repeating-linear-gradient(transparent 0 21px,var(--faint) 21px 22px)}
+textarea{width:100%;height:286px;border:1px solid var(--rule);border-radius:2px;padding:12px 14px;font:12px/1.75 'IBM Plex Sans',sans-serif;color:var(--ink);background:#fff;resize:none}
+.disc{margin-top:9px;font:400 10px/1.7 'IBM Plex Mono',monospace;color:#59677a}
+.disc summary{cursor:pointer;font-weight:600;color:var(--ink)}
+.acts{display:flex;gap:8px;align-items:center;margin:14px 0 0}
+.note{font:400 10px 'IBM Plex Mono',monospace;color:var(--pen)}
+.gate{margin-top:14px;border:1px solid var(--rule);border-left:4px solid var(--red);background:#fff;padding:11px 13px;font:400 11px/1.65 'IBM Plex Sans',sans-serif}
+.gate b{font:600 9.5px 'IBM Plex Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--red);display:block;margin-bottom:3px}
+.side{padding:12px 14px 8px;display:flex;flex-direction:column;min-height:0}
+.side-head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--ink);padding-bottom:7px}
+.side-head .mono{font-size:9.5px;line-height:1.7;color:var(--pen);max-width:225px}
+.big{font:600 25px/1 'IBM Plex Mono',monospace}
+.big s{text-decoration:none;color:var(--pen)}
+.fill{display:grid;grid-template-columns:1fr 60px;grid-template-rows:16px 126px 154px 112px 98px 14px 56px auto}
+.hd{border-bottom:1px solid var(--rule);padding:3px 0}
+.trk{border-top:1px solid var(--rule);padding:9px 10px 0 2px;overflow:hidden}
+.trk .n{font:600 11px 'IBM Plex Mono',monospace}
+.trk .t{font:600 13px/1.35 'IBM Plex Sans',sans-serif;margin-top:2px}
+.trk .m{font:400 9.5px/1.8 'IBM Plex Mono',monospace;color:#59677a;margin-top:3px}
+.trk.pen{display:flex;gap:7px;align-items:baseline;padding:2px 2px 0}
+.trk.pen .t{margin:0;font-size:11px;font-style:italic}
+.trk.pen .m{margin:0;font-size:9px}
+.trk.pen .n,.trk.pen .t,.trk.pen .m{color:var(--pen)}
+.openrow{border-top:1px solid var(--rule);padding:6px 2px;font:400 9.5px 'IBM Plex Mono',monospace;color:var(--pen)}
+.u{border-top:1px solid var(--rule);border-left:1px solid var(--rule);padding:3px 0 0 7px;font:600 11px 'IBM Plex Mono',monospace;color:#fff}
+.u.ink{background:var(--ink);background-image:repeating-linear-gradient(rgba(248,246,241,.3) 0 1px,transparent 1px 14px)}
+.u.pencil{background:var(--pen);font-size:9px;padding-top:2px;background-image:repeating-linear-gradient(rgba(255,255,255,.35) 0 1px,transparent 1px 14px)}
+.u.open{color:var(--pen);background-image:repeating-linear-gradient(transparent 0 13px,var(--faint) 13px 14px)}
+.close{grid-column:1/3;border-top:3px solid var(--ink);display:flex;justify-content:space-between;padding:6px 2px 0}
+.close .caps{color:var(--red)}
+.hand{font:17px/1.1 'Caveat',cursive;color:var(--pen);padding:6px 2px 0}
+footer{height:46px;display:grid;grid-template-columns:1fr 1fr 1fr;border-top:1px solid var(--ink)}
+footer>div{padding:7px 20px;border-left:1px solid var(--faint);min-width:0}
+footer>div:first-child{border-left:0}
+footer .caps{color:var(--pen);display:block;margin-bottom:3px}
+footer .v{font:400 10.5px 'IBM Plex Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Rejection Rejector <i>—</i></div>
+  <div class="chips">
+    <span class="chip"><b>gmail</b> connected · app password</span>
+    <span class="chip"><b>ollama</b> 0.40.13 healthy</span>
+    <span class="chip"><b>granite4.2:8b-q8_0</b> · digest pinned</span>
+    <span class="chip"><b>sending</b> enabled</span>
+  </div>
+  <div class="flip">
+    <input id="flip" type="checkbox">
+    <label class="a" for="flip">Side A · Human review</label>
+    <label class="b" for="flip">Side B · Automatic</label>
+  </div>
+</header>
+<nav>
+  <button class="on">Review</button><button>Overview</button><button>Activity</button><button>Local AI</button><button>Settings</button>
+  <span class="meta">local console · loopback only · api port 8787 · email shown as plain text</span>
+</nav>
+<main>
+  <aside class="rail">
+    <div class="rail-head"><h2>Queue</h2><span class="count">7 messages</span></div>
+    <p class="hint">Reviewable messages first. Select one to open it in Review.</p>
+    <div class="q sel"><div><div class="q-id">app-2026-0412</div><div class="q-sub">Platform Engineer (grad) · Meridian Robotics · r7</div></div><span class="q-st">awaiting_confirm</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0408</div><div class="q-sub">Backend Intern · Tidepool Health · r3</div></div><span class="q-st">draft_ready</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0404</div><div class="q-sub">Junior SRE · Kestrel Cloud · r1 · conf .93</div></div><span class="q-st">rejection_detected</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0399</div><div class="q-sub">Data Analyst · Aperture Labs · r3</div></div><span class="q-st hold">blocked: gate</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0395</div><div class="q-sub">QA Engineer · Blue Harbor · r5</div></div><span class="q-st">sent 14:02</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0391</div><div class="q-sub">Frontend Developer · Orbit Studios · r2</div></div><span class="q-st">sent 11:37</span></div>
+    <div class="q"><div><div class="q-id">app-2026-0387</div><div class="q-sub">ML Ops Intern · Quarry AI · r4</div></div><span class="q-st">sent 09:52</span></div>
+    <div class="rail-foot"><button>Previous page</button><button>Next page</button><span>page 1</span></div>
+  </aside>
+  <section class="mid">
+    <h1>app-2026-0412 — Platform Engineer (graduate)<span class="pin">R7 PINNED</span></h1>
+    <div class="meta">from Lena Ortiz &lt;talent@meridian-robotics.example&gt; · received 2026-11-01 08:12 · revision r7 (pinned) · rejection_detected (conf .93) → draft_ready → awaiting_confirm · exact body sha256:9f2c…</div>
+    <div class="cols">
+      <div>
+        <h3>Original message</h3>
+        <div class="mail">From: Lena Ortiz &lt;talent@meridian-robotics.example&gt;<br>Subject: Your application — Platform Engineer (graduate)<br>Received: 2026-11-01 08:12<br><br>Dear applicant,<br><br>Thank you for taking the time to apply for the Platform Engineer (graduate) role at Meridian Robotics. We received a very large number of applications from strong candidates.<br><br>After careful consideration, we have decided not to move forward with your application at this time. We will keep your details on file for twelve months.<br><br>We wish you every success in your search.<br><br>Kind regards,<br>Lena Ortiz — Talent Acquisition, Meridian Robotics</div>
+        <details class="disc" open><summary>Why the model classified it this way</summary>cue “not move forward with your application” · explicit rejection pattern · conf .93 · verifier agrees · granite4.2:8b-q8_0</details>
+      </div>
+      <div>
+        <h3>Draft reply · revision r7</h3>
+        <textarea>Dear Ms Ortiz,
+
+Thank you for letting me know, and for the care taken in reviewing my application. I remain very interested in Meridian Robotics — if a suitable role opens on the Platform team later this year, I would welcome the chance to be considered. Any feedback on my application would be very helpful.
+
+Kind regards,
+R. Halden</textarea>
+      </div>
+    </div>
+    <div class="acts"><button>Save changes</button><button>Regenerate with local AI</button><button>Dismiss</button><button class="red">Review &amp; send…</button><span class="note">saved · r7 clean · no unsaved changes</span></div>
+    <div class="gate"><b>Send gate · deterministic</b>Review &amp; send… opens the exact-body confirmation: the persisted body is shown with its hash sha256:9f2c…, and the gate releases the reply to Gmail only if the confirmed body matches byte for byte. Any edit creates revision r8 with a new hash. Sending cannot be undone.</div>
+  </section>
+  <aside class="side">
+    <div class="side-head">
+      <div><div class="caps">Daily send budget · side a / today</div><div class="mono">cap 40/day (Settings · send limits) · was 12/40 at midday · closing rule enforced</div></div>
+      <div class="big">36<s>/40</s></div>
+    </div>
+    <div class="fill">
+      <div class="hd caps">Tracklist · sends</div><div class="hd caps" style="text-align:right">Fill / 40</div>
+      <div class="trk"><div class="n">01</div><div class="t">first sweep — overnight rejections</div><div class="m">09 sends · 08:41 · inked · 6 rejections confirmed, 3 released after r4</div></div><div class="u ink">09</div>
+      <div class="trk"><div class="n">02</div><div class="t">morning re-replies</div><div class="m">11 sends · 09:52 · inked · revisions r4→r5 confirmed · incl. app-2026-0387 sent 09:52</div></div><div class="u ink">11</div>
+      <div class="trk"><div class="n">03</div><div class="t">interview scheduling replies</div><div class="m">08 sends · 11:37 · inked · slots proposed, none conflicted · incl. app-2026-0391 sent 11:37</div></div><div class="u ink">08</div>
+      <div class="trk"><div class="n">04</div><div class="t">afternoon sweep</div><div class="m">07 sends · 14:02 · inked · 5 rejections, 2 follow-ups · incl. app-2026-0395 sent 14:02</div></div><div class="u ink">07</div>
+      <div class="trk pen"><div class="n">05</div><div class="t">meridian — held</div><div class="m">01 · 14:26 · pencil</div></div><div class="u pencil">01</div>
+      <div class="openrow">4 open · unallocated — queued drafts wait for the next side</div><div class="u open"></div>
+      <div class="close"><span class="caps">40 — closing rule</span><span class="caps">nothing sends below this line</span></div>
+    </div>
+    <div class="hand">↑ the last track stays penciled until I sign off r7 — then it inks.</div>
+  </aside>
+</main>
+<footer>
+  <div><span class="caps">Worker</span><div class="v">running · next mailbox check 14:35 · dispatch not paused</div></div>
+  <div><span class="caps">Blocked: gate — 1 held</span><div class="v">app-2026-0399 · body hash mismatch on r3 — held until r4 is pinned</div></div>
+  <div><span class="caps">Audit</span><div class="v">214 events · chain verified 14:02 · retention 30 d · api :8787</div></div>
+</footer>
+</body>
+</html>

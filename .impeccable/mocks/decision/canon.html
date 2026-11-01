@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rejection Rejector — Review</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#111827;--muted:#6B7280;--faint:#9CA3AF;--line:#E5E7EB;--blue:#2563EB;--blue-bg:#EFF6FF;--green:#15803D;--green-bg:#F0FDF4;--amber:#B45309;--amber-bg:#FFFBEB;--red:#B91C1C;--red-bg:#FEF2F2;--bg:#F9FAFB}
+  *{box-sizing:border-box}
+  html,body{width:1440px;height:900px;overflow:hidden;margin:0}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);font-size:13px;line-height:1.5;display:grid;grid-template-columns:224px 400px minmax(0,1fr)}
+  h1,h2,h3,p{margin:0}
+  .side{background:var(--bg);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:22px}
+  .brand{display:flex;align-items:center;gap:9px;padding:0 8px;font-size:14px;font-weight:700;letter-spacing:-.01em}
+  .mark{width:24px;height:24px;border-radius:7px;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700}
+  .brand small{display:block;font-size:11px;font-weight:500;color:var(--muted);letter-spacing:0}
+  nav{display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-weight:500;color:#374151}
+  .nav-item .ico{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--faint)}
+  .nav-item.active{background:var(--blue-bg);color:var(--blue);font-weight:600}
+  .nav-item.active .ico{border-color:var(--blue);background:var(--blue)}
+  .nav-item .count{margin-left:auto;font-size:11px;font-weight:600;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:10px;padding:1px 7px}
+  .nav-item.active .count{color:var(--blue);border-color:#BFDBFE}
+  .health{margin-top:auto;border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px}
+  .health h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600;margin-bottom:8px}
+  .health-row{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:12px}
+  .health-row span:first-child{color:var(--muted)}
+  .health-row b{font-weight:600}
+  .dot{width:6px;height:6px;border-radius:50%;background:#22C55E;display:inline-block;margin-right:5px}
+  .list{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:#fff}
+  .list-head{padding:18px 20px 12px;border-bottom:1px solid var(--line)}
+  .list-head h1{font-size:16px;letter-spacing:-.01em}
+  .list-head p{color:var(--muted);font-size:12px;margin-top:2px}
+  .filters{display:flex;gap:6px;padding:10px 20px;border-bottom:1px solid var(--line)}
+  .filter{font-size:11px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:14px;padding:3px 10px}
+  .filter.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:13px 20px;border-bottom:1px solid var(--line);border-left:3px solid transparent}
+  .row .from{font-size:12px;color:var(--muted)}
+  .row .subj{font-size:13px;font-weight:600;letter-spacing:-.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .time{grid-column:2;grid-row:1;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .row.sel{background:var(--blue-bg);border-left-color:var(--blue)}
+  .chip{grid-column:2;justify-self:end;font-size:10.5px;font-weight:600;border-radius:11px;padding:2.5px 9px;white-space:nowrap}
+  .chip.red{background:var(--red-bg);color:var(--red)}
+  .chip.blue{background:var(--blue-bg);color:var(--blue)}
+  .chip.amber{background:var(--amber-bg);color:var(--amber)}
+  .chip.green{background:var(--green-bg);color:var(--green)}
+  .chip.gray{background:var(--bg);color:var(--muted)}
+  .detail{display:flex;flex-direction:column;min-height:0}
+  .detail-head{padding:18px 28px 14px;border-bottom:1px solid var(--line)}
+  .crumb{font-size:11.5px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .crumb code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  .detail-head h1{font-size:19px;letter-spacing:-.015em;margin:6px 0 4px}
+  .detail-body{padding:18px 28px 0;overflow:auto;min-height:0}
+  .block{border:1px solid var(--line);border-radius:10px;margin-bottom:14px}
+  .block-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg);border-radius:10px 10px 0 0}
+  .block-head h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .block-head .chip{margin-left:auto}
+  .mail{padding:12px 14px;font-size:12.5px;line-height:1.65;color:#374151;white-space:pre-wrap}
+  .draft{padding:12px 14px;font-size:13px;line-height:1.7;color:var(--ink);white-space:pre-wrap;border-left:3px solid var(--blue)}
+  .toolbar{display:flex;gap:8px;align-items:center;padding:14px 28px;border-top:1px solid var(--line);background:#fff;margin-top:auto}
+  button{font:600 12.5px Inter,system-ui,sans-serif;border-radius:8px;padding:8px 14px;cursor:pointer;border:1px solid var(--line);background:#fff;color:#374151}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff;margin-left:auto}
+  button.danger{color:var(--red)}
+  .backdrop{position:fixed;inset:0;background:rgba(17,24,39,.45)}
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:620px;background:#fff;border-radius:14px;box-shadow:0 24px 64px rgba(17,24,39,.28);padding:24px 26px}
+  .modal h2{font-size:17px;letter-spacing:-.01em}
+  .modal .to{color:var(--muted);font-size:12px;margin:5px 0 14px}
+  .pin{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-size:12px;color:#374151}
+  .pin code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;background:#fff;border:1px solid var(--line);border-radius:5px;padding:1.5px 7px}
+  .pin .tag{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--green);background:var(--green-bg);border-radius:10px;padding:2px 8px}
+  .exact{border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:12px 0;font-size:12.5px;line-height:1.65;color:#374151;white-space:pre-wrap;max-height:190px;overflow:auto}
+  .warn{font-size:11.5px;color:var(--amber);background:var(--amber-bg);border:1px solid #FDE68A;border-radius:8px;padding:9px 12px;margin-bottom:16px}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end}
+  .modal-actions button.primary{margin-left:0}
+</style>
+</head>
+<body>
+  <aside class="side">
+    <div class="brand"><div class="mark">RR</div><div>Rejection Rejector<small>local console · loopback only</small></div></div>
+    <nav>
+      <div class="nav-item"><span class="ico"></span>Overview</div>
+      <div class="nav-item active"><span class="ico"></span>Review<span class="count">3</span></div>
+      <div class="nav-item"><span class="ico"></span>Activity</div>
+      <div class="nav-item"><span class="ico"></span>Local AI</div>
+      <div class="nav-item"><span class="ico"></span>Settings</div>
+    </nav>
+    <div class="health">
+      <h3>Health</h3>
+      <div class="health-row"><span>Send cap</span><b>12/40 today</b></div>
+      <div class="health-row"><span>Model</span><b>granite4.2:8b-q8_0</b></div>
+      <div class="health-row"><span>Ollama</span><b><span class="dot"></span>0.40.13 healthy</b></div>
+      <div class="health-row"><span>Mode</span><b>Human review</b></div>
+      <div class="health-row"><span>Sending</span><b>enabled</b></div>
+    </div>
+  </aside>
+
+  <section class="list">
+    <div class="list-head"><h1>Review</h1><p>3 messages need a decision · newest first</p></div>
+    <div class="filters"><span class="filter on">Needs review</span><span class="filter">All</span><span class="filter">Sent</span><span class="filter">Blocked</span></div>
+    <div class="row sel"><div><div class="from">Priya Raghavan &lt;priya.raghavan@northwind.example&gt;</div><div class="subj">Re: Your application — Senior Data Engineer</div></div><div class="time">13:47</div><div class="chip red">rejection_detected (conf .93)</div></div>
+    <div class="row"><div><div class="from">Workday Notifications &lt;no-reply@workday.example&gt;</div><div class="subj">Status update: Product Analyst</div></div><div class="time">12:20</div><div class="chip amber">awaiting_confirm</div></div>
+    <div class="row"><div><div class="from">Greenhouse &lt;notifications@greenhouse.example&gt;</div><div class="subj">Thank you for applying — Backend Engineer</div></div><div class="time">11:58</div><div class="chip blue">draft_ready</div></div>
+    <div class="row"><div><div class="from">Marcus Feld &lt;m.feld@atlasrecruit.example&gt;</div><div class="subj">Following up on your interview</div></div><div class="time">13:58</div><div class="chip green">sent 14:02</div></div>
+    <div class="row"><div><div class="from">Careers Bot &lt;bot@nimbuslabs.example&gt;</div><div class="subj">Your application to Nimbus Labs</div></div><div class="time">10:33</div><div class="chip gray">blocked: gate</div></div>
+    <div class="row"><div><div class="from">Lena Ortiz &lt;l.ortiz@brightpath.example&gt;</div><div class="subj">Application received — Data Analyst</div></div><div class="time">09:41</div><div class="chip green">sent 10:05</div></div>
+    <div class="row"><div><div class="from">Taleo System &lt;system@taleo.example&gt;</div><div class="subj">Candidate portal: application update</div></div><div class="time">08:52</div><div class="chip gray">blocked: gate</div></div>
+  </section>
+
+  <section class="detail">
+    <div class="detail-head">
+      <div class="crumb"><code>app-2026-0412</code> · revision <code>r7</code> · <code>sha256:9f2c…a41e</code> · <span class="chip red">rejection_detected (conf .93)</span></div>
+      <h1>Re: Your application — Senior Data Engineer</h1>
+      <div class="crumb">Priya Raghavan &lt;priya.raghavan@northwind.example&gt; · received 13:47 · draft_ready → awaiting_confirm</div>
+    </div>
+    <div class="detail-body">
+      <div class="block">
+        <div class="block-head"><h2>Detected rejection</h2><span class="chip red">rejection_detected (conf .93)</span></div>
+        <div class="mail">From: Priya Raghavan &lt;priya.raghavan@northwind.example&gt;
+Subject: Re: Your application — Senior Data Engineer
+
+Dear applicant,
+
+Thank you for taking the time to apply to Northwind Analytics. After careful consideration, we have decided not to move forward with your application for the Senior Data Engineer role. We received a large number of applications and this decision reflects our current hiring needs only.
+
+We wish you every success in your search.
+
+Kind regards,
+Priya Raghavan
+Talent Acquisition, Northwind Analytics</div>
+      </div>
+      <div class="block">
+        <div class="block-head"><h2>Draft reply</h2><span class="chip amber">awaiting_confirm</span></div>
+        <div class="draft">Dear Priya,
+
+Thank you for letting me know, and for the time you took to review my application. I understand that this decision reflects current hiring needs, and I appreciate the clear and considerate note.
+
+I remain very interested in Northwind Analytics. If a suitable role opens up in the future, I would welcome the chance to be considered again. I would also be grateful for any brief feedback on my application, if your process allows it.
+
+Thank you again, and I wish you and the team all the best.
+
+Kind regards,
+Alex Mercer</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button>Save changes</button>
+      <button>Regenerate with local AI</button>
+      <button class="danger">Dismiss</button>
+      <button class="primary">Review &amp; send…</button>
+    </div>
+  </section>
+
+  <div class="backdrop"></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Confirm this exact reply">
+    <h2>Confirm this exact reply</h2>
+    <p class="to">To: Priya Raghavan &lt;priya.raghavan@northwind.example&gt; · Subject: Re: Your application — Senior Data Engineer</p>
+    <div class="pin"><span class="tag">pinned</span>revision <code>r7</code> · body <code>sha256:9f2c…a41e</code> · the send gate matches this exact body before dispatch</div>
+    <div class="exact">Dear Priya,
+
+Thank you for letting me know, and for the time you took to review my application. I understand that this decision reflects current hiring needs, and I appreciate the clear and considerate note.
+
+I remain very interested in Northwind Analytics. If a suitable role opens up in the future, I would welcome the chance to be considered again. I would also be grateful for any brief feedback on my application, if your process allows it.
+
+Thank you again, and I wish you and the team all the best.
+
+Kind regards,
+Alex Mercer</div>
+    <div class="warn">Sending cannot be undone by this application. Any edit invalidates the body hash and returns this item to review.</div>
+    <div class="modal-actions"><button>Cancel</button><button class="primary">Send reply</button></div>
+  </div>
+</body>
+</html>
