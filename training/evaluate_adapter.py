@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -174,6 +175,15 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
+
+    # Fail fast on operator errors before importing the heavy training
+    # stack: a bad path must be diagnosable without a GPU environment.
+    if not args.adapter.is_file():
+        print(f"adapter not found: {args.adapter}", file=sys.stderr)
+        return 2
+    if not args.holdout.is_file():
+        print(f"holdout not found: {args.holdout}", file=sys.stderr)
+        return 2
 
     import torch
     from peft import PeftModel
