@@ -93,7 +93,11 @@ def main() -> int:
         return view
 
     if args.command == "probe":
-        probe_once()
+        try:
+            probe_once()
+        except FileNotFoundError:
+            print(json.dumps({"status": "waiting-for-heartbeat"}))
+            return 2
         return 0
     while True:
         try:
