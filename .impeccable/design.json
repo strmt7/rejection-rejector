@@ -1,0 +1,395 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-01T10:12:48+01:00",
+  "title": "Design System: Carbon Copy Docket",
+  "extensions": {
+    "colorMeta": {
+      "bone": {
+        "role": "neutral",
+        "displayName": "Bone Stock",
+        "canonical": "oklch(95% 0.018 89)",
+        "purpose": "NCR carbonless ground and first (GATE) copy; background of every surface.",
+        "tonalRamp": [
+          "#0d0b05",
+          "#252118",
+          "#3e3a30",
+          "#59554a",
+          "#767166",
+          "#938f83",
+          "#c2bdb1",
+          "#f0eee8"
+        ]
+      },
+      "pink": {
+        "role": "neutral",
+        "displayName": "Pale Pink Stock",
+        "canonical": "oklch(89% 0.031 69)",
+        "purpose": "Second (AUDIT) copy; the only hover/selection tint and warn/void ground.",
+        "tonalRamp": [
+          "#110903",
+          "#2b1f11",
+          "#453829",
+          "#615243",
+          "#7e6f5f",
+          "#9c8c7b",
+          "#cbbba9",
+          "#f5ede5"
+        ]
+      },
+      "green": {
+        "role": "neutral",
+        "displayName": "Pale Green Stock",
+        "canonical": "oklch(92% 0.024 136)",
+        "purpose": "Third (BACKUP) copy; the only ok tint, reserved for verified passes.",
+        "tonalRamp": [
+          "#080d06",
+          "#1c2419",
+          "#353e31",
+          "#4f594b",
+          "#6b7567",
+          "#899384",
+          "#b7c2b2",
+          "#ebf0e9"
+        ]
+      },
+      "ink": {
+        "role": "primary",
+        "displayName": "Process Ink",
+        "canonical": "oklch(25% 0.011 73)",
+        "purpose": "The only structural color: rules, borders, primary buttons, body text.",
+        "tonalRamp": [
+          "#0d0b08",
+          "#25211c",
+          "#3e3a34",
+          "#59544f",
+          "#76716b",
+          "#938e88",
+          "#c2bdb6",
+          "#f0eeeb"
+        ]
+      },
+      "stamp": {
+        "role": "secondary",
+        "displayName": "Stamp Vermilion",
+        "canonical": "oklch(52% 0.158 29)",
+        "purpose": "Rubber-stamp dispositions: VOID rules/text, danger buttons, errors.",
+        "tonalRamp": [
+          "#2d0000",
+          "#570000",
+          "#780000",
+          "#9a2118",
+          "#bc4337",
+          "#df6354",
+          "#ff9381",
+          "#ffddd3"
+        ]
+      },
+      "stamp-ink": {
+        "role": "secondary",
+        "displayName": "Stamp Ink Deep",
+        "canonical": "oklch(44% 0.136 31)",
+        "purpose": "Struck-impression ink: VOID lettering, void chip text, struck marks. Added by the implementation beyond the roll palette.",
+        "tonalRamp": [
+          "#290000",
+          "#510000",
+          "#710a00",
+          "#922f1f",
+          "#b34d3c",
+          "#d56c59",
+          "#ff9b86",
+          "#ffe0d5"
+        ]
+      },
+      "pen": {
+        "role": "secondary",
+        "displayName": "Ballpoint Blue",
+        "canonical": "oklch(42% 0.061 250)",
+        "purpose": "Everything human: links, focus ring, dirty flag, sign-off margin.",
+        "tonalRamp": [
+          "#000b1d",
+          "#06233e",
+          "#203c59",
+          "#3a5876",
+          "#567494",
+          "#7392b4",
+          "#a1c1e4",
+          "#e1f0ff"
+        ]
+      },
+      "ink-70": {
+        "role": "neutral",
+        "displayName": "Ink 70",
+        "canonical": "rgba(38, 34, 29, 0.72)",
+        "purpose": "Secondary text, placeholders, field-group headings."
+      },
+      "ink-45": {
+        "role": "neutral",
+        "displayName": "Ink 45",
+        "canonical": "rgba(38, 34, 29, 0.5)",
+        "purpose": "Quiet borders: neutral stub state, quiet buttons, neutral impressions."
+      },
+      "ink-25": {
+        "role": "neutral",
+        "displayName": "Ink 25",
+        "canonical": "rgba(38, 34, 29, 0.25)",
+        "purpose": "Hairline cell dividers, scrollbar thumb, exact-copy rules."
+      },
+      "ink-12": {
+        "role": "neutral",
+        "displayName": "Ink 12",
+        "canonical": "rgba(38, 34, 29, 0.12)",
+        "purpose": "Row separators and settings-row rules."
+      },
+      "grid-faint": {
+        "role": "neutral",
+        "displayName": "Grid Faint",
+        "canonical": "rgba(38, 34, 29, 0.055)",
+        "purpose": "The visible hairline construction grid (Grid Specimen raise), 24px pitch both axes."
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Form and pane titles (h1, 17px/.04em); brand lockup variant 15px/.12em. Tracked uppercase Archivo."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Inverted corner labels on ruled boxes (h2, 14px/.04em uppercase)."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Field-group headings (h3, 11px/.16em uppercase, ink-70) — the widest tracking in the system."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Running text at 14px/1.55; ink for primary, ink-70 for supporting copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "The .lbl system: every structural label at 11px/.14em tracked caps; buttons and chips share the voice at .10-.12em."
+      },
+      "typed": {
+        "displayName": "Typed",
+        "purpose": "Courier Prime values: docket ids, timestamps, mail bodies, editor, inputs, impression marks, tabular countdowns. The typewriter into the printed form."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "stamp-press",
+        "value": "0.32s cubic-bezier(0.19, 1, 0.22, 1)",
+        "purpose": "The single motion moment: stamp impressions land at scale(1.18)->1 with opacity 0->1 (complete by 60%), settling at the stamp's -4deg rest angle. Keyframes: from { transform: rotate(-4deg) scale(1.18); opacity: 0 } 60% { opacity: 1 } to { transform: rotate(-4deg) scale(1); opacity: 1 }. Fires only when an impression is actually laid down. Disabled under prefers-reduced-motion (animation: none; scroll-behavior: auto) — stamps still appear; evidence must not depend on motion."
+      },
+      {
+        "name": "scroll-glide",
+        "value": "smooth",
+        "purpose": "Root smooth scrolling for in-page anchors; reverts to auto under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "form-stack",
+        "value": "980px",
+        "purpose": "Review grid and settings rows drop to one column; the gate strip wraps."
+      },
+      {
+        "name": "docket-stack",
+        "value": "850px",
+        "purpose": "Docket stacks: rail becomes a full-width band (dashed rule moves below, perforation hidden), main grid single-column, header cells reflow and lose right rules."
+      }
+    ],
+    "borders": [
+      {
+        "name": "hairline",
+        "value": "1px solid rgba(38,34,29,.12)-.25 alpha ladder",
+        "purpose": "Cell dividers, row separators, quiet containers."
+      },
+      {
+        "name": "form-rule",
+        "value": "1.5px solid #26221d",
+        "purpose": "Boxes, buttons, chips, inputs, gate strip."
+      },
+      {
+        "name": "structural-rule",
+        "value": "2px solid #26221d",
+        "purpose": "Header bottom, dialog edge, selected stub edges."
+      },
+      {
+        "name": "stamp-double",
+        "value": "3px double #b23a2e",
+        "purpose": "The VOID mark only."
+      }
+    ],
+    "a11y": {
+      "stateEncoding": "State is always mark + rule form + text (✓/✕/·, struck line-through, 3px double rule, -4deg stamp, inverted fill); hue only reinforces. Color-blind safe by construction.",
+      "focusVisible": "2px solid #33506e outline, 2px offset, on every interactive element; queue rows and tabs keyboard-reachable (WCAG 2.1.1).",
+      "contrastFloors": "ink/bone 13.8:1 · ink/pink 11.4:1 · ink/green 12.4:1 · stamp-ink/pink 5.9:1 · pen/bone 7.3:1 · ink-70-on-bone 5.9:1 · stamp/bone 5.2:1 — all AA or better at their sizes.",
+      "reducedMotion": "prefers-reduced-motion: reduce disables the stamp press and smooth scrolling; stamps appear instantly."
+    },
+    "worldOverrides": {
+      "creamGround": "The bone ground (#f4efe2) is NCR carbonless stock (the GATE copy), not a generic off-white preset.",
+      "hairlineGrid": "The repeating hairline grid (grid-faint, 24px pitch, both axes; single-axis in the reply editor) is the carried Grid Specimen raise: the machine shows its work.",
+      "honestyRules": "Stamps reflect actual command outcomes only: a filed non-send write stamps AUDIT+BACKUP and leaves GATE bare; a refused send strikes GATE '— VOID', marks hash/policy layers with struck ✕ and raises the VOID stamp; a completed send stamps all three copies with ✓ + time and all three layers ✓."
+    }
+  },
+  "components": [
+    {
+      "name": "Form Box (ruled container with inverted corner label)",
+      "kind": "card",
+      "refersTo": "form-box",
+      "description": "The fundamental region: a square ruled box whose heading sits in an ink tab pinned over the top-left rule.",
+      "html": "<div class=\"ds-form-box\">\n  <h2 class=\"ds-form-box__label\">Review</h2>\n  <p class=\"ds-form-box__lead\">Select a message in the queue to review its draft reply.</p>\n  <div class=\"ds-form-box__body\">Typed content goes here.</div>\n</div>",
+      "css": ".ds-form-box { background: var(--bone); color: var(--ink); border: 1.5px solid var(--ink); padding: 26px 22px 22px; position: relative; font: 400 14px/1.55 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; }\n.ds-form-box__label { position: absolute; top: -1px; left: -1px; background: var(--ink); color: var(--bone); margin: 0; padding: 5px 11px 4px; font: 700 14px/1.2 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; }\n.ds-form-box__lead { color: var(--ink-70); margin: 10px 0 16px; }\n.ds-form-box__body { font-family: \"Courier Prime\", \"Courier New\", Consolas, monospace; font-variant-numeric: tabular-nums; font-size: 13px; }"
+    },
+    {
+      "name": "Action Button",
+      "kind": "button",
+      "refersTo": "action-button",
+      "description": "Plain form-print button; hover tints pink (second copy), focus rings in ballpoint blue.",
+      "html": "<button class=\"ds-btn\">Save changes</button>",
+      "css": ".ds-btn { border: 1.5px solid var(--ink); background: var(--bone); color: var(--ink); padding: 9px 13px; cursor: pointer; font: 700 11px/1.4 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }\n.ds-btn:hover:not(:disabled) { background: var(--pink); }\n.ds-btn:focus-visible { outline: 2px solid var(--pen); outline-offset: 2px; }\n.ds-btn:disabled { opacity: .45; cursor: default; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "action-button-primary",
+      "description": "The decisive action only (send, connect). Hover lights the third copy green as the text color.",
+      "html": "<button class=\"ds-btn-primary\">Review &amp; send…</button>",
+      "css": ".ds-btn-primary { border: 1.5px solid var(--ink); background: var(--ink); color: var(--bone); padding: 9px 13px; cursor: pointer; font: 700 11px/1.4 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .1em; text-transform: uppercase; }\n.ds-btn-primary:hover:not(:disabled) { background: var(--ink); color: var(--green); }\n.ds-btn-primary:focus-visible { outline: 2px solid var(--pen); outline-offset: 2px; }\n.ds-btn-primary:disabled { opacity: .45; cursor: default; }"
+    },
+    {
+      "name": "Stamp Chip (status)",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Status chip; state is carried by ground + rule + text color together (never hue alone).",
+      "html": "<span class=\"ds-chip\">pending</span> <span class=\"ds-chip ds-chip--ok\">sending on</span> <span class=\"ds-chip ds-chip--warn\">review</span> <span class=\"ds-chip ds-chip--ai\">local ai</span>",
+      "css": ".ds-chip { display: inline-block; font: 700 11px/1.2 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; padding: 5px 10px 4px; border: 1.5px solid var(--ink); color: var(--ink); background: var(--bone); white-space: nowrap; }\n.ds-chip--ok { background: var(--green); }\n.ds-chip--warn { background: var(--pink); border-color: var(--stamp); color: var(--stamp-ink); }\n.ds-chip--ai { background: var(--bone); border-color: var(--pen); color: var(--pen); }"
+    },
+    {
+      "name": "Queue Stub (rail item)",
+      "kind": "custom",
+      "refersTo": "stub",
+      "description": "A tear-off queue stub; selected stub gets 2px ink rules top/bottom, pink ground and a 3px indent.",
+      "html": "<div class=\"ds-stub\">\n  <div><h3 class=\"ds-stub__title\">Software Engineer — Acme</h3><p class=\"ds-stub__meta\">rejection · 2026-10-31</p></div>\n  <span class=\"ds-stub__state\">review</span>\n</div>\n<div class=\"ds-stub ds-stub--selected\">\n  <div><h3 class=\"ds-stub__title\">Backend Intern — Globex</h3><p class=\"ds-stub__meta\">rejection · 2026-10-30</p></div>\n  <span class=\"ds-stub__state ds-stub__state--review\">review</span>\n</div>",
+      "css": ".ds-stub { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 13px 20px 13px 18px; cursor: pointer; border-top: 1px solid var(--ink-12); background: var(--bone); }\n.ds-stub:hover { background: var(--pink); }\n.ds-stub--selected { background: var(--pink); border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); padding-left: 15px; }\n.ds-stub__title { margin: 0 0 3px; font: 700 11px/1.3 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }\n.ds-stub__meta { margin: 1px 0; font: 400 12px/1.4 \"Courier Prime\", \"Courier New\", Consolas, monospace; color: var(--ink-70); }\n.ds-stub__state { font: 700 11px/1.2 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; border: 1px solid var(--ink-45); padding: 3px 7px 2px; white-space: nowrap; align-self: start; }\n.ds-stub__state--review { border-color: var(--stamp); color: var(--stamp-ink); background: var(--pink); }"
+    },
+    {
+      "name": "Gate Checkbox Mark (xbox)",
+      "kind": "custom",
+      "refersTo": "gate-layer-mark",
+      "description": "Send-gate layer mark: '·' pending, '✓' verified (green), '✕' void (pink, stamp rule, struck through).",
+      "html": "<span class=\"ds-xbox\">·</span>\n<span class=\"ds-xbox ds-xbox--ok\">✓</span>\n<span class=\"ds-xbox ds-xbox--void\">✕</span>",
+      "css": ".ds-xbox { width: 18px; height: 18px; border: 1.5px solid var(--ink); display: inline-flex; align-items: center; justify-content: center; font: 700 12px/1 \"Courier Prime\", \"Courier New\", Consolas, monospace; color: var(--ink); background: var(--bone); }\n.ds-xbox--ok { background: var(--green); }\n.ds-xbox--void { border-color: var(--stamp); color: var(--stamp-ink); background: var(--pink); text-decoration: line-through; }"
+    },
+    {
+      "name": "Impression Chip (triplicate record)",
+      "kind": "custom",
+      "refersTo": "impression-chip",
+      "description": "One copy of the triplicate record; stamped only on real command outcomes (GATE / AUDIT / BACKUP).",
+      "html": "<div class=\"ds-impressions\">\n  <span class=\"ds-imp\">1 GATE</span>\n  <span class=\"ds-imp ds-imp--stamped\">2 AUDIT ✓ 10:12</span>\n  <span class=\"ds-imp ds-imp--void\">1 GATE — VOID</span>\n</div>",
+      "css": ".ds-impressions { display: flex; gap: 8px; flex-wrap: wrap; }\n.ds-imp { border: 1.5px solid var(--ink-45); padding: 3px 8px 2px; font: 400 11px/1.5 \"Courier Prime\", \"Courier New\", Consolas, monospace; letter-spacing: .06em; color: var(--ink); background: var(--bone); }\n.ds-imp--stamped { border-color: var(--ink); background: var(--green); }\n.ds-imp--void { border-color: var(--stamp); color: var(--stamp-ink); background: var(--pink); }\n.ds-impressions--press .ds-imp--stamped, .ds-impressions--press .ds-imp--void { animation: ds-stamp-press .32s cubic-bezier(.19, 1, .22, 1); }\n@keyframes ds-stamp-press { from { transform: rotate(-4deg) scale(1.18); opacity: 0; } 60% { opacity: 1; } to { transform: rotate(-4deg) scale(1); opacity: 1; } }\n@media (prefers-reduced-motion: reduce) { .ds-impressions--press .ds-imp--stamped, .ds-impressions--press .ds-imp--void { animation: none; } }"
+    },
+    {
+      "name": "VOID Stamp",
+      "kind": "custom",
+      "refersTo": "void-stamp",
+      "description": "The gate's mark: the only double-ruled, only rotated object in the system. Reveal fires the single motion moment.",
+      "html": "<span class=\"ds-void-stamp\">VOID — GATE BLOCKED</span>",
+      "css": ".ds-void-stamp { display: inline-flex; align-items: center; border: 3px double var(--stamp); color: var(--stamp-ink); padding: 6px 14px 5px; transform: rotate(-4deg); font: 700 13px/1.2 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .18em; text-transform: uppercase; background: var(--bone); animation: ds-stamp-press .32s cubic-bezier(.19, 1, .22, 1); }\n@keyframes ds-stamp-press { from { transform: rotate(-4deg) scale(1.18); opacity: 0; } 60% { opacity: 1; } to { transform: rotate(-4deg) scale(1); opacity: 1; } }\n@media (prefers-reduced-motion: reduce) { .ds-void-stamp { animation: none; } }"
+    },
+    {
+      "name": "Sign-off Margin",
+      "kind": "custom",
+      "refersTo": "sign-line",
+      "description": "Design Annual raise: a blank in ballpoint blue — the machine never signs for you.",
+      "html": "<div class=\"ds-sign-block\">\n  <span class=\"ds-sign-label\">Confirmed by operator — the machine never signs for you</span>\n  <div class=\"ds-sign-line\"></div>\n</div>",
+      "css": ".ds-sign-block { margin: 16px 0 4px; }\n.ds-sign-label { display: block; font: 700 11px/1.3 \"Archivo\", \"Segoe UI\", system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: var(--pen); }\n.ds-sign-line { border-bottom: 1.5px solid var(--pen); width: 240px; height: 26px; margin-top: 6px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Carbon Copy Docket",
+    "overview": "The console is one continuous carbon-copy docket. Every write is a docketed triplicate — the send gate, the audit anchor and the encrypted backup are the three copies you can see — and the interface refuses the category's three-pane mail client and the card-dashboard rut outright. The world is NCR carbonless business-form printing, 1950s–70s: bone / pale-pink / pale-green stock under process ink, rubber-stamp vermilion for dispositions, ballpoint blue for human sign-off. The page reads as one form you work down: docket header band, perforated stub rail, ruled working boxes, stamp strip, sign-off margin. The memorable moment is the triplicate press: a confirmed action visibly stamps its three copies — GATE, AUDIT, BACKUP — so evidence is seen, not promised.\n\nProvenance: roll assignment from seed key 8345aab6, grounded candidate 7 of 7, user-confirmed as \"Carbon Copy Docket — THE ROLL\"; the approved sketch is .impeccable/mocks/decision/assigned.html and the decision round is recorded in .impeccable/mocks/decision/payload.json. Two named raises were carried into the build and are invariants of this system: from the Design Annual challenger, every confirmed send carries a human sign-off mark in the margin — the machine never signs for you; from the Grid Specimen challenger, the construction grid stays visible as hairline ruling in empty ground — the machine shows its work.\n\nHonesty is the personality, per PRODUCT.md's brand commitments: unverified things are never shown green, states say \"not_configured\" rather than faking health, and stamps fire only on actual command outcomes. Two API-driven substitutions (recorded as amendments in the surface brief on 2026-11-01) keep the docket honest: the header carries only fields the live routes expose — docket id · revision, gate posture (sending_enabled × mode), last poll — with no \"send cap\", \"confidence\" or model-identity cells, and no phantom gmail_send_scope signal.",
+    "keyCharacteristics": [
+      "One continuous form: ruled boxes with inverted ink corner labels, never cards.",
+      "Triplicate logic everywhere: three stock tints map to GATE / AUDIT / BACKUP.",
+      "State is a stamp mark (✓ ✕ ·, struck line, double rule, rotated VOID) — hue only reinforces.",
+      "Form-printed type: tracked Archivo small caps as printed labels, Courier Prime as typed values.",
+      "Flat, square, hairline-ruled: zero border-radius, zero shadows; the construction grid shows in empty ground.",
+      "One motion moment only: the stamp press."
+    ],
+    "rules": [
+      {
+        "name": "The Hue-Never-Alone Rule",
+        "body": "Hue never carries state alone. Every state is a stamp mark first — a glyph (✓ ✕ ·), a struck line-through, a double rule, a rotated band, an inverted fill — and the tint only reinforces it. Removing all color must leave every state readable.",
+        "section": "colors"
+      },
+      {
+        "name": "The Honest Green Rule",
+        "body": "Pale green means exactly two things: third copy, or a verified pass. Nothing is green until a real outcome says so — unconfigured states print \"not_configured\", never a friendly tint.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three-Copy Rule",
+        "body": "Bone / pink / green always read as copy 1 GATE / 2 AUDIT / 3 BACKUP in that order (the header legend and the impression strip both spell it out). Do not reuse the tints in a new meaning without a spelled-out legend.",
+        "section": "colors"
+      },
+      {
+        "name": "The Printed-vs-Typed Rule",
+        "body": "Structure is printed (Archivo tracked caps); content is typed (Courier Prime). A value never appears in Archivo and a label never appears in Courier. code tokens get a pink ground to stay visibly typed.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Anything numeric that can change — countdowns, impression timestamps — uses tabular numerals (font-variant-numeric: tabular-nums) so the type doesn't jitter as values tick.",
+        "section": "typography"
+      },
+      {
+        "name": "The One-Docket Rule",
+        "body": "The whole console is one form. Regions are boxes with corner labels or hairline-divided cells — never floating cards, never nested panels.",
+        "section": "layout"
+      },
+      {
+        "name": "The No-Shadow Rule",
+        "body": "Depth comes from tint and rule weight only. Adding a shadow or a radius imports a different world.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hairline Grid Rule",
+        "body": "Empty ground always shows the construction grid at grid-faint strength (and the reply editor carries the same ruling at one-axis pitch). It is the honesty of the medium — the grid the form was printed on.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Stamp Angle Rule",
+        "body": "Rotation is a stamp privilege. Nothing else in the system is ever rotated.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Machine-Never-Signs Rule",
+        "body": "Human sign-off is a blank margin in ballpoint blue. The interface may ask for a signature; it never produces one.",
+        "section": "components"
+      },
+      {
+        "name": "The Outcome-Stamped Rule",
+        "body": "Stamps reflect actual command outcomes only. A filed (non-send) write stamps copies 2 and 3 — AUDIT and BACKUP — and leaves the GATE copy bare, because no send happened. A refused send strikes the GATE copy '— VOID', marks layers 2 and 3 with struck ✕ and raises the VOID stamp. A completed send stamps all three copies with ✓ + time and marks all three layers ✓. Nothing is pre-stamped, estimated, or stamped in anticipation.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do carry every state as a mark plus a rule form plus text — ✓/✕/· glyphs, struck lines, double rules, inverted fills — and let the tint only reinforce it (the Hue-Never-Alone Rule).",
+      "Do print structure in tracked Archivo caps and type values in Courier Prime with tabular numerals (the Printed-vs-Typed Rule).",
+      "Do keep the construction grid visible at grid-faint (24px pitch) in empty ground and the editor (the Hairline Grid Rule).",
+      "Do show only fields the live API actually exposes in docketed header/record cells — the amendments to the surface brief exist precisely for this; unverified state prints its real word (\"not_configured\"), never a friendly tint.",
+      "Do give every interactive element the 2px pen :focus-visible ring at 2px offset, and keep queue rows and tabs keyboard-reachable (WCAG 2.1.1).",
+      "Do stamp impressions only after the command resolves (the Outcome-Stamped Rule)."
+    ],
+    "donts": [
+      "Don't use hue alone for state, and don't use pale green for anything unverified (the Honest Green Rule).",
+      "Don't add border-radius (0px is the system) or shadows (the No-Shadow Rule).",
+      "Don't add motion beyond the stamp press; under reduced motion, don't substitute a different flourish.",
+      "Don't rotate anything but stamps, or double-rule anything but the VOID mark (the Stamp Angle Rule).",
+      "Don't decorate with stamps, perforations or triplicate legends: the risk of this world is bureaucratic costume — the stamps stay marks of control, never clutter.",
+      "Don't build three-pane mail-client layouts or card dashboards; regions are ruled boxes with corner labels (the One-Docket Rule).",
+      "Don't mix the two type voices inside a phrase, or render a value in Archivo / a label in Courier."
+    ]
+  }
+}
