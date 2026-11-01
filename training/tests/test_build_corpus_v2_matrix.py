@@ -45,9 +45,7 @@ class TemplateMatrixTests(unittest.TestCase):
                 for fmt_name in bc.FORMATS:
                     with self.subTest(lang=lang, style=style, fmt=fmt_name):
                         rng = self._seeded(f"rej-{lang}-{style}-{fmt_name}")
-                        rec = bc.assemble_rejection(
-                            rng, lang, style, fmt_name, self.slots_by_lang[lang]
-                        )
+                        rec = bc.assemble_rejection(rng, lang, style, fmt_name, self.slots_by_lang[lang])
                         self.assertIsInstance(rec, dict)
                         body = rec.get("body") or rec.get("text") or ""
                         self.assertTrue(str(body).strip())
@@ -66,9 +64,7 @@ class TemplateMatrixTests(unittest.TestCase):
                 for fmt_name in bc.FORMATS:
                     with self.subTest(lang=lang, neg=neg_type, fmt=fmt_name):
                         rng = self._seeded(f"neg-{lang}-{neg_type}-{fmt_name}")
-                        rec = bc.assemble_negative(
-                            rng, lang, neg_type, fmt_name, self.slots_by_lang[lang]
-                        )
+                        rec = bc.assemble_negative(rng, lang, neg_type, fmt_name, self.slots_by_lang[lang])
                         self.assertIsInstance(rec, dict)
                         body = rec.get("body") or rec.get("text") or ""
                         self.assertTrue(str(body).strip())
@@ -92,9 +88,7 @@ class TemplateMatrixTests(unittest.TestCase):
                 for fmt_name in bc.FORMATS:
                     with self.subTest(lang=lang, amb=amb_type, fmt=fmt_name):
                         rng = self._seeded(f"amb-{lang}-{amb_type}-{fmt_name}")
-                        rec = bc.assemble_ambiguous(
-                            rng, lang, amb_type, fmt_name, self.slots_by_lang[lang]
-                        )
+                        rec = bc.assemble_ambiguous(rng, lang, amb_type, fmt_name, self.slots_by_lang[lang])
                         self.assertIsInstance(rec, dict)
                         self.assertTrue(str(rec.get("body") or rec.get("text") or "").strip())
 
