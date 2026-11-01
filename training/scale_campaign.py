@@ -1454,6 +1454,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20261027, help="RNG seed")
     args = parser.parse_args(argv)
 
+    # The generator reports multilingual statistics; make the CLI safe on
+    # legacy Windows consoles (cp1252) where a Greek or Cyrillic summary
+    # would otherwise crash the run with UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
     rng = random.Random(args.seed)
     fx = CaseFactory(rng)
     for lang in LANGUAGES:

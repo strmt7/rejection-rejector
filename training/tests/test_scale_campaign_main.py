@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "training"))
@@ -34,6 +35,29 @@ class ScaleCampaignMainTests(unittest.TestCase):
             self.assertGreaterEqual(len(rows), 1000)
             report = json.loads(summary.read_text(encoding="utf-8"))
             self.assertIsInstance(report, dict)
+
+    def test_main_survives_legacy_console_encoding(self) -> None:
+        """Why (Windows release review): the generator prints Greek and
+        Cyrillic statistics; on a cp1252 console that used to crash the
+        run with UnicodeEncodeError. The UTF-8 reconfiguration must make
+        the CLI survive any console encoding.
+        """
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "corpus.jsonl"
+            summary = Path(tmp) / "summary.json"
+            args = ["--out", str(out), "--summary", str(summary), "--seed", "7"]
+            legacy_out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+            legacy_err = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+            with (
+                mock.patch.object(sys, "argv", ["scale_campaign.py", *args]),
+                mock.patch.object(sys, "stdout", legacy_out),
+                mock.patch.object(sys, "stderr", legacy_err),
+            ):
+                code = sc.main(args)
+            self.assertEqual(code, 0)
+            self.assertTrue(out.is_file())
 
     def test_main_is_deterministic_per_seed(self) -> None:
         """Why: the corpus is evaluation material — the same seed must
