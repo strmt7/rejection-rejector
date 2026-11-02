@@ -89,8 +89,13 @@ jobs:
           if (-not $info.source_commit_verified) { throw "Release binary does not report a verified source commit" }
           if ($info.source_commit -ne $env:GITHUB_SHA) { throw "Embedded source commit does not match release commit" }
           if ($info.profile -ne 'release') { throw "Embedded build profile is not release" }
-          if ($info.rustc_version -notmatch '^rustc 1\.99\.0(?:\s|$)') {
-            throw "Release binary was not built with pinned Rust 1.99.0: $($info.rustc_version)"
+          # The pinned channel is the single source of truth (rust-toolchain.toml);
+          # this verifier reads it instead of duplicating a version literal.
+          $toml = Get-Content rust-toolchain.toml -Raw
+          if ($toml -notmatch 'channel\s*=\s*"([^"]+)"') { throw "rust-toolchain.toml has no pinned channel" }
+          $channel = $Matches[1]
+          if ($info.rustc_version -notmatch ('^rustc ' + [regex]::Escape($channel) + '(?:\s|$)')) {
+            throw "Release binary was not built with pinned Rust ${channel}: $($info.rustc_version)"
           }
           if ($info.target -ne 'x86_64-pc-windows-msvc') {
             throw "Release binary target is not x86_64-pc-windows-msvc: $($info.target)"
