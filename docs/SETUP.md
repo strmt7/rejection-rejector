@@ -21,7 +21,7 @@ guidance.
 
 ## Safe preview and storage
 
-Run `rejection-rejector.exe --demo` for synthetic offline data. It uses a temporary
+Run `rr.exe --demo` for synthetic offline data. It uses a temporary
 encrypted database and cannot connect to Gmail or send anything — use it to see the
 whole interface risk-free. Real data goes to the OS local application-data directory;
 override with `--data-dir <absolute-path>`. Never choose a public repository or
@@ -50,8 +50,6 @@ prefer a dedicated app password you can delete without affecting anything else.
 
 ## Gmail OAuth
 
-
-
 The app uses **OAuth 2.0 for desktop apps**: you create your own Google Cloud OAuth
 client, sign in through your system browser, and the app receives tokens through a
 random local callback port protected by PKCE (RFC 8252/7636). No shared Google identity
@@ -72,9 +70,10 @@ reconnect as needed. Distribution to other users requires reviewing Google's cur
 verification requirements.
 
 Official references:
-- https://developers.google.com/identity/protocols/oauth2/native-app
-- https://developers.google.com/identity/protocols/oauth2#expiration
-- https://developers.google.com/workspace/gmail/api/auth/scopes
+
+- <https://developers.google.com/identity/protocols/oauth2/native-app>
+- <https://developers.google.com/identity/protocols/oauth2#expiration>
+- <https://developers.google.com/workspace/gmail/api/auth/scopes>
 
 ## Ollama and local AI
 
@@ -89,7 +88,7 @@ non-sending typed-decision bake-off includes `nimble:9b-q8_0`, `clef-flash:9b-q8
 `tev1:4b`. Changing model/context disarms delivery until the new configuration is
 qualified.
 
-1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.35.1 or newer**. It fails closed if `/api/show` does not expose capability metadata: production chat models must declare general completion capability and may not be decision-only, while the typed-decision R&D lane requires a decision-only capability. This prevents decision endpoints from being accidentally promoted into the reply-generation pipeline. Approve the installer. If winget is unavailable, install from https://ollama.com/download/windows.
+1. **Install Ollama** asks for confirmation and invokes the official `Ollama.Ollama` package through Windows Package Manager. Rejection Rejector requires Ollama **0.35.1 or newer**. It fails closed if `/api/show` does not expose capability metadata: production chat models must declare general completion capability and may not be decision-only, while the typed-decision R&D lane requires a decision-only capability. This prevents decision endpoints from being accidentally promoted into the reply-generation pipeline. Approve the installer. If winget is unavailable, install from <https://ollama.com/download/windows.>
 2. **Start Ollama** starts a loopback daemon if one is not already responding. App-started servers use no cloud, one parallel request, one loaded model, flash attention and q8_0 KV cache. Existing servers are not killed or silently reconfigured.
 3. **Download model** retrieves weights through the local Ollama API with progress. No email is sent to the registry.
 4. **Qualify & pin** checks installed local model metadata and cloud/remote markers, pins the inspected digest temporarily, then runs the complete synthetic pipeline: rejection classification, reply drafting, same-model verification, and Ollama GPU-residency checks. The pin is saved only if every stage passes. Qualification does not authorize email sending.
@@ -175,7 +174,7 @@ For a replacement or locked Windows/macOS workspace, the preferred native flow i
 pre-open recovery UI:
 
 ```powershell
-.\rejection-rejector.exe --recovery
+.\rr.exe --recovery
 ```
 
 Recovery Mode does **not** start the normal Gmail/model worker and does not open or
@@ -264,16 +263,16 @@ dependency.
 ## Sources (checked 2026-10-12)
 
 - Google, "OAuth 2.0 for Mobile & Desktop Apps" (Desktop client + loopback/PKCE):
-  https://developers.google.com/identity/protocols/oauth2/native-app
+  <https://developers.google.com/identity/protocols/oauth2/native-app>
 - Google, "OAuth 2.0 token expiration" (seven-day refresh tokens while in Testing):
-  https://developers.google.com/identity/protocols/oauth2#expiration
+  <https://developers.google.com/identity/protocols/oauth2#expiration>
 - Google, Gmail API scopes (`gmail.readonly`, `gmail.send`):
-  https://developers.google.com/gmail/api/auth/scopes
+  <https://developers.google.com/gmail/api/auth/scopes>
 - Ollama, Windows download and API documentation:
-  https://ollama.com/download/windows and https://github.com/ollama/ollama/blob/main/docs/api.md
+  <https://ollama.com/download/windows> and <https://github.com/ollama/ollama/blob/main/docs/api.md>
 - Microsoft, Windows Package Manager (`winget`, used by **Install Ollama**):
-  https://learn.microsoft.com/en-us/windows/package-manager/
+  <https://learn.microsoft.com/en-us/windows/package-manager/>
 - NIST SP 800-88 Rev. 2, "Guidelines for Media Sanitization":
-  https://csrc.nist.gov/pubs/sp/800/88/r2/final
+  <https://csrc.nist.gov/pubs/sp/800/88/r2/final>
 - IETF RFC 9106 (Argon2, used for passphrase key derivation):
-  https://www.rfc-editor.org/rfc/rfc9106
+  <https://www.rfc-editor.org/rfc/rfc9106>

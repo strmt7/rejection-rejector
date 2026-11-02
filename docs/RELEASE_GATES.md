@@ -20,7 +20,7 @@ From a full checkout of the release commit, with the GitHub CLI authenticated us
 
 ```powershell
 python scripts/release_guard.py evidence --repository strmt7/rejection-rejector --commit <40-character-source-SHA> --output artifacts/release-evidence.json
-python scripts/release_guard.py audit --output artifacts target/release/rejection-rejector.exe target/release/rr.exe
+python scripts/release_guard.py audit --output artifacts target/release/rr.exe
 python -m unittest discover -s tests/release -v
 ```
 

@@ -40,7 +40,7 @@ Windows prerequisite: install Microsoft's latest **Visual C++ v14 Redistributabl
 Safe offline preview:
 
 ```powershell
-.\rejection-rejector.exe --demo
+.\rr.exe --demo
 ```
 
 After configuring the real workspace, run the non-sensitive readiness check with the console closed and no worker running. The app requires Ollama 0.35.1 or newer. It enforces the capability boundary between local chat-generation models and decision-only models; Ollama 0.35 adds the local typed decision-model API used by the repository's new non-sending classification R&D lane:
@@ -81,7 +81,7 @@ Install stable Rust and Microsoft C++ Build Tools with the Windows SDK:
 ```powershell
 cargo test --locked --lib --no-default-features
 cargo build --locked --release --bins
-.\target\release\rejection-rejector.exe --demo
+.\target\release\rr.exe --demo
 ```
 
 For a full local check (fmt, all-features tests, clippy, release bins) run the tracked helper script:

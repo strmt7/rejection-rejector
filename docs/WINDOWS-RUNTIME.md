@@ -1,6 +1,6 @@
 # Windows runtime prerequisite
 
-Rejection Rejector's Windows executables (`rejection-rejector.exe` and `rr.exe`) are
+Rejection Rejector's Windows executables (`rr.exe` and `rr-tray.exe`) are
 64-bit native programs built with Microsoft's Visual C++ toolchain. Like most programs
 built that way, they depend on the **Microsoft Visual C++ Redistributable** — a small
 set of Microsoft-provided runtime libraries, including `VCRUNTIME140.dll`. Many Windows
@@ -11,11 +11,11 @@ installs it silently.
 
 1. Get the **latest supported Visual C++ Redistributable, X64** from Microsoft's
    official download page:
-   https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+   <https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist>
 2. The currently documented official X64 permalink is:
-   https://aka.ms/vc14/vc_redist.x64.exe
+   <https://aka.ms/vc14/vc_redist.x64.exe>
 3. Run the Microsoft installer, approve its own license and elevation prompt, and
-   restart Windows if the installer asks. Then start `rejection-rejector.exe`.
+   restart Windows if the installer asks. Then start `rr.exe`.
 
 If the application still reports a missing `VCRUNTIME140.dll` (or a similar runtime
 DLL), use the installer's **Repair** option. Do not copy DLLs by hand.
@@ -64,10 +64,10 @@ acceptance checklist in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 ## Sources (checked 2026-10-12)
 
 - Microsoft Learn, "Latest supported Visual C++ downloads":
-  https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+  <https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist>
 - Microsoft Learn, "Application manifests" (`requestedExecutionLevel` / `asInvoker`):
-  https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests
+  <https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests>
 - Microsoft Learn, "Setting the default DPI awareness for a process" (Per-Monitor V2):
-  https://learn.microsoft.com/en-us/windows/win32/hidpi/setting-the-default-dpi-awareness-for-a-process
+  <https://learn.microsoft.com/en-us/windows/win32/hidpi/setting-the-default-dpi-awareness-for-a-process>
 - Microsoft Learn, "Maximum Path Length Limitation" (`MAX_PATH` and `LongPathsEnabled`):
-  https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
+  <https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation>

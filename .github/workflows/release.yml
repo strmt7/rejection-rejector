@@ -131,7 +131,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python scripts/release_guard.py audit --output artifacts target/release/rejection-rejector.exe target/release/rr.exe
+          python scripts/release_guard.py audit --output artifacts target/release/rr.exe
           if ($LASTEXITCODE -ne 0) { throw 'A release executable failed its RustSec audit' }
           cargo auditable --version | Set-Content artifacts/cargo-auditable-version.txt -Encoding ascii
           if ($LASTEXITCODE -ne 0) { throw 'Could not record cargo-auditable version' }
@@ -187,7 +187,6 @@ jobs:
           signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
           files: |
-            ${{ github.workspace }}\target\release\rejection-rejector.exe
             ${{ github.workspace }}\target\release\rr.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
@@ -217,7 +216,6 @@ jobs:
           }
           $records = @()
           foreach ($path in @(
-            'target/release/rejection-rejector.exe',
             'target/release/rr.exe'
           )) {
             $signature = Get-AuthenticodeSignature -FilePath $path
@@ -263,7 +261,7 @@ jobs:
             throw 'Package staging directory must be fresh'
           }
           New-Item -ItemType Directory artifacts/windows | Out-Null
-          Copy-Item target/release/rejection-rejector.exe,target/release/rr.exe artifacts/windows/
+          Copy-Item target/release/rr.exe artifacts/windows/
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
           # Stage only committed documents/operator scripts, not caches or local files.
           $sourceArchive = Join-Path $env:RUNNER_TEMP 'rr-package-tracked-sources.zip'

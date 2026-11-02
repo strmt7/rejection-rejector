@@ -216,7 +216,7 @@ diagnostics, audit text or the envelope. Fresh-machine recovery is available thr
 the native pre-open UI:
 
 ```powershell
-.\rejection-rejector.exe --recovery
+.\rr.exe --recovery
 ```
 
 Recovery Mode does not start the normal worker or create/open the normal vault. It
@@ -299,7 +299,7 @@ and CycloneDX SBOM attestation against the exact repository,
 runner policy before upload. The manual package workflow has two explicit flavors:
 `unsigned` and `azure-artifact-signing`. Signed mode uses GitHub OIDC with Azure login
 and Microsoft Artifact Signing, then requires Windows `Get-AuthenticodeSignature` to
-report `Valid` for both `rejection-rejector.exe` and `rr.exe`; otherwise packaging
+report `Valid` for `rr.exe` (the shipped executable); otherwise packaging
 stops. The package records `signing.json`, `build-info.json` and `contract-info.json`.
 MSI/MSIX/Intune packaging remains separate release-engineering work.
 
@@ -410,13 +410,13 @@ scheduled-task creation, and the application does not attempt to bypass such pol
 
 - NIST SP 800-61 Rev. 3, "Incident Response Recommendations and Considerations for
   Cybersecurity Risk Management" (general incident lifecycle):
-  https://csrc.nist.gov/pubs/sp/800/61/r3/final
+  <https://csrc.nist.gov/pubs/sp/800/61/r3/final>
 - NIST SP 800-88 Rev. 2, "Guidelines for Media Sanitization" (logical removal vs media
   erasure, September 2025):
-  https://csrc.nist.gov/pubs/sp/800/88/r2/final
+  <https://csrc.nist.gov/pubs/sp/800/88/r2/final>
 - IETF RFC 9110 §10.2.3 (`Retry-After` semantics honored from Gmail):
-  https://www.rfc-editor.org/rfc/rfc9110
+  <https://www.rfc-editor.org/rfc/rfc9110>
 - OpenMetrics 1.0 (the `--openmetrics` text format):
-  https://openmetrics.io/
+  <https://openmetrics.io/>
 - SLSA provenance (release attestation model):
-  https://slsa.dev/spec/v1/provenance
+  <https://slsa.dev/spec/v1/provenance>
