@@ -265,7 +265,7 @@ jobs:
           Copy-Item README.md,LICENSE,SECURITY.md,CHANGELOG.md artifacts/windows/
           # Stage only committed documents/operator scripts, not caches or local files.
           $sourceArchive = Join-Path $env:RUNNER_TEMP 'rr-package-tracked-sources.zip'
-          git archive --format=zip "--output=$sourceArchive" HEAD -- docs scripts
+          git archive --format=zip "--output=$sourceArchive" HEAD -- docs scripts ":(exclude)scripts/ci"
           if ($LASTEXITCODE -ne 0) { throw 'Could not archive committed package sources' }
           Expand-Archive -LiteralPath $sourceArchive -DestinationPath artifacts/windows
           Copy-Item artifacts/release-evidence.json artifacts/windows/

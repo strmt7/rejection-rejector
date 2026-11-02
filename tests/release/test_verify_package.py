@@ -543,6 +543,15 @@ class PackageVerificationTests(unittest.TestCase):
 class WorkflowIntegrationTests(unittest.TestCase):
     """The release workflow text pins the packaging gates."""
 
+    def test_payload_allowlist_admits_licenses_and_refuses_ci_tooling(self):
+        """Why: third-party license texts are legal release content and
+        must pass the closed-world allowlist, while CI tooling paths must
+        stay refused even when they sit under an allowed tree.
+        """
+        self.assertTrue(verifier.allowed_payload("docs/licenses/Crawl4AI-0.9.5.txt"))
+        self.assertFalse(verifier.allowed_payload("scripts/ci/requirements-coverage.txt"))
+        self.assertFalse(verifier.allowed_payload("docs/stray.txt"))
+
     def test_signature_status_is_fail_closed_and_digest_bound(self):
         """Signature checks are fail-closed and digest-bound in CI."""
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -555,6 +564,7 @@ class WorkflowIntegrationTests(unittest.TestCase):
         """Only tracked docs and scripts enter the package."""
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn('git archive --format=zip "--output=$sourceArchive" HEAD -- docs scripts', workflow)
+        self.assertIn('":(exclude)scripts/ci"', workflow)
         self.assertNotIn("Copy-Item -Recurse scripts", workflow)
         self.assertNotIn("Copy-Item -Recurse docs", workflow)
         self.assertIn("Package staging directory must be fresh", workflow)

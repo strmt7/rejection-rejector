@@ -126,6 +126,9 @@ def allowed_payload(name: str) -> bool:
     if any(part.startswith(".") or part == "__pycache__" for part in parts):
         return False
     suffix = Path(name).suffix.lower()
+    if parts[:2] == ["docs", "licenses"] and suffix == ".txt":
+        # Third-party license texts are legal release content.
+        return True
     return (
         parts[0] == "docs" and suffix in {".md", ".json"} or parts[0] == "scripts" and suffix in {".py", ".ps1", ".sh"}
     )
