@@ -225,6 +225,32 @@ new value), and mechanically identical in strength.
   growing log before trusting it; re-launch through a known-good wrapper
   (e.g. tools/train_guarded.sh) rather than hand-rolled nohup lines.
 
+## Changed-file lints scan whole files (2026-11-02)
+
+`tools/lint.ps1` scans every **changed** markdown file in full. Touching
+one line in a doc exposes all of its pre-existing findings to the lint
+lane — the "red roundtrip" this project hit repeatedly. Before claiming
+a changed file clean, run the linter on the whole file (for markdown:
+`pymarkdown --config .pymarkdown.json scan <file>`), not on the diff.
+When a bulk fixer wraps tokens (URLs and the like), diff-read every line
+it touched: one deployment of this wrapped OAuth-scope strings inside
+inline code spans.
+
+## Dry-prove release pipelines on the exact tip (2026-11-02)
+
+The attested-packaging workflow was green on paper and broken in four
+concrete ways until it was exercised against real commits: an expected
+toolchain version hardcoded in one place and stale in another, an
+executable name no build target produced, and a package-staging set that
+disagreed with the closed-world verifier. Each gate failure identified a
+real stale contract until proven otherwise. Rules: expected values must
+derive from their single source (here `rust-toolchain.toml`); the
+authoritative "what ships" definition (here
+`scripts/verify_package.py`'s `EXECUTABLES`) wins over any workflow
+copy; and the proof must run against the exact commit the release will
+use, with the branch kept quiet during validation (the workflow's own
+"main moved during release validation" guard enforced this).
+
 ## Tool-call economy and recurring-action hygiene (2026-10-31)
 
 - Before writing ANY helper, search the repo's `tools/` first. A complete

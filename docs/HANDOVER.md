@@ -1,5 +1,27 @@
 # Handover: state and operating guide for automated contributors
 
+> **State update (2026-11-02, release-ready).** The repo is a verified
+> release candidate at `0f54484`: every CI lane green (14/14), the test
+> gate at 486 release + 121 training + 48 contract + 917 Rust, Python
+> coverage 83%+ / Rust 96.8% with dispositions for every residual. The
+> release pipeline is **dry-proven end to end** on the exact tip (run
+> `41510515840`, 28/28 steps, 86 MB attested unsigned package): three
+> release-blocking defects were found and fixed at source during the
+> proof — a stale pinned-Rust literal (now derived from
+> `rust-toolchain.toml`), stale `rejection-rejector.exe` naming (the
+> crate builds `rr`/`rr-tray`; `verify_package.EXECUTABLES` = `rr.exe`),
+> and a package-staging vs closed-world-verifier mismatch (license texts
+> allowed, CI tooling excluded; both contract-pinned). Zero open
+> dependency alerts/PRs. DeepSource caught up to `a4f5ed5` with 0
+> raised / 0 suppressed (an errored run's two false claims are
+> dispositioned in `docs/deepsource-dispositions.md`). Version coherence
+> is pinned: the installer's `AppVersion` fallback must equal
+> `Cargo.toml`. All `report.md` F1–F15 findings are fixed at source.
+> Remaining: the owner's release decision (tag + signed-flavor
+> dispatch) and the CII-Best-Practices registration — both owner-only.
+
+---
+
 > **State update (2026-10-30, web-console pivot).** Since the 2026-10-28
 > handover: the desktop GUI (`src/gui.rs`, `src/gui/`, `src/bin/desktop.rs`,
 > the `gui` feature, `eframe`/`rfd`/`image`) and the redundant
@@ -104,6 +126,9 @@ picking up the repository cold.
 - **Release**: no tag/package cut yet. Packaging is the manual *Attested
   Windows package* workflow with an explicit `PACKAGE` confirmation; the
   signed flavor fails closed without administrator-provisioned signing.
+  The pipeline is dry-proven on `0f54484` (run `41510515840`, 28/28 steps
+  green): the owner only needs to flip this file's `Unreleased` heading in
+  `CHANGELOG.md`, tag `v0.3.0`, and dispatch with `signing=azure-artifact-signing`.
 
 ## Operating recipes (exact)
 
