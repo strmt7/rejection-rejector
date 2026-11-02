@@ -13,6 +13,7 @@ a@b..com
 a@b.com
 a@bad-.com
 a@example.com
+a@example.invalid
 a@x.com
 abc@example.com
 abc@example.invalid
@@ -110,6 +111,7 @@ assessments@Innotech.example
 attacker@example.com
 b@c.com
 b@example.com
+b@example.invalid
 b@x.com
 b@y.com
 big@x.com
@@ -203,6 +205,7 @@ bot@nimbuslabs.example
 bulk@example.invalid
 c@d.com
 c@example.com
+c@example.invalid
 candidate@example.com
 candidate@example.invalid
 careers@cedarfinch.example
@@ -1243,6 +1246,7 @@ careerszhstrong0028recruiting@example.invalid
 careerszhtrunc0001recruiting@example.invalid
 careerszhtrunc0002recruiting@example.invalid
 d.whitfield@northbridge-talent.example
+d@example.invalid
 de-ambig-0001@example.invalid
 de-ambig-0002@example.invalid
 de-ambig-0003@example.invalid
@@ -1332,6 +1336,7 @@ de-trunc-0002@example.invalid
 demo@example.invalid
 different-recipient@example.com
 do_not_reply@example.invalid
+e@example.invalid
 el-ambig-0001@example.invalid
 el-ambig-0002@example.invalid
 el-ambig-0003@example.invalid
@@ -1590,6 +1595,7 @@ es-strong-0027@example.invalid
 es-strong-0028@example.invalid
 es-trunc-0001@example.invalid
 es-trunc-0002@example.invalid
+f@example.invalid
 foo@bar.com
 fr-ambig-0001@example.invalid
 fr-ambig-0002@example.invalid

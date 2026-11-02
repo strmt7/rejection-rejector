@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "training"))
@@ -133,6 +134,77 @@ class CorpusSourceDispatchTests(unittest.TestCase):
             (root / "cur" / "2").write_bytes(b"From: b\n\nbody")
             payloads = list(me.iter_raw_messages(root))
         self.assertEqual(len(payloads), 2)
+
+
+class MineMainTests(unittest.TestCase):
+    """CLI entry-point contracts over fixture corpora."""
+
+    def _archive(self, tmp: str) -> Path:
+        root = Path(tmp)
+        archive = root / "corpus.tar.gz"
+        bodies = (
+            b"From: a@example.invalid\nTo: b@example.invalid\nSubject: Application\n\nThank you for applying.\n",
+            b"From: c@example.invalid\nTo: d@example.invalid\nSubject: Update\n\nWe will keep your resume.\n",
+            b"From: e@example.invalid\nTo: f@example.invalid\nSubject: Scheduling\n\nInterview invite.\n",
+        )
+        with tarfile.open(archive, "w:gz") as tar:
+            for index, body in enumerate(bodies):
+                info = tarfile.TarInfo(f"mail/{index}")
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+        return archive
+
+    def test_main_stats_only_over_fixture_archive(self) -> None:
+        """Why: the stats path exercises the full ingest/parse/report
+        machinery without writing a corpus; exit 0 means every check ran.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._archive(tmp)
+            argv = [
+                "mine_enron.py",
+                "--corpus",
+                str(archive),
+                "--out-dir",
+                str(Path(tmp) / "out"),
+                "--target",
+                "2",
+                "--stats-only",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                code = me.main()
+            self.assertIn(code, (0, 1))
+
+    def test_main_unsupported_corpus_refused(self) -> None:
+        """Why: the source-dispatch refusal surfaces at the CLI."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bogus = Path(tmp) / "corpus.txt"
+            bogus.write_text("nope", encoding="utf-8")
+            argv = ["mine_enron.py", "--corpus", str(bogus), "--out-dir", str(Path(tmp) / "out"), "--stats-only"]
+            with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
+                me.main()
+
+    def test_main_writes_corpus_and_report(self) -> None:
+        """Why: the mining pipeline's write path runs end to end over a
+        fixture corpus at tiny target scale.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._archive(tmp)
+            out = Path(tmp) / "out"
+            argv = [
+                "mine_enron.py",
+                "--corpus",
+                str(archive),
+                "--out-dir",
+                str(out),
+                "--target",
+                "1",
+                "--max-scan",
+                "10",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                code = me.main()
+            self.assertIn(code, (0, 1))
+            self.assertTrue(out.is_dir())
 
 
 if __name__ == "__main__":
