@@ -52,3 +52,14 @@ at source by professional rewrites. The twelve historical DeepSource
 disposition records cannot be deleted through the platform API on this
 account type (`unsuppressIssueForTeam` is refused); their patterns are
 gone, so they remain as inert history only.
+
+## Errored analysis run (2026-11-02) — artifacts, not findings
+
+The analysis of `754df5c` terminated with run status `FAILURE` and two
+`raised` entries ("Reimport 'sys'" claims against
+`tests/release/test_crawl4ai_source_build.py`). Verified against source:
+the file contains exactly one `import sys` (line 8), so both claims are
+factually false — artifacts of the errored run. The authoritative
+successor run (`a4f5ed5`, status `SUCCESS`) raised **0** findings over
+the same code. Per the outages rule, the failed run is transient noise;
+nothing is suppressed and nothing is open against the code.

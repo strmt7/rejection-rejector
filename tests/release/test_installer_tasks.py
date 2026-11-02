@@ -66,6 +66,18 @@ class InstallerTasksTest(unittest.TestCase):
         self.assertIn('Source: "{#SourceDir}\\rr.exe"', self.text)
         self.assertIn('Source: "..\\LICENSE"', self.text)
 
+    def test_version_fallback_matches_cargo_toml(self):
+        """Why: the installer's AppVersion fallback must equal the crate
+        version (Cargo.toml is the single version source); the build
+        overrides it, but a stale default would mislead manual builds.
+        """
+        cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        crate_version = re.search(r'^version = "([^"]+)"', cargo, re.MULTILINE)
+        fallback = re.search(r'#define AppVersion "([^"]+)"', self.text)
+        if crate_version is None or fallback is None:
+            self.fail("missing crate version or installer AppVersion fallback")
+        self.assertEqual(fallback.group(1), crate_version.group(1))
+
     def test_tray_binary_and_start_menu_shortcut_ship(self):
         """The tray binary ships in its own component with its shortcut."""
         self.assertIn(

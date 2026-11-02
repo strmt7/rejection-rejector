@@ -9,7 +9,7 @@
 
 #define AppName "Rejection Rejector"
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.3.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\target\release"
