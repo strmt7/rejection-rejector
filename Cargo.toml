@@ -52,7 +52,7 @@ rand = "0.10"
 # password is a static secret held only in the encrypted vault (vault.rs) —
 # never in the repository, config, or logs.
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "rustls-tls"] }
-io-imap = { version = "0.7.1", default-features = false, features = ["client", "native-tls"] }
+io-imap = { version = "0.8.1", default-features = false, features = ["client", "native-tls"] }
 # imap-codec (via io-imap) needs nom's `alloc`; this also drops imap 2's nom 5 ->
 # unsound lexical-core 0.7.6 (RUSTSEC-2023-0086) for nom 7 + minimal-lexical.
 nom = { version = "7", features = ["alloc", "std"] }
